@@ -7,6 +7,7 @@
 
 import { writeFile } from 'node:fs/promises'
 import { B2Client } from '@backblaze/b2-sdk'
+import { smokeTransport } from './_smoke/transport.ts'
 
 async function main() {
   const bucketName = process.argv[2]
@@ -27,7 +28,12 @@ async function main() {
     process.exit(1)
   }
 
-  const client = new B2Client({ applicationKeyId: keyId, applicationKey: key })
+  const transport = await smokeTransport()
+  const client = new B2Client({
+    applicationKeyId: keyId,
+    applicationKey: key,
+    ...(transport !== undefined ? { transport } : {}),
+  })
   await client.authorize()
 
   const bucket = await client.getBucket(bucketName)

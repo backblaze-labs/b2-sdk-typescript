@@ -1,6 +1,7 @@
 import { B2Error, ExpiredAuthTokenError, NetworkError, classifyError } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions, computeBackoff, sleep } from './retry.ts'
+import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
 
 /** Describes an outgoing HTTP request to the B2 API. */
@@ -45,18 +46,22 @@ export interface HttpTransport {
 
 /**
  * Default transport implementation using the global `fetch` API.
- * Automatically sets the User-Agent header on each request.
+ * Automatically sets the User-Agent header on each request and applies the
+ * SSRF {@link UrlGuard} (if configured) before opening the connection.
  */
 export class FetchTransport implements HttpTransport {
   /** User-Agent string sent with every request. */
   private readonly userAgent: string
+  /** SSRF allow-list applied to every outgoing URL. Mutable so `B2Client.authorize()` can lock it down post-auth. */
+  readonly urlGuard: UrlGuard
 
   /**
    * Creates a new FetchTransport.
-   * @param options - Optional configuration including a custom User-Agent prefix.
+   * @param options - Optional configuration: custom User-Agent prefix and SSRF guard.
    */
-  constructor(options?: { userAgent?: string }) {
+  constructor(options?: { userAgent?: string; urlGuard?: UrlGuard }) {
     this.userAgent = getUserAgent(options?.userAgent)
+    this.urlGuard = options?.urlGuard ?? new UrlGuard()
   }
 
   /**
@@ -64,8 +69,12 @@ export class FetchTransport implements HttpTransport {
    * @param request - The HTTP request to execute.
    *
    * @returns The HTTP response.
+   *
+   * @throws B2SsrfError when the URL fails the configured SSRF guard.
    */
   async send(request: HttpRequest): Promise<HttpResponse> {
+    this.urlGuard.check(request.url)
+
     const headers = new Headers(request.headers)
     if (!headers.has('User-Agent')) {
       headers.set('User-Agent', this.userAgent)

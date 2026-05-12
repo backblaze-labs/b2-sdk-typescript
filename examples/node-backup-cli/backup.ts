@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path'
 import { B2Client } from '@backblaze/b2-sdk'
 import type { Bucket } from '@backblaze/b2-sdk'
 import { BufferSource } from '@backblaze/b2-sdk/streams'
+import { smokeTransport } from '../_smoke/transport.ts'
 import { type WrappedKey, decryptFile, deriveKek, encryptFile, generateSalt } from './crypto.ts'
 import {
   type Manifest,
@@ -134,7 +135,12 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
 
   const { bucket: bucketName, prefix } = parseB2Uri(uriString)
 
-  const client = new B2Client({ applicationKeyId: keyId, applicationKey: key })
+  const transport = await smokeTransport()
+  const client = new B2Client({
+    applicationKeyId: keyId,
+    applicationKey: key,
+    ...(transport !== undefined ? { transport } : {}),
+  })
   await client.authorize()
   const bucket = await client.getBucket(bucketName)
   if (!bucket) {
@@ -208,7 +214,12 @@ async function restore(uriString: string, localDir: string, options: CliOptions)
 
   const { bucket: bucketName, prefix } = parseB2Uri(uriString)
 
-  const client = new B2Client({ applicationKeyId: keyId, applicationKey: key })
+  const transport = await smokeTransport()
+  const client = new B2Client({
+    applicationKeyId: keyId,
+    applicationKey: key,
+    ...(transport !== undefined ? { transport } : {}),
+  })
   await client.authorize()
   const bucket = await client.getBucket(bucketName)
   if (!bucket) {

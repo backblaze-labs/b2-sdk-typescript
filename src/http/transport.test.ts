@@ -76,6 +76,30 @@ describe('FetchTransport', () => {
     expect(headers.get('User-Agent')).toMatch(/^my-app\/1\.0 b2-sdk-ts\//)
   })
 
+  it('routes the URL through the configured UrlGuard before fetch', async () => {
+    const { UrlGuard } = await import('./url-guard.ts')
+    const { B2SsrfError } = await import('../errors/index.ts')
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport = new FetchTransport({ urlGuard: guard })
+
+    // Permitted host: fetch is called.
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+    await transport.send({ url: 'https://api.backblazeb2.com/x', method: 'GET' })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+    // Rejected host: fetch must NOT be called. Defense in depth: even if the
+    // upstream URL says https://169.254.169.254/, no TCP connection happens.
+    fetchSpy.mockClear()
+    await expect(
+      transport.send({
+        url: 'http://169.254.169.254/latest/meta-data/',
+        method: 'GET',
+      }),
+    ).rejects.toBeInstanceOf(B2SsrfError)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('does not override an existing User-Agent header', async () => {
     fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
 

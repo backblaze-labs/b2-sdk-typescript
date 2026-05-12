@@ -152,6 +152,134 @@ describe('B2Client with simulator', () => {
   })
 })
 
+// --- SSRF guard integration ---
+
+describe('B2Client SSRF guard', () => {
+  it('exposes urlGuard=null when a custom transport is supplied (user owns hardening)', () => {
+    const sim = new B2Simulator()
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+    })
+    expect(client.urlGuard).toBeNull()
+  })
+
+  it('locks the urlGuard to the realm domains after authorize() with the default transport', async () => {
+    const { vi } = await import('vitest')
+    const { B2SsrfError } = await import('./errors/index.ts')
+
+    // Capture the original fetch so we can restore it after the test.
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const u = typeof url === 'string' ? url : url.toString()
+      if (u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+        // Minimal authorize-account response shape consumed by the SDK.
+        return new Response(
+          JSON.stringify({
+            accountId: 'a',
+            authorizationToken: 't',
+            apiInfo: {
+              storageApi: {
+                apiUrl: 'https://api.us-west-004.backblazeb2.com',
+                downloadUrl: 'https://f004.backblazeb2.com',
+                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+                absoluteMinimumPartSize: 5_000_000,
+                recommendedPartSize: 100_000_000,
+                capabilities: ['readFiles', 'writeFiles'],
+                bucketId: null,
+                bucketName: null,
+                namePrefix: null,
+              },
+            },
+            applicationKeyExpirationTimestamp: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      throw new Error(`unexpected fetch: ${u}`)
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+      })
+
+      // Before authorize, guard is permissive.
+      expect(client.urlGuard?.getAllowedSuffixes()).toEqual([])
+
+      await client.authorize()
+
+      // After authorize, guard locks to realm + backblaze.com.
+      const suffixes = client.urlGuard?.getAllowedSuffixes() ?? []
+      expect(suffixes).toContain('backblazeb2.com')
+      expect(suffixes).toContain('backblaze.com')
+
+      // Any direct transport call to a hostile URL is now rejected without
+      // ever issuing a network request. Use the inner FetchTransport via the
+      // raw client's transport chain by sending a request whose URL points
+      // at the metadata service — bypassing the high-level facade so we
+      // exercise just the guard.
+      const innerTransport = client.urlGuard
+      expect(() => innerTransport?.check('http://169.254.169.254/latest/meta-data/')).toThrow(
+        B2SsrfError,
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('merges user-supplied allowedHostSuffixes with the auto-derived set', async () => {
+    const { vi } = await import('vitest')
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            accountId: 'a',
+            authorizationToken: 't',
+            apiInfo: {
+              storageApi: {
+                apiUrl: 'https://api.backblazeb2.com',
+                downloadUrl: 'https://f001.backblazeb2.com',
+                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+                absoluteMinimumPartSize: 5_000_000,
+                recommendedPartSize: 100_000_000,
+                capabilities: ['readFiles'],
+                bucketId: null,
+                bucketName: null,
+                namePrefix: null,
+              },
+            },
+            applicationKeyExpirationTimestamp: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    )
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 's',
+        // E.g. user routes traffic through a self-hosted MITM proxy for
+        // debugging and needs to allow its host.
+        allowedHostSuffixes: ['internal-proxy.example'],
+      })
+      await client.authorize()
+
+      const suffixes = client.urlGuard?.getAllowedSuffixes() ?? []
+      expect(suffixes).toContain('backblazeb2.com')
+      expect(suffixes).toContain('backblaze.com')
+      expect(suffixes).toContain('internal-proxy.example')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
 // --- Download tests ---
 
 describe('downloads', () => {

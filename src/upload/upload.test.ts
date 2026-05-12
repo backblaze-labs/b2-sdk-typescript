@@ -195,6 +195,21 @@ describe('uploadLargeFile (real multipart, data > minPartSize)', () => {
       const last = events[events.length - 1]
       expect(last?.bytesTransferred).toBe(size)
       expect(last?.partsCompleted).toBe(2)
+
+      // Audit anchor (ecosystem lesson 5): only 2 of 29 npm B2 packages emit
+      // observable upload progress. Pin down the invariants callers rely on
+      // so we never silently regress to fire-once-at-the-end or random order:
+      //   - bytesTransferred is non-decreasing across the event sequence
+      //   - partsCompleted is non-decreasing across the event sequence
+      //   - the final event has bytesTransferred === total size and
+      //     partsCompleted === total parts (already asserted above)
+      for (let i = 1; i < events.length; i++) {
+        const prev = events[i - 1]
+        const cur = events[i]
+        if (prev === undefined || cur === undefined) continue
+        expect(cur.bytesTransferred).toBeGreaterThanOrEqual(prev.bytesTransferred)
+        expect(cur.partsCompleted).toBeGreaterThanOrEqual(prev.partsCompleted)
+      }
     },
     LARGE_TEST_TIMEOUT,
   )

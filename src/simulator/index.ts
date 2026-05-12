@@ -1061,8 +1061,8 @@ export class B2Simulator {
       const versions = bucket.files.get(req.fileName)
       if (!versions) continue
       const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
-      if (idx !== -1) {
-        const old = versions[idx]!
+      const old = idx === -1 ? undefined : versions[idx]
+      if (old !== undefined) {
         const updated: StoredFile = {
           fileVersion: {
             ...old.fileVersion,
@@ -1096,8 +1096,8 @@ export class B2Simulator {
       const versions = bucket.files.get(req.fileName)
       if (!versions) continue
       const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
-      if (idx !== -1) {
-        const old = versions[idx]!
+      const old = idx === -1 ? undefined : versions[idx]
+      if (old !== undefined) {
         const updated: StoredFile = {
           fileVersion: {
             ...old.fileVersion,

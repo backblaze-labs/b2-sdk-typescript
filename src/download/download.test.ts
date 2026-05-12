@@ -328,10 +328,11 @@ describe('extractDownloadHeaders (via downloadById)', () => {
 
     const after = Date.now()
     expect(result.headers.uploadTimestamp).toBeGreaterThanOrEqual(before)
-    // Allow small overshoot: the simulator's monotonic timestamp generator may
-    // advance past `after` by a few ms when multiple operations land in the
-    // same millisecond.
-    expect(result.headers.uploadTimestamp).toBeLessThanOrEqual(after + 100)
+    // Allow generous overshoot: the simulator's monotonic timestamp generator
+    // advances by 1 ms per emitted timestamp, and on fast runtimes (Bun) the
+    // microtask queue drains so quickly that the counter outruns Date.now().
+    // We only need to assert the timestamp is *recent*, not exact.
+    expect(result.headers.uploadTimestamp).toBeLessThanOrEqual(after + 1000)
   })
 })
 

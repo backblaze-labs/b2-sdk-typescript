@@ -302,6 +302,71 @@ describe('UploadUrlPool', () => {
     pool.checkout('key1')
     expect(pool.checkout('key1')).toBeNull()
   })
+
+  // Audit anchor (ecosystem lesson 8): four of 29 audited B2 packages have
+  // auth/pool concurrency issues (global token state, undocumented pool
+  // behavior, manual re-auth, naive timer-based re-auth). The invariants
+  // below pin down ours so a future refactor can't silently regress.
+  describe('concurrency invariants', () => {
+    it('never issues the same upload URL to two callers without a checkin between them', () => {
+      // 10 unique entries, all checked in to the same key.
+      const entries: UploadUrlEntry[] = Array.from({ length: 10 }, (_, i) => ({
+        uploadUrl: `https://upload.example.com/${i}`,
+        authorizationToken: `token-${i}`,
+      }))
+      for (const e of entries) pool.checkin('shared-key', e)
+
+      // 10 simultaneous "callers" each pull one. None should ever see the
+      // same URL as another.
+      const checkedOut = new Set<string>()
+      for (let i = 0; i < 10; i++) {
+        const got = pool.checkout('shared-key')
+        expect(got).not.toBeNull()
+        if (got !== null) {
+          expect(checkedOut.has(got.uploadUrl)).toBe(false)
+          checkedOut.add(got.uploadUrl)
+        }
+      }
+      // Pool is drained.
+      expect(pool.checkout('shared-key')).toBeNull()
+      expect(checkedOut.size).toBe(10)
+    })
+
+    it('interleaved checkin/checkout never returns a previously-evicted entry', () => {
+      pool.checkin('k', entryA)
+      pool.checkin('k', entryB)
+      // Caller A pulls entryB (LIFO).
+      const a = pool.checkout('k')
+      // Server returns 503 on the upload; caller evicts the entry. The evict
+      // operates on the entry the caller is HOLDING (not in the pool now),
+      // so it should be a no-op rather than corrupting pool state.
+      pool.evict('k', a as UploadUrlEntry)
+      // Caller B now pulls — must get entryA (still in pool), never entryB.
+      const b = pool.checkout('k')
+      expect(b).toBe(entryA)
+      expect(pool.checkout('k')).toBeNull()
+    })
+
+    it('keys are isolated: checkout against bucket A never returns bucket B URLs', () => {
+      pool.checkin('bucket-A', entryA)
+      pool.checkin('bucket-B', entryB)
+      expect(pool.checkout('bucket-B')).toBe(entryB)
+      expect(pool.checkout('bucket-B')).toBeNull()
+      // bucket-A entry is still intact and isolated.
+      expect(pool.checkout('bucket-A')).toBe(entryA)
+    })
+
+    it('survives N rapid checkin/checkout cycles without growing unbounded', () => {
+      // Stress: 1000 cycles. After each, the pool should hold at most one
+      // entry per key (because checkin then immediate checkout leaves it
+      // empty).
+      for (let i = 0; i < 1000; i++) {
+        pool.checkin('k', { uploadUrl: `u${i}`, authorizationToken: `t${i}` })
+        pool.checkout('k')
+      }
+      expect(pool.checkout('k')).toBeNull()
+    })
+  })
 })
 
 // -- getRealmUrl --------------------------------------------------------

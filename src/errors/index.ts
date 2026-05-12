@@ -231,6 +231,34 @@ export class B2InsufficientCapabilityError extends Error {
   }
 }
 
+/**
+ * Thrown when the SDK is asked to fetch a URL whose host is outside the
+ * authorized B2 realm. Defense against SSRF / URL-substitution attacks where
+ * a compromised or hostile B2 endpoint returns an upload URL pointing at an
+ * internal service (e.g. cloud metadata at `169.254.169.254`).
+ *
+ * Not retryable.
+ */
+export class B2SsrfError extends Error {
+  /** Always `false` — this is a security failure, not transient. */
+  readonly retryable = false
+
+  /**
+   * Creates a new {@link B2SsrfError}.
+   *
+   * @param message - Human-readable description of which URL was rejected and why.
+   * @param url - The full URL that was rejected.
+   */
+  constructor(
+    message: string,
+    /** The full URL that was rejected. */
+    public readonly url: string,
+  ) {
+    super(message)
+    this.name = 'B2SsrfError'
+  }
+}
+
 /** Thrown when a network-level failure occurs (DNS, TCP, TLS). Always retryable. */
 export class NetworkError extends Error {
   /** Always `true` since network errors are transient. */

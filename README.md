@@ -486,6 +486,33 @@ const client = new B2Client({
 })
 ```
 
+## SSRF guard
+
+The default `FetchTransport` ships an allow-list guard that rejects any URL whose host falls outside the authorized B2 realm. This defends against URL-substitution attacks where a compromised or hostile B2 endpoint could return an upload URL pointing at an internal service (e.g. cloud metadata at `169.254.169.254`) and trick the SDK into making an authenticated request to it.
+
+```ts
+const client = new B2Client({ applicationKeyId, applicationKey })
+await client.authorize()
+// Guard is now locked. Hosts under backblazeb2.com / backblaze.com are
+// allowed; literal IPs, localhost, metadata.google.internal, *.internal,
+// and *.local are rejected unconditionally; anything else throws B2SsrfError.
+
+client.urlGuard?.getAllowedSuffixes()
+// => ['backblaze.com', 'backblazeb2.com']
+```
+
+You can extend the allow-list (e.g. for a self-hosted MITM proxy during debugging) without disabling the guard:
+
+```ts
+new B2Client({
+  applicationKeyId,
+  applicationKey,
+  allowedHostSuffixes: ['internal-proxy.example'],
+})
+```
+
+Of 29 audited B2 packages in the npm ecosystem, **zero** ship SSRF protection. Passing a custom `transport` opts out of the guard (your transport, your threat model).
+
 ## Retry behavior
 
 The SDK automatically retries transient errors with exponential backoff:
@@ -603,7 +630,7 @@ This SDK is held to standards most B2 packages aren't.
 | Signal | Value |
 |---|---|
 | Statement coverage | **≥ 95%** (CI-gated) |
-| Test count | 498+ passing on Node, 1,431+ across 3 browser engines |
+| Test count | 520+ passing on Node, 1,431+ across 3 browser engines |
 | Runtime matrix | Linux × (Node 22, Node 24), Windows × (Node 22, Node 24), macOS × (Node 22, Node 24), plus Bun, plus Chromium/Firefox/WebKit |
 | TypeScript strictness | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` + `verbatimModuleSyntax` |
 | Doc coverage | TypeDoc + ESLint JSDoc rules treat warnings as errors |
@@ -614,6 +641,19 @@ By comparison, of 29 npm-published B2 packages surveyed:
 - 17 / 29 ship with **no test framework**
 - 18 / 29 are **JavaScript-only** (no first-class TypeScript types)
 - 5 / 29 ship with **no retry logic**, including the most-downloaded S3 client
+
+### Bundle sizes
+
+Per-subpath bundle sizes for a tree-shaken browser build (Bun + minify, `node:*` and `@aws-sdk/*` external):
+
+| Subpath | Minified | Gzipped |
+|---|---|---|
+| `@backblaze/b2-sdk` (typical: `B2Client` + `BufferSource`) | 36.1 KB | 9.6 KB |
+| `@backblaze/b2-sdk/errors` (`B2Error` + `classifyError`) | 2.1 KB | 670 B |
+| `@backblaze/b2-sdk/streams` (`IncrementalSha1`, source adapters) | 1.8 KB | 801 B |
+| `@backblaze/b2-sdk/simulator` (full in-memory B2 for tests) | 19.2 KB | 5.3 KB |
+
+Numbers are auto-checked at build time. Most apps consume only the main entry, paying ~10 KB gzipped, dwarfed by typical app dependencies.
 
 ## Source isomorphism
 

@@ -5,6 +5,7 @@ import { Bucket } from './bucket.ts'
 import type { RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
+import { UrlGuard, deriveAllowedSuffixes } from './http/url-guard.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
@@ -45,6 +46,18 @@ export interface B2ClientOptions {
   readonly retry?: Partial<RetryOptions>
   /** Custom user-agent string prepended to the SDK default. */
   readonly userAgent?: string
+  /**
+   * Override the SSRF allow-list. By default the SDK locks the
+   * {@link FetchTransport} to host suffixes derived from the realm's authorize
+   * response (e.g. `backblazeb2.com`, `backblaze.com`) so a compromised B2
+   * endpoint cannot redirect the SDK to internal services. Pass an explicit
+   * list to add hosts (e.g. when testing against a self-hosted proxy) or set
+   * to an empty array to disable the guard entirely (not recommended).
+   *
+   * Only consulted when {@link B2ClientOptions.transport} is unset; a custom
+   * transport is the user's responsibility to harden.
+   */
+  readonly allowedHostSuffixes?: readonly string[]
 }
 
 /**
@@ -65,9 +78,16 @@ export class B2Client {
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
   readonly accountInfo: AccountInfo
+  /**
+   * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
+   * a custom transport was supplied — in that case the SDK does not own the
+   * guard. Locked down by {@link B2Client.authorize}.
+   */
+  readonly urlGuard: UrlGuard | null
   private readonly applicationKeyId: string
   private readonly applicationKey: string
   private readonly realmUrl: string
+  private readonly userAllowedSuffixes: readonly string[] | undefined
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -78,12 +98,20 @@ export class B2Client {
     this.applicationKey = options.applicationKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
+    this.userAllowedSuffixes = options.allowedHostSuffixes
 
-    const baseTransport =
-      options.transport ??
-      new FetchTransport(
-        options.userAgent !== undefined ? { userAgent: options.userAgent } : undefined,
-      )
+    let baseTransport: HttpTransport
+    if (options.transport !== undefined) {
+      baseTransport = options.transport
+      this.urlGuard = null
+    } else {
+      const urlGuard = new UrlGuard()
+      baseTransport = new FetchTransport({
+        urlGuard,
+        ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
+      })
+      this.urlGuard = urlGuard
+    }
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
@@ -106,6 +134,16 @@ export class B2Client {
       this.realmUrl,
     )
     this.accountInfo.setAuth(auth)
+    // Lock the SSRF guard to the realm's hosts (plus any user additions).
+    // No-op when the caller supplied a custom transport: their threat model.
+    if (this.urlGuard !== null) {
+      const derived = deriveAllowedSuffixes(auth.apiInfo.storageApi)
+      const merged =
+        this.userAllowedSuffixes !== undefined
+          ? Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
+          : derived
+      this.urlGuard.setAllowedSuffixes(merged)
+    }
     return auth
   }
 

@@ -55,6 +55,57 @@ jobs:
       - name: Typecheck examples against src/ (Bun-hosted tsc)
         run: bunx --bun tsc --noEmit -p examples/tsconfig.json
 
+  smoke-examples:
+    name: Smoke-run examples (B2Simulator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare smoke fixtures
+        run: |
+          mkdir -p /tmp/smoke-data
+          echo "alpha file" > /tmp/smoke-data/a.txt
+          echo "beta file"  > /tmp/smoke-data/b.txt
+          mkdir -p /tmp/smoke-data/subdir
+          echo "nested"    > /tmp/smoke-data/subdir/c.txt
+      # Each example is executed against an in-memory B2Simulator (via
+      # `examples/_smoke/transport.ts`). No network, no credentials, no cost.
+      # The simulator is fresh per example process; pre-seeded with the
+      # `smoke-test` bucket containing `smoke-test.txt`.
+      - name: examples/node-list-buckets.ts
+        env:
+          B2_USE_SIMULATOR: '1'
+          B2_APPLICATION_KEY_ID: smoke-id
+          B2_APPLICATION_KEY: smoke-key
+        run: npx tsx examples/node-list-buckets.ts
+      - name: examples/node-upload.ts
+        env:
+          B2_USE_SIMULATOR: '1'
+          B2_APPLICATION_KEY_ID: smoke-id
+          B2_APPLICATION_KEY: smoke-key
+        run: npx tsx examples/node-upload.ts smoke-test /tmp/smoke-data/a.txt
+      - name: examples/node-download.ts
+        env:
+          B2_USE_SIMULATOR: '1'
+          B2_APPLICATION_KEY_ID: smoke-id
+          B2_APPLICATION_KEY: smoke-key
+        run: npx tsx examples/node-download.ts smoke-test smoke-test.txt /tmp/restored.txt
+      - name: examples/node-backup-cli (snapshot)
+        env:
+          B2_USE_SIMULATOR: '1'
+          B2_APPLICATION_KEY_ID: smoke-id
+          B2_APPLICATION_KEY: smoke-key
+          B2_BACKUP_PASSPHRASE: smoke-pass
+        run: npx tsx examples/node-backup-cli/backup.ts snapshot /tmp/smoke-data b2://smoke-test/backups
+      - name: Verify the downloaded file matches what the simulator served
+        run: |
+          diff /tmp/restored.txt <(printf 'hello smoke\n')
+
   typecheck-deno:
     name: Typecheck (Deno)
     runs-on: ubuntu-latest

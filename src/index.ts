@@ -45,6 +45,7 @@ export {
   BadUploadUrlError,
   ChecksumMismatchError,
   B2InsufficientCapabilityError,
+  B2SsrfError,
   NetworkError,
   classifyError,
 } from './errors/index.ts'
@@ -64,6 +65,7 @@ export type {
   HttpResponse,
   RetryTransportOptions,
 } from './http/transport.ts'
+export { UrlGuard, deriveAllowedSuffixes } from './http/url-guard.ts'
 export type { RetryOptions } from './http/retry.ts'
 
 export type { DownloadResult } from './download/single.ts'

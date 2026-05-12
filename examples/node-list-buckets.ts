@@ -6,6 +6,7 @@
  */
 
 import { B2Client } from '@backblaze/b2-sdk'
+import { smokeTransport } from './_smoke/transport.ts'
 
 async function main() {
   const keyId = process.env.B2_APPLICATION_KEY_ID
@@ -15,7 +16,12 @@ async function main() {
     process.exit(1)
   }
 
-  const client = new B2Client({ applicationKeyId: keyId, applicationKey: key })
+  const transport = await smokeTransport()
+  const client = new B2Client({
+    applicationKeyId: keyId,
+    applicationKey: key,
+    ...(transport !== undefined ? { transport } : {}),
+  })
   await client.authorize()
 
   const buckets = await client.listBuckets()
