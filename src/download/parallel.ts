@@ -3,14 +3,34 @@ import type { RawClient } from '../raw/index.js'
 import type { FileId } from '../types/ids.js'
 import { Semaphore } from '../upload/concurrency.js'
 
+/** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
+  /** ID of the file to download. */
   readonly fileId: FileId
+  /** Total file size in bytes (must be known in advance). */
   readonly totalSize: number
+  /** Size of each ranged chunk in bytes. Defaults to 10 MB. */
   readonly rangeSize?: number
+  /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
+  /** Signal to abort the download. */
   readonly signal?: AbortSignal
 }
 
+/**
+ * Creates a readable stream that downloads a file using parallel byte-range requests.
+ *
+ * The file is split into fixed-size ranges fetched concurrently, then chunks
+ * are emitted in order. This approach saturates bandwidth more effectively than
+ * a single sequential download for large files. For small files, a single
+ * request via {@link downloadById} or {@link downloadByName} is simpler.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param options - Parallel download parameters (file ID, size, concurrency).
+ *
+ * @returns A `ReadableStream` that yields file bytes in order.
+ */
 export function createParallelDownloadStream(
   raw: RawClient,
   accountInfo: AccountInfo,
@@ -94,6 +114,7 @@ export function createParallelDownloadStream(
   })
 }
 
+/** Reads an entire readable stream into a single Uint8Array. */
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const reader = stream.getReader()
   const parts: Uint8Array[] = []

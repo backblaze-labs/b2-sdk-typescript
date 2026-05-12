@@ -1,15 +1,31 @@
+/** Configuration for retry behavior on transient failures. */
 export interface RetryOptions {
+  /** Maximum number of retry attempts before giving up. */
   readonly maxRetries: number
+  /** Upper bound on retry delay in milliseconds, regardless of backoff calculation. */
   readonly maxRetryDelayMs: number
+  /** Base delay in milliseconds for the first retry. Doubles on each subsequent attempt. */
   readonly initialRetryDelayMs: number
 }
 
+/** Default retry settings: 5 retries, 1s initial delay, 64s max delay. */
 export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
   maxRetries: 5,
   maxRetryDelayMs: 64_000,
   initialRetryDelayMs: 1_000,
 }
 
+/**
+ * Computes the delay before the next retry using exponential backoff with jitter.
+ * If a `Retry-After` value is provided by the server, it takes precedence over
+ * the calculated backoff (still capped at {@link RetryOptions.maxRetryDelayMs}).
+ *
+ * @param attempt - Zero-based retry attempt index.
+ * @param options - Retry configuration with delay bounds.
+ * @param retryAfter - Server-provided retry delay in seconds, if any.
+ *
+ * @returns Delay in milliseconds before the next retry.
+ */
 export function computeBackoff(
   attempt: number,
   options: RetryOptions,
@@ -23,6 +39,13 @@ export function computeBackoff(
   return Math.min(base + jitter, options.maxRetryDelayMs)
 }
 
+/**
+ * Returns a promise that resolves after the given delay. Supports cancellation
+ * via an optional AbortSignal.
+ *
+ * @param ms - Delay in milliseconds.
+ * @param signal - Optional abort signal to cancel the sleep early.
+ */
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {

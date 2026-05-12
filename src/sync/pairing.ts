@@ -1,7 +1,16 @@
 import type { SyncFolder, SyncPath } from './types.js'
 
+/** A paired tuple of source and destination files. Either side may be null if the file is absent. */
 export type SyncPair = readonly [SyncPath | null, SyncPath | null]
 
+/**
+ * Merge-joins two sorted folder scans by relative path, yielding paired tuples.
+ * Files present only in source yield `[source, null]`, only in dest yield `[null, dest]`,
+ * and files in both yield `[source, dest]`.
+ *
+ * @param source - The source folder to scan.
+ * @param dest - The destination folder to scan.
+ */
 export async function* zipFolders(source: SyncFolder, dest: SyncFolder): AsyncGenerator<SyncPair> {
   const sourceIter = source.scan()[Symbol.asyncIterator]()
   const destIter = dest.scan()[Symbol.asyncIterator]()

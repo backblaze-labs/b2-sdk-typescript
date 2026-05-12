@@ -37,6 +37,6 @@
     }
   },
   "files": {
-    "ignore": ["dist", "node_modules", "*.cjs", "coverage"]
+    "ignore": ["dist", "docs", "node_modules", "*.cjs", "coverage"]
   }
 }

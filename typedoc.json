@@ -1,0 +1,51 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "src/index.ts",
+    "src/raw/index.ts",
+    "src/errors/index.ts",
+    "src/auth/index.ts",
+    "src/streams/index.ts",
+    "src/sync/index.ts",
+    "src/simulator/index.ts",
+    "src/s3/index.ts"
+  ],
+  "out": "docs",
+  "name": "@backblaze/b2-sdk",
+  "includeVersion": true,
+  "readme": "README.md",
+  "tsconfig": "tsconfig.json",
+  "plugin": [],
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "categorizeByGroup": true,
+  "navigationLinks": {
+    "GitHub": "https://github.com/backblaze/b2-sdk-typescript",
+    "Backblaze B2": "https://www.backblaze.com/cloud-storage"
+  },
+  "treatWarningsAsErrors": true,
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": true
+  },
+  "requiredToBeDocumented": [
+    "Class",
+    "Interface",
+    "Function",
+    "Method",
+    "Property",
+    "Enum",
+    "EnumMember",
+    "TypeAlias",
+    "Variable",
+    "Accessor",
+    "Constructor",
+    "GetSignature",
+    "SetSignature",
+    "CallSignature",
+    "IndexSignature"
+  ]
+}

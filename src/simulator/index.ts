@@ -1,3 +1,14 @@
+/**
+ * In-memory B2 simulator for testing without network I/O.
+ *
+ * {@link B2Simulator} implements 25+ B2 native API operations at the
+ * request/response level. Create a simulator, call {@link B2Simulator.transport}
+ * to get an {@link HttpTransport}, and pass it to `B2Client`. Ideal for
+ * unit tests, CI pipelines, and local development.
+ *
+ * @packageDocumentation
+ */
+
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.js'
 import type { AuthorizeAccountResponse } from '../types/auth.js'
 import type { BucketInfo, BucketType } from '../types/bucket.js'
@@ -40,6 +51,40 @@ interface StoredKey {
   readonly expirationTimestamp: number | null
 }
 
+/** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
+export interface SimulatorJsonResponse {
+  /** HTTP status code. */
+  readonly status: number
+  /** JSON response body. */
+  readonly body: unknown
+}
+
+/** Download response returned by {@link B2Simulator.handleDownload}. */
+export interface SimulatorDownloadResponse {
+  /** HTTP status code. */
+  readonly status: number
+  /** B2 response headers (content type, SHA-1, file info, etc.). */
+  readonly headers: Record<string, string>
+  /** Raw file bytes, or null if the file was not found. */
+  readonly data: Uint8Array | null
+}
+
+/**
+ * In-memory B2 simulator for testing. Implements the B2 native API at the
+ * request/response level without any network I/O. Supports 25+ operations
+ * including buckets, files, large files, keys, and notifications.
+ *
+ * @example
+ * ```ts
+ * const sim = new B2Simulator()
+ * const client = new B2Client({
+ *   applicationKeyId: 'test-key-id',
+ *   applicationKey: 'test-key',
+ *   transport: sim.transport(),
+ * })
+ * await client.authorize()
+ * ```
+ */
 export class B2Simulator {
   private readonly buckets = new Map<string, StoredBucket>()
   private readonly accountId = 'sim_account_0001'
@@ -47,16 +92,21 @@ export class B2Simulator {
   private readonly keys = new Map<string, StoredKey>()
   private readonly notificationRules = new Map<string, EventNotificationRule[]>()
 
+  /** Creates an {@link HttpTransport} that routes requests to this simulator. */
   transport(): HttpTransport {
     return new SimulatorTransport(this)
   }
 
+  /**
+   * Dispatches a JSON API request to the appropriate handler.
+   * @returns An object with HTTP status and JSON response body.
+   */
   handleRequest(
     _method: string,
     path: string,
     _headers: Record<string, string>,
     body: unknown,
-  ): { status: number; body: unknown } {
+  ): SimulatorJsonResponse {
     const endpoint = path.split('/').pop() ?? ''
 
     switch (endpoint) {
@@ -154,21 +204,26 @@ export class B2Simulator {
     }
   }
 
+  /**
+   * Handles file and part upload requests (`b2_upload_file`, `b2_upload_part`).
+   * Dispatches to the appropriate internal handler based on the URL.
+   */
   handleUpload(
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): { status: number; body: unknown } {
+  ): SimulatorJsonResponse {
     if (url.includes('b2_upload_part')) {
       return this.handleUploadPart(url, headers, data)
     }
     return this.handleUploadFile(url, headers, data)
   }
 
-  handleDownload(
-    path: string,
-    headers: Record<string, string>,
-  ): { status: number; headers: Record<string, string>; data: Uint8Array | null } {
+  /**
+   * Handles file download requests (`b2_download_file_by_id`, `/file/` by name).
+   * Returns the file data along with B2 response headers.
+   */
+  handleDownload(path: string, headers: Record<string, string>): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
@@ -189,7 +244,7 @@ export class B2Simulator {
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): { status: number; body: unknown } {
+  ): SimulatorJsonResponse {
     const bucketId = new URL(url).searchParams.get('bucketId')
     if (!bucketId) return this.error(400, 'bad_request', 'Missing bucketId')
 
@@ -223,7 +278,7 @@ export class B2Simulator {
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): { status: number; body: unknown } {
+  ): SimulatorJsonResponse {
     const fileId = new URL(url).searchParams.get('fileId')
     if (!fileId) return this.error(400, 'bad_request', 'Missing fileId')
 
@@ -248,10 +303,7 @@ export class B2Simulator {
     }
   }
 
-  private downloadById(
-    fileId: string,
-    range?: string,
-  ): { status: number; headers: Record<string, string>; data: Uint8Array | null } {
+  private downloadById(fileId: string, range?: string): SimulatorDownloadResponse {
     for (const bucket of this.buckets.values()) {
       for (const versions of bucket.files.values()) {
         for (const stored of versions) {
@@ -268,7 +320,7 @@ export class B2Simulator {
     bucketName: string,
     fileName: string,
     range?: string,
-  ): { status: number; headers: Record<string, string>; data: Uint8Array | null } {
+  ): SimulatorDownloadResponse {
     for (const bucket of this.buckets.values()) {
       if (bucket.info.bucketName !== bucketName) continue
       const versions = bucket.files.get(fileName)
@@ -394,19 +446,19 @@ export class B2Simulator {
     return { status: 200, body: info }
   }
 
-  private listBuckets(): { status: number; body: unknown } {
+  private listBuckets(): SimulatorJsonResponse {
     const buckets = [...this.buckets.values()].map((b) => b.info)
     return { status: 200, body: { buckets } }
   }
 
-  private deleteBucket(req: { bucketId: string }): { status: number; body: unknown } {
+  private deleteBucket(req: { bucketId: string }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     this.buckets.delete(req.bucketId)
     return { status: 200, body: bucket.info }
   }
 
-  private updateBucket(req: Record<string, unknown>): { status: number; body: unknown } {
+  private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {
     const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     const updated: BucketInfo = {
@@ -427,7 +479,7 @@ export class B2Simulator {
     return { status: 200, body: updated }
   }
 
-  private getUploadUrl(req: { bucketId: string }): { status: number; body: unknown } {
+  private getUploadUrl(req: { bucketId: string }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     return {
       status: 200,
@@ -444,7 +496,7 @@ export class B2Simulator {
     maxFileCount?: number
     prefix?: string
     startFileName?: string
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -473,7 +525,7 @@ export class B2Simulator {
     maxFileCount?: number
     startFileName?: string
     startFileId?: string
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -499,7 +551,7 @@ export class B2Simulator {
     return { status: 200, body: { files, nextFileName, nextFileId } }
   }
 
-  private getFileInfo(req: { fileId: string }): { status: number; body: unknown } {
+  private getFileInfo(req: { fileId: string }): SimulatorJsonResponse {
     for (const bucket of this.buckets.values()) {
       for (const versions of bucket.files.values()) {
         for (const stored of versions) {
@@ -512,7 +564,7 @@ export class B2Simulator {
     return this.error(404, 'file_not_present', 'File not found')
   }
 
-  private hideFile(req: { bucketId: string; fileName: string }): { status: number; body: unknown } {
+  private hideFile(req: { bucketId: string; fileName: string }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -598,7 +650,7 @@ export class B2Simulator {
     fileName: string
     contentType: string
     fileInfo?: Record<string, string>
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
     const fid = genId('4_z')
@@ -625,7 +677,7 @@ export class B2Simulator {
     }
   }
 
-  private getUploadPartUrl(req: { fileId: string }): { status: number; body: unknown } {
+  private getUploadPartUrl(req: { fileId: string }): SimulatorJsonResponse {
     if (!this.largeFiles.has(req.fileId))
       return this.error(400, 'bad_request', 'Large file not found')
     return {
@@ -678,7 +730,7 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private cancelLargeFile(req: { fileId: string }): { status: number; body: unknown } {
+  private cancelLargeFile(req: { fileId: string }): SimulatorJsonResponse {
     const large = this.largeFiles.get(req.fileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
     this.largeFiles.delete(req.fileId)
@@ -693,7 +745,7 @@ export class B2Simulator {
     }
   }
 
-  private listUnfinishedLargeFiles(req: { bucketId: string }): { status: number; body: unknown } {
+  private listUnfinishedLargeFiles(req: { bucketId: string }): SimulatorJsonResponse {
     const files = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .map((f) => ({
@@ -711,7 +763,7 @@ export class B2Simulator {
     bucketId: string
     fileNamePrefix: string
     validDurationInSeconds: number
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     return {
       status: 200,
@@ -732,7 +784,7 @@ export class B2Simulator {
     validDurationInSeconds?: number
     bucketId?: string
     namePrefix?: string
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     const kid = genId('sim_key')
     const appKey = genId('sim_secret')
     const expiration =
@@ -771,7 +823,7 @@ export class B2Simulator {
     accountId: string
     maxKeyCount?: number
     startApplicationKeyId?: string
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     const max = req.maxKeyCount ?? 1000
     let allKeys = [...this.keys.values()].sort((a, b) =>
       a.applicationKeyId.localeCompare(b.applicationKeyId),
@@ -798,7 +850,7 @@ export class B2Simulator {
     return { status: 200, body: { keys, nextApplicationKeyId: nextId } }
   }
 
-  private deleteKey(req: { applicationKeyId: string }): { status: number; body: unknown } {
+  private deleteKey(req: { applicationKeyId: string }): SimulatorJsonResponse {
     const key = this.keys.get(req.applicationKeyId)
     if (!key) return this.error(400, 'bad_request', 'Key not found')
     this.keys.delete(req.applicationKeyId)
@@ -831,7 +883,7 @@ export class B2Simulator {
   private setBucketNotificationRules(req: {
     bucketId: string
     eventNotificationRules: EventNotificationRule[]
-  }): { status: number; body: unknown } {
+  }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     this.notificationRules.set(req.bucketId, req.eventNotificationRules)
     return {
@@ -869,7 +921,7 @@ export class B2Simulator {
     }
   }
 
-  private error(status: number, code: string, message: string): { status: number; body: unknown } {
+  private error(status: number, code: string, message: string): SimulatorJsonResponse {
     return { status, body: { status, code, message } }
   }
 }

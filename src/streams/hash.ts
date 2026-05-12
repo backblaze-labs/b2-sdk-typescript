@@ -1,8 +1,12 @@
+/** Internal wrapper around a Node.js Hash instance. */
 type NodeHasher = { update(data: Uint8Array): void; digest(encoding: string): string }
+
+/** Factory that creates a NodeHasher for a given algorithm name. */
 type NodeHashFactory = (algorithm: string) => NodeHasher
 
 let nodeCreateHash: NodeHashFactory | null | undefined
 
+/** Lazily loads `node:crypto` and caches the factory. Returns null in non-Node runtimes. */
 async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
   if (nodeCreateHash !== undefined) return nodeCreateHash
   try {
@@ -25,18 +29,28 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
   return nodeCreateHash
 }
 
+/**
+ * Incrementally computes SHA-1 hashes over streaming data.
+ * Uses Node.js `crypto` when available, falling back to WebCrypto.
+ */
 export class IncrementalSha1 {
+  /** Buffered chunks for WebCrypto fallback path. */
   private chunks: Uint8Array[] = []
+  /** Total bytes fed into the hash so far. */
   private totalLength = 0
+  /** Node.js hash instance, or null if using WebCrypto fallback. */
   private nodeHash: NodeHasher | null = null
+  /** Resolves once the crypto backend has been loaded. */
   private initPromise: Promise<void>
 
+  /** Creates a new IncrementalSha1 and lazily initializes the crypto backend. */
   constructor() {
     this.initPromise = getNodeCreateHash().then((factory) => {
       if (factory) this.nodeHash = factory('sha1')
     })
   }
 
+  /** Feed data into the hash. Async because it lazily initializes the crypto backend. */
   async update(data: Uint8Array): Promise<void> {
     await this.initPromise
     if (this.nodeHash) {
@@ -47,6 +61,7 @@ export class IncrementalSha1 {
     this.totalLength += data.byteLength
   }
 
+  /** Finalize the hash and return the hex-encoded SHA-1 digest. */
   async digest(): Promise<string> {
     await this.initPromise
     if (this.nodeHash) {
@@ -64,11 +79,13 @@ export class IncrementalSha1 {
     return hexEncode(new Uint8Array(hashBuffer))
   }
 
+  /** Total number of bytes fed into the hash so far. */
   get bytesProcessed(): number {
     return this.totalLength
   }
 }
 
+/** Convert a byte array to a lowercase hex string. */
 function hexEncode(bytes: Uint8Array): string {
   const hex: string[] = []
   for (const b of bytes) {
@@ -77,6 +94,7 @@ function hexEncode(bytes: Uint8Array): string {
   return hex.join('')
 }
 
+/** Compute the SHA-1 hex digest of a complete byte array in one shot. */
 export async function sha1Hex(data: Uint8Array): Promise<string> {
   const factory = await getNodeCreateHash()
   if (factory) {

@@ -8,20 +8,48 @@ import type { FileVersion } from '../types/file.js'
 import type { BucketId } from '../types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
 
+/** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {
+  /** Target bucket for the upload. */
   readonly bucketId: BucketId
+  /** Full B2 file name including any path prefix. */
   readonly fileName: string
+  /** Content to upload. */
   readonly source: ContentSource
+  /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
   readonly contentType?: string
+  /** Custom file info key/value pairs stored with the file. */
   readonly fileInfo?: Record<string, string>
+  /** Server-side encryption settings. */
   readonly serverSideEncryption?: EncryptionSetting
+  /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
+  /** Legal hold status applied at upload time. */
   readonly legalHold?: LegalHoldValue
+  /** Override the last-modified timestamp (epoch millis). */
   readonly lastModifiedMillis?: number
+  /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener
+  /** Signal to abort the upload. */
   readonly signal?: AbortSignal
 }
 
+/**
+ * Uploads a file in a single HTTP request (suitable for files up to ~100 MB).
+ *
+ * The entire file content is read into memory, SHA-1 hashed, and sent in one
+ * `b2_upload_file` call. For files larger than the recommended part size, use
+ * {@link uploadLargeFile} which splits the file into parts uploaded in parallel.
+ *
+ * Upload URLs are pooled via {@link AccountInfo} and recycled on success or
+ * evicted on failure.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state (tokens, URLs, upload URL pool).
+ * @param options - Upload parameters.
+ *
+ * @returns The resulting {@link FileVersion} metadata.
+ */
 export async function uploadSmallFile(
   raw: RawClient,
   accountInfo: AccountInfo,

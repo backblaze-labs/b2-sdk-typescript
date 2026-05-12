@@ -2,16 +2,26 @@ import type { Bucket } from '../../bucket.js'
 import type { FileVersion } from '../../types/file.js'
 import type { B2SyncPath, SyncFolder } from '../types.js'
 
+/**
+ * Scans a B2 bucket (optionally filtered by prefix) and yields {@link B2SyncPath} entries
+ * sorted by file name. Hidden files are excluded. All versions are fetched and grouped.
+ */
 export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
   private readonly bucket: Bucket
   private readonly prefix: string
 
+  /**
+   * Creates a new B2Folder for the given bucket and optional prefix.
+   * @param bucket - The B2 bucket to scan.
+   * @param prefix - Optional key prefix to restrict the scan scope.
+   */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
     this.prefix = prefix
   }
 
+  /** Lists all file versions in the bucket, groups by name, and yields the latest visible version. */
   async *scan(): AsyncGenerator<B2SyncPath> {
     const grouped = new Map<string, FileVersion[]>()
 

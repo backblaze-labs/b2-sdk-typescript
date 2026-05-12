@@ -26,25 +26,53 @@ import type {
   SyncOptions,
 } from './types.js'
 
+/** Base configuration for a sync operation. */
 export interface SynchronizerConfig {
+  /** The folder to read files from. */
   readonly source: SyncFolder
+  /** The folder to write files to. */
   readonly dest: SyncFolder
+  /** Options controlling comparison, deletion policy, concurrency, etc. */
   readonly options: SyncOptions
 }
 
+/** A sync folder constrained to the local filesystem. */
+export interface LocalSyncFolder extends SyncFolder {
+  /** Discriminant identifying a local folder. */
+  readonly type: 'local'
+  /** Absolute filesystem path to the local root directory. */
+  readonly root: string
+}
+
+/** A sync folder constrained to a B2 bucket prefix. */
+export interface B2SyncFolder extends SyncFolder {
+  /** Discriminant identifying a B2 folder. */
+  readonly type: 'b2'
+}
+
+/** Configuration for a local-to-B2 sync (upload direction). */
 export interface SynchronizerUpConfig extends SynchronizerConfig {
-  readonly source: SyncFolder & { readonly type: 'local'; readonly root: string }
-  readonly dest: SyncFolder & { readonly type: 'b2' }
+  /** Local source folder. */
+  readonly source: LocalSyncFolder
+  /** B2 destination folder. */
+  readonly dest: B2SyncFolder
+  /** The target B2 bucket. */
   readonly bucket: Bucket
+  /** Key prefix for uploaded files in the bucket. */
   readonly prefix: string
 }
 
+/** Configuration for a B2-to-local sync (download direction). */
 export interface SynchronizerDownConfig extends SynchronizerConfig {
-  readonly source: SyncFolder & { readonly type: 'b2' }
-  readonly dest: SyncFolder & { readonly type: 'local'; readonly root: string }
+  /** B2 source folder. */
+  readonly source: B2SyncFolder
+  /** Local destination folder. */
+  readonly dest: LocalSyncFolder
+  /** The source B2 bucket. */
   readonly bucket: Bucket
 }
 
+/** Infers the sync direction from the source and destination folder types. */
 function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
   if (source.type === 'local' && dest.type === 'b2') return 'local-to-b2'
   if (source.type === 'b2' && dest.type === 'local') return 'b2-to-local'
@@ -52,6 +80,13 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
   throw new Error(`Unsupported sync direction: ${source.type} to ${dest.type}`)
 }
 
+/**
+ * Runs a full sync operation: scans both folders, pairs files, generates actions,
+ * and executes them with bounded concurrency. Yields {@link SyncEvent} entries for
+ * each comparison and action result.
+ *
+ * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
+ */
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
   const direction = resolveDirection(source, dest)
@@ -123,6 +158,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 }
 
+/** Builds an {@link ActionFactory} wired to the bucket and paths in the given config. */
 function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>

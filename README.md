@@ -1,5 +1,13 @@
 # @backblaze/b2-sdk
 
+[![CI](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml)
+[![API Docs](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/docs.yml/badge.svg)](https://backblaze-labs.github.io/b2-typescript-sdk/)
+[![npm](https://img.shields.io/npm/v/@backblaze/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze/b2-sdk)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
+
 The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript.
 
 **Isomorphic.** Works in Node.js 22+, browsers, Bun, Deno, Cloudflare Workers, and Vercel Edge.

@@ -2,14 +2,24 @@ import { readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import type { LocalSyncPath, SyncFolder } from '../types.js'
 
+/**
+ * Scans a local directory tree and yields {@link LocalSyncPath} entries
+ * sorted by relative path. Unreadable files and directories are silently skipped.
+ */
 export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
+  /** Absolute path to the local root directory. */
   readonly root: string
 
+  /**
+   * Creates a new LocalFolder for the given root directory.
+   * @param root - Absolute path to the local directory to scan.
+   */
   constructor(root: string) {
     this.root = root
   }
 
+  /** Recursively walks the directory and yields files sorted by relative path. */
   async *scan(): AsyncGenerator<LocalSyncPath> {
     const collected: LocalSyncPath[] = []
     await this.walk(this.root, collected)
@@ -19,6 +29,7 @@ export class LocalFolder implements SyncFolder {
     }
   }
 
+  /** Recursively collects files from {@link dir} into {@link out}. */
   private async walk(dir: string, out: LocalSyncPath[]): Promise<void> {
     let entries: import('node:fs').Dirent[]
     try {

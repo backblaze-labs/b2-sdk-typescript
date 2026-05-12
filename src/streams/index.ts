@@ -1,3 +1,4 @@
+/** @packageDocumentation */
 export { IncrementalSha1, sha1Hex } from './hash.js'
 export type { ProgressEvent, ProgressListener } from './progress.js'
 export { ProgressTracker } from './progress.js'

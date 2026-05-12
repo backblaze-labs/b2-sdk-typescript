@@ -10,27 +10,57 @@ import type { BucketId } from '../types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
 import { Semaphore } from './concurrency.js'
 
+/** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
+  /** Target bucket for the upload. */
   readonly bucketId: BucketId
+  /** Full B2 file name including any path prefix. */
   readonly fileName: string
+  /** Content to upload. Must support {@link ContentSource.slice} for part extraction. */
   readonly source: ContentSource
+  /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
   readonly contentType?: string
+  /** Custom file info key/value pairs stored with the file. */
   readonly fileInfo?: Record<string, string>
+  /** Server-side encryption settings applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
+  /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
+  /** Legal hold status applied at upload time. */
   readonly legalHold?: LegalHoldValue
+  /** Size of each part in bytes. Defaults to the account's recommended part size. */
   readonly partSize?: number
+  /** Maximum number of parts uploaded in parallel. Defaults to 4. */
   readonly concurrency?: number
+  /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener
+  /** Signal to abort the upload. Triggers cancellation of the large file. */
   readonly signal?: AbortSignal
 }
 
+/** Describes a single part to be uploaded: its 1-based number, byte offset, and length. */
 interface PartPlan {
   readonly partNumber: number
   readonly offset: number
   readonly length: number
 }
 
+/**
+ * Uploads a file using the B2 multipart (large file) protocol.
+ *
+ * The source is sliced into parts and uploaded concurrently via
+ * `b2_upload_part`. This is appropriate for files larger than the recommended
+ * part size. For smaller files, use {@link uploadSmallFile} which sends the
+ * entire payload in a single request.
+ *
+ * On failure, the in-progress large file is cancelled on a best-effort basis.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state (tokens, URLs, upload URL pool).
+ * @param options - Upload parameters including part size and concurrency.
+ *
+ * @returns The resulting {@link FileVersion} metadata.
+ */
 export async function uploadLargeFile(
   raw: RawClient,
   accountInfo: AccountInfo,
@@ -135,6 +165,7 @@ export async function uploadLargeFile(
   }
 }
 
+/** Splits a total byte range into sequential, non-overlapping parts. */
 function planParts(totalSize: number, partSize: number): PartPlan[] {
   const parts: PartPlan[] = []
   let offset = 0

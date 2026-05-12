@@ -1,7 +1,15 @@
+/**
+ * @packageDocumentation
+ * Public type definitions for the B2 SDK.
+ * Re-exports all branded IDs, request/response interfaces, and configuration types.
+ */
+
 export type {
   AccountId,
   ApplicationKeyId,
   AuthToken,
+  Brand,
+  BrandTag,
   BucketId,
   FileId,
   KeyId,
@@ -26,6 +34,7 @@ export type {
   BucketRetentionMode,
   BucketRetentionPolicy,
   BucketType,
+  RetentionPeriod,
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,

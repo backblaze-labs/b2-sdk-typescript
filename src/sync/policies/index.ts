@@ -11,15 +11,35 @@ import type {
 } from '../types.js'
 import { filesAreDifferent } from './compare.js'
 
+/** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {
+  /** Creates an action to upload a local file to B2. */
   upload(source: LocalSyncPath): SyncAction
+  /** Creates an action to download a B2 file to the local filesystem. */
   download(source: B2SyncPath): SyncAction
+  /** Creates an action to server-side copy a B2 file to a new destination path. */
   copy(source: B2SyncPath, destPath: string): SyncAction
+  /** Creates an action to hide a file in B2 (soft delete). */
   hide(path: string): SyncAction
+  /** Creates an action to permanently delete a remote B2 file version. */
   deleteRemote(path: B2SyncPath): SyncAction
+  /** Creates an action to delete a local file. */
   deleteLocal(path: LocalSyncPath): SyncAction
 }
 
+/**
+ * Converts a paired source/dest tuple into zero or more sync actions based on the
+ * sync direction, compare mode, and keep policy.
+ *
+ * @param pair - The source/dest file pair from {@link zipFolders}.
+ * @param direction - The sync direction.
+ * @param compareMode - How to compare files for differences.
+ * @param keepMode - Policy for destination-only files.
+ * @param keepDays - Retention period when keepMode is 'keep-days'.
+ * @param nowMillis - Current time in milliseconds, used for keep-days calculation.
+ * @param factory - Factory to create the concrete action objects.
+ * @param compareThreshold - Tolerance for the comparison.
+ */
 export function* generateActions(
   pair: SyncPair,
   direction: SyncDirection,
