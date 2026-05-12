@@ -9,14 +9,19 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 ## Commands
 
 ```bash
-pnpm build          # Vite library mode: ESM + CJS + DTS for all 8 subpath exports
-pnpm test           # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator
-pnpm test:watch     # Vitest in watch mode
-pnpm lint           # Biome: lint + format check
-pnpm lint:fix       # Biome: auto-fix
-pnpm typecheck      # tsc --noEmit (strict + exactOptionalPropertyTypes)
-pnpm clean          # rm -rf dist
+pnpm build           # Vite library mode: ESM + CJS + DTS for all 9 subpath exports
+pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator
+pnpm test:watch      # Vitest in watch mode
+pnpm test:coverage   # Vitest with v8 coverage (target: ≥ 95% statements)
+pnpm lint            # Biome: lint + format check
+pnpm lint:fix        # Biome: auto-fix
+pnpm lint:docs       # ESLint JSDoc/TSDoc strict checks
+pnpm typecheck       # tsc --noEmit (strict + exactOptionalPropertyTypes)
+pnpm docs            # Generate TypeDoc API docs under ./docs
+pnpm clean           # rm -rf dist docs
 ```
+
+CI runs all of these plus `bun test src/` (Bun's vitest-compat) on every push.
 
 ## Architecture
 
@@ -26,32 +31,33 @@ Single npm package with subpath exports:
 |---|---|---|
 | `@backblaze/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
 | `@backblaze/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for all 37 B2 native API endpoints |
-| `@backblaze/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 12 subclasses + classifyError() |
+| `@backblaze/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 13 subclasses + classifyError() |
 | `@backblaze/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
-| `@backblaze/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker |
-| `@backblaze/b2-sdk/sync` | `src/sync/index.ts` | Sync engine (stub, M9) |
+| `@backblaze/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
+| `@backblaze/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
+| `@backblaze/b2-sdk/sync` | `src/sync/index.ts` | Local/B2 sync engine: LocalFolder, B2Folder, synchronize() |
 | `@backblaze/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
-| `@backblaze/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible wrapper (stub, M10) |
+| `@backblaze/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignGetObjectUrl |
 
 ## Source layout
 
 ```
 src/
   types/         Branded IDs, DTOs, enums (ids.ts, auth.ts, bucket.ts, file.ts, upload.ts, ...)
-  errors/        B2Error hierarchy + classifyError + isTransient
-  http/          HttpTransport interface, FetchTransport, RetryTransport, retry math, user-agent
+  errors/        B2Error hierarchy + classifyError + isTransient + B2InsufficientCapabilityError
+  http/          HttpTransport, FetchTransport, RetryTransport (injectable sleepImpl), retry math
   raw/           RawClient (all 37 endpoints), B2-specific percent-encoding
-  auth/          AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realm URLs
-  streams/       IncrementalSha1 (Node crypto / WebCrypto), ContentSource (Blob/Buffer/Stream), progress
-  upload/        uploadSmallFile, uploadLargeFile (multipart), Semaphore concurrency
-  download/      downloadById/ByName, parallel ranged downloads
-  copy/          Server-side copy (stub)
-  sync/          Sync engine (stub)
-  s3/            S3-compatible wrapper (stub)
+  auth/          AccountInfo interface, InMemoryAccountInfo, FileAccountInfo, UploadUrlPool, realms
+  streams/       IncrementalSha1 (Node crypto / WebCrypto), ContentSource adapters, EncryptionKey
+  upload/        uploadSmallFile, uploadLargeFile (multipart + resume), createWriteStream, concurrency
+  download/      downloadById/ByName, parallel ranged downloads with per-range retry
+  copy/          copyLargeFile orchestrator (server-side multipart copy via b2_copy_part)
+  sync/          synchronize() async generator + LocalFolder + B2Folder scanners
+  s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl)
   simulator/     B2Simulator + SimulatorTransport for testing
-  client.ts      B2Client high-level facade
-  bucket.ts      Bucket handle
-  object.ts      B2Object handle
+  client.ts      B2Client high-level facade + hasCapabilities + CapabilityCheckResult
+  bucket.ts      Bucket: upload/download/list/copy/copyLargeFile/deleteMany/deleteAll/unhide/...
+  object.ts      B2Object: upload, download, createReadStream, createWriteStream, getFileInfo
   index.ts       Public API re-exports
   version.ts     VERSION constant
 ```
@@ -63,9 +69,14 @@ src/
 - **No top-level await.** The `node:crypto` import in `streams/hash.ts` uses lazy async initialization. CJS doesn't support TLA.
 - **IncrementalSha1.update() is async** (returns `Promise<void>`) because it awaits lazy init of the Node crypto backend. Always `await sha1.update(data)`.
 - **verbatimModuleSyntax** is ON. Use `import type` for type-only imports. Use value imports for anything used at runtime (including `instanceof` checks).
-- **Web Streams everywhere.** Downloads return `ReadableStream<Uint8Array>`. The simulator wraps responses in ReadableStream.
+- **Web Streams everywhere.** Downloads return `ReadableStream<Uint8Array>`. `B2Object.createWriteStream` returns a `WritableStream<Uint8Array>` for pipeTo-style uploads. The simulator wraps responses in ReadableStream.
 - **Upload URL pool** with checkout/checkin/evict pattern (mirrors Python SDK). URLs are recycled across requests, evicted on error.
-- **RetryTransport** wraps any HttpTransport. Handles 401 reauth, 503/408/429 backoff with jitter, Retry-After header, network errors.
+- **RetryTransport** wraps any HttpTransport. Handles 401 reauth, 503/408/429 backoff with jitter, Retry-After header, network errors. The `sleepImpl` option lets tests inject a no-op sleep for portability across vitest and Bun's vitest-compat (which doesn't support `vi.mock`'s `importOriginal` / `vi.importActual`).
+- **Resume support** for multipart uploads: pass `resume: true` (or an explicit `resumeFileId`) to `uploadLargeFile` / `Bucket.upload`. The engine queries `listUnfinishedLargeFiles` + `listParts` and skips parts whose locally-recomputed SHA-1 matches the server's. See `src/upload/resume.ts`.
+- **Per-range retry** for parallel downloads. `createParallelDownloadStream` retries each range independently with exponential backoff (default 5 attempts) so a single transient 503 doesn't kill the whole transfer.
+- **SSE-C key safety.** `EncryptionKey.fromBytes(rawKey)` computes MD5 internally and **redacts itself** in `toJSON()`, `toString()`, and Node's `util.inspect` custom symbol so the key never lands in logs.
+- **Simulator monotonic timestamps.** The simulator generates strictly-increasing `uploadTimestamp` values so version ordering is deterministic in tests (Date.now() ties broke version selection).
+- **No module-level test mocking.** Tests use dependency injection instead of `vi.mock` factories with `importOriginal` / `importActual`, which behave differently across vitest and Bun.
 
 ## TypeScript strictness
 

@@ -24,17 +24,25 @@ pnpm test
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
 | `pnpm test:watch` | Run tests in watch mode |
+| `pnpm test:coverage` | Run tests with v8 coverage report (target ≥ 95% statements) |
 | `pnpm lint` | Check formatting + lint rules (Biome) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
+| `pnpm lint:docs` | Check JSDoc / TSDoc completeness with ESLint |
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
+| `pnpm docs` | Generate TypeDoc API documentation under `./docs` |
+
+CI also runs `bun test src/` against the same test suite. Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
 
 ## Before submitting a PR
 
 1. `pnpm typecheck` passes with zero errors
 2. `pnpm test` passes with all tests green
-3. `pnpm lint` passes with no errors
-4. If you added a new public API, add a test using the `B2Simulator`
-5. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
+3. `pnpm test:coverage` keeps coverage at or above 95% statements
+4. `pnpm lint` and `pnpm lint:docs` both pass with no errors
+5. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
+6. If you added a new public API, add a test using the `B2Simulator`
+7. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
+8. If you added a new exported type used in any public method signature, re-export it from `src/index.ts` (TypeDoc fails the docs job otherwise)
 
 ## Code style
 
@@ -89,18 +97,21 @@ import { B2Error } from './errors/index.js'          // used with instanceof
 
 ```
 src/
-  types/         Pure type definitions (no runtime code)
-  errors/        Error hierarchy: B2Error base + subclasses + classifyError()
-  http/          Transport layer: HttpTransport interface, fetch wrapper, retry middleware
+  types/         Pure type definitions (no runtime code) + EncryptionKey class
+  errors/        Error hierarchy: B2Error base + 13 subclasses + classifyError() + B2InsufficientCapabilityError
+  http/          Transport layer: HttpTransport, FetchTransport, RetryTransport (with injectable sleepImpl)
   raw/           RawClient: 1:1 bindings for all 37 B2 native API endpoints
-  auth/          AccountInfo (auth state), upload URL pool, realm URLs
+  auth/          AccountInfo (in-memory + JSON-file backends), upload URL pool, realm URLs
   streams/       SHA1 hashing, ContentSource adapters, progress tracking
-  upload/        Small file + large file (multipart) upload orchestration
-  download/      Single + parallel ranged download
+  upload/        Single + large-file (multipart) upload, resume.ts, stream.ts (WritableStream sink)
+  download/      Single + parallel ranged download (with per-range retry)
+  copy/          copyLargeFile orchestrator (server-side multipart copy)
+  sync/          synchronize() async generator, LocalFolder + B2Folder scanners, policies, actions
+  s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl)
   simulator/     In-memory B2 server for testing
-  client.ts      B2Client: high-level facade over RawClient
-  bucket.ts      Bucket: operations scoped to a bucket
-  object.ts      B2Object: operations scoped to a file name
+  client.ts      B2Client: high-level facade over RawClient + hasCapabilities
+  bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhide)
+  object.ts      B2Object: operations scoped to a file name (including createReadStream/createWriteStream)
 ```
 
 ### Testing

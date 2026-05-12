@@ -111,6 +111,45 @@ await bucket.upload({
 })
 ```
 
+#### Resume a failed multipart upload
+
+Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`, checks which parts are already on the server, and only re-uploads the missing ones. Parts whose locally-recomputed SHA-1 matches the server's are skipped.
+
+```ts
+// Restart the upload that crashed at part 47 of 100
+await bucket.upload({
+  fileName: 'backup.tar.gz',
+  source: new BlobSource(largeBlob),
+  partSize: 64 * 1024 * 1024,
+  resume: true,
+})
+
+// Or target a specific in-progress large file explicitly
+await bucket.upload({
+  fileName: 'backup.tar.gz',
+  source: new BlobSource(largeBlob),
+  resumeFileId: knownLargeFileId,
+})
+```
+
+#### Streaming uploads via WritableStream
+
+Pipe any `ReadableStream<Uint8Array>` straight into B2. The SDK buffers up to `partSize` bytes per part and uploads them in parallel through the multipart protocol. Backpressure is honoured via the internal queue.
+
+```ts
+const { writable, done } = bucket.file('logs.ndjson').createWriteStream({
+  partSize: 16 * 1024 * 1024,
+  concurrency: 4,
+})
+
+// Pipe from any ReadableStream source: fetch().body, fs.createReadStream(...) (with toWeb), etc.
+await response.body.pipeTo(writable)
+const fileVersion = await done
+console.log(`Streamed upload finished: ${fileVersion.fileName} (${fileVersion.contentLength} bytes)`)
+```
+
+> Streaming uploads do not support resume because the total size and per-part SHA-1s are not known in advance. Use the buffered `upload` path with `resume: true` when that matters.
+
 ### Downloads
 
 ```ts
@@ -123,11 +162,14 @@ const partial = await bucket.download('large-file.bin', {
   range: 'bytes=0-1023',
 })
 
-// Parallel ranged download (for large files)
+// Parallel ranged download (for large files).
+// Each range is retried independently with exponential backoff so a single
+// transient 503 does not kill the whole transfer.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
   rangeSize: 10 * 1024 * 1024,
+  maxRetries: 5,
 })
 ```
 
@@ -142,17 +184,55 @@ for await (const file of bucket.listAllFiles({ prefix: 'logs/' })) {
   console.log(file.fileName, file.contentLength)
 }
 
+// Look up the latest visible version by name (returns null if missing or hidden)
+const info = await bucket.getFileInfoByName('hello.txt')
+
 // Hide a file (soft delete)
 await bucket.hideFile('old-config.json')
+
+// Restore visibility by removing the latest hide marker
+await bucket.unhide('old-config.json')
 
 // Delete a specific file version
 await bucket.deleteFileVersion('file.txt', fileId)
 
-// Server-side copy
+// Server-side copy (single call, suitable for any size B2 supports)
 await bucket.copyFile({
   sourceFileId: originalFileId,
   fileName: 'copy-of-file.txt',
 })
+
+// Server-side multipart copy for large files. Splits the source into parts
+// copied in parallel via b2_copy_part. Falls back to copyFile below partSize.
+await bucket.copyLargeFile({
+  sourceFileId: originalFileId,
+  fileName: 'big-replica.bin',
+  partSize: 64 * 1024 * 1024,
+  concurrency: 4,
+})
+```
+
+### Bulk delete
+
+Two primitives on `Bucket` for cleanup at scale:
+
+```ts
+// Delete a known set of file versions with bounded concurrency
+const result = await bucket.deleteMany(
+  [
+    { fileName: 'a.txt', fileId: id1 },
+    { fileName: 'b.txt', fileId: id2 },
+  ],
+  { concurrency: 10 },
+)
+console.log(`deleted=${result.deleted} errors=${result.errors.length}`)
+
+// Stream-delete every version matching a prefix (or the whole bucket if omitted).
+// Yields a DeleteAllEvent per version; never materialises the full list in memory.
+for await (const event of bucket.deleteAll({ prefix: 'tmp/', dryRun: false })) {
+  if (event.type === 'delete') console.log('deleted', event.fileName)
+  else if (event.type === 'error') console.warn('failed', event.fileName, event.message)
+}
 ```
 
 ### Application keys
@@ -170,10 +250,28 @@ const keys = await client.listKeys()
 await client.deleteKey(key.applicationKeyId)
 ```
 
+#### Capability checks
+
+Fail fast with a typed error instead of waiting for a server 401/403:
+
+```ts
+import { B2InsufficientCapabilityError } from '@backblaze/b2-sdk/errors'
+
+const { ok, missing } = client.hasCapabilities(['readFiles', 'writeFiles'])
+if (!ok) {
+  throw new B2InsufficientCapabilityError(
+    ['readFiles', 'writeFiles'],
+    [...missing], // available capabilities is on accountInfo if needed
+    missing,
+  )
+}
+```
+
 ### Server-side encryption
 
 ```ts
 import { SSE_B2, sseCustomer } from '@backblaze/b2-sdk'
+import { EncryptionKey } from '@backblaze/b2-sdk/streams'
 
 // SSE-B2 (Backblaze-managed keys)
 await bucket.upload({
@@ -182,12 +280,24 @@ await bucket.upload({
   serverSideEncryption: SSE_B2,
 })
 
-// SSE-C (customer-provided keys)
+// SSE-C (customer-provided keys) - precomputed digests
 await bucket.upload({
   fileName: 'secret.dat',
   source: new BufferSource(data),
   serverSideEncryption: sseCustomer(base64Key, base64KeyMd5),
 })
+
+// SSE-C from raw bytes (Node). EncryptionKey computes the MD5 internally and
+// redacts itself in JSON.stringify, toString, and Node's util.inspect so the
+// key never lands in logs.
+const key = await EncryptionKey.fromBytes(randomBytes(32))
+await bucket.upload({
+  fileName: 'secret.dat',
+  source: new BufferSource(data),
+  serverSideEncryption: key,
+})
+console.log(key)            // [EncryptionKey SSE-C [redacted SSE-C key]]
+JSON.stringify(key)         // customer key and MD5 fields show "[redacted SSE-C key]"
 ```
 
 ### Object lock and legal hold
@@ -197,6 +307,14 @@ await bucket.updateFileRetention('important.pdf', fileId, {
   mode: 'governance',
   retainUntilTimestamp: Date.now() + 365 * 24 * 60 * 60 * 1000,
 })
+
+// Shorten a governance-mode retention. Requires the bypassGovernance capability.
+await bucket.updateFileRetention(
+  'important.pdf',
+  fileId,
+  { mode: 'governance', retainUntilTimestamp: Date.now() + 24 * 60 * 60 * 1000 },
+  { bypassGovernance: true },
+)
 
 await bucket.updateFileLegalHold('evidence.pdf', fileId, 'on')
 ```
@@ -224,6 +342,30 @@ await bucket.setNotificationRules([
 const auth = await bucket.getDownloadAuthorization('photos/', 3600)
 ```
 
+### Persistent authorization (Node)
+
+`FileAccountInfo` persists the authorization response to a JSON file on disk so processes can restart without re-authorizing. It implements the `AccountInfo` interface and is a drop-in replacement for `InMemoryAccountInfo`. Upload URL pools remain in memory.
+
+```ts
+import { B2Client } from '@backblaze/b2-sdk'
+import { FileAccountInfo } from '@backblaze/b2-sdk/auth/file'
+
+const accountInfo = new FileAccountInfo('/var/cache/my-app/b2-auth.json')
+await accountInfo.load() // populate from disk if the file exists
+
+const client = new B2Client({
+  applicationKeyId: process.env.B2_APPLICATION_KEY_ID,
+  applicationKey: process.env.B2_APPLICATION_KEY,
+  accountInfo,
+})
+
+if (accountInfo.getAuth() === null) {
+  await client.authorize() // first run, or token cleared
+}
+```
+
+`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
+
 ## Subpath exports
 
 The SDK is organized into subpath exports for tree-shaking:
@@ -236,22 +378,33 @@ import { B2Client, Bucket, B2Object } from '@backblaze/b2-sdk'
 import { RawClient } from '@backblaze/b2-sdk/raw'
 
 // Error types for catch blocks
-import { B2Error, ExpiredAuthTokenError, CapExceededError } from '@backblaze/b2-sdk/errors'
+import {
+  B2Error,
+  ExpiredAuthTokenError,
+  CapExceededError,
+  B2InsufficientCapabilityError,
+} from '@backblaze/b2-sdk/errors'
 
-// Auth backends
+// Auth backends (in-memory default, file-backed for Node persistence)
 import { InMemoryAccountInfo } from '@backblaze/b2-sdk/auth'
+import { FileAccountInfo } from '@backblaze/b2-sdk/auth/file'
 
-// Streaming utilities
-import { IncrementalSha1, BufferSource, BlobSource } from '@backblaze/b2-sdk/streams'
+// Streaming utilities + SSE-C key wrapper
+import {
+  IncrementalSha1,
+  BufferSource,
+  BlobSource,
+  EncryptionKey,
+} from '@backblaze/b2-sdk/streams'
+
+// Sync engine (local <-> B2)
+import { synchronize, LocalFolder, B2Folder } from '@backblaze/b2-sdk/sync'
+
+// S3-compatible helpers (requires @aws-sdk/client-s3 peer dependency)
+import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze/b2-sdk/s3'
 
 // In-memory B2 server for tests (no network required)
 import { B2Simulator } from '@backblaze/b2-sdk/simulator'
-
-// S3-compatible wrapper (requires @aws-sdk/client-s3 peer dependency)
-import {} from '@backblaze/b2-sdk/s3' // coming soon
-
-// Sync engine (local <-> B2)
-import {} from '@backblaze/b2-sdk/sync' // coming soon
 ```
 
 ## Custom transport
@@ -340,10 +493,15 @@ describe('my app', () => {
 
 ## Error handling
 
-All B2 API errors are thrown as typed `B2Error` subclasses:
+All B2 API errors are thrown as typed `B2Error` subclasses (13 in total). Client-side capability checks throw `B2InsufficientCapabilityError`.
 
 ```ts
-import { B2Error, CapExceededError, DuplicateBucketNameError } from '@backblaze/b2-sdk/errors'
+import {
+  B2Error,
+  CapExceededError,
+  DuplicateBucketNameError,
+  B2InsufficientCapabilityError,
+} from '@backblaze/b2-sdk/errors'
 
 try {
   await client.createBucket({ bucketName: 'test', bucketType: 'allPrivate' })
@@ -352,6 +510,8 @@ try {
     console.log('Bucket already exists')
   } else if (err instanceof CapExceededError) {
     console.log('Storage cap exceeded, upgrade your plan')
+  } else if (err instanceof B2InsufficientCapabilityError) {
+    console.log('Missing capabilities:', err.missing)
   } else if (err instanceof B2Error) {
     console.log(`B2 error: ${err.code} (status ${err.status}, retryable: ${err.retryable})`)
   }
