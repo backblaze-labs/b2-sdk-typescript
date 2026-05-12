@@ -1,0 +1,62 @@
+name: Integration (real B2)
+
+# Runs the integration suite against a real Backblaze B2 account. Gated on
+# repo-level secrets being present, so the job is automatically skipped on
+# pull requests from forks (which can't see secrets).
+#
+# Required repo secrets:
+#   B2_APPLICATION_KEY_ID
+#   B2_APPLICATION_KEY
+# Recommended: scope the key to a dedicated test account. The tests create
+# ephemeral `sdk-test-<timestamp>` buckets and clean up after themselves
+# (including a defensive sweep at startup for any stale buckets from
+# previously-crashed runs).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 06:00 UTC. Catches drift from B2 API changes that the
+    # in-memory simulator wouldn't see.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Integration (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    # Fork PRs can't access secrets; skip rather than fail loudly. Same-repo
+    # PRs and pushes to main do run.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      # Run matrix entries one at a time. The integration tests share a single
+      # B2 account; serializing avoids one entry's bucket-cleanup sweep racing
+      # against another entry's freshly-created bucket. Wall-clock cost is
+      # ~2 min total either way.
+      max-parallel: 1
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run integration tests against real B2
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: |
+          if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then
+            echo "::warning::B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY secrets are not set; integration suite will skip every test."
+          fi
+          pnpm test:integration

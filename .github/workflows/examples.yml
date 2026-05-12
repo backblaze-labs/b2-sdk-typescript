@@ -66,6 +66,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Examples import `@backblaze/b2-sdk` which resolves via package.json's
+      # `exports` map to `./dist/index.js`. Build dist/ so tsx can resolve
+      # those imports the same way an end user would after `npm install`.
+      # (The typecheck jobs above don't need this because tsc honours
+      # `paths` to map the bare specifier straight at ../src/*.ts.)
+      - run: pnpm build
       - name: Prepare smoke fixtures
         run: |
           mkdir -p /tmp/smoke-data

@@ -10,9 +10,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { Bucket } from '../../src/bucket.js'
-import { B2Client } from '../../src/client.js'
-import { BufferSource } from '../../src/streams/source.js'
+import type { Bucket } from '../../src/bucket.ts'
+import { B2Client } from '../../src/client.ts'
+import { BufferSource } from '../../src/streams/source.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
@@ -30,6 +30,31 @@ describe.skipIf(skip)('B2 integration', () => {
       applicationKey: appKey,
     })
     await client.authorize()
+
+    // Defensive: sweep stale `sdk-test-*` buckets from prior runs that crashed
+    // before their afterAll cleanup. Each B2 account has a bucket-count limit
+    // (typically 100); without this sweep the integration job starts failing
+    // once stale state accumulates. Safe because the workflow runs matrix
+    // entries serially (max-parallel: 1) so no concurrent run can have a
+    // live `sdk-test-*` bucket we'd accidentally nuke.
+    const existing = await client.listBuckets()
+    for (const b of existing) {
+      if (!b.name.startsWith('sdk-test-')) continue
+      try {
+        for await (const file of b.listAllFiles()) {
+          await b.deleteFileVersion(file.fileName, file.fileId)
+        }
+        const versions = await b.listFileVersions()
+        for (const fv of versions.files) {
+          await b.deleteFileVersion(fv.fileName, fv.fileId)
+        }
+        await b.delete()
+      } catch {
+        // Skip buckets we can't clean up (permissions, in-flight uploads).
+        // They'll surface as a hard bucket-limit error later, which is the
+        // right place to fix it.
+      }
+    }
 
     bucket = await client.createBucket({
       bucketName,
