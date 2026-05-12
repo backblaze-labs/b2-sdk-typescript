@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.js'
 import { B2Simulator } from './simulator/index.js'
 import { BufferSource } from './streams/source.js'
-import type { FileId, LargeFileId } from './types/ids.js'
+import type { LargeFileId } from './types/ids.js'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -35,10 +35,9 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Arra
 
 describe('B2Client with simulator', () => {
   let client: B2Client
-  let sim: B2Simulator
 
   beforeEach(async () => {
-    ;({ client, sim } = makeClient())
+    ;({ client } = makeClient())
     await client.authorize()
   })
 
@@ -710,6 +709,183 @@ describe('file versioning', () => {
     await bucket.hideFile('secret.txt')
 
     await expect(bucket.download('secret.txt')).rejects.toThrow()
+  })
+})
+
+// --- Key management tests ---
+
+describe('key management', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('creates and lists application keys', async () => {
+    const { accountId } = await import('./types/ids.js')
+
+    const key = await client.raw.createKey(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        accountId: accountId(client.accountInfo.getAccountId()),
+        capabilities: ['readFiles', 'writeFiles'],
+        keyName: 'test-key',
+      },
+    )
+
+    expect(key.keyName).toBe('test-key')
+    expect(key.applicationKeyId).toBeTruthy()
+    expect(key.applicationKey).toBeTruthy()
+    expect(key.capabilities).toContain('readFiles')
+    expect(key.capabilities).toContain('writeFiles')
+
+    const listing = await client.raw.listKeys(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { accountId: accountId(client.accountInfo.getAccountId()) },
+    )
+
+    expect(listing.keys.length).toBeGreaterThanOrEqual(1)
+    const found = listing.keys.find((k) => k.keyName === 'test-key')
+    expect(found).toBeTruthy()
+  })
+
+  it('deletes an application key', async () => {
+    const { accountId } = await import('./types/ids.js')
+
+    const key = await client.raw.createKey(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        accountId: accountId(client.accountInfo.getAccountId()),
+        capabilities: ['listBuckets'],
+        keyName: 'to-delete',
+      },
+    )
+
+    const deleted = await client.raw.deleteKey(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { applicationKeyId: key.applicationKeyId },
+    )
+    expect(deleted.keyName).toBe('to-delete')
+
+    const listing = await client.raw.listKeys(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { accountId: accountId(client.accountInfo.getAccountId()) },
+    )
+    const found = listing.keys.find((k) => k.keyName === 'to-delete')
+    expect(found).toBeUndefined()
+  })
+
+  it('creates a key scoped to a bucket', async () => {
+    const { accountId } = await import('./types/ids.js')
+    const bucket = await client.createBucket({ bucketName: 'key-scope', bucketType: 'allPrivate' })
+
+    const key = await client.raw.createKey(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        accountId: accountId(client.accountInfo.getAccountId()),
+        capabilities: ['readFiles'],
+        keyName: 'scoped-key',
+        bucketId: bucket.id,
+        namePrefix: 'photos/',
+      },
+    )
+
+    expect(key.bucketId).toBe(bucket.id)
+    expect(key.namePrefix).toBe('photos/')
+  })
+})
+
+// --- Notification rules tests ---
+
+describe('notification rules', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('gets empty notification rules for new bucket', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'notif-empty',
+      bucketType: 'allPrivate',
+    })
+
+    const rules = await bucket.getNotificationRules()
+    expect(rules.eventNotificationRules).toEqual([])
+    expect(rules.bucketId).toBe(bucket.id)
+  })
+
+  it('sets and gets notification rules', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'notif-set',
+      bucketType: 'allPrivate',
+    })
+
+    const rule = {
+      eventTypes: ['b2:ObjectCreated:*'] as const,
+      isEnabled: true,
+      isSuspended: false,
+      name: 'upload-webhook',
+      objectNamePrefix: 'photos/',
+      suspensionReason: '',
+      targetConfiguration: {
+        targetType: 'webhook',
+        url: 'https://example.com/webhook',
+      },
+    }
+
+    const setResult = await bucket.setNotificationRules([rule])
+    expect(setResult.eventNotificationRules).toHaveLength(1)
+    expect(setResult.eventNotificationRules[0]?.name).toBe('upload-webhook')
+
+    const getResult = await bucket.getNotificationRules()
+    expect(getResult.eventNotificationRules).toHaveLength(1)
+    expect(getResult.eventNotificationRules[0]?.targetConfiguration.url).toBe(
+      'https://example.com/webhook',
+    )
+  })
+
+  it('replaces notification rules', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'notif-replace',
+      bucketType: 'allPrivate',
+    })
+
+    await bucket.setNotificationRules([
+      {
+        eventTypes: ['b2:ObjectCreated:*'],
+        isEnabled: true,
+        isSuspended: false,
+        name: 'rule-1',
+        objectNamePrefix: '',
+        suspensionReason: '',
+        targetConfiguration: { targetType: 'webhook', url: 'https://one.example.com' },
+      },
+    ])
+
+    await bucket.setNotificationRules([
+      {
+        eventTypes: ['b2:ObjectDeleted:*'],
+        isEnabled: true,
+        isSuspended: false,
+        name: 'rule-2',
+        objectNamePrefix: '',
+        suspensionReason: '',
+        targetConfiguration: { targetType: 'webhook', url: 'https://two.example.com' },
+      },
+    ])
+
+    const rules = await bucket.getNotificationRules()
+    expect(rules.eventNotificationRules).toHaveLength(1)
+    expect(rules.eventNotificationRules[0]?.name).toBe('rule-2')
   })
 })
 

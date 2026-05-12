@@ -1,5 +1,5 @@
 import type { Capability } from './auth.js'
-import type { AccountId, ApplicationKeyId, BucketId, KeyId } from './ids.js'
+import type { AccountId, ApplicationKeyId, BucketId } from './ids.js'
 
 export interface CreateKeyRequest {
   readonly accountId: AccountId

@@ -11,7 +11,8 @@
         "noExcessiveCognitiveComplexity": {
           "level": "warn",
           "options": { "maxAllowedComplexity": 45 }
-        }
+        },
+        "useLiteralKeys": "off"
       },
       "style": {
         "noNonNullAssertion": "warn",

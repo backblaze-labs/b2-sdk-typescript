@@ -17,7 +17,7 @@ import type {
 import type { BucketRetentionPolicy } from './types/bucket.js'
 import type { EncryptionSetting } from './types/encryption.js'
 import type { ApplicationKeyId, BucketId } from './types/ids.js'
-import { accountId, bucketId } from './types/ids.js'
+import { accountId } from './types/ids.js'
 import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.js'
 import type { ReplicationConfiguration } from './types/replication.js'
 

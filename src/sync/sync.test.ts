@@ -56,7 +56,7 @@ function makeNoopFactory(): ActionFactory {
     upload: (s: LocalSyncPath) =>
       new UploadAction(s.relativePath, s.absolutePath, s.size, async () => {}),
     download: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-download'),
-    copy: (s: B2SyncPath, dest: string) => new SkipAction(s.relativePath, 'noop-copy'),
+    copy: (s: B2SyncPath, _dest: string) => new SkipAction(s.relativePath, 'noop-copy'),
     hide: (path: string) => new SkipAction(path, 'noop-hide'),
     deleteRemote: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-delete-remote'),
     deleteLocal: (s: LocalSyncPath) => new SkipAction(s.relativePath, 'noop-delete-local'),

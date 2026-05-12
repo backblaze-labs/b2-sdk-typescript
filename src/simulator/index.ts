@@ -2,7 +2,8 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { AuthorizeAccountResponse } from '../types/auth.js'
 import type { BucketInfo, BucketType } from '../types/bucket.js'
 import type { FileAction, FileVersion } from '../types/file.js'
-import type { AccountId, AuthToken, BucketId, FileId, LargeFileId } from '../types/ids.js'
+import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.js'
+import type { EventNotificationRule } from '../types/notifications.js'
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -28,10 +29,23 @@ function genId(prefix: string): string {
   return `${prefix}_${String(nextId++).padStart(12, '0')}`
 }
 
+interface StoredKey {
+  readonly applicationKeyId: string
+  readonly keyName: string
+  readonly capabilities: readonly string[]
+  readonly accountId: string
+  readonly applicationKey: string
+  readonly bucketId: string | null
+  readonly namePrefix: string | null
+  readonly expirationTimestamp: number | null
+}
+
 export class B2Simulator {
   private readonly buckets = new Map<string, StoredBucket>()
   private readonly accountId = 'sim_account_0001'
   private readonly largeFiles = new Map<string, LargeFileInProgress>()
+  private readonly keys = new Map<string, StoredKey>()
+  private readonly notificationRules = new Map<string, EventNotificationRule[]>()
 
   transport(): HttpTransport {
     return new SimulatorTransport(this)
@@ -109,6 +123,29 @@ export class B2Simulator {
         return this.getDownloadAuthorization(
           body as { bucketId: string; fileNamePrefix: string; validDurationInSeconds: number },
         )
+      case 'b2_create_key':
+        return this.createKey(
+          body as {
+            accountId: string
+            capabilities: string[]
+            keyName: string
+            validDurationInSeconds?: number
+            bucketId?: string
+            namePrefix?: string
+          },
+        )
+      case 'b2_list_keys':
+        return this.listKeys(
+          body as { accountId: string; maxKeyCount?: number; startApplicationKeyId?: string },
+        )
+      case 'b2_delete_key':
+        return this.deleteKey(body as { applicationKeyId: string })
+      case 'b2_get_bucket_notification_rules':
+        return this.getBucketNotificationRules(body as { bucketId: string })
+      case 'b2_set_bucket_notification_rules':
+        return this.setBucketNotificationRules(
+          body as { bucketId: string; eventNotificationRules: EventNotificationRule[] },
+        )
       default:
         return {
           status: 400,
@@ -135,14 +172,14 @@ export class B2Simulator {
     if (path.includes('b2_download_file_by_id')) {
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
-      return this.downloadById(fileId, headers.range)
+      return this.downloadById(fileId, headers['range'])
     }
 
     const fileMatch = path.match(/\/file\/([^/]+)\/(.+)/)
     if (fileMatch) {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
-      return this.downloadByName(bucketName, fileName, headers.range)
+      return this.downloadByName(bucketName, fileName, headers['range'])
     }
 
     return { status: 404, headers: {}, data: null }
@@ -370,23 +407,23 @@ export class B2Simulator {
   }
 
   private updateBucket(req: Record<string, unknown>): { status: number; body: unknown } {
-    const bucket = this.buckets.get(req.bucketId as string)
+    const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     const updated: BucketInfo = {
       ...bucket.info,
-      ...(req.bucketType !== undefined ? { bucketType: req.bucketType as BucketType } : {}),
-      ...(req.bucketInfo !== undefined
-        ? { bucketInfo: req.bucketInfo as Record<string, string> }
+      ...(req['bucketType'] !== undefined ? { bucketType: req['bucketType'] as BucketType } : {}),
+      ...(req['bucketInfo'] !== undefined
+        ? { bucketInfo: req['bucketInfo'] as Record<string, string> }
         : {}),
-      ...(req.lifecycleRules !== undefined
-        ? { lifecycleRules: req.lifecycleRules as BucketInfo['lifecycleRules'] }
+      ...(req['lifecycleRules'] !== undefined
+        ? { lifecycleRules: req['lifecycleRules'] as BucketInfo['lifecycleRules'] }
         : {}),
-      ...(req.corsRules !== undefined
-        ? { corsRules: req.corsRules as BucketInfo['corsRules'] }
+      ...(req['corsRules'] !== undefined
+        ? { corsRules: req['corsRules'] as BucketInfo['corsRules'] }
         : {}),
       revision: bucket.info.revision + 1,
     }
-    this.buckets.set(req.bucketId as string, { info: updated, files: bucket.files })
+    this.buckets.set(req['bucketId'] as string, { info: updated, files: bucket.files })
     return { status: 200, body: updated }
   }
 
@@ -686,6 +723,123 @@ export class B2Simulator {
     }
   }
 
+  // --- Keys ---
+
+  private createKey(req: {
+    accountId: string
+    capabilities: string[]
+    keyName: string
+    validDurationInSeconds?: number
+    bucketId?: string
+    namePrefix?: string
+  }): { status: number; body: unknown } {
+    const kid = genId('sim_key')
+    const appKey = genId('sim_secret')
+    const expiration =
+      req.validDurationInSeconds !== undefined
+        ? Date.now() + req.validDurationInSeconds * 1000
+        : null
+    const stored: StoredKey = {
+      applicationKeyId: kid,
+      keyName: req.keyName,
+      capabilities: req.capabilities,
+      accountId: req.accountId,
+      applicationKey: appKey,
+      bucketId: req.bucketId ?? null,
+      namePrefix: req.namePrefix ?? null,
+      expirationTimestamp: expiration,
+    }
+    this.keys.set(kid, stored)
+
+    return {
+      status: 200,
+      body: {
+        keyName: stored.keyName,
+        applicationKeyId: stored.applicationKeyId,
+        applicationKey: stored.applicationKey,
+        capabilities: stored.capabilities,
+        accountId: stored.accountId,
+        expirationTimestamp: stored.expirationTimestamp,
+        bucketId: stored.bucketId,
+        namePrefix: stored.namePrefix,
+        options: [],
+      },
+    }
+  }
+
+  private listKeys(req: {
+    accountId: string
+    maxKeyCount?: number
+    startApplicationKeyId?: string
+  }): { status: number; body: unknown } {
+    const max = req.maxKeyCount ?? 1000
+    let allKeys = [...this.keys.values()].sort((a, b) =>
+      a.applicationKeyId.localeCompare(b.applicationKeyId),
+    )
+
+    if (req.startApplicationKeyId) {
+      const start = req.startApplicationKeyId
+      allKeys = allKeys.filter((k) => k.applicationKeyId >= start)
+    }
+
+    const keys = allKeys.slice(0, max).map((k) => ({
+      keyName: k.keyName,
+      applicationKeyId: k.applicationKeyId,
+      capabilities: k.capabilities,
+      accountId: k.accountId,
+      expirationTimestamp: k.expirationTimestamp,
+      bucketId: k.bucketId,
+      namePrefix: k.namePrefix,
+      options: [],
+    }))
+
+    const nextId = allKeys.length > max ? (allKeys[max]?.applicationKeyId ?? null) : null
+
+    return { status: 200, body: { keys, nextApplicationKeyId: nextId } }
+  }
+
+  private deleteKey(req: { applicationKeyId: string }): { status: number; body: unknown } {
+    const key = this.keys.get(req.applicationKeyId)
+    if (!key) return this.error(400, 'bad_request', 'Key not found')
+    this.keys.delete(req.applicationKeyId)
+    return {
+      status: 200,
+      body: {
+        keyName: key.keyName,
+        applicationKeyId: key.applicationKeyId,
+        capabilities: key.capabilities,
+        accountId: key.accountId,
+        expirationTimestamp: key.expirationTimestamp,
+        bucketId: key.bucketId,
+        namePrefix: key.namePrefix,
+        options: [],
+      },
+    }
+  }
+
+  // --- Notifications ---
+
+  private getBucketNotificationRules(req: { bucketId: string }): {
+    status: number
+    body: unknown
+  } {
+    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const rules = this.notificationRules.get(req.bucketId) ?? []
+    return { status: 200, body: { bucketId: req.bucketId, eventNotificationRules: rules } }
+  }
+
+  private setBucketNotificationRules(req: {
+    bucketId: string
+    eventNotificationRules: EventNotificationRule[]
+  }): { status: number; body: unknown } {
+    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    this.notificationRules.set(req.bucketId, req.eventNotificationRules)
+    return {
+      status: 200,
+      body: { bucketId: req.bucketId, eventNotificationRules: req.eventNotificationRules },
+    }
+  }
+
   // --- Helpers ---
 
   private makeFileVersion(
@@ -755,7 +909,7 @@ class SimulatorTransport implements HttpTransport {
             controller.close()
           },
         }),
-        json: <T>() => Promise.reject(new Error('Download response is not JSON')),
+        json: () => Promise.reject(new Error('Download response is not JSON')),
         text: () => Promise.resolve(new TextDecoder().decode(data)),
         arrayBuffer: () =>
           Promise.resolve(

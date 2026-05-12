@@ -6,7 +6,7 @@ import { ProgressTracker } from '../streams/progress.js'
 import type { ContentSource } from '../streams/source.js'
 import type { EncryptionSetting } from '../types/encryption.js'
 import type { FileVersion } from '../types/file.js'
-import type { BucketId, LargeFileId } from '../types/ids.js'
+import type { BucketId } from '../types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
 import { Semaphore } from './concurrency.js'
 
@@ -60,7 +60,6 @@ export async function uploadLargeFile(
   const largeFileId = startResp.fileId
 
   const partSha1s: string[] = new Array(parts.length)
-  const wholeSha1 = new IncrementalSha1()
   const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
   const sem = new Semaphore(concurrency)
 

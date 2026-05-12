@@ -50,7 +50,7 @@ import type {
   UpdateFileRetentionResponse,
 } from '../types/index.js'
 import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.js'
-import { buildFileInfoHeaders, encodeFileName, parseFileInfoHeaders } from './encoding.js'
+import { buildFileInfoHeaders, encodeFileName } from './encoding.js'
 
 export interface RawClientOptions {
   readonly transport: HttpTransport
@@ -340,7 +340,7 @@ export class RawClient {
       Authorization: authToken,
     }
     if (options?.range) {
-      headers.Range = options.range
+      headers['Range'] = options.range
     }
 
     const response = await this.transport.send({
@@ -364,7 +364,7 @@ export class RawClient {
       Authorization: authToken,
     }
     if (options?.range) {
-      headers.Range = options.range
+      headers['Range'] = options.range
     }
 
     const response = await this.transport.send({

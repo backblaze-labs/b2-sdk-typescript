@@ -9,7 +9,6 @@ import type {
   BucketType,
   CorsRule,
   LifecycleRule,
-  UpdateBucketRequest,
 } from './types/bucket.js'
 import type { DownloadAuthorizationResponse } from './types/download.js'
 import type { EncryptionSetting } from './types/encryption.js'

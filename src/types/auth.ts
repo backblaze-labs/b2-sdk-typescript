@@ -1,4 +1,4 @@
-import type { AccountId, ApplicationKeyId, AuthToken, BucketId } from './ids.js'
+import type { AccountId, AuthToken, BucketId } from './ids.js'
 
 export type Capability =
   | 'listKeys'

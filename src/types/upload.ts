@@ -1,5 +1,5 @@
 import type { EncryptionSetting } from './encryption.js'
-import type { BucketId, FileId, LargeFileId } from './ids.js'
+import type { BucketId, LargeFileId } from './ids.js'
 import type { FileRetentionValue, LegalHoldValue } from './lock.js'
 
 export interface GetUploadUrlRequest {
