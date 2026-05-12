@@ -39,8 +39,15 @@ jobs:
           - { os: ubuntu-latest, node-version: 24 }
           # Windows: catches path-separator and NTFS-specific issues
           # (LocalFolder normalises `\` to `/`, file.node.test.ts uses tmpdir).
-          # Node 22 only — Windows runner minutes are billed at 2x.
+          # Tested on the same Node versions as Linux. Windows runner minutes
+          # are billed at 2x on public repos.
           - { os: windows-latest, node-version: 22 }
+          - { os: windows-latest, node-version: 24 }
+          # macOS: catches APFS / Darwin fs quirks (case-insensitive lookups,
+          # .DS_Store side effects, hfs+/apfs mtime precision). macOS runner
+          # minutes are billed at 10x on public repos.
+          - { os: macos-latest, node-version: 22 }
+          - { os: macos-latest, node-version: 24 }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -66,6 +73,47 @@ jobs:
           bun-version: latest
       - run: pnpm install --frozen-lockfile
       - run: bun test src/
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run tests with coverage
+        # Vite/Vitest's `coverage.thresholds` config fails the run when any
+        # metric drops below the configured floor (see vite.config.ts).
+        run: pnpm test:coverage
+      - name: Publish coverage summary to the job log
+        if: always()
+        run: |
+          echo "## Coverage summary" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f coverage/coverage-summary.json ]; then
+            node -e "
+              const s = require('./coverage/coverage-summary.json').total;
+              const fmt = (m) => \`\${m.pct.toFixed(2).padStart(6)}%  (\${m.covered}/\${m.total})\`;
+              console.log('statements:', fmt(s.statements));
+              console.log('branches:  ', fmt(s.branches));
+              console.log('functions: ', fmt(s.functions));
+              console.log('lines:     ', fmt(s.lines));
+            " >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '(coverage-summary.json not found)' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   test-browser:
     name: Test (Browser - ${{ matrix.browser }})

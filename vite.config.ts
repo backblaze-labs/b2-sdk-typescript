@@ -50,8 +50,16 @@ export default defineConfig({
         'src/auth/account-info.ts',
         'src/sync/types.ts',
       ],
-      reporter: ['text', 'text-summary', 'html'],
+      reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],
       reportsDirectory: 'coverage',
+      // CI gate: drop below these and the coverage job fails. Adjust upward
+      // as coverage improves; never adjust downward to paper over a drop.
+      thresholds: {
+        statements: 95,
+        lines: 95,
+        functions: 95,
+        branches: 84,
+      },
     },
   },
 })

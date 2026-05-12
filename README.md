@@ -522,7 +522,7 @@ try {
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22+ | Primary target. CI runs the full suite on Node 22 and 24. |
+| Node.js | 22+ | Primary target. CI runs the full suite on Node 22 and 24 across Linux, Windows, and macOS. |
 | Bun | latest | Tested in CI via `bun test src/`. |
 | Deno | latest | Supported. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |

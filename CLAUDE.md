@@ -22,7 +22,7 @@ pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs
 ```
 
-CI runs all of these plus `bun test src/` (Bun's vitest-compat) and a per-engine `test:browser` matrix on every push.
+CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and a coverage gate that fails if statements drop below 95% (configured in `vite.config.ts`'s `coverage.thresholds`).
 
 ## Test file naming convention
 
