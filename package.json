@@ -1,0 +1,145 @@
+{
+  "name": "@backblaze/b2-sdk",
+  "version": "0.0.0",
+  "description": "The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.1.0",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./raw": {
+      "import": {
+        "types": "./dist/raw/index.d.ts",
+        "default": "./dist/raw/index.js"
+      },
+      "require": {
+        "types": "./dist/raw/index.d.cts",
+        "default": "./dist/raw/index.cjs"
+      }
+    },
+    "./errors": {
+      "import": {
+        "types": "./dist/errors/index.d.ts",
+        "default": "./dist/errors/index.js"
+      },
+      "require": {
+        "types": "./dist/errors/index.d.cts",
+        "default": "./dist/errors/index.cjs"
+      }
+    },
+    "./auth": {
+      "import": {
+        "types": "./dist/auth/index.d.ts",
+        "default": "./dist/auth/index.js"
+      },
+      "require": {
+        "types": "./dist/auth/index.d.cts",
+        "default": "./dist/auth/index.cjs"
+      }
+    },
+    "./streams": {
+      "import": {
+        "types": "./dist/streams/index.d.ts",
+        "default": "./dist/streams/index.js"
+      },
+      "require": {
+        "types": "./dist/streams/index.d.cts",
+        "default": "./dist/streams/index.cjs"
+      }
+    },
+    "./sync": {
+      "import": {
+        "types": "./dist/sync/index.d.ts",
+        "default": "./dist/sync/index.js"
+      },
+      "require": {
+        "types": "./dist/sync/index.d.cts",
+        "default": "./dist/sync/index.cjs"
+      }
+    },
+    "./simulator": {
+      "import": {
+        "types": "./dist/simulator/index.d.ts",
+        "default": "./dist/simulator/index.js"
+      },
+      "require": {
+        "types": "./dist/simulator/index.d.cts",
+        "default": "./dist/simulator/index.cjs"
+      }
+    },
+    "./s3": {
+      "import": {
+        "types": "./dist/s3/index.d.ts",
+        "default": "./dist/s3/index.js"
+      },
+      "require": {
+        "types": "./dist/s3/index.d.cts",
+        "default": "./dist/s3/index.cjs"
+      }
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "B2_INTEGRATION=1 vitest run --project integration",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "pnpm run clean && pnpm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.3.0",
+    "vite-plugin-dts": "^4.5.0",
+    "vitest": "^3.1.0"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "backblaze",
+    "b2",
+    "cloud-storage",
+    "object-storage",
+    "s3",
+    "upload",
+    "download",
+    "multipart",
+    "streaming",
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/backblaze/b2-sdk-typescript"
+  },
+  "author": "Backblaze, Inc.",
+  "homepage": "https://github.com/backblaze/b2-sdk-typescript#readme",
+  "bugs": {
+    "url": "https://github.com/backblaze/b2-sdk-typescript/issues"
+  }
+}
