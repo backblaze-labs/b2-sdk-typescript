@@ -39,6 +39,14 @@ function deterministic(size: number): Uint8Array {
   return buf
 }
 
+// Multipart copy tests round-trip ~5 MB through upload + b2_copy_part + download
+// + content-equality assertion. The simulator computes real SHA-1s for each
+// part, so wall-clock scales with how fast the runner can hash. macOS GitHub
+// runners are ~2-3x slower than local Macs for this workload, and the
+// previously-hardcoded 30 s timeout was getting clipped on bad scheduling
+// ticks. Match the upload.test.ts calibration (60 s).
+const LARGE_TEST_TIMEOUT = 60_000
+
 describe('copyLargeFile', () => {
   let client: B2Client
 
@@ -47,34 +55,38 @@ describe('copyLargeFile', () => {
     await client.authorize()
   })
 
-  it('multipart-copies a file whose size exceeds partSize', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'copy-large-src',
-      bucketType: 'allPrivate',
-    })
+  it(
+    'multipart-copies a file whose size exceeds partSize',
+    async () => {
+      const bucket = await client.createBucket({
+        bucketName: 'copy-large-src',
+        bucketType: 'allPrivate',
+      })
 
-    const content = deterministic(5_000_010)
-    const uploaded = await bucket.upload({
-      fileName: 'big.bin',
-      source: new BufferSource(content),
-      partSize: 5_000_000,
-      concurrency: 1,
-    })
+      const content = deterministic(5_000_010)
+      const uploaded = await bucket.upload({
+        fileName: 'big.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
 
-    const copied = await copyLargeFile(client.raw, client.accountInfo, {
-      sourceFileId: uploaded.fileId,
-      fileName: 'big-copy.bin',
-      partSize: 5_000_000,
-      concurrency: 1,
-    })
+      const copied = await copyLargeFile(client.raw, client.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'big-copy.bin',
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
 
-    expect(copied.fileName).toBe('big-copy.bin')
-    expect(copied.contentLength).toBe(content.byteLength)
+      expect(copied.fileName).toBe('big-copy.bin')
+      expect(copied.contentLength).toBe(content.byteLength)
 
-    const dl = await bucket.download('big-copy.bin')
-    const data = await readStream(dl.body)
-    expect(data).toEqual(content)
-  }, 30_000)
+      const dl = await bucket.download('big-copy.bin')
+      const data = await readStream(dl.body)
+      expect(data).toEqual(content)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 
   it('falls back to single copyFile when source fits in one part', async () => {
     const bucket = await client.createBucket({
@@ -121,85 +133,93 @@ describe('copyLargeFile', () => {
     expect(copied.fileName).toBe('dst.txt')
   })
 
-  it('cancels the unfinished large file when a copyPart fails', async () => {
-    const sim = new B2Simulator()
-    const inner = sim.transport()
-    let copyPartCalls = 0
-    const transport = {
-      async send(req: Parameters<typeof inner.send>[0]) {
-        if (req.url.includes('b2_copy_part')) {
-          copyPartCalls++
-          if (copyPartCalls > 1) throw new Error('forced copy_part failure')
-        }
-        return inner.send(req)
-      },
-    }
-    const c = new B2Client({
-      applicationKeyId: 'k',
-      applicationKey: 'k',
-      transport,
-      retry: { maxRetries: 0 },
-    })
-    await c.authorize()
-    const bucket = await c.createBucket({
-      bucketName: 'copy-fail',
-      bucketType: 'allPrivate',
-    })
-    const content = deterministic(15_000_000)
-    const uploaded = await bucket.upload({
-      fileName: 'src.bin',
-      source: new BufferSource(content),
-      partSize: 5_000_000,
-      concurrency: 1,
-    })
-
-    await expect(
-      copyLargeFile(c.raw, c.accountInfo, {
-        sourceFileId: uploaded.fileId,
-        fileName: 'fail-copy.bin',
+  it(
+    'cancels the unfinished large file when a copyPart fails',
+    async () => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      let copyPartCalls = 0
+      const transport = {
+        async send(req: Parameters<typeof inner.send>[0]) {
+          if (req.url.includes('b2_copy_part')) {
+            copyPartCalls++
+            if (copyPartCalls > 1) throw new Error('forced copy_part failure')
+          }
+          return inner.send(req)
+        },
+      }
+      const c = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 0 },
+      })
+      await c.authorize()
+      const bucket = await c.createBucket({
+        bucketName: 'copy-fail',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(15_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'src.bin',
+        source: new BufferSource(content),
         partSize: 5_000_000,
         concurrency: 1,
-      }),
-    ).rejects.toThrow(/copy_part failure/)
+      })
 
-    const unfinished = await c.raw.listUnfinishedLargeFiles(
-      c.accountInfo.getApiUrl(),
-      c.accountInfo.getAuthToken(),
-      { bucketId: bucket.id },
-    )
-    expect(unfinished.files.find((f) => f.fileName === 'fail-copy.bin')).toBeUndefined()
-  }, 30_000)
+      await expect(
+        copyLargeFile(c.raw, c.accountInfo, {
+          sourceFileId: uploaded.fileId,
+          fileName: 'fail-copy.bin',
+          partSize: 5_000_000,
+          concurrency: 1,
+        }),
+      ).rejects.toThrow(/copy_part failure/)
 
-  it('copies across buckets', async () => {
-    const src = await client.createBucket({
-      bucketName: 'copy-cross-src',
-      bucketType: 'allPrivate',
-    })
-    const dst = await client.createBucket({
-      bucketName: 'copy-cross-dst',
-      bucketType: 'allPrivate',
-    })
+      const unfinished = await c.raw.listUnfinishedLargeFiles(
+        c.accountInfo.getApiUrl(),
+        c.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      expect(unfinished.files.find((f) => f.fileName === 'fail-copy.bin')).toBeUndefined()
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 
-    const content = deterministic(5_000_010)
-    const uploaded = await src.upload({
-      fileName: 'src.bin',
-      source: new BufferSource(content),
-      partSize: 5_000_000,
-      concurrency: 1,
-    })
+  it(
+    'copies across buckets',
+    async () => {
+      const src = await client.createBucket({
+        bucketName: 'copy-cross-src',
+        bucketType: 'allPrivate',
+      })
+      const dst = await client.createBucket({
+        bucketName: 'copy-cross-dst',
+        bucketType: 'allPrivate',
+      })
 
-    const copied = await copyLargeFile(client.raw, client.accountInfo, {
-      sourceFileId: uploaded.fileId,
-      fileName: 'cross.bin',
-      destinationBucketId: dst.id,
-      partSize: 5_000_000,
-      concurrency: 1,
-    })
+      const content = deterministic(5_000_010)
+      const uploaded = await src.upload({
+        fileName: 'src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
 
-    expect(copied.fileName).toBe('cross.bin')
+      const copied = await copyLargeFile(client.raw, client.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'cross.bin',
+        destinationBucketId: dst.id,
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
 
-    const dl = await dst.download('cross.bin')
-    const data = await readStream(dl.body)
-    expect(data).toEqual(content)
-  }, 30_000)
+      expect(copied.fileName).toBe('cross.bin')
+
+      const dl = await dst.download('cross.bin')
+      const data = await readStream(dl.body)
+      expect(data).toEqual(content)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 })

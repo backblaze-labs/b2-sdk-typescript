@@ -3,6 +3,12 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 
+// Multipart streaming tests round-trip multi-MB through the WritableStream
+// pipeline + the simulator's real SHA-1 verification per part. Match the
+// upload.test.ts / copy.test.ts calibration (60 s) so a slow macOS CI tick
+// doesn't clip an otherwise-passing run.
+const LARGE_TEST_TIMEOUT = 60_000
+
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
   const client = new B2Client({
@@ -63,46 +69,54 @@ describe('B2Object.createWriteStream', () => {
     bucket = await client.createBucket({ bucketName: 'stream-upload', bucketType: 'allPrivate' })
   })
 
-  it('pipes a chunked ReadableStream through createWriteStream and round-trips bytes', async () => {
-    const total = 5_000_010
-    const data = deterministic(total)
-    const source = chunkedReadable(data, 128 * 1024)
+  it(
+    'pipes a chunked ReadableStream through createWriteStream and round-trips bytes',
+    async () => {
+      const total = 5_000_010
+      const data = deterministic(total)
+      const source = chunkedReadable(data, 128 * 1024)
 
-    const { writable, done } = bucket.file('streamed.bin').createWriteStream({
-      partSize: 5_000_000,
-      concurrency: 2,
-    })
+      const { writable, done } = bucket.file('streamed.bin').createWriteStream({
+        partSize: 5_000_000,
+        concurrency: 2,
+      })
 
-    await source.pipeTo(writable)
-    const result = await done
+      await source.pipeTo(writable)
+      const result = await done
 
-    expect(result.fileName).toBe('streamed.bin')
-    expect(result.contentLength).toBe(total)
+      expect(result.fileName).toBe('streamed.bin')
+      expect(result.contentLength).toBe(total)
 
-    const dl = await bucket.download('streamed.bin')
-    const got = await readStream(dl.body)
-    expect(got).toEqual(data)
-  }, 30_000)
+      const dl = await bucket.download('streamed.bin')
+      const got = await readStream(dl.body)
+      expect(got).toEqual(data)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 
-  it('invokes the onProgress listener as parts complete', async () => {
-    const data = deterministic(5_000_010)
-    const events: { bytesTransferred: number; partsCompleted: number }[] = []
-    const { writable, done } = bucket.file('progress.bin').createWriteStream({
-      partSize: 5_000_000,
-      concurrency: 1,
-      onProgress: (e) => {
-        events.push({ bytesTransferred: e.bytesTransferred, partsCompleted: e.partsCompleted })
-      },
-    })
+  it(
+    'invokes the onProgress listener as parts complete',
+    async () => {
+      const data = deterministic(5_000_010)
+      const events: { bytesTransferred: number; partsCompleted: number }[] = []
+      const { writable, done } = bucket.file('progress.bin').createWriteStream({
+        partSize: 5_000_000,
+        concurrency: 1,
+        onProgress: (e) => {
+          events.push({ bytesTransferred: e.bytesTransferred, partsCompleted: e.partsCompleted })
+        },
+      })
 
-    await chunkedReadable(data, 128 * 1024).pipeTo(writable)
-    await done
+      await chunkedReadable(data, 128 * 1024).pipeTo(writable)
+      await done
 
-    expect(events.length).toBeGreaterThan(0)
-    const last = events[events.length - 1]
-    expect(last?.bytesTransferred).toBe(data.byteLength)
-    expect(last?.partsCompleted).toBe(2)
-  }, 30_000)
+      expect(events.length).toBeGreaterThan(0)
+      const last = events[events.length - 1]
+      expect(last?.bytesTransferred).toBe(data.byteLength)
+      expect(last?.partsCompleted).toBe(2)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 
   it('rejects when the writable is closed without any data', async () => {
     const { writable, done } = bucket.file('empty.bin').createWriteStream({
@@ -117,31 +131,35 @@ describe('B2Object.createWriteStream', () => {
     await expect(done).rejects.toThrow(/without any data/)
   })
 
-  it('abort cancels the unfinished large file and rejects done', async () => {
-    const controller = new AbortController()
-    const { writable, done } = bucket.file('aborted.bin').createWriteStream({
-      partSize: 5_000_000,
-      signal: controller.signal,
-    })
+  it(
+    'abort cancels the unfinished large file and rejects done',
+    async () => {
+      const controller = new AbortController()
+      const { writable, done } = bucket.file('aborted.bin').createWriteStream({
+        partSize: 5_000_000,
+        signal: controller.signal,
+      })
 
-    // Pump a tiny bit of data, then abort before close.
-    const writer = writable.getWriter()
-    await writer.write(new Uint8Array(100))
-    controller.abort()
-    try {
-      await writer.close()
-    } catch {
-      // expected
-    }
-    await expect(done).rejects.toBeDefined()
+      // Pump a tiny bit of data, then abort before close.
+      const writer = writable.getWriter()
+      await writer.write(new Uint8Array(100))
+      controller.abort()
+      try {
+        await writer.close()
+      } catch {
+        // expected
+      }
+      await expect(done).rejects.toBeDefined()
 
-    const unfinished = await client.raw.listUnfinishedLargeFiles(
-      client.accountInfo.getApiUrl(),
-      client.accountInfo.getAuthToken(),
-      { bucketId: bucket.id },
-    )
-    // The large file may or may not have been started before abort fired;
-    // either way it should not remain unfinished.
-    expect(unfinished.files.find((f) => f.fileName === 'aborted.bin')).toBeUndefined()
-  }, 30_000)
+      const unfinished = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      // The large file may or may not have been started before abort fired;
+      // either way it should not remain unfinished.
+      expect(unfinished.files.find((f) => f.fileName === 'aborted.bin')).toBeUndefined()
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 })

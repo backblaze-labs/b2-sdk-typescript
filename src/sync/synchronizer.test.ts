@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { Bucket } from '../bucket.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { synchronize } from './synchronizer.ts'
@@ -93,7 +94,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
       // Should not throw; produces no actions for empty folders.
@@ -108,7 +109,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'b2' },
         dest: { ...dest, type: 'local', root: '/tmp/dest' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
       }
       const events = await collectEvents(config)
       expect(events).toEqual([])
@@ -151,7 +152,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -171,7 +172,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -193,7 +194,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -215,7 +216,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete', dryRun: true },
-        bucket: mockBucket as any,
+        bucket: mockBucket as unknown as Bucket,
         prefix: '',
       }
 
@@ -237,7 +238,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'delete', dryRun: true },
-        bucket: mockBucket as any,
+        bucket: mockBucket as unknown as Bucket,
         prefix: '',
       }
 
@@ -262,7 +263,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -281,7 +282,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'delete' },
-        bucket: mockBucket as any,
+        bucket: mockBucket as unknown as Bucket,
         prefix: '',
       }
 
@@ -304,7 +305,7 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'keep-days', keepDays: 7 },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -333,7 +334,7 @@ describe('synchronize', () => {
           keepMode: 'no-delete',
           signal: controller.signal,
         },
-        bucket: makeMockBucket() as any,
+        bucket: makeMockBucket() as unknown as Bucket,
         prefix: '',
       }
 
@@ -365,7 +366,7 @@ describe('synchronize', () => {
           source: { ...source, type: 'b2' },
           dest: { ...dest, type: 'local', root },
           options: { compareMode: 'modtime', keepMode: 'no-delete' },
-          bucket: mockBucket as any,
+          bucket: mockBucket as unknown as Bucket,
         }
 
         const events = await collectEvents(config)

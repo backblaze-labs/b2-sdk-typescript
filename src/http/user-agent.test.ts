@@ -1,59 +1,90 @@
 import { describe, expect, it } from 'vitest'
 
 import { VERSION } from '../version.ts'
-import { getUserAgent } from './user-agent.ts'
+import { SDK_PACKAGE, SDK_PRODUCT, getUserAgent } from './user-agent.ts'
 
 describe('getUserAgent', () => {
-  it('returns a string containing the version and runtime', () => {
+  it('starts with the SDK product token + version', () => {
     const ua = getUserAgent()
-
-    expect(ua).toContain(`b2-sdk-ts/${VERSION}`)
-    expect(ua).toMatch(/\(.+\)/)
+    expect(ua).toMatch(new RegExp(`^${SDK_PRODUCT}\\/${VERSION}\\s\\(`))
   })
 
-  it('includes custom prefix when provided', () => {
+  it('includes the typescript language token and npm package name in the comment', () => {
+    const ua = getUserAgent()
+    // Both tokens are part of the documented contract so log queries can grep
+    // on either one and find every SDK request.
+    expect(ua).toContain('typescript')
+    expect(ua).toContain(SDK_PACKAGE)
+  })
+
+  it('prepends a custom prefix verbatim and keeps the SDK identifiers intact', () => {
     const ua = getUserAgent('my-app/1.0')
-
     expect(ua).toMatch(/^my-app\/1\.0 /)
-    expect(ua).toContain(`b2-sdk-ts/${VERSION}`)
+    expect(ua).toContain(`${SDK_PRODUCT}/${VERSION}`)
+    expect(ua).toContain(SDK_PACKAGE)
   })
 
-  it('default format matches b2-sdk-ts/{version} ({runtime})', () => {
+  it('uses semicolon-separated tokens inside the comment', () => {
     const ua = getUserAgent()
-
-    expect(ua).toMatch(/^b2-sdk-ts\/[\w.]+\s\([^)]+\)$/)
+    // Format: b2-sdk-ts/<v> (typescript; @backblaze/b2-sdk; <runtime>; [os; ][arch])
+    const match = /^[^\s]+\s\(([^)]+)\)$/.exec(ua)
+    expect(match).not.toBeNull()
+    const inside = match?.[1]
+    expect(inside).toBeTruthy()
+    const tokens = (inside ?? '').split('; ')
+    expect(tokens[0]).toBe('typescript')
+    expect(tokens[1]).toBe(SDK_PACKAGE)
+    // Runtime is always third.
+    expect(tokens[2]).toBeTruthy()
+    expect(tokens.length).toBeGreaterThanOrEqual(3)
   })
 
-  // These three tests probe the runtime-detection branches in detectRuntime().
-  // They depend on what globals are present so the assertions are gated on the
-  // current runtime (Bun exposes `Bun`, Deno exposes `Deno`, Node exposes
-  // `process.versions.node`, browsers expose `navigator`).
+  // Probe runtime-specific tokens. Each block is gated on the corresponding
+  // runtime so the assertions hold across the test matrix (Node, Bun, Deno,
+  // and browsers via the Vitest browser config).
   const g = globalThis as Record<string, unknown>
   const isBun = typeof g['Bun'] !== 'undefined'
   const isDeno = typeof g['Deno'] !== 'undefined'
   const isNode = typeof g['process'] !== 'undefined' && !isBun && !isDeno
 
-  it.skipIf(!isNode)('detects node runtime when process.versions.node exists', () => {
+  it.skipIf(!isNode)('emits node/<version>; <platform>; <arch> on Node', () => {
     const ua = getUserAgent()
-    expect(ua).toMatch(/\(node\/[\d.]+\)/)
+    expect(ua).toMatch(/; node\/\d+\.\d+\.\d+;/)
+    // process.platform values include linux, darwin, win32; process.arch
+    // includes x64, arm64. Just check both are present as non-empty tokens.
+    const inside = /\(([^)]+)\)/.exec(ua)?.[1] ?? ''
+    const tokens = inside.split('; ')
+    // Tokens: [typescript, @backblaze/b2-sdk, node/<v>, <os>, <arch>]
+    expect(tokens[3]).toMatch(/^\w+$/)
+    expect(tokens[4]).toMatch(/^\w+$/)
   })
 
-  it.skipIf(!isNode)('detects browser runtime when only navigator is present', () => {
+  it.skipIf(!isBun)('emits bun/<version>; <platform>; <arch> on Bun', () => {
+    const ua = getUserAgent()
+    expect(ua).toMatch(/; bun(\/\d|;)/)
+  })
+
+  it.skipIf(!isDeno)('emits deno/<version>; <os>; <arch> on Deno', () => {
+    const ua = getUserAgent()
+    expect(ua).toMatch(/; deno(\/\d|;)/)
+  })
+
+  it.skipIf(!isNode)('falls back to browser when only navigator is present', () => {
     const savedProcess = globalThis.process
     const navDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
     try {
-      // Remove process so Node branch is skipped
+      // Strip process so the Node branch is skipped, leaving only navigator.
       Reflect.deleteProperty(globalThis as object, 'process')
-      // Ensure navigator is present (Node 21+ has it as a getter)
       if (!navDescriptor) {
         Object.defineProperty(globalThis, 'navigator', {
           value: { userAgent: 'test' },
           configurable: true,
         })
       }
-
       const ua = getUserAgent()
-      expect(ua).toContain('(browser)')
+      expect(ua).toContain('; browser)')
+      // Browser branch has no OS/arch by design (navigator parsing is noisy).
+      expect(ua).not.toMatch(/; browser;/)
     } finally {
       globalThis.process = savedProcess
       if (!navDescriptor) {
@@ -62,7 +93,7 @@ describe('getUserAgent', () => {
     }
   })
 
-  it.skipIf(!isNode)('returns unknown when no runtime globals are present', () => {
+  it.skipIf(!isNode)('falls back to "unknown" when no runtime globals are present', () => {
     const savedProcess = globalThis.process
     const navDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
     try {
@@ -74,22 +105,13 @@ describe('getUserAgent', () => {
           writable: true,
         })
       }
-
       const ua = getUserAgent()
-      expect(ua).toContain('(unknown)')
+      expect(ua).toContain('; unknown)')
     } finally {
       globalThis.process = savedProcess
       if (navDescriptor) {
         Object.defineProperty(globalThis, 'navigator', navDescriptor)
       }
     }
-  })
-
-  it.skipIf(!isBun)('detects bun runtime when Bun global exists', () => {
-    expect(getUserAgent()).toContain('(bun)')
-  })
-
-  it.skipIf(!isDeno)('detects deno runtime when Deno global exists', () => {
-    expect(getUserAgent()).toContain('(deno)')
   })
 })

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
@@ -460,7 +461,7 @@ describe('createParallelDownloadStream', () => {
       getAuthToken: () => 'mock_token',
     }
 
-    const stream = createParallelDownloadStream(raw, accountInfo as any, {
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
       fileId: fakeFileId as FileId,
       totalSize: 100,
       rangeSize: 30,
@@ -489,7 +490,7 @@ describe('createParallelDownloadStream', () => {
       getAuthToken: () => 'mock_token',
     }
 
-    const stream = createParallelDownloadStream(raw, accountInfo as any, {
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
       fileId: fakeFileId as FileId,
       totalSize: 15,
       rangeSize: 1024, // much larger than file
@@ -518,7 +519,7 @@ describe('createParallelDownloadStream', () => {
       getAuthToken: () => 'mock_token',
     }
 
-    const stream = createParallelDownloadStream(raw, accountInfo as any, {
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
       fileId: fakeFileId as FileId,
       totalSize: 50,
       rangeSize: 20,
@@ -684,7 +685,7 @@ describe('createParallelDownloadStream per-range retry', () => {
       getAuthToken: () => 'mock_token',
     }
 
-    const stream = createParallelDownloadStream(raw, accountInfo as any, {
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
       fileId: 'fake_file_retry' as FileId,
       totalSize: 100,
       rangeSize: 30,
@@ -715,7 +716,7 @@ describe('createParallelDownloadStream per-range retry', () => {
       getAuthToken: () => 'mock_token',
     }
 
-    const stream = createParallelDownloadStream(raw, accountInfo as any, {
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
       fileId: 'fake_file_fail' as FileId,
       totalSize: 60,
       rangeSize: 30,

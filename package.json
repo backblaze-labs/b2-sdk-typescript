@@ -112,7 +112,7 @@
     "test:coverage": "vitest run --coverage",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:integration": "vitest run --config vitest.integration.ts",
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "lint:fix": "biome check --write .",
     "lint:docs": "eslint src/ --no-warn-ignored",
     "lint:docs:fix": "eslint src/ --fix --no-warn-ignored",
