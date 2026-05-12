@@ -1,4 +1,4 @@
-import type { FileId } from './ids.js'
+import type { FileId } from './ids.ts'
 
 /** File-level Object Lock retention mode. */
 export type RetentionMode = 'compliance' | 'governance'

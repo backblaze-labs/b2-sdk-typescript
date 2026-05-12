@@ -8,6 +8,17 @@ export default defineConfig({
       rollupTypes: false,
       include: ['src'],
       outDir: 'dist',
+      // Source uses .ts import extensions (source-isomorphism). vite-plugin-dts
+      // doesn't honour `rewriteRelativeImportExtensions` even when passed via
+      // compilerOptions, so we rewrite relative .ts -> .js in the emitted
+      // .d.ts content directly. Npm consumers then see normal imports that
+      // resolve against the dist .js + .d.ts siblings.
+      beforeWriteFile(filePath, content) {
+        return {
+          filePath,
+          content: content.replace(/(\.\.?\/[^'"\s]*)\.ts(['";])/g, '$1.js$2'),
+        }
+      },
     }),
   ],
   build: {

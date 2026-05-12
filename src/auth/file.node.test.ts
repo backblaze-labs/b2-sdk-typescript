@@ -2,9 +2,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { B2Client } from '../client.js'
-import { B2Simulator } from '../simulator/index.js'
-import { FileAccountInfo } from './file.js'
+import { B2Client } from '../client.ts'
+import { B2Simulator } from '../simulator/index.ts'
+import { FileAccountInfo } from './file.ts'
 
 describe('FileAccountInfo', () => {
   let tempDir: string

@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 
-import type { B2ErrorCode, B2ErrorResponse } from '../types/errors.js'
+import type { B2ErrorCode, B2ErrorResponse } from '../types/errors.ts'
 
 /**
  * Base error class for all B2 API errors.
@@ -243,7 +243,7 @@ export class NetworkError extends Error {
    */
   constructor(
     message: string,
-    public readonly cause?: unknown,
+    public override readonly cause?: unknown,
   ) {
     super(message)
     this.name = 'NetworkError'

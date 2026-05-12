@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { B2ErrorResponse } from '../types/errors.js'
+import type { B2ErrorResponse } from '../types/errors.ts'
 
 import {
   AccessDeniedError,
@@ -18,7 +18,7 @@ import {
   ServiceUnavailableError,
   TooManyRequestsError,
   classifyError,
-} from './index.js'
+} from './index.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers

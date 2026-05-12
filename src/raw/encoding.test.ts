@@ -4,7 +4,7 @@ import {
   decodeFileName,
   encodeFileName,
   parseFileInfoHeaders,
-} from './encoding.js'
+} from './encoding.ts'
 
 describe('encodeFileName', () => {
   it('passes through lowercase letters', () => {

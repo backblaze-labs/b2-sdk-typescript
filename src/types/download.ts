@@ -1,4 +1,4 @@
-import type { BucketId, FileId } from './ids.js'
+import type { BucketId, FileId } from './ids.ts'
 
 /** Request parameters for downloading a file by its ID via `b2_download_file_by_id`. */
 export interface DownloadByIdRequest {

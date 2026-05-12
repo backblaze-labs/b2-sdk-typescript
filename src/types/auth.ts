@@ -1,4 +1,4 @@
-import type { AccountId, AuthToken, BucketId } from './ids.js'
+import type { AccountId, AuthToken, BucketId } from './ids.ts'
 
 /**
  * A B2 API capability that can be granted to an application key.

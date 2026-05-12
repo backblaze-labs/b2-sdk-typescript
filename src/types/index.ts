@@ -16,8 +16,8 @@ export type {
   LargeFileId,
   UploadAuthToken,
   UploadUrl,
-} from './ids.js'
-export { accountId, applicationKeyId, bucketId, fileId, keyId } from './ids.js'
+} from './ids.ts'
+export { accountId, applicationKeyId, bucketId, fileId, keyId } from './ids.ts'
 
 export type {
   AllowedInfo,
@@ -27,7 +27,7 @@ export type {
   Capability,
   GroupsApiInfo,
   StorageApiInfo,
-} from './auth.js'
+} from './auth.ts'
 
 export type {
   BucketInfo,
@@ -42,7 +42,7 @@ export type {
   ListBucketsRequest,
   ListBucketsResponse,
   UpdateBucketRequest,
-} from './bucket.js'
+} from './bucket.ts'
 
 export type {
   CopyFileRequest,
@@ -59,7 +59,7 @@ export type {
   ListFileVersionsRequest,
   ListFileVersionsResponse,
   MetadataDirective,
-} from './file.js'
+} from './file.ts'
 
 export type {
   CancelLargeFileRequest,
@@ -80,7 +80,7 @@ export type {
   UploadFileHeaders,
   UploadPartHeaders,
   UploadPartResponse,
-} from './upload.js'
+} from './upload.ts'
 
 export type {
   DownloadAuthorizationRequest,
@@ -88,7 +88,7 @@ export type {
   DownloadByIdRequest,
   DownloadByNameRequest,
   DownloadHeaders,
-} from './download.js'
+} from './download.ts'
 
 export type {
   EncryptionAlgorithm,
@@ -97,8 +97,8 @@ export type {
   NoEncryption,
   SseB2Setting,
   SseCCustomerSetting,
-} from './encryption.js'
-export { SSE_B2, SSE_NONE, sseCustomer } from './encryption.js'
+} from './encryption.ts'
+export { SSE_B2, SSE_NONE, sseCustomer } from './encryption.ts'
 
 export type {
   FileRetentionValue,
@@ -108,7 +108,7 @@ export type {
   UpdateFileLegalHoldResponse,
   UpdateFileRetentionRequest,
   UpdateFileRetentionResponse,
-} from './lock.js'
+} from './lock.ts'
 
 export type {
   ApplicationKey,
@@ -117,14 +117,14 @@ export type {
   FullApplicationKey,
   ListKeysRequest,
   ListKeysResponse,
-} from './key.js'
+} from './key.ts'
 
 export type {
   ReplicationConfiguration,
   ReplicationDestination,
   ReplicationRule,
   ReplicationSource,
-} from './replication.js'
+} from './replication.ts'
 
 export type {
   EventNotificationRule,
@@ -133,6 +133,6 @@ export type {
   GetBucketNotificationRulesResponse,
   SetBucketNotificationRulesRequest,
   SetBucketNotificationRulesResponse,
-} from './notifications.js'
+} from './notifications.ts'
 
-export type { B2ErrorCode, B2ErrorResponse } from './errors.js'
+export type { B2ErrorCode, B2ErrorResponse } from './errors.ts'

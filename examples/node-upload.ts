@@ -46,6 +46,7 @@ async function main() {
     fileName,
     source,
     onProgress: (progress) => {
+      if (progress.totalBytes === null) return
       const pct = Math.round((progress.bytesTransferred / progress.totalBytes) * 100)
       process.stdout.write(`\r  ${pct}%`)
     },

@@ -1,8 +1,8 @@
-import type { Bucket } from '../bucket.js'
-import { BufferSource } from '../streams/source.js'
-import type { FileId } from '../types/ids.js'
-import { Semaphore } from '../upload/concurrency.js'
-import type { SyncAction } from './actions/index.js'
+import type { Bucket } from '../bucket.ts'
+import { BufferSource } from '../streams/source.ts'
+import type { FileId } from '../types/ids.ts'
+import { Semaphore } from '../upload/concurrency.ts'
+import type { SyncAction } from './actions/index.ts'
 import {
   CopyAction,
   DeleteLocalAction,
@@ -10,10 +10,10 @@ import {
   DownloadAction,
   HideAction,
   UploadAction,
-} from './actions/index.js'
-import { zipFolders } from './pairing.js'
-import type { ActionFactory } from './policies/index.js'
-import { generateActions } from './policies/index.js'
+} from './actions/index.ts'
+import { zipFolders } from './pairing.ts'
+import type { ActionFactory } from './policies/index.ts'
+import { generateActions } from './policies/index.ts'
 import type {
   B2SyncPath,
   LocalSyncPath,
@@ -21,7 +21,7 @@ import type {
   SyncEvent,
   SyncFolder,
   SyncOptions,
-} from './types.js'
+} from './types.ts'
 
 /** Base configuration for a sync operation. */
 export interface SynchronizerConfig {

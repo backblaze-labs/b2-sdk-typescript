@@ -1,8 +1,8 @@
-import type { AccountInfo } from '../auth/account-info.js'
-import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.js'
-import type { RawClient } from '../raw/index.js'
-import type { FileId } from '../types/ids.js'
-import { Semaphore } from '../upload/concurrency.js'
+import type { AccountInfo } from '../auth/account-info.ts'
+import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.ts'
+import type { RawClient } from '../raw/index.ts'
+import type { FileId } from '../types/ids.ts'
+import { Semaphore } from '../upload/concurrency.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {

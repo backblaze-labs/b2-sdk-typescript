@@ -1,7 +1,7 @@
-import { B2Error, ExpiredAuthTokenError, NetworkError, classifyError } from '../errors/index.js'
-import type { B2ErrorResponse } from '../types/errors.js'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions, computeBackoff, sleep } from './retry.js'
-import { getUserAgent } from './user-agent.js'
+import { B2Error, ExpiredAuthTokenError, NetworkError, classifyError } from '../errors/index.ts'
+import type { B2ErrorResponse } from '../types/errors.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions, computeBackoff, sleep } from './retry.ts'
+import { getUserAgent } from './user-agent.ts'
 
 /** Describes an outgoing HTTP request to the B2 API. */
 export interface HttpRequest {

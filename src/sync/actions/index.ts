@@ -1,4 +1,4 @@
-import type { SyncEvent } from '../types.js'
+import type { SyncEvent } from '../types.ts'
 
 /** Discriminated union of all sync action types. */
 export type SyncActionType =

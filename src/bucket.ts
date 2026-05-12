@@ -1,36 +1,36 @@
-import type { B2Client } from './client.js'
-import { copyLargeFile } from './copy/large.js'
-import { type DownloadResult, downloadByName } from './download/single.js'
-import { B2Object, type DownloadCallOptions } from './object.js'
-import type { ProgressListener } from './streams/progress.js'
-import type { ContentSource } from './streams/source.js'
+import type { B2Client } from './client.ts'
+import { copyLargeFile } from './copy/large.ts'
+import { type DownloadResult, downloadByName } from './download/single.ts'
+import { B2Object, type DownloadCallOptions } from './object.ts'
+import type { ProgressListener } from './streams/progress.ts'
+import type { ContentSource } from './streams/source.ts'
 import type {
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
   CorsRule,
   LifecycleRule,
-} from './types/bucket.js'
-import type { DownloadAuthorizationResponse } from './types/download.js'
-import type { EncryptionSetting } from './types/encryption.js'
+} from './types/bucket.ts'
+import type { DownloadAuthorizationResponse } from './types/download.ts'
+import type { EncryptionSetting } from './types/encryption.ts'
 import type {
   FileVersion,
   ListFileNamesResponse,
   ListFileVersionsResponse,
   MetadataDirective,
-} from './types/file.js'
-import type { BucketId, FileId, LargeFileId } from './types/ids.js'
-import { accountId } from './types/ids.js'
-import type { FileRetentionValue, LegalHoldValue } from './types/lock.js'
+} from './types/file.ts'
+import type { BucketId, FileId, LargeFileId } from './types/ids.ts'
+import { accountId } from './types/ids.ts'
+import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import type {
   EventNotificationRule,
   GetBucketNotificationRulesResponse,
-} from './types/notifications.js'
-import type { ReplicationConfiguration } from './types/replication.js'
-import type { CancelLargeFileResponse } from './types/upload.js'
-import { Semaphore } from './upload/concurrency.js'
-import { uploadLargeFile } from './upload/large.js'
-import { uploadSmallFile } from './upload/single.js'
+} from './types/notifications.ts'
+import type { ReplicationConfiguration } from './types/replication.ts'
+import type { CancelLargeFileResponse } from './types/upload.ts'
+import { Semaphore } from './upload/concurrency.ts'
+import { uploadLargeFile } from './upload/large.ts'
+import { uploadSmallFile } from './upload/single.ts'
 
 /** A target for bulk deletion: a file name and its specific version ID. */
 export interface DeleteTarget {

@@ -1,5 +1,5 @@
-import type { Capability } from './auth.js'
-import type { AccountId, ApplicationKeyId, BucketId } from './ids.js'
+import type { Capability } from './auth.ts'
+import type { AccountId, ApplicationKeyId, BucketId } from './ids.ts'
 
 /** Request parameters for the `b2_create_key` API call. Creates a new application key. */
 export interface CreateKeyRequest {

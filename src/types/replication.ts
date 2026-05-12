@@ -1,4 +1,4 @@
-import type { ApplicationKeyId, BucketId } from './ids.js'
+import type { ApplicationKeyId, BucketId } from './ids.ts'
 
 /** A single replication rule defining how files are replicated to a destination bucket. */
 export interface ReplicationRule {

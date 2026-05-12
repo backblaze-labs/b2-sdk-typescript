@@ -2,7 +2,7 @@
  * Sync a local directory to a B2 bucket.
  *
  * Usage:
- *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/sync-cli.ts <local-dir> <bucket-name> [prefix]
+ *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/node-sync-cli.ts <local-dir> <bucket-name> [prefix]
  *
  * Options via env:
  *   SYNC_MODE=modtime|size|none     (default: modtime)
@@ -13,7 +13,7 @@
 
 import { B2Client } from '@backblaze/b2-sdk'
 import { B2Folder, LocalFolder, synchronize } from '@backblaze/b2-sdk/sync'
-import type { CompareMode, KeepMode } from '@backblaze/b2-sdk/sync'
+import type { CompareMode, KeepMode, SynchronizerUpConfig } from '@backblaze/b2-sdk/sync'
 
 async function main() {
   const localDir = process.argv[2]
@@ -21,7 +21,7 @@ async function main() {
   const prefix = process.argv[4] ?? ''
 
   if (!localDir || !bucketName) {
-    console.error('Usage: npx tsx examples/sync-cli.ts <local-dir> <bucket-name> [prefix]')
+    console.error('Usage: npx tsx examples/node-sync-cli.ts <local-dir> <bucket-name> [prefix]')
     process.exit(1)
   }
 
@@ -55,7 +55,7 @@ async function main() {
   let skipped = 0
   let errors = 0
 
-  for await (const event of synchronize({
+  const config: SynchronizerUpConfig = {
     source,
     dest,
     bucket,
@@ -66,7 +66,8 @@ async function main() {
       concurrency,
       dryRun,
     },
-  })) {
+  }
+  for await (const event of synchronize(config)) {
     switch (event.type) {
       case 'upload-start':
         console.log(`  uploading ${event.path} (${event.size} bytes)`)

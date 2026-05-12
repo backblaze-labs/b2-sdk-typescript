@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { VERSION } from '../version.js'
-import { getUserAgent } from './user-agent.js'
+import { VERSION } from '../version.ts'
+import { getUserAgent } from './user-agent.ts'
 
 describe('getUserAgent', () => {
   it('returns a string containing the version and runtime', () => {

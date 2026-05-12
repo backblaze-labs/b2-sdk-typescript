@@ -1,8 +1,8 @@
-import type { AccountInfo } from '../auth/account-info.js'
-import { parseFileInfoHeaders } from '../raw/encoding.js'
-import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.js'
-import type { DownloadHeaders } from '../types/download.js'
-import type { FileId } from '../types/ids.js'
+import type { AccountInfo } from '../auth/account-info.ts'
+import { parseFileInfoHeaders } from '../raw/encoding.ts'
+import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.ts'
+import type { DownloadHeaders } from '../types/download.ts'
+import type { FileId } from '../types/ids.ts'
 
 /** Result of a single-request file download. */
 export interface DownloadResult {

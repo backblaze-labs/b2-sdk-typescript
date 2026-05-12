@@ -8,7 +8,7 @@
  */
 import { inspect } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { EncryptionKey } from '../types/encryption.js'
+import { EncryptionKey } from '../types/encryption.ts'
 
 describe('EncryptionKey (Node-only)', () => {
   const rawKey = new Uint8Array(32).fill(0xaa)

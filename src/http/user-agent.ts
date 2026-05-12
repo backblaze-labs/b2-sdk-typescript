@@ -1,4 +1,4 @@
-import { VERSION } from '../version.js'
+import { VERSION } from '../version.ts'
 
 /**
  * Detects the current JavaScript runtime (Node, Deno, Bun, or browser).

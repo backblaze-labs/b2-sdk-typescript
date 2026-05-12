@@ -1,4 +1,4 @@
-import type { UploadUrlEntry } from './account-info.js'
+import type { UploadUrlEntry } from './account-info.ts'
 
 /**
  * Manages a pool of reusable upload URLs keyed by bucket ID or file ID.

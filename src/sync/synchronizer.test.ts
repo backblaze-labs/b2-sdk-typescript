@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { FileVersion } from '../types/file.js'
-import type { AccountId, BucketId, FileId } from '../types/ids.js'
-import { synchronize } from './synchronizer.js'
+import type { FileVersion } from '../types/file.ts'
+import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { synchronize } from './synchronizer.ts'
 import type {
   SynchronizerConfig,
   SynchronizerDownConfig,
   SynchronizerUpConfig,
-} from './synchronizer.js'
-import type { B2SyncPath, LocalSyncPath, SyncEvent, SyncFolder, SyncPath } from './types.js'
+} from './synchronizer.ts'
+import type { B2SyncPath, LocalSyncPath, SyncEvent, SyncFolder, SyncPath } from './types.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers

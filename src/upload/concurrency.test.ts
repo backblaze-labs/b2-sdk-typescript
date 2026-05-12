@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Semaphore, mapConcurrent } from './concurrency.js'
+import { Semaphore, mapConcurrent } from './concurrency.ts'
 
 describe('Semaphore', () => {
   it('acquire resolves immediately when below limit', async () => {

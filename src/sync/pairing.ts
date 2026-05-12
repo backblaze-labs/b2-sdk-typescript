@@ -1,4 +1,4 @@
-import type { SyncFolder, SyncPath } from './types.js'
+import type { SyncFolder, SyncPath } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
 export type SyncPair = readonly [SyncPath | null, SyncPath | null]

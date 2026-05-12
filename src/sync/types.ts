@@ -1,5 +1,5 @@
-import type { EncryptionSetting } from '../types/encryption.js'
-import type { FileVersion } from '../types/file.js'
+import type { EncryptionSetting } from '../types/encryption.ts'
+import type { FileVersion } from '../types/file.ts'
 
 /** Strategy for comparing source and destination files: by modification time, size, or skip comparison. */
 export type CompareMode = 'modtime' | 'size' | 'none'

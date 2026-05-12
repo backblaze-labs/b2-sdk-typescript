@@ -1,12 +1,12 @@
-import type { AccountInfo } from '../auth/account-info.js'
-import type { RawClient } from '../raw/index.js'
-import { IncrementalSha1 } from '../streams/hash.js'
-import type { ProgressListener } from '../streams/progress.js'
-import type { ContentSource } from '../streams/source.js'
-import type { EncryptionSetting } from '../types/encryption.js'
-import type { FileVersion } from '../types/file.js'
-import type { BucketId } from '../types/ids.js'
-import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
+import type { AccountInfo } from '../auth/account-info.ts'
+import type { RawClient } from '../raw/index.ts'
+import { IncrementalSha1 } from '../streams/hash.ts'
+import type { ProgressListener } from '../streams/progress.ts'
+import type { ContentSource } from '../streams/source.ts'
+import type { EncryptionSetting } from '../types/encryption.ts'
+import type { FileVersion } from '../types/file.ts'
+import type { BucketId } from '../types/ids.ts'
+import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {

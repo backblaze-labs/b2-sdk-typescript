@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { EncryptionKey } from '../types/encryption.js'
-import { IncrementalSha1, sha1Hex } from './hash.js'
-import { ProgressTracker } from './progress.js'
-import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.js'
+import { EncryptionKey } from '../types/encryption.ts'
+import { IncrementalSha1, sha1Hex } from './hash.ts'
+import { ProgressTracker } from './progress.ts'
+import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'

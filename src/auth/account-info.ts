@@ -1,5 +1,5 @@
-import type { AuthorizeAccountResponse } from '../types/auth.js'
-import type { BucketId } from '../types/ids.js'
+import type { AuthorizeAccountResponse } from '../types/auth.ts'
+import type { BucketId } from '../types/ids.ts'
 
 /** A pre-authorized upload URL paired with its authorization token. */
 export interface UploadUrlEntry {

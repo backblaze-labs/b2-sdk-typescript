@@ -2,12 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { B2Client } from '../../client.js'
-import { B2Simulator } from '../../simulator/index.js'
-import { BufferSource } from '../../streams/source.js'
-import type { B2SyncPath, LocalSyncPath } from '../types.js'
-import { B2Folder } from './b2.js'
-import { LocalFolder } from './local.js'
+import { B2Client } from '../../client.ts'
+import { B2Simulator } from '../../simulator/index.ts'
+import { BufferSource } from '../../streams/source.ts'
+import type { B2SyncPath, LocalSyncPath } from '../types.ts'
+import { B2Folder } from './b2.ts'
+import { LocalFolder } from './local.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers

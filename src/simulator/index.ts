@@ -9,13 +9,13 @@
  * @packageDocumentation
  */
 
-import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.js'
-import { sha1Hex } from '../streams/hash.js'
-import type { AuthorizeAccountResponse } from '../types/auth.js'
-import type { BucketInfo, BucketType } from '../types/bucket.js'
-import type { FileAction, FileVersion } from '../types/file.js'
-import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.js'
-import type { EventNotificationRule } from '../types/notifications.js'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { sha1Hex } from '../streams/hash.ts'
+import type { AuthorizeAccountResponse } from '../types/auth.ts'
+import type { BucketInfo, BucketType } from '../types/bucket.ts'
+import type { FileAction, FileVersion } from '../types/file.ts'
+import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.ts'
+import type { EventNotificationRule } from '../types/notifications.ts'
 
 interface StoredFile {
   readonly fileVersion: FileVersion

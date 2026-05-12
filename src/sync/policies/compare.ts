@@ -1,4 +1,4 @@
-import type { CompareMode, SyncPath } from '../types.js'
+import type { CompareMode, SyncPath } from '../types.ts'
 
 /**
  * Determines whether two files should be considered different based on the compare mode.

@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { B2Client } from '../client.js'
-import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.js'
-import { B2Simulator } from '../simulator/index.js'
-import { BufferSource } from '../streams/source.js'
-import type { FileId } from '../types/ids.js'
-import { createParallelDownloadStream } from './parallel.js'
-import { downloadById, downloadByName } from './single.js'
+import { B2Client } from '../client.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { B2Simulator } from '../simulator/index.ts'
+import { BufferSource } from '../streams/source.ts'
+import type { FileId } from '../types/ids.ts'
+import { createParallelDownloadStream } from './parallel.ts'
+import { downloadById, downloadByName } from './single.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -450,7 +450,7 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_001'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.js')
+    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     // Build a minimal accountInfo that provides download URL and auth token
@@ -480,7 +480,7 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_002'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.js')
+    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -509,7 +509,7 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_003'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.js')
+    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -671,9 +671,9 @@ describe('createParallelDownloadStream per-range retry', () => {
 
     // Force the middle range to fail twice with 503 before succeeding.
     const failures = new Map<string, number>([['bytes=30-59', 2]])
-    const { RawClient } = await import('../raw/index.js')
+    const { RawClient } = await import('../raw/index.ts')
     // Wrap in RetryTransport so 503s are surfaced rather than swallowed by the raw transport.
-    const { RetryTransport } = await import('../http/transport.js')
+    const { RetryTransport } = await import('../http/transport.ts')
     const inner = createFlakyTransport(fileData, 'fake_file_retry', failures)
     const retry = new RetryTransport({ transport: inner, retry: { maxRetries: 0 } })
     const raw = new RawClient({ transport: retry })
@@ -703,8 +703,8 @@ describe('createParallelDownloadStream per-range retry', () => {
   it('errors the stream when a range fails beyond maxRetries', async () => {
     const fileData = new Uint8Array(60)
     const failures = new Map<string, number>([['bytes=0-29', 10]])
-    const { RawClient } = await import('../raw/index.js')
-    const { RetryTransport } = await import('../http/transport.js')
+    const { RawClient } = await import('../raw/index.ts')
+    const { RetryTransport } = await import('../http/transport.ts')
     const inner = createFlakyTransport(fileData, 'fake_file_fail', failures)
     const retry = new RetryTransport({ transport: inner, retry: { maxRetries: 0 } })
     const raw = new RawClient({ transport: retry })

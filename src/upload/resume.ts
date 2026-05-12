@@ -1,7 +1,7 @@
-import type { AccountInfo } from '../auth/account-info.js'
-import type { RawClient } from '../raw/index.js'
-import type { LargeFileId } from '../types/ids.js'
-import type { PartInfo } from '../types/upload.js'
+import type { AccountInfo } from '../auth/account-info.ts'
+import type { RawClient } from '../raw/index.ts'
+import type { LargeFileId } from '../types/ids.ts'
+import type { PartInfo } from '../types/upload.ts'
 
 /** Information about an unfinished large file eligible for resume. */
 export interface ResumeCandidate {

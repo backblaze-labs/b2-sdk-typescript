@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { B2Error, ExpiredAuthTokenError, NetworkError } from '../errors/index.js'
-import type { HttpRequest, HttpResponse, HttpTransport } from './transport.js'
-import { FetchTransport, RetryTransport } from './transport.js'
+import { B2Error, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
+import { FetchTransport, RetryTransport } from './transport.ts'
 
 // ---------------------------------------------------------------------------
 // Inject a no-op sleep into RetryTransport so retry tests don't actually wait.

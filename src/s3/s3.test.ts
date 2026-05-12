@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { AccountInfo } from '../auth/account-info.js'
-import { createS3ClientConfig, presignGetObjectUrl } from './index.js'
+import type { AccountInfo } from '../auth/account-info.ts'
+import { createS3ClientConfig, presignGetObjectUrl } from './index.ts'
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(

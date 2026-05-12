@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.js'
+export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
 export {
   Bucket,
   type DeleteAllDeleteEvent,
@@ -18,17 +18,17 @@ export {
   type DeleteError,
   type DeleteManyResult,
   type DeleteTarget,
-} from './bucket.js'
-export { B2Object, type DownloadCallOptions } from './object.js'
+} from './bucket.ts'
+export { B2Object, type DownloadCallOptions } from './object.ts'
 
-export type { UploadWriteHandle } from './upload/stream.js'
+export type { UploadWriteHandle } from './upload/stream.ts'
 
 export {
   RawClient,
   type RawClientOptions,
   type DownloadFileOptions,
   type SseCDownloadKey,
-} from './raw/index.js'
+} from './raw/index.ts'
 
 export {
   B2Error,
@@ -47,29 +47,29 @@ export {
   B2InsufficientCapabilityError,
   NetworkError,
   classifyError,
-} from './errors/index.js'
+} from './errors/index.ts'
 
-export { InMemoryAccountInfo } from './auth/in-memory.js'
-export type { AccountInfo, UploadUrlEntry } from './auth/account-info.js'
+export { InMemoryAccountInfo } from './auth/in-memory.ts'
+export type { AccountInfo, UploadUrlEntry } from './auth/account-info.ts'
 
-export { IncrementalSha1, sha1Hex } from './streams/hash.js'
-export { toContentSource, BlobSource, BufferSource, StreamSource } from './streams/source.js'
-export type { ContentSource } from './streams/source.js'
-export type { ProgressEvent, ProgressListener } from './streams/progress.js'
+export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
+export { toContentSource, BlobSource, BufferSource, StreamSource } from './streams/source.ts'
+export type { ContentSource } from './streams/source.ts'
+export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
 
-export { FetchTransport, RetryTransport } from './http/transport.js'
+export { FetchTransport, RetryTransport } from './http/transport.ts'
 export type {
   HttpTransport,
   HttpRequest,
   HttpResponse,
   RetryTransportOptions,
-} from './http/transport.js'
-export type { RetryOptions } from './http/retry.js'
+} from './http/transport.ts'
+export type { RetryOptions } from './http/retry.ts'
 
-export type { DownloadResult } from './download/single.js'
+export type { DownloadResult } from './download/single.ts'
 
-export { SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.js'
+export { SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.ts'
 
-export type * from './types/index.js'
+export type * from './types/index.ts'
 
-export { VERSION } from './version.js'
+export { VERSION } from './version.ts'

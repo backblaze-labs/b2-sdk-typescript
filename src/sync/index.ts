@@ -7,16 +7,16 @@
  * @packageDocumentation
  */
 
-export { LocalFolder } from './scanners/local.js'
-export { B2Folder } from './scanners/b2.js'
-export { zipFolders } from './pairing.js'
-export { generateActions } from './policies/index.js'
-export { filesAreDifferent } from './policies/compare.js'
-export { synchronize } from './synchronizer.js'
+export { LocalFolder } from './scanners/local.ts'
+export { B2Folder } from './scanners/b2.ts'
+export { zipFolders } from './pairing.ts'
+export { generateActions } from './policies/index.ts'
+export { filesAreDifferent } from './policies/compare.ts'
+export { synchronize } from './synchronizer.ts'
 export type {
   SyncAction,
   SyncActionType,
-} from './actions/index.js'
+} from './actions/index.ts'
 export {
   UploadAction,
   DownloadAction,
@@ -25,7 +25,7 @@ export {
   DeleteRemoteAction,
   DeleteLocalAction,
   SkipAction,
-} from './actions/index.js'
+} from './actions/index.ts'
 export type {
   CompareMode,
   KeepMode,
@@ -38,13 +38,13 @@ export type {
   SyncOptions,
   SyncEncryptionProvider,
   SyncFolder,
-} from './types.js'
-export type { ActionFactory } from './policies/index.js'
-export type { SyncPair } from './pairing.js'
+} from './types.ts'
+export type { ActionFactory } from './policies/index.ts'
+export type { SyncPair } from './pairing.ts'
 export type {
   SynchronizerConfig,
   SynchronizerUpConfig,
   SynchronizerDownConfig,
   LocalSyncFolder,
   B2SyncFolder,
-} from './synchronizer.js'
+} from './synchronizer.ts'

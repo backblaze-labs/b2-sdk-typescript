@@ -58,8 +58,15 @@ export function sseCustomer(customerKey: string, customerKeyMd5: string): SseCCu
  * @returns The base64-encoded string.
  */
 function bytesToBase64(bytes: Uint8Array): string {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64')
+  // Prefer Node's Buffer when available (faster), but degrade to btoa() in
+  // browsers / Deno / Workers where Buffer isn't a global. We access via
+  // globalThis to avoid a hard reference to a Node-only symbol — that would
+  // break the type-check in non-Node runtimes (Deno, browser-mode Vitest).
+  const g = globalThis as {
+    Buffer?: { from(b: Uint8Array): { toString(encoding: string): string } }
+  }
+  if (g.Buffer) {
+    return g.Buffer.from(bytes).toString('base64')
   }
   let binary = ''
   for (const b of bytes) binary += String.fromCharCode(b)

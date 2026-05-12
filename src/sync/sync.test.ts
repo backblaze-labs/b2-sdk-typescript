@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { FileVersion } from '../types/file.js'
-import type { AccountId, BucketId, FileId } from '../types/ids.js'
-import { SkipAction, UploadAction } from './actions/index.js'
-import { zipFolders } from './pairing.js'
-import { filesAreDifferent } from './policies/compare.js'
-import { generateActions } from './policies/index.js'
-import type { ActionFactory } from './policies/index.js'
-import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.js'
+import type { FileVersion } from '../types/file.ts'
+import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { SkipAction, UploadAction } from './actions/index.ts'
+import { zipFolders } from './pairing.ts'
+import { filesAreDifferent } from './policies/compare.ts'
+import { generateActions } from './policies/index.ts'
+import type { ActionFactory } from './policies/index.ts'
+import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
 
 function makeSyncPath(relativePath: string, modTimeMillis: number, size: number): SyncPath {
   return { relativePath, modTimeMillis, size }

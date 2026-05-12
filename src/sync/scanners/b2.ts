@@ -1,6 +1,6 @@
-import type { Bucket } from '../../bucket.js'
-import type { FileVersion } from '../../types/file.js'
-import type { B2SyncPath, SyncFolder } from '../types.js'
+import type { Bucket } from '../../bucket.ts'
+import type { FileVersion } from '../../types/file.ts'
+import type { B2SyncPath, SyncFolder } from '../types.ts'
 
 /**
  * Scans a B2 bucket (optionally filtered by prefix) and yields {@link B2SyncPath} entries
@@ -33,7 +33,7 @@ export class B2Folder implements SyncFolder {
         ...(this.prefix !== '' ? { prefix: this.prefix } : {}),
         ...(startFileName !== undefined ? { startFileName } : {}),
         ...(startFileId !== undefined
-          ? { startFileId: startFileId as import('../../types/ids.js').FileId }
+          ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
           : {}),
       })
 

@@ -1,6 +1,6 @@
-import type { SyncAction } from '../actions/index.js'
-import { SkipAction } from '../actions/index.js'
-import type { SyncPair } from '../pairing.js'
+import type { SyncAction } from '../actions/index.ts'
+import { SkipAction } from '../actions/index.ts'
+import type { SyncPair } from '../pairing.ts'
 import type {
   B2SyncPath,
   CompareMode,
@@ -8,8 +8,8 @@ import type {
   LocalSyncPath,
   SyncDirection,
   SyncPath,
-} from '../types.js'
-import { filesAreDifferent } from './compare.js'
+} from '../types.ts'
+import { filesAreDifferent } from './compare.ts'
 
 /** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {

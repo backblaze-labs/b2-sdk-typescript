@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { AuthorizeAccountResponse } from '../types/auth.js'
-import type { BucketId } from '../types/ids.js'
-import type { AccountInfo, UploadUrlEntry } from './account-info.js'
-import { InMemoryAccountInfo } from './in-memory.js'
+import type { AuthorizeAccountResponse } from '../types/auth.ts'
+import type { BucketId } from '../types/ids.ts'
+import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
+import { InMemoryAccountInfo } from './in-memory.ts'
 
 /**
  * Node-only {@link AccountInfo} backend that persists the authorization

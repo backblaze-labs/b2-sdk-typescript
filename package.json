@@ -117,6 +117,7 @@
     "lint:docs": "eslint src/ --no-warn-ignored",
     "lint:docs:fix": "eslint src/ --fix --no-warn-ignored",
     "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
     "clean": "rm -rf dist docs",

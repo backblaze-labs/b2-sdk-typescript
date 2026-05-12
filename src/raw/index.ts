@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 
-import type { HttpTransport } from '../http/transport.js'
+import type { HttpTransport } from '../http/transport.ts'
 import type {
   ApplicationKey,
   AuthorizeAccountResponse,
@@ -59,9 +59,9 @@ import type {
   UpdateFileLegalHoldResponse,
   UpdateFileRetentionRequest,
   UpdateFileRetentionResponse,
-} from '../types/index.js'
-import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.js'
-import { buildFileInfoHeaders, encodeFileName } from './encoding.js'
+} from '../types/index.ts'
+import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.ts'
+import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
 
 /** Configuration for constructing a {@link RawClient}. */
 export interface RawClientOptions {
@@ -800,8 +800,8 @@ export class RawClient {
 
 // --- Header helpers ---
 
-import type { EncryptionSetting } from '../types/encryption.js'
-import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
+import type { EncryptionSetting } from '../types/encryption.ts'
+import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 
 /**
  * Applies server-side encryption headers to the request.
@@ -954,4 +954,4 @@ export {
   decodeFileName,
   buildFileInfoHeaders,
   parseFileInfoHeaders,
-} from './encoding.js'
+} from './encoding.ts'

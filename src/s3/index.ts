@@ -8,7 +8,7 @@
  * @packageDocumentation
  */
 
-import type { AccountInfo } from '../auth/account-info.js'
+import type { AccountInfo } from '../auth/account-info.ts'
 
 /** Configuration for deriving S3-compatible client settings from B2 auth state. */
 export interface B2S3Config {

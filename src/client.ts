@@ -1,25 +1,25 @@
-import type { AccountInfo } from './auth/account-info.js'
-import { InMemoryAccountInfo } from './auth/in-memory.js'
-import { getRealmUrl } from './auth/realms.js'
-import { Bucket } from './bucket.js'
-import type { RetryOptions } from './http/retry.js'
-import type { HttpTransport } from './http/transport.js'
-import { FetchTransport, RetryTransport } from './http/transport.js'
-import { RawClient } from './raw/index.js'
-import type { AuthorizeAccountResponse, Capability } from './types/auth.js'
+import type { AccountInfo } from './auth/account-info.ts'
+import { InMemoryAccountInfo } from './auth/in-memory.ts'
+import { getRealmUrl } from './auth/realms.ts'
+import { Bucket } from './bucket.ts'
+import type { RetryOptions } from './http/retry.ts'
+import type { HttpTransport } from './http/transport.ts'
+import { FetchTransport, RetryTransport } from './http/transport.ts'
+import { RawClient } from './raw/index.ts'
+import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
   BucketInfo,
   BucketType,
   CorsRule,
   CreateBucketRequest,
   LifecycleRule,
-} from './types/bucket.js'
-import type { BucketRetentionPolicy } from './types/bucket.js'
-import type { EncryptionSetting } from './types/encryption.js'
-import type { ApplicationKeyId, BucketId } from './types/ids.js'
-import { accountId } from './types/ids.js'
-import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.js'
-import type { ReplicationConfiguration } from './types/replication.js'
+} from './types/bucket.ts'
+import type { BucketRetentionPolicy } from './types/bucket.ts'
+import type { EncryptionSetting } from './types/encryption.ts'
+import type { ApplicationKeyId, BucketId } from './types/ids.ts'
+import { accountId } from './types/ids.ts'
+import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.ts'
+import type { ReplicationConfiguration } from './types/replication.ts'
 
 /** Result of {@link B2Client.hasCapabilities}. */
 export interface CapabilityCheckResult {

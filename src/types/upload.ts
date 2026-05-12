@@ -1,6 +1,6 @@
-import type { EncryptionSetting } from './encryption.js'
-import type { BucketId, LargeFileId } from './ids.js'
-import type { FileRetentionValue, LegalHoldValue } from './lock.js'
+import type { EncryptionSetting } from './encryption.ts'
+import type { BucketId, LargeFileId } from './ids.ts'
+import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
 /** Request parameters for the `b2_get_upload_url` API call. */
 export interface GetUploadUrlRequest {

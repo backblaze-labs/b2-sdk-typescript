@@ -1,0 +1,13 @@
+name = "b2-bandwidth-alliance"
+main = "worker.ts"
+compatibility_date = "2026-05-01"
+
+# Replace with your bucket and region (the region is part of the S3-compat
+# endpoint, e.g. `us-west-004`).
+[vars]
+B2_BUCKET = "my-public-bucket"
+B2_REGION = "us-west-004"
+
+# Secrets — set via `wrangler secret put`:
+#   wrangler secret put B2_APPLICATION_KEY_ID
+#   wrangler secret put B2_APPLICATION_KEY

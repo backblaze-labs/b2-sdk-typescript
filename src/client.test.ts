@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { B2Client } from './client.js'
-import { B2Simulator } from './simulator/index.js'
-import { BufferSource } from './streams/source.js'
-import type { LargeFileId } from './types/ids.js'
+import { B2Client } from './client.ts'
+import { B2Simulator } from './simulator/index.ts'
+import { BufferSource } from './streams/source.ts'
+import type { LargeFileId } from './types/ids.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -775,7 +775,7 @@ describe('key management', () => {
   })
 
   it('creates and lists application keys', async () => {
-    const { accountId } = await import('./types/ids.js')
+    const { accountId } = await import('./types/ids.ts')
 
     const key = await client.raw.createKey(
       client.accountInfo.getApiUrl(),
@@ -805,7 +805,7 @@ describe('key management', () => {
   })
 
   it('deletes an application key', async () => {
-    const { accountId } = await import('./types/ids.js')
+    const { accountId } = await import('./types/ids.ts')
 
     const key = await client.raw.createKey(
       client.accountInfo.getApiUrl(),
@@ -834,7 +834,7 @@ describe('key management', () => {
   })
 
   it('creates a key scoped to a bucket', async () => {
-    const { accountId } = await import('./types/ids.js')
+    const { accountId } = await import('./types/ids.ts')
     const bucket = await client.createBucket({ bucketName: 'key-scope', bucketType: 'allPrivate' })
 
     const key = await client.raw.createKey(
@@ -1217,7 +1217,7 @@ describe('B2Client constructor options', () => {
 
 describe('error classification', () => {
   it('classifies expired_auth_token as retryable', async () => {
-    const { classifyError } = await import('./errors/index.js')
+    const { classifyError } = await import('./errors/index.ts')
     const error = classifyError({
       status: 401,
       code: 'expired_auth_token',
@@ -1228,14 +1228,14 @@ describe('error classification', () => {
   })
 
   it('classifies cap_exceeded as not retryable', async () => {
-    const { classifyError } = await import('./errors/index.js')
+    const { classifyError } = await import('./errors/index.ts')
     const error = classifyError({ status: 403, code: 'cap_exceeded', message: 'Cap exceeded' })
     expect(error.retryable).toBe(false)
     expect(error.name).toBe('CapExceededError')
   })
 
   it('classifies 503 as retryable', async () => {
-    const { classifyError } = await import('./errors/index.js')
+    const { classifyError } = await import('./errors/index.ts')
     const error = classifyError({ status: 503, code: 'service_unavailable', message: 'Try again' })
     expect(error.retryable).toBe(true)
     expect(error.name).toBe('ServiceUnavailableError')
@@ -1244,7 +1244,7 @@ describe('error classification', () => {
 
 describe('IncrementalSha1', () => {
   it('computes correct SHA1 for known input', async () => {
-    const { IncrementalSha1 } = await import('./streams/hash.js')
+    const { IncrementalSha1 } = await import('./streams/hash.ts')
     const sha1 = new IncrementalSha1()
     await sha1.update(new TextEncoder().encode('hello'))
     const digest = await sha1.digest()
@@ -1252,7 +1252,7 @@ describe('IncrementalSha1', () => {
   })
 
   it('handles multiple updates', async () => {
-    const { IncrementalSha1, sha1Hex } = await import('./streams/hash.js')
+    const { IncrementalSha1, sha1Hex } = await import('./streams/hash.ts')
     const sha1 = new IncrementalSha1()
     await sha1.update(new TextEncoder().encode('hello'))
     await sha1.update(new TextEncoder().encode(' world'))
@@ -1265,14 +1265,14 @@ describe('IncrementalSha1', () => {
 
 describe('encoding', () => {
   it('percent-encodes file names correctly', async () => {
-    const { encodeFileName, decodeFileName } = await import('./raw/encoding.js')
+    const { encodeFileName, decodeFileName } = await import('./raw/encoding.ts')
     expect(encodeFileName('photos/2026/cat.jpg')).toBe('photos/2026/cat.jpg')
     expect(encodeFileName('path with spaces')).toBe('path%20with%20spaces')
     expect(decodeFileName('path%20with%20spaces')).toBe('path with spaces')
   })
 
   it('handles unicode in file names', async () => {
-    const { encodeFileName, decodeFileName } = await import('./raw/encoding.js')
+    const { encodeFileName, decodeFileName } = await import('./raw/encoding.ts')
     const original = 'docs/日本語.txt'
     const encoded = encodeFileName(original)
     expect(encoded).not.toContain('日')

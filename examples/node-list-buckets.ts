@@ -2,7 +2,7 @@
  * List all buckets in a B2 account.
  *
  * Usage:
- *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/list-buckets.ts
+ *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/node-list-buckets.ts
  */
 
 import { B2Client } from '@backblaze/b2-sdk'

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Bucket } from '../bucket.js'
-import { B2Client } from '../client.js'
-import { B2Simulator } from '../simulator/index.js'
-import { BufferSource } from '../streams/source.js'
-import { uploadLargeFile } from './large.js'
-import { uploadSmallFile } from './single.js'
+import type { Bucket } from '../bucket.ts'
+import { B2Client } from '../client.ts'
+import { B2Simulator } from '../simulator/index.ts'
+import { BufferSource } from '../streams/source.ts'
+import { uploadLargeFile } from './large.ts'
+import { uploadSmallFile } from './single.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -426,7 +426,7 @@ describe('uploadLargeFile resume', () => {
 
       // Upload part 1 with the matching SHA-1 the resume path will recompute locally.
       const part1Data = data.slice(0, 5_000_000)
-      const { sha1Hex } = await import('../streams/hash.js')
+      const { sha1Hex } = await import('../streams/hash.ts')
       const part1Sha1 = await sha1Hex(part1Data)
 
       await client.raw.uploadPart(

@@ -1,6 +1,6 @@
-import type { EncryptionSetting } from './encryption.js'
-import type { AccountId, BucketId, FileId } from './ids.js'
-import type { FileRetentionValue, LegalHoldValue } from './lock.js'
+import type { EncryptionSetting } from './encryption.ts'
+import type { AccountId, BucketId, FileId } from './ids.ts'
+import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
 /**
  * The action that created a file version.

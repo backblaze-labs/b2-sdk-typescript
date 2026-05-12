@@ -1,4 +1,4 @@
-import type { BucketId } from './ids.js'
+import type { BucketId } from './ids.ts'
 
 /**
  * B2 event types that can trigger notifications.

@@ -11,7 +11,6 @@ import { B2Client } from '@backblaze/b2-sdk'
 async function main() {
   const bucketName = process.argv[2]
   const fileName = process.argv[3]
-  const outputPath = process.argv[4] ?? fileName
 
   if (!bucketName || !fileName) {
     console.error(
@@ -19,6 +18,7 @@ async function main() {
     )
     process.exit(1)
   }
+  const outputPath = process.argv[4] ?? fileName
 
   const keyId = process.env.B2_APPLICATION_KEY_ID
   const key = process.env.B2_APPLICATION_KEY

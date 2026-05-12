@@ -1,7 +1,7 @@
-import type { AuthorizeAccountResponse } from '../types/auth.js'
-import type { BucketId } from '../types/ids.js'
-import type { AccountInfo, UploadUrlEntry } from './account-info.js'
-import { UploadUrlPool } from './upload-url-pool.js'
+import type { AuthorizeAccountResponse } from '../types/auth.ts'
+import type { BucketId } from '../types/ids.ts'
+import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
+import { UploadUrlPool } from './upload-url-pool.ts'
 
 /**
  * In-memory implementation of {@link AccountInfo}.

@@ -1,6 +1,6 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
-import type { LocalSyncPath, SyncFolder } from '../types.js'
+import type { LocalSyncPath, SyncFolder } from '../types.ts'
 
 /**
  * Scans a local directory tree and yields {@link LocalSyncPath} entries

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.js'
-import { B2Client } from './client.js'
-import { B2Simulator } from './simulator/index.js'
-import { BufferSource } from './streams/source.js'
+import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.ts'
+import { B2Client } from './client.ts'
+import { B2Simulator } from './simulator/index.ts'
+import { BufferSource } from './streams/source.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()

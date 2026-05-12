@@ -1,6 +1,6 @@
-import type { EncryptionSetting } from './encryption.js'
-import type { AccountId, BucketId } from './ids.js'
-import type { ReplicationConfiguration } from './replication.js'
+import type { EncryptionSetting } from './encryption.ts'
+import type { AccountId, BucketId } from './ids.ts'
+import type { ReplicationConfiguration } from './replication.ts'
 
 /** Access level for a B2 bucket. */
 export type BucketType = 'allPublic' | 'allPrivate' | 'snapshot' | 'restricted'

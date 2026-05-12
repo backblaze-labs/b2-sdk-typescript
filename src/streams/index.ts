@@ -1,6 +1,6 @@
 /** @packageDocumentation */
-export { IncrementalSha1, sha1Hex } from './hash.js'
-export type { ProgressEvent, ProgressListener } from './progress.js'
-export { ProgressTracker } from './progress.js'
-export type { ContentSource } from './source.js'
-export { BlobSource, BufferSource, StreamSource, toContentSource } from './source.js'
+export { IncrementalSha1, sha1Hex } from './hash.ts'
+export type { ProgressEvent, ProgressListener } from './progress.ts'
+export { ProgressTracker } from './progress.ts'
+export type { ContentSource } from './source.ts'
+export { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
