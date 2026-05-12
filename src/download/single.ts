@@ -1,6 +1,6 @@
 import type { AccountInfo } from '../auth/account-info.js'
 import { parseFileInfoHeaders } from '../raw/encoding.js'
-import type { RawClient } from '../raw/index.js'
+import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.js'
 import type { DownloadHeaders } from '../types/download.js'
 import type { FileId } from '../types/ids.js'
 
@@ -12,26 +12,42 @@ export interface DownloadResult {
   readonly body: ReadableStream<Uint8Array>
 }
 
-/** Options for downloading a file by its unique ID. */
-export interface DownloadByIdOptions {
-  /** ID of the file version to download. */
-  readonly fileId: FileId
+/** Shared download options exposed at the high-level facade. */
+interface DownloadCommonOptions {
+  /** HTTP method. Defaults to `'GET'`. Use `'HEAD'` to fetch only response headers without streaming the body. */
+  readonly method?: 'GET' | 'HEAD'
   /** Optional HTTP Range header value (e.g. `bytes=0-999`). */
   readonly range?: string
+  /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+  readonly serverSideEncryption?: SseCDownloadKey
+  /** Override the response `Content-Disposition` header. */
+  readonly b2ContentDisposition?: string
+  /** Override the response `Content-Language` header. */
+  readonly b2ContentLanguage?: string
+  /** Override the response `Content-Encoding` header. */
+  readonly b2ContentEncoding?: string
+  /** Override the response `Content-Type` header. */
+  readonly b2ContentType?: string
+  /** Override the response `Cache-Control` header. */
+  readonly b2CacheControl?: string
+  /** Override the response `Expires` header. */
+  readonly b2Expires?: string
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
 }
 
+/** Options for downloading a file by its unique ID. */
+export interface DownloadByIdOptions extends DownloadCommonOptions {
+  /** ID of the file version to download. */
+  readonly fileId: FileId
+}
+
 /** Options for downloading a file by bucket name and file path. */
-export interface DownloadByNameOptions {
+export interface DownloadByNameOptions extends DownloadCommonOptions {
   /** Name of the bucket containing the file. */
   readonly bucketName: string
   /** Full file name (path) within the bucket. */
   readonly fileName: string
-  /** Optional HTTP Range header value (e.g. `bytes=0-999`). */
-  readonly range?: string
-  /** Signal to abort the download. */
-  readonly signal?: AbortSignal
 }
 
 /**
@@ -56,17 +72,14 @@ export async function downloadById(
     accountInfo.getDownloadUrl(),
     accountInfo.getAuthToken(),
     options.fileId as string,
-    {
-      ...(options.range !== undefined ? { range: options.range } : {}),
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    },
+    toRawDownloadOptions(options),
   )
-
-  if (!resp.body) throw new Error('Download response has no body')
 
   return {
     headers: extractDownloadHeaders(resp.headers),
-    body: resp.body,
+    // HEAD requests legitimately have no body; return an empty stream so the
+    // result shape stays consistent.
+    body: resp.body ?? emptyStream(),
   }
 }
 
@@ -93,18 +106,59 @@ export async function downloadByName(
     accountInfo.getAuthToken(),
     options.bucketName,
     options.fileName,
-    {
-      ...(options.range !== undefined ? { range: options.range } : {}),
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    },
+    toRawDownloadOptions(options),
   )
-
-  if (!resp.body) throw new Error('Download response has no body')
 
   return {
     headers: extractDownloadHeaders(resp.headers),
-    body: resp.body,
+    body: resp.body ?? emptyStream(),
   }
+}
+
+/**
+ * Translates the public download-options shape into the raw client's
+ * {@link DownloadFileOptions}, dropping the request-target fields (`fileId`,
+ * `bucketName`, `fileName`) that don't apply at the transport layer.
+ *
+ * @param options - Caller-supplied download options.
+ *
+ * @returns The raw transport-layer options.
+ */
+function toRawDownloadOptions(options: DownloadCommonOptions): DownloadFileOptions {
+  return {
+    ...(options.method !== undefined ? { method: options.method } : {}),
+    ...(options.range !== undefined ? { range: options.range } : {}),
+    ...(options.serverSideEncryption !== undefined
+      ? { serverSideEncryption: options.serverSideEncryption }
+      : {}),
+    ...(options.b2ContentDisposition !== undefined
+      ? { b2ContentDisposition: options.b2ContentDisposition }
+      : {}),
+    ...(options.b2ContentLanguage !== undefined
+      ? { b2ContentLanguage: options.b2ContentLanguage }
+      : {}),
+    ...(options.b2ContentEncoding !== undefined
+      ? { b2ContentEncoding: options.b2ContentEncoding }
+      : {}),
+    ...(options.b2ContentType !== undefined ? { b2ContentType: options.b2ContentType } : {}),
+    ...(options.b2CacheControl !== undefined ? { b2CacheControl: options.b2CacheControl } : {}),
+    ...(options.b2Expires !== undefined ? { b2Expires: options.b2Expires } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+  }
+}
+
+/**
+ * Builds an immediately-closed empty ReadableStream. Used as the body of a
+ * HEAD download response so callers always get a stream they can `pipeTo`.
+ *
+ * @returns A ReadableStream that yields zero bytes and immediately closes.
+ */
+function emptyStream(): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.close()
+    },
+  })
 }
 
 /**

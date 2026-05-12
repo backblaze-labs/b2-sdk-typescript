@@ -544,10 +544,7 @@ export class RawClient {
     downloadUrl: string,
     authToken: string,
     fileId: string,
-    options?: {
-      /** HTTP Range header value for partial content requests. */ range?: string /** Signal to abort the download. */
-      signal?: AbortSignal
-    },
+    options?: DownloadFileOptions,
   ): Promise<{
     /** Response headers containing file metadata and B2 info headers. */
     headers: Headers
@@ -556,16 +553,15 @@ export class RawClient {
     /** HTTP status code (200 for full content, 206 for partial content). */
     status: number
   }> {
-    const headers: Record<string, string> = {
-      Authorization: authToken,
-    }
-    if (options?.range) {
-      headers['Range'] = options.range
-    }
+    const headers = buildDownloadRequestHeaders(authToken, options)
+    const url = appendDownloadOverrides(
+      `${downloadUrl}/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(fileId)}`,
+      options,
+    )
 
     const response = await this.transport.send({
-      url: `${downloadUrl}/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(fileId)}`,
-      method: 'GET',
+      url,
+      method: options?.method ?? 'GET',
       headers,
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
     })
@@ -588,10 +584,7 @@ export class RawClient {
     authToken: string,
     bucketName: string,
     fileName: string,
-    options?: {
-      /** HTTP Range header value for partial content requests. */ range?: string /** Signal to abort the download. */
-      signal?: AbortSignal
-    },
+    options?: DownloadFileOptions,
   ): Promise<{
     /** Response headers containing file metadata and B2 info headers. */
     headers: Headers
@@ -600,16 +593,15 @@ export class RawClient {
     /** HTTP status code (200 for full content, 206 for partial content). */
     status: number
   }> {
-    const headers: Record<string, string> = {
-      Authorization: authToken,
-    }
-    if (options?.range) {
-      headers['Range'] = options.range
-    }
+    const headers = buildDownloadRequestHeaders(authToken, options)
+    const url = appendDownloadOverrides(
+      `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeFileName(fileName)}`,
+      options,
+    )
 
     const response = await this.transport.send({
-      url: `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeFileName(fileName)}`,
-      method: 'GET',
+      url,
+      method: options?.method ?? 'GET',
       headers,
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
     })
@@ -828,6 +820,102 @@ function applyEncryptionHeaders(
     headers['X-Bz-Server-Side-Encryption-Customer-Key'] = encryption.customerKey
     headers['X-Bz-Server-Side-Encryption-Customer-Key-Md5'] = encryption.customerKeyMd5
   }
+}
+
+/**
+ * SSE-C decryption parameters supplied to downloads of files that were
+ * uploaded with customer-managed keys.
+ */
+export interface SseCDownloadKey {
+  /** Encryption algorithm. Always `'AES256'`. */
+  readonly algorithm: 'AES256'
+  /** Base64-encoded customer-provided decryption key. */
+  readonly customerKey: string
+  /** Base64-encoded MD5 digest of the decryption key. */
+  readonly customerKeyMd5: string
+}
+
+/**
+ * Options accepted by {@link RawClient.downloadFileById} and
+ * {@link RawClient.downloadFileByName}. Mirrors the B2 native API: range +
+ * SSE-C decryption headers + the documented `b2Content*` response-header
+ * overrides (query-string parameters on the request URL).
+ */
+export interface DownloadFileOptions {
+  /** HTTP method. Defaults to `'GET'`. Use `'HEAD'` to fetch headers without the body. */
+  readonly method?: 'GET' | 'HEAD'
+  /** HTTP Range header value for partial content requests. */
+  readonly range?: string
+  /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+  readonly serverSideEncryption?: SseCDownloadKey
+  /** Override the `Content-Disposition` header in the download response. */
+  readonly b2ContentDisposition?: string
+  /** Override the `Content-Language` header in the download response. */
+  readonly b2ContentLanguage?: string
+  /** Override the `Content-Encoding` header in the download response. */
+  readonly b2ContentEncoding?: string
+  /** Override the `Content-Type` header in the download response. */
+  readonly b2ContentType?: string
+  /** Override the `Cache-Control` header in the download response. */
+  readonly b2CacheControl?: string
+  /** Override the `Expires` header in the download response. */
+  readonly b2Expires?: string
+  /** Signal to abort the download. */
+  readonly signal?: AbortSignal
+}
+
+const DOWNLOAD_OVERRIDE_PARAMS = [
+  'b2ContentDisposition',
+  'b2ContentLanguage',
+  'b2ContentEncoding',
+  'b2ContentType',
+  'b2CacheControl',
+  'b2Expires',
+] as const
+
+/**
+ * Builds the HTTP request headers for a download: Authorization, optional
+ * Range, and optional SSE-C decryption headers.
+ *
+ * @param authToken - The B2 session authorization token.
+ * @param options - Caller-supplied download options.
+ *
+ * @returns The header map to send with the request.
+ */
+function buildDownloadRequestHeaders(
+  authToken: string,
+  options: DownloadFileOptions | undefined,
+): Record<string, string> {
+  const headers: Record<string, string> = { Authorization: authToken }
+  if (options?.range) headers['Range'] = options.range
+  if (options?.serverSideEncryption) {
+    applyEncryptionHeaders(headers, { mode: 'SSE-C', ...options.serverSideEncryption })
+  }
+  return headers
+}
+
+/**
+ * Appends the documented `b2Content*` response-header overrides to a download
+ * URL as query-string parameters. B2 echoes the values into the response
+ * headers so callers can control content type, disposition, and caching.
+ *
+ * @param url - The base download URL.
+ * @param options - Caller-supplied download options.
+ *
+ * @returns The URL with any override parameters appended.
+ */
+function appendDownloadOverrides(url: string, options: DownloadFileOptions | undefined): string {
+  if (!options) return url
+  const params: string[] = []
+  for (const key of DOWNLOAD_OVERRIDE_PARAMS) {
+    const value = options[key]
+    if (value !== undefined) {
+      params.push(`${key}=${encodeURIComponent(value)}`)
+    }
+  }
+  if (params.length === 0) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}${params.join('&')}`
 }
 
 /**

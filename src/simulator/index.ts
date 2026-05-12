@@ -278,24 +278,68 @@ export class B2Simulator {
    * Returns the file data along with B2 response headers.
    * @param path - The request URL path identifying the file to download.
    * @param headers - The HTTP request headers for range or authorization.
+   * @param method - The HTTP method; `'HEAD'` suppresses the response body.
    *
    * @returns The download response containing file data and B2 headers.
    */
-  handleDownload(path: string, headers: Record<string, string>): SimulatorDownloadResponse {
+  handleDownload(
+    path: string,
+    headers: Record<string, string>,
+    method: 'GET' | 'HEAD' = 'GET',
+  ): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
-      return this.downloadById(fileId, headers['range'])
+      return this.finalizeDownload(this.downloadById(fileId, headers['range']), url, method)
     }
 
-    const fileMatch = path.match(/\/file\/([^/]+)\/(.+)/)
+    const fileMatch = path.match(/^([^?]+)/)?.[1]?.match(/\/file\/([^/]+)\/(.+)/)
     if (fileMatch) {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
-      return this.downloadByName(bucketName, fileName, headers['range'])
+      const url = new URL(`http://localhost${path}`)
+      return this.finalizeDownload(
+        this.downloadByName(bucketName, fileName, headers['range']),
+        url,
+        method,
+      )
     }
 
     return { status: 404, headers: {}, data: null }
+  }
+
+  /**
+   * Applies HEAD-method body suppression and `b2Content*` response-header
+   * overrides parsed from the download URL's query string. Mirrors what the
+   * real B2 service does: any `b2Content*` query parameter is echoed back as
+   * the corresponding response header.
+   *
+   * @param response - The download response produced by {@link downloadById} or {@link downloadByName}.
+   * @param url - The parsed download URL (used to read `b2Content*` query params).
+   * @param method - The HTTP method of the originating request.
+   *
+   * @returns The response with overrides applied.
+   */
+  private finalizeDownload(
+    response: SimulatorDownloadResponse,
+    url: URL,
+    method: 'GET' | 'HEAD',
+  ): SimulatorDownloadResponse {
+    const overrideMap: Record<string, string> = {
+      b2ContentDisposition: 'Content-Disposition',
+      b2ContentLanguage: 'Content-Language',
+      b2ContentEncoding: 'Content-Encoding',
+      b2ContentType: 'Content-Type',
+      b2CacheControl: 'Cache-Control',
+      b2Expires: 'Expires',
+    }
+    const newHeaders = { ...response.headers }
+    for (const [param, header] of Object.entries(overrideMap)) {
+      const value = url.searchParams.get(param)
+      if (value !== null) newHeaders[header] = value
+    }
+    const data = method === 'HEAD' ? null : response.data
+    return { status: response.status, headers: newHeaders, data }
   }
 
   private handleUploadFile(
@@ -1153,7 +1197,8 @@ class SimulatorTransport implements HttpTransport {
       parsedUrl.pathname.includes('b2_download_file_by_id') || parsedUrl.pathname.includes('/file/')
 
     if (isDownload) {
-      const result = this.sim.handleDownload(parsedUrl.pathname + parsedUrl.search, headers)
+      const method = request.method === 'HEAD' ? 'HEAD' : 'GET'
+      const result = this.sim.handleDownload(parsedUrl.pathname + parsedUrl.search, headers, method)
       const data = result.data ?? new Uint8Array(0)
       const responseHeaders = new Headers(result.headers)
       responseHeaders.set(
@@ -1161,15 +1206,21 @@ class SimulatorTransport implements HttpTransport {
         result.headers['Content-Type'] ?? 'application/octet-stream',
       )
 
+      // HEAD responses have no body but keep all headers (matches HTTP semantics).
+      const body =
+        method === 'HEAD' || result.data === null
+          ? null
+          : new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(data)
+                controller.close()
+              },
+            })
+
       return {
         status: result.status,
         headers: responseHeaders,
-        body: new ReadableStream({
-          start(controller) {
-            controller.enqueue(data)
-            controller.close()
-          },
-        }),
+        body,
         json: () => Promise.reject(new Error('Download response is not JSON')),
         text: () => Promise.resolve(new TextDecoder().decode(data)),
         arrayBuffer: () =>

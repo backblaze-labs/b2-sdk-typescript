@@ -786,3 +786,191 @@ describe('createParallelDownloadStream with simulator', () => {
     expect(decode(result)).toBe(text)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Tier 1: HEAD method + response-header overrides on downloadById
+// ---------------------------------------------------------------------------
+
+describe('downloadById HEAD method and response-header overrides', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('HEAD download returns headers and an empty body', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'head-by-id',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('payload for HEAD test')
+    const uploaded = await bucket.upload({
+      fileName: 'head.bin',
+      source: new BufferSource(content),
+      contentType: 'application/octet-stream',
+    })
+
+    const result = await downloadById(client.raw, client.accountInfo, {
+      fileId: uploaded.fileId,
+      method: 'HEAD',
+    })
+
+    expect(result.headers.fileName).toBe('head.bin')
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    const body = await readStream(result.body)
+    expect(body.byteLength).toBe(0)
+  })
+
+  it('downloadByName supports HEAD and produces an empty body', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'head-by-name',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('named HEAD payload')
+    await bucket.upload({
+      fileName: 'meta.txt',
+      source: new BufferSource(content),
+      contentType: 'text/plain',
+    })
+
+    const result = await downloadByName(client.raw, client.accountInfo, {
+      bucketName: 'head-by-name',
+      fileName: 'meta.txt',
+      method: 'HEAD',
+    })
+
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    const body = await readStream(result.body)
+    expect(body.byteLength).toBe(0)
+  })
+
+  it('b2Content* overrides on downloadById are echoed back as response headers', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'overrides-by-id',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('{"hello":"world"}')
+    const uploaded = await bucket.upload({
+      fileName: 'data.json',
+      source: new BufferSource(content),
+      contentType: 'application/json',
+    })
+
+    const result = await downloadById(client.raw, client.accountInfo, {
+      fileId: uploaded.fileId,
+      b2ContentType: 'text/plain; charset=utf-8',
+      b2ContentDisposition: 'attachment; filename="report.txt"',
+      b2CacheControl: 'no-cache',
+    })
+
+    // The simulator echoes b2Content* query params back into response headers,
+    // matching real B2 behavior.
+    expect(result.headers.contentType).toBe('text/plain; charset=utf-8')
+  })
+
+  it('b2Content* overrides on downloadByName are echoed back as response headers', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'overrides-by-name',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('overridden!')
+    await bucket.upload({
+      fileName: 'output.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await downloadByName(client.raw, client.accountInfo, {
+      bucketName: 'overrides-by-name',
+      fileName: 'output.bin',
+      b2ContentType: 'application/pdf',
+      b2ContentLanguage: 'en-US',
+    })
+
+    expect(result.headers.contentType).toBe('application/pdf')
+  })
+
+  it('every b2Content* override is forwarded as a query parameter', async () => {
+    // Exercises every branch of the override map in raw/index.ts so each
+    // b2Content* parameter actually round-trips through the simulator's
+    // response-header echo.
+    const bucket = await client.createBucket({
+      bucketName: 'overrides-all',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('all-overrides')
+    const uploaded = await bucket.upload({
+      fileName: 'all.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await downloadById(client.raw, client.accountInfo, {
+      fileId: uploaded.fileId,
+      b2ContentType: 'text/csv',
+      b2ContentDisposition: 'inline',
+      b2ContentEncoding: 'gzip',
+      b2ContentLanguage: 'fr-CA',
+      b2CacheControl: 'public, max-age=3600',
+      b2Expires: 'Thu, 01 Jan 2099 00:00:00 GMT',
+    })
+    expect(result.headers.contentType).toBe('text/csv')
+  })
+
+  it('HEAD + b2Content* overrides combine: empty body, overridden headers', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'head-with-overrides',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('combined test')
+    const uploaded = await bucket.upload({
+      fileName: 'combo.bin',
+      source: new BufferSource(content),
+      contentType: 'application/octet-stream',
+    })
+
+    const result = await downloadById(client.raw, client.accountInfo, {
+      fileId: uploaded.fileId,
+      method: 'HEAD',
+      b2ContentType: 'image/png',
+    })
+
+    expect(result.headers.contentType).toBe('image/png')
+    const body = await readStream(result.body)
+    expect(body.byteLength).toBe(0)
+  })
+
+  it('Bucket.download(method: HEAD) returns metadata without streaming the body', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-head',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('via Bucket.download HEAD')
+    await bucket.upload({
+      fileName: 'bucket-head.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await bucket.download('bucket-head.bin', { method: 'HEAD' })
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    const body = await readStream(result.body)
+    expect(body.byteLength).toBe(0)
+  })
+
+  it('B2Object.downloadById(method: HEAD) returns metadata without streaming the body', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'object-head',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('via B2Object.downloadById HEAD')
+    const uploaded = await bucket.upload({
+      fileName: 'obj-head.bin',
+      source: new BufferSource(content),
+    })
+
+    const obj = bucket.file('obj-head.bin')
+    const result = await obj.downloadById(uploaded.fileId, { method: 'HEAD' })
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    const body = await readStream(result.body)
+    expect(body.byteLength).toBe(0)
+  })
+})

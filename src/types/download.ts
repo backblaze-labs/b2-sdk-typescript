@@ -15,6 +15,18 @@ export interface DownloadByIdRequest {
     /** Base64-encoded MD5 digest of the decryption key. */
     readonly customerKeyMd5: string
   }
+  /** Override the Content-Disposition header in the download response. */
+  readonly b2ContentDisposition?: string
+  /** Override the Content-Language header in the download response. */
+  readonly b2ContentLanguage?: string
+  /** Override the Content-Encoding header in the download response. */
+  readonly b2ContentEncoding?: string
+  /** Override the Content-Type header in the download response. */
+  readonly b2ContentType?: string
+  /** Override the Cache-Control header in the download response. */
+  readonly b2CacheControl?: string
+  /** Override the Expires header in the download response. */
+  readonly b2Expires?: string
 }
 
 /** Request parameters for downloading a file by bucket name and file name via `b2_download_file_by_name`. */

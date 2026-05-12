@@ -1,7 +1,7 @@
 import type { B2Client } from './client.js'
 import { copyLargeFile } from './copy/large.js'
 import { type DownloadResult, downloadByName } from './download/single.js'
-import { B2Object } from './object.js'
+import { B2Object, type DownloadCallOptions } from './object.js'
 import type { ProgressListener } from './streams/progress.js'
 import type { ContentSource } from './streams/source.js'
 import type {
@@ -19,7 +19,7 @@ import type {
   ListFileVersionsResponse,
   MetadataDirective,
 } from './types/file.js'
-import type { BucketId, FileId } from './types/ids.js'
+import type { BucketId, FileId, LargeFileId } from './types/ids.js'
 import { accountId } from './types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.js'
 import type {
@@ -27,6 +27,7 @@ import type {
   GetBucketNotificationRulesResponse,
 } from './types/notifications.js'
 import type { ReplicationConfiguration } from './types/replication.js'
+import type { CancelLargeFileResponse } from './types/upload.js'
 import { Semaphore } from './upload/concurrency.js'
 import { uploadLargeFile } from './upload/large.js'
 import { uploadSmallFile } from './upload/single.js'
@@ -183,21 +184,15 @@ export class Bucket {
   }
 
   /**
-   * Downloads a file from this bucket by name.
+   * Downloads a file from this bucket by name. Pass `method: 'HEAD'` in
+   * `options` to fetch only the response headers (file metadata) without
+   * streaming the body.
    * @param fileName - The file name (path) to download.
-   * @param options - Optional range and abort signal.
+   * @param options - Optional method, range, SSE-C decryption, response-header overrides, and abort signal.
    *
    * @returns The download result containing response headers and a readable body stream.
    */
-  async download(
-    fileName: string,
-    options?: {
-      /** HTTP Range header value (e.g., `"bytes=0-999"`). */
-      range?: string
-      /** Abort signal for cancelling the download. */
-      signal?: AbortSignal
-    },
-  ): Promise<DownloadResult> {
+  async download(fileName: string, options?: DownloadCallOptions): Promise<DownloadResult> {
     return downloadByName(this.client.raw, this.client.accountInfo, {
       bucketName: this.name,
       fileName,
@@ -349,6 +344,49 @@ export class Bucket {
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
       { fileName, fileId },
+    )
+  }
+
+  /**
+   * Cancels an in-progress large file upload so the partial parts are not
+   * retained or billed. The most common reason to call this is to clean up
+   * abandoned multipart uploads surfaced by {@link listUnfinishedLargeFiles}.
+   * @param fileId - The unique identifier of the unfinished large file to cancel.
+   *
+   * @returns Metadata about the cancelled large file.
+   */
+  async cancelLargeFile(fileId: LargeFileId): Promise<CancelLargeFileResponse> {
+    return this.client.raw.cancelLargeFile(
+      this.client.accountInfo.getApiUrl(),
+      this.client.accountInfo.getAuthToken(),
+      { fileId },
+    )
+  }
+
+  /**
+   * Lists large files in this bucket that were started but never finished or
+   * cancelled. Wraps `b2_list_unfinished_large_files`.
+   * @param options - Optional pagination filters.
+   *
+   * @returns The page of unfinished large files plus a continuation token.
+   */
+  async listUnfinishedLargeFiles(options?: {
+    /** Restrict results to files whose name starts with this prefix. */
+    namePrefix?: string
+    /** Start listing after this file ID (for pagination). */
+    startFileId?: LargeFileId
+    /** Maximum number of files to return (1-100). */
+    maxFileCount?: number
+  }) {
+    return this.client.raw.listUnfinishedLargeFiles(
+      this.client.accountInfo.getApiUrl(),
+      this.client.accountInfo.getAuthToken(),
+      {
+        bucketId: this.id,
+        ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
+        ...(options?.startFileId !== undefined ? { startFileId: options.startFileId } : {}),
+        ...(options?.maxFileCount !== undefined ? { maxFileCount: options.maxFileCount } : {}),
+      },
     )
   }
 

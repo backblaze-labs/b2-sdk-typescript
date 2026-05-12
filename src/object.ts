@@ -3,6 +3,7 @@ import type { B2Client } from './client.js'
 import { createParallelDownloadStream } from './download/parallel.js'
 import { type DownloadResult, downloadByName } from './download/single.js'
 import { downloadById } from './download/single.js'
+import type { SseCDownloadKey } from './raw/index.js'
 import type { ProgressListener } from './streams/progress.js'
 import type { ContentSource } from './streams/source.js'
 import type { EncryptionSetting } from './types/encryption.js'
@@ -12,6 +13,30 @@ import type { FileRetentionValue, LegalHoldValue } from './types/lock.js'
 import { uploadLargeFile } from './upload/large.js'
 import { uploadSmallFile } from './upload/single.js'
 import { type UploadWriteHandle, createWriteStream } from './upload/stream.js'
+
+/** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
+export interface DownloadCallOptions {
+  /** HTTP method. Defaults to `'GET'`. Use `'HEAD'` to fetch only headers (no body). */
+  readonly method?: 'GET' | 'HEAD'
+  /** HTTP Range header value (e.g., `"bytes=0-999"`). */
+  readonly range?: string
+  /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+  readonly serverSideEncryption?: SseCDownloadKey
+  /** Override the response `Content-Disposition` header. */
+  readonly b2ContentDisposition?: string
+  /** Override the response `Content-Language` header. */
+  readonly b2ContentLanguage?: string
+  /** Override the response `Content-Encoding` header. */
+  readonly b2ContentEncoding?: string
+  /** Override the response `Content-Type` header. */
+  readonly b2ContentType?: string
+  /** Override the response `Cache-Control` header. */
+  readonly b2CacheControl?: string
+  /** Override the response `Expires` header. */
+  readonly b2Expires?: string
+  /** Abort signal for cancelling the download. */
+  readonly signal?: AbortSignal
+}
 
 /**
  * Handle to a specific file (by name) within a B2 bucket.
@@ -90,17 +115,13 @@ export class B2Object {
   }
 
   /**
-   * Downloads this file by name.
-   * @param options - Optional range and abort signal.
+   * Downloads this file by name. Pass `method: 'HEAD'` to fetch only the
+   * response headers (file metadata) without streaming the body.
+   * @param options - Optional method, range, SSE-C decryption, response-header overrides, and abort signal.
    *
    * @returns The download result with response headers and body stream.
    */
-  async download(options?: {
-    /** HTTP Range header value (e.g., `"bytes=0-999"`). */
-    range?: string
-    /** Abort signal for cancelling the download. */
-    signal?: AbortSignal
-  }): Promise<DownloadResult> {
+  async download(options?: DownloadCallOptions): Promise<DownloadResult> {
     return downloadByName(this.client.raw, this.client.accountInfo, {
       bucketName: this.bucket.name,
       fileName: this.fileName,
@@ -109,21 +130,14 @@ export class B2Object {
   }
 
   /**
-   * Downloads a specific version of this file by ID.
+   * Downloads a specific version of this file by ID. Pass `method: 'HEAD'`
+   * to fetch only the response headers (file metadata) without streaming the body.
    * @param fileId - The file version ID to download.
-   * @param options - Optional range and abort signal.
+   * @param options - Optional method, range, SSE-C decryption, response-header overrides, and abort signal.
    *
    * @returns The download result with response headers and body stream.
    */
-  async downloadById(
-    fileId: FileId,
-    options?: {
-      /** HTTP Range header value (e.g., `"bytes=0-999"`). */
-      range?: string
-      /** Abort signal for cancelling the download. */
-      signal?: AbortSignal
-    },
-  ): Promise<DownloadResult> {
+  async downloadById(fileId: FileId, options?: DownloadCallOptions): Promise<DownloadResult> {
     return downloadById(this.client.raw, this.client.accountInfo, {
       fileId,
       ...options,

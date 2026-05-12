@@ -7,8 +7,8 @@ import { getUserAgent } from './user-agent.js'
 export interface HttpRequest {
   /** Fully qualified URL to send the request to. */
   readonly url: string
-  /** HTTP method. B2 uses GET for downloads and POST for all other operations. */
-  readonly method: 'GET' | 'POST'
+  /** HTTP method. B2 uses GET for downloads (HEAD to fetch only headers) and POST for all other operations. */
+  readonly method: 'GET' | 'HEAD' | 'POST'
   /** Request headers. Authorization and content-type are typically included. */
   readonly headers?: Record<string, string>
   /** Request body. Used for POST requests (JSON payloads or file uploads). */

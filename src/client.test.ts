@@ -559,6 +559,58 @@ describe('large file operations', () => {
   })
 })
 
+// --- Bucket.cancelLargeFile + Bucket.listUnfinishedLargeFiles tests ---
+
+describe('Bucket large-file high-level helpers', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('cancelLargeFile cleans up an in-progress upload via the Bucket handle', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'cancel-via-bucket',
+      bucketType: 'allPrivate',
+    })
+
+    const startResp = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id, fileName: 'orphan.bin', contentType: 'application/octet-stream' },
+    )
+
+    const cancelResp = await bucket.cancelLargeFile(startResp.fileId as unknown as LargeFileId)
+    expect(cancelResp.fileName).toBe('orphan.bin')
+
+    const remaining = await bucket.listUnfinishedLargeFiles()
+    expect(remaining.files.find((f) => f.fileName === 'orphan.bin')).toBeUndefined()
+  })
+
+  it('listUnfinishedLargeFiles exposes unfinished uploads scoped to this bucket', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'list-unfinished',
+      bucketType: 'allPrivate',
+    })
+
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id, fileName: 'a.bin', contentType: 'application/octet-stream' },
+    )
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id, fileName: 'b.bin', contentType: 'application/octet-stream' },
+    )
+
+    const listing = await bucket.listUnfinishedLargeFiles()
+    expect(listing.files).toHaveLength(2)
+    expect(listing.files.map((f) => f.fileName).sort()).toEqual(['a.bin', 'b.bin'])
+  })
+})
+
 // --- Download authorization tests ---
 
 describe('download authorization', () => {

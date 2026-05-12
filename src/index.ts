@@ -19,11 +19,16 @@ export {
   type DeleteManyResult,
   type DeleteTarget,
 } from './bucket.js'
-export { B2Object } from './object.js'
+export { B2Object, type DownloadCallOptions } from './object.js'
 
 export type { UploadWriteHandle } from './upload/stream.js'
 
-export { RawClient, type RawClientOptions } from './raw/index.js'
+export {
+  RawClient,
+  type RawClientOptions,
+  type DownloadFileOptions,
+  type SseCDownloadKey,
+} from './raw/index.js'
 
 export {
   B2Error,
