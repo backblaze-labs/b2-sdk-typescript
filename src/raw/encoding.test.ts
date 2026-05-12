@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildFileInfoHeaders, decodeFileName, encodeFileName, parseFileInfoHeaders } from './encoding.js'
+import {
+  buildFileInfoHeaders,
+  decodeFileName,
+  encodeFileName,
+  parseFileInfoHeaders,
+} from './encoding.js'
 
 describe('encodeFileName', () => {
   it('passes through lowercase letters', () => {
@@ -148,7 +153,7 @@ describe('buildFileInfoHeaders', () => {
   })
 
   it('handles non-ASCII characters in both keys and values', () => {
-    const result = buildFileInfoHeaders({ '名前': '太郎' })
+    const result = buildFileInfoHeaders({ 名前: '太郎' })
     const encodedKey = encodeFileName('名前')
     const encodedValue = encodeFileName('太郎')
     expect(result).toEqual({
@@ -212,7 +217,7 @@ describe('parseFileInfoHeaders', () => {
     const encodedValue = encodeFileName('太郎')
     headers.set(`x-bz-info-${encodedKey}`, encodedValue)
     expect(parseFileInfoHeaders(headers)).toEqual({
-      '名前': '太郎',
+      名前: '太郎',
     })
   })
 

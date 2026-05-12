@@ -50,6 +50,16 @@
         "default": "./dist/auth/index.cjs"
       }
     },
+    "./auth/file": {
+      "import": {
+        "types": "./dist/auth/file.d.ts",
+        "default": "./dist/auth/file.js"
+      },
+      "require": {
+        "types": "./dist/auth/file.d.cts",
+        "default": "./dist/auth/file.cjs"
+      }
+    },
     "./streams": {
       "import": {
         "types": "./dist/streams/index.d.ts",

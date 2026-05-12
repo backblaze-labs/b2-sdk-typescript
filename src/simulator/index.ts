@@ -9,12 +9,17 @@
  * @packageDocumentation
  */
 
+import { createHash } from 'node:crypto'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.js'
 import type { AuthorizeAccountResponse } from '../types/auth.js'
 import type { BucketInfo, BucketType } from '../types/bucket.js'
 import type { FileAction, FileVersion } from '../types/file.js'
 import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.js'
 import type { EventNotificationRule } from '../types/notifications.js'
+
+function simpleSha1Hex(data: Uint8Array): string {
+  return createHash('sha1').update(data).digest('hex')
+}
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -38,6 +43,17 @@ interface LargeFileInProgress {
 let nextId = 1
 function genId(prefix: string): string {
   return `${prefix}_${String(nextId++).padStart(12, '0')}`
+}
+
+let lastTimestamp = 0
+function monotonicTimestamp(): number {
+  const now = Date.now()
+  if (now <= lastTimestamp) {
+    lastTimestamp += 1
+  } else {
+    lastTimestamp = now
+  }
+  return lastTimestamp
 }
 
 interface StoredKey {
@@ -148,6 +164,7 @@ export class B2Simulator {
             maxFileCount?: number
             startFileName?: string
             startFileId?: string
+            prefix?: string
           },
         )
       case 'b2_get_file_info':
@@ -177,6 +194,19 @@ export class B2Simulator {
         return this.cancelLargeFile(body as { fileId: string })
       case 'b2_list_unfinished_large_files':
         return this.listUnfinishedLargeFiles(body as { bucketId: string })
+      case 'b2_list_parts':
+        return this.listParts(
+          body as { fileId: string; startPartNumber?: number; maxPartCount?: number },
+        )
+      case 'b2_copy_part':
+        return this.copyPart(
+          body as {
+            sourceFileId: string
+            largeFileId: string
+            partNumber: number
+            range?: string
+          },
+        )
       case 'b2_get_download_authorization':
         return this.getDownloadAuthorization(
           body as { bucketId: string; fileNamePrefix: string; validDurationInSeconds: number },
@@ -200,7 +230,14 @@ export class B2Simulator {
         return this.deleteKey(body as { applicationKeyId: string })
       case 'b2_update_file_retention':
         return this.updateFileRetention(
-          body as { fileName: string; fileId: string; fileRetention: { mode: 'compliance' | 'governance' | null; retainUntilTimestamp: number | null } },
+          body as {
+            fileName: string
+            fileId: string
+            fileRetention: {
+              mode: 'compliance' | 'governance' | null
+              retainUntilTimestamp: number | null
+            }
+          },
         )
       case 'b2_update_file_legal_hold':
         return this.updateFileLegalHold(
@@ -550,12 +587,15 @@ export class B2Simulator {
     maxFileCount?: number
     startFileName?: string
     startFileId?: string
+    prefix?: string
   }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
     const max = req.maxFileCount ?? 1000
+    const prefix = req.prefix ?? ''
     let allVersions = [...bucket.files.entries()]
+      .filter(([name]) => name.startsWith(prefix))
       .flatMap(([_, versions]) => versions.map((v) => v.fileVersion))
       .sort((a, b) => {
         const nameCmp = a.fileName.localeCompare(b.fileName)
@@ -782,6 +822,81 @@ export class B2Simulator {
         fileInfo: f.fileInfo,
       }))
     return { status: 200, body: { files, nextFileId: null } }
+  }
+
+  private listParts(req: {
+    fileId: string
+    startPartNumber?: number
+    maxPartCount?: number
+  }): SimulatorJsonResponse {
+    const large = this.largeFiles.get(req.fileId)
+    if (!large) return this.error(400, 'bad_request', 'Large file not found')
+
+    const start = req.startPartNumber ?? 1
+    const max = req.maxPartCount ?? 1000
+
+    const allParts = [...large.parts.entries()]
+      .filter(([n]) => n >= start)
+      .sort((a, b) => a[0] - b[0])
+      .map(([partNumber, part]) => ({
+        fileId: req.fileId,
+        partNumber,
+        contentLength: part.data.byteLength,
+        contentSha1: part.sha1,
+        uploadTimestamp: Date.now(),
+      }))
+
+    const parts = allParts.slice(0, max)
+    const nextPartNumber = allParts.length > max ? (allParts[max]?.partNumber ?? null) : null
+
+    return { status: 200, body: { parts, nextPartNumber } }
+  }
+
+  private copyPart(req: {
+    sourceFileId: string
+    largeFileId: string
+    partNumber: number
+    range?: string
+  }): SimulatorJsonResponse {
+    const large = this.largeFiles.get(req.largeFileId)
+    if (!large) return this.error(400, 'bad_request', 'Large file not found')
+
+    let sourceStored: StoredFile | undefined
+    for (const bucket of this.buckets.values()) {
+      for (const versions of bucket.files.values()) {
+        for (const stored of versions) {
+          if ((stored.fileVersion.fileId as string) === req.sourceFileId) {
+            sourceStored = stored
+          }
+        }
+      }
+    }
+    if (!sourceStored) return this.error(404, 'file_not_present', 'Source file not found')
+
+    let partData = sourceStored.data
+    if (req.range) {
+      const match = req.range.match(/bytes=(\d+)-(\d+)?/)
+      if (match) {
+        const rs = Number.parseInt(match[1] ?? '0', 10)
+        const re =
+          match[2] !== undefined ? Number.parseInt(match[2], 10) : sourceStored.data.byteLength - 1
+        partData = sourceStored.data.slice(rs, re + 1)
+      }
+    }
+
+    // Hash the part data so list_parts can return a real SHA-1
+    const sha1 = simpleSha1Hex(partData)
+    large.parts.set(req.partNumber, { data: new Uint8Array(partData), sha1 })
+
+    return {
+      status: 200,
+      body: {
+        fileId: req.largeFileId,
+        partNumber: req.partNumber,
+        contentLength: partData.byteLength,
+        contentSha1: sha1,
+      },
+    }
   }
 
   private getDownloadAuthorization(req: {
@@ -1014,7 +1129,7 @@ export class B2Simulator {
       legalHold: { isClientAuthorizedToRead: true, value: null },
       replicationStatus: null,
       serverSideEncryption: { mode: 'none' },
-      uploadTimestamp: Date.now(),
+      uploadTimestamp: monotonicTimestamp(),
     }
   }
 

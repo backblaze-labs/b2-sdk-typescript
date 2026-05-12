@@ -1,7 +1,8 @@
+import { inspect } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
+import { EncryptionKey } from '../types/encryption.js'
 import { IncrementalSha1, sha1Hex } from './hash.js'
 import { ProgressTracker } from './progress.js'
-import type { ProgressListener } from './progress.js'
 import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.js'
 
 // Well-known SHA-1 digests for verification.
@@ -65,7 +66,7 @@ describe('sha1Hex', () => {
 describe('ProgressTracker', () => {
   it('sets up initial state via constructor parameters', () => {
     const listener = vi.fn()
-    const tracker = new ProgressTracker(listener, 1000, 5)
+    new ProgressTracker(listener, 1000, 5)
 
     // No events should have been emitted yet.
     expect(listener).not.toHaveBeenCalled()
@@ -255,7 +256,7 @@ describe('StreamSource', () => {
 
   it('slice always throws', () => {
     const src = new StreamSource(makeStream(new Uint8Array(1)), 1)
-    expect(() => src.slice(0, 1)).toThrow(
+    expect(() => (src as unknown as { slice: () => void }).slice()).toThrow(
       'StreamSource does not support slicing. Buffer the stream first.',
     )
   })
@@ -430,5 +431,61 @@ describe('IncrementalSha1 - hexEncode edge cases', () => {
     const digest = await sha.digest()
     const expected = await sha1Hex(data)
     expect(digest).toBe(expected)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// EncryptionKey - SSE-C key safety helpers (M11.5)
+// ---------------------------------------------------------------------------
+
+describe('EncryptionKey', () => {
+  const rawKey = new Uint8Array(32).fill(0xaa)
+
+  it('fromBytes computes base64 key and MD5 internally', async () => {
+    const key = await EncryptionKey.fromBytes(rawKey)
+    expect(key.mode).toBe('SSE-C')
+    expect(key.algorithm).toBe('AES256')
+    expect(key.customerKey).toBeTruthy()
+    expect(key.customerKeyMd5).toBeTruthy()
+    // 32 raw bytes -> 44 base64 chars (with padding)
+    expect(key.customerKey.length).toBe(44)
+  })
+
+  it('fromBytes rejects keys that are not exactly 32 bytes', async () => {
+    await expect(EncryptionKey.fromBytes(new Uint8Array(16))).rejects.toThrow(
+      /must be exactly 32 bytes/,
+    )
+    await expect(EncryptionKey.fromBytes(new Uint8Array(33))).rejects.toThrow(
+      /must be exactly 32 bytes/,
+    )
+  })
+
+  it('fromBase64 accepts pre-computed strings', () => {
+    const key = EncryptionKey.fromBase64('precomputed-key', 'precomputed-md5')
+    expect(key.customerKey).toBe('precomputed-key')
+    expect(key.customerKeyMd5).toBe('precomputed-md5')
+  })
+
+  it('toJSON redacts the customer key and MD5', async () => {
+    const key = await EncryptionKey.fromBytes(rawKey)
+    const json = JSON.stringify(key)
+    expect(json).not.toContain(key.customerKey)
+    expect(json).not.toContain(key.customerKeyMd5)
+    expect(json).toContain('[redacted SSE-C key]')
+  })
+
+  it('toString does not leak the key', async () => {
+    const key = await EncryptionKey.fromBytes(rawKey)
+    const str = String(key)
+    expect(str).not.toContain(key.customerKey)
+    expect(str).toContain('[redacted')
+  })
+
+  it('Node util.inspect (used by console.log) does not leak the key', async () => {
+    const key = await EncryptionKey.fromBytes(rawKey)
+    const inspected = inspect(key)
+    expect(inspected).not.toContain(key.customerKey)
+    expect(inspected).not.toContain(key.customerKeyMd5)
+    expect(inspected).toContain('[redacted')
   })
 })

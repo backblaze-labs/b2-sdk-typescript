@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Bucket } from '../bucket.js'
 import { B2Client } from '../client.js'
 import { B2Simulator } from '../simulator/index.js'
 import { BufferSource } from '../streams/source.js'
-import type { Bucket } from '../bucket.js'
 import { uploadLargeFile } from './large.js'
 import { uploadSmallFile } from './single.js'
 
@@ -192,9 +192,9 @@ describe('uploadLargeFile (real multipart, data > minPartSize)', () => {
       // addBytes + completePart per part = at least 4 events for 2 parts
       expect(events.length).toBeGreaterThanOrEqual(4)
 
-      const last = events[events.length - 1]!
-      expect(last.bytesTransferred).toBe(size)
-      expect(last.partsCompleted).toBe(2)
+      const last = events[events.length - 1]
+      expect(last?.bytesTransferred).toBe(size)
+      expect(last?.partsCompleted).toBe(2)
     },
     LARGE_TEST_TIMEOUT,
   )
@@ -359,7 +359,7 @@ describe('uploadSmallFile edge cases', () => {
       bucketId: bucket.id,
       fileName: 'sse.txt',
       source: new BufferSource(data),
-      serverSideEncryption: { mode: 'SSE-B2' },
+      serverSideEncryption: { mode: 'SSE-B2', algorithm: 'AES256' },
     })
 
     expect(result.fileName).toBe('sse.txt')
@@ -393,6 +393,113 @@ describe('uploadSmallFile edge cases', () => {
     expect(r1.fileName).toBe('first.txt')
     expect(r2.fileName).toBe('second.txt')
   })
+})
+
+describe('uploadLargeFile resume', () => {
+  let client: B2Client
+  let bucket: Bucket
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+    bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
+  })
+
+  it(
+    'resume: true picks up an existing unfinished large file and skips uploaded parts',
+    async () => {
+      const size = 5_000_010
+      const data = deterministicBytes(size)
+
+      // Step 1: start a large file and upload part 1 only, then leave it unfinished.
+      const startResp = await client.raw.startLargeFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id, fileName: 'resumed.bin', contentType: 'application/octet-stream' },
+      )
+
+      const partUrl = await client.raw.getUploadPartUrl(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { fileId: startResp.fileId },
+      )
+
+      // Upload part 1 with the matching SHA-1 the resume path will recompute locally.
+      const part1Data = data.slice(0, 5_000_000)
+      const { createHash } = await import('node:crypto')
+      const part1Sha1 = createHash('sha1').update(part1Data).digest('hex')
+
+      await client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: part1Data.byteLength,
+          contentSha1: part1Sha1,
+        },
+        part1Data,
+      )
+
+      // Step 2: resume with the same file name. Should find the unfinished file
+      // via listUnfinishedLargeFiles, see part 1 already uploaded with matching SHA-1,
+      // and only upload the remaining parts.
+      const result = await uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resumed.bin',
+        source: new BufferSource(data),
+        partSize: 5_000_000,
+        concurrency: 1,
+        resume: true,
+      })
+
+      expect(result.fileName).toBe('resumed.bin')
+      expect(result.contentLength).toBe(size)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'resume: true with no candidate falls back to a fresh upload',
+    async () => {
+      const data = deterministicBytes(5_000_010)
+      const result = await uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'no-candidate.bin',
+        source: new BufferSource(data),
+        partSize: 5_000_000,
+        concurrency: 1,
+        resume: true,
+      })
+
+      expect(result.fileName).toBe('no-candidate.bin')
+      expect(result.contentLength).toBe(data.byteLength)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'resumeFileId targets a specific unfinished large file',
+    async () => {
+      const data = deterministicBytes(5_000_010)
+      const start = await client.raw.startLargeFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id, fileName: 'explicit.bin', contentType: 'application/octet-stream' },
+      )
+
+      const result = await uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'explicit.bin',
+        source: new BufferSource(data),
+        partSize: 5_000_000,
+        concurrency: 1,
+        resumeFileId: start.fileId,
+      })
+
+      expect(result.fileName).toBe('explicit.bin')
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 })
 
 describe('Bucket.upload() routing', () => {
@@ -429,7 +536,6 @@ describe('Bucket.upload() routing', () => {
   })
 
   it('routes to large file upload when source exceeds recommended part size', async () => {
-    const originalGetRecommendedPartSize = client.accountInfo.getRecommendedPartSize
     vi.spyOn(client.accountInfo, 'getRecommendedPartSize').mockReturnValue(10)
 
     const data = deterministicBytes(50)

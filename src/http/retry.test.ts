@@ -1,10 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  DEFAULT_RETRY_OPTIONS,
-  computeBackoff,
-  sleep,
-  type RetryOptions,
-} from './retry.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions, computeBackoff, sleep } from './retry.js'
 
 describe('DEFAULT_RETRY_OPTIONS', () => {
   it('has the expected defaults', () => {
@@ -160,7 +155,7 @@ describe('sleep', () => {
 
     const promise = sleep(10_000, fakeSignal)
     // Fire the stored abort listener to simulate an abort with no reason
-    abortListener!()
+    abortListener?.()
 
     try {
       await promise

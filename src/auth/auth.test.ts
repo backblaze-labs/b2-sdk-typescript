@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { AuthorizeAccountResponse } from '../types/auth.js'
+import { bucketId } from '../types/ids.js'
 import type { UploadUrlEntry } from './account-info.js'
 import { InMemoryAccountInfo } from './in-memory.js'
 import { REALM_URLS, getRealmUrl } from './realms.js'
 import { UploadUrlPool } from './upload-url-pool.js'
-import { bucketId } from '../types/ids.js'
 
 const mockAuth: AuthorizeAccountResponse = {
   accountId: 'acct123' as AuthorizeAccountResponse['accountId'],

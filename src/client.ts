@@ -21,6 +21,14 @@ import { accountId } from './types/ids.js'
 import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.js'
 import type { ReplicationConfiguration } from './types/replication.js'
 
+/** Result of {@link B2Client.hasCapabilities}. */
+export interface CapabilityCheckResult {
+  /** `true` when the key carries every requested capability. */
+  readonly ok: boolean
+  /** Capabilities the call requested that the current key does not hold. Empty when `ok` is `true`. */
+  readonly missing: readonly Capability[]
+}
+
 /** Configuration options for creating a {@link B2Client}. */
 export interface B2ClientOptions {
   /** The application key ID from the B2 dashboard or `b2_create_key`. */
@@ -245,5 +253,25 @@ export class B2Client {
     return this.raw.deleteKey(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
       applicationKeyId,
     })
+  }
+
+  /**
+   * Checks whether the authorized application key carries every capability in
+   * `needed`. Returns the missing capabilities so callers can fail fast with a
+   * clear error instead of a generic 401/403 from the server.
+   *
+   * @param needed - The capabilities required by the planned operation.
+   *
+   * @returns An object with `ok: true` when every needed capability is
+   *   present, otherwise `{ ok: false, missing: [...] }`.
+   *
+   * @throws If {@link authorize} has not been called yet.
+   */
+  hasCapabilities(needed: readonly Capability[]): CapabilityCheckResult {
+    const auth = this.accountInfo.getAuth()
+    if (!auth) throw new Error('Not authorized. Call authorize() first.')
+    const available = new Set<string>(auth.apiInfo.storageApi.allowed.capabilities)
+    const missing = needed.filter((cap) => !available.has(cap as string))
+    return { ok: missing.length === 0, missing }
   }
 }

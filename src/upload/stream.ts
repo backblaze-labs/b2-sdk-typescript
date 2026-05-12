@@ -1,0 +1,304 @@
+import type { AccountInfo } from '../auth/account-info.js'
+import type { RawClient } from '../raw/index.js'
+import { IncrementalSha1 } from '../streams/hash.js'
+import type { ProgressListener } from '../streams/progress.js'
+import { ProgressTracker } from '../streams/progress.js'
+import type { EncryptionSetting } from '../types/encryption.js'
+import type { FileVersion } from '../types/file.js'
+import type { BucketId, LargeFileId } from '../types/ids.js'
+import { Semaphore } from './concurrency.js'
+
+/** Options for creating a streaming multipart upload sink. */
+export interface CreateWriteStreamOptions {
+  /** Target bucket for the upload. */
+  readonly bucketId: BucketId
+  /** Destination file name in the bucket. */
+  readonly fileName: string
+  /** MIME type. Defaults to `b2/x-auto`. */
+  readonly contentType?: string
+  /** Custom file info stored with the file. */
+  readonly fileInfo?: Record<string, string>
+  /** Server-side encryption applied to each part. */
+  readonly serverSideEncryption?: EncryptionSetting
+  /**
+   * Target part size in bytes. The stream buffers writes until this many bytes
+   * are accumulated, then ships a part. Must be at least the account's
+   * absolute minimum part size; the implementation will raise it if too small.
+   */
+  readonly partSize?: number
+  /** Maximum number of parts uploaded in parallel. Defaults to 4. */
+  readonly concurrency?: number
+  /** Callback invoked with upload progress events. `totalBytes` is `null` (size unknown). */
+  readonly onProgress?: ProgressListener
+  /** Aborts the upload and cancels the unfinished large file. */
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Handle returned by `B2Object.createWriteStream`: the Web `WritableStream` to
+ * pipe data into, plus a promise that resolves with the finished
+ * {@link FileVersion} once the stream is closed and all parts have been
+ * uploaded.
+ */
+export interface UploadWriteHandle {
+  /** Web `WritableStream` sink to pipe data into. */
+  readonly writable: WritableStream<Uint8Array>
+  /** Resolves with the finalized file version when the stream closes successfully. */
+  readonly done: Promise<FileVersion>
+}
+
+/**
+ * Creates a {@link WritableStream} that streams data into a B2 multipart upload.
+ *
+ * Buffers incoming chunks until `partSize` bytes are accumulated, ships each
+ * complete part through the standard multipart engine, and finalizes the file
+ * once the stream is closed. Honours backpressure via the queue's bounded
+ * concurrency. Streaming uploads do not support resume because the total size
+ * and per-part hashes aren't known in advance; use {@link uploadLargeFile} with
+ * a buffered source when resume is required.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state (tokens, URLs, part URL pool).
+ * @param options - Streaming upload parameters.
+ *
+ * @returns A {@link UploadWriteHandle} with the writable sink and a completion promise.
+ */
+export function createWriteStream(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: CreateWriteStreamOptions,
+): UploadWriteHandle {
+  const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
+  const recommendedPartSize = accountInfo.getRecommendedPartSize()
+  const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
+  const concurrency = options.concurrency ?? 4
+  const tracker = new ProgressTracker(options.onProgress, null, null)
+  const sem = new Semaphore(concurrency)
+
+  let largeFileId: LargeFileId | null = null
+  let startPromise: Promise<LargeFileId> | null = null
+  let nextPartNumber = 1
+  let pendingBytes = 0
+  const pending: Uint8Array[] = []
+  const partSha1s: string[] = []
+  const inflight: Promise<void>[] = []
+  let errored: Error | null = null
+
+  let resolveDone!: (fv: FileVersion) => void
+  let rejectDone!: (err: unknown) => void
+  const done = new Promise<FileVersion>((resolve, reject) => {
+    resolveDone = resolve
+    rejectDone = reject
+  })
+
+  function ensureStarted(): Promise<LargeFileId> {
+    if (largeFileId !== null) return Promise.resolve(largeFileId)
+    if (startPromise !== null) return startPromise
+    startPromise = (async () => {
+      const resp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+        bucketId: options.bucketId,
+        fileName: options.fileName,
+        contentType: options.contentType ?? 'b2/x-auto',
+        fileInfo: options.fileInfo ?? {},
+        ...(options.serverSideEncryption !== undefined
+          ? { serverSideEncryption: options.serverSideEncryption }
+          : {}),
+      })
+      largeFileId = resp.fileId
+      return largeFileId
+    })()
+    return startPromise
+  }
+
+  async function shipPart(data: Uint8Array, partNumber: number): Promise<void> {
+    const fileId = await ensureStarted()
+
+    const sha1 = new IncrementalSha1()
+    await sha1.update(data)
+    const sha1Hex = await sha1.digest()
+
+    let uploadEntry = accountInfo.checkoutPartUploadUrl(fileId as string)
+    if (!uploadEntry) {
+      const resp = await raw.getUploadPartUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+        fileId,
+      })
+      uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
+    }
+
+    try {
+      const result = await raw.uploadPart(
+        uploadEntry.uploadUrl,
+        {
+          authorization: uploadEntry.authorizationToken,
+          partNumber,
+          contentLength: data.byteLength,
+          contentSha1: sha1Hex,
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+        },
+        data as BodyInit,
+        options.signal,
+      )
+      accountInfo.returnPartUploadUrl(fileId as string, uploadEntry)
+      partSha1s[partNumber - 1] = result.contentSha1
+      tracker.addBytes(data.byteLength)
+      tracker.completePart()
+    } catch (err) {
+      accountInfo.evictPartUploadUrl(fileId as string, uploadEntry)
+      throw err
+    }
+  }
+
+  function dispatchPart(): void {
+    if (pending.length === 0) return
+    let data: Uint8Array
+    if (pending.length === 1) {
+      const head = pending[0]
+      if (!head) return
+      data = head
+    } else {
+      const total = pending.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+      data = new Uint8Array(total)
+      let offset = 0
+      for (const chunk of pending) {
+        data.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+    }
+    pending.length = 0
+    pendingBytes = 0
+    const partNumber = nextPartNumber++
+    const task = (async () => {
+      await sem.acquire()
+      try {
+        await shipPart(data, partNumber)
+      } catch (err) {
+        errored = err instanceof Error ? err : new Error(String(err))
+        throw err
+      } finally {
+        sem.release()
+      }
+    })()
+    inflight.push(task)
+    // Swallow rejection here; we check `errored` later.
+    task.catch(() => {})
+  }
+
+  const writable = new WritableStream<Uint8Array>({
+    async write(chunk: Uint8Array): Promise<void> {
+      if (errored) throw errored
+      options.signal?.throwIfAborted()
+
+      pending.push(chunk)
+      pendingBytes += chunk.byteLength
+      while (pendingBytes >= partSize) {
+        // Pull exactly partSize bytes off the front
+        const carved = carveExact(pending, partSize)
+        const partNumber = nextPartNumber++
+        pendingBytes -= partSize
+        const task = (async () => {
+          await sem.acquire()
+          try {
+            await shipPart(carved, partNumber)
+          } catch (err) {
+            errored = err instanceof Error ? err : new Error(String(err))
+            throw err
+          } finally {
+            sem.release()
+          }
+        })()
+        inflight.push(task)
+        task.catch(() => {})
+      }
+    },
+
+    async close(): Promise<void> {
+      try {
+        if (errored) throw errored
+        options.signal?.throwIfAborted()
+
+        // Ship any remaining bytes as the last part. If the total fit in one
+        // single buffered batch (no parts shipped yet), we have to use the
+        // multipart path anyway since we already called startLargeFile lazily.
+        if (pendingBytes > 0) {
+          dispatchPart()
+        }
+
+        await Promise.all(inflight)
+        if (errored) throw errored
+
+        if (largeFileId === null) {
+          // Stream closed before any data was written. Start an empty large
+          // file? B2 requires at least 2 parts. Reject — callers shouldn't
+          // close an empty stream.
+          throw new Error('createWriteStream closed without any data written.')
+        }
+
+        const result = await raw.finishLargeFile(
+          accountInfo.getApiUrl(),
+          accountInfo.getAuthToken(),
+          { fileId: largeFileId, partSha1Array: partSha1s },
+        )
+        resolveDone(result)
+      } catch (err) {
+        if (largeFileId !== null) {
+          try {
+            await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+              fileId: largeFileId,
+            })
+          } catch {
+            // Best-effort cleanup.
+          }
+        }
+        rejectDone(err)
+        throw err
+      }
+    },
+
+    async abort(reason: unknown): Promise<void> {
+      if (largeFileId !== null) {
+        try {
+          await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+            fileId: largeFileId,
+          })
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      rejectDone(reason instanceof Error ? reason : new Error(String(reason)))
+    },
+  })
+
+  return { writable, done }
+}
+
+/**
+ * Removes exactly `size` bytes from the front of `chunks` (mutates) and returns
+ * them as a contiguous Uint8Array. Any trailing remainder of the last chunk
+ * stays at the front of `chunks` for the next part.
+ *
+ * @param chunks - Queue of pending chunks. Modified in place.
+ * @param size - Number of bytes to carve off the front.
+ *
+ * @returns A new Uint8Array containing exactly `size` bytes.
+ */
+function carveExact(chunks: Uint8Array[], size: number): Uint8Array {
+  const out = new Uint8Array(size)
+  let written = 0
+  while (written < size && chunks.length > 0) {
+    const head = chunks[0]
+    if (!head) break
+    const need = size - written
+    if (head.byteLength <= need) {
+      out.set(head, written)
+      written += head.byteLength
+      chunks.shift()
+    } else {
+      out.set(head.subarray(0, need), written)
+      chunks[0] = head.subarray(need)
+      written += need
+    }
+  }
+  return out
+}

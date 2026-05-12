@@ -199,6 +199,38 @@ export class ChecksumMismatchError extends B2Error {
   }
 }
 
+/**
+ * Thrown by client-side capability checks when the application key is missing
+ * capabilities required by an operation. Not raised by the server.
+ */
+export class B2InsufficientCapabilityError extends Error {
+  /** Capabilities that were required for the operation. */
+  readonly required: readonly string[]
+  /** Capabilities that the current key actually has. */
+  readonly available: readonly string[]
+  /** Capabilities present in `required` but not in `available`. */
+  readonly missing: readonly string[]
+
+  /**
+   * Creates a new B2InsufficientCapabilityError instance.
+   *
+   * @param required - Capabilities the operation requires.
+   * @param available - Capabilities the current key holds.
+   * @param missing - The subset of required that isn't available.
+   */
+  constructor(
+    required: readonly string[],
+    available: readonly string[],
+    missing: readonly string[],
+  ) {
+    super(`Application key is missing capabilities: ${missing.join(', ')}`)
+    this.name = 'B2InsufficientCapabilityError'
+    this.required = required
+    this.available = available
+    this.missing = missing
+  }
+}
+
 /** Thrown when a network-level failure occurs (DNS, TCP, TLS). Always retryable. */
 export class NetworkError extends Error {
   /** Always `true` since network errors are transient. */

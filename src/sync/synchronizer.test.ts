@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { FileVersion } from '../types/file.js'
 import type { AccountId, BucketId, FileId } from '../types/ids.js'
-import type { SyncEvent, SyncFolder, SyncPath, LocalSyncPath, B2SyncPath } from './types.js'
 import { synchronize } from './synchronizer.js'
-import type { SynchronizerConfig, SynchronizerUpConfig, SynchronizerDownConfig } from './synchronizer.js'
+import type {
+  SynchronizerConfig,
+  SynchronizerDownConfig,
+  SynchronizerUpConfig,
+} from './synchronizer.js'
+import type { B2SyncPath, LocalSyncPath, SyncEvent, SyncFolder, SyncPath } from './types.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -130,7 +134,9 @@ describe('synchronize', () => {
         dest: { ...dest, type: 'local' },
         options: { compareMode: 'modtime', keepMode: 'no-delete' },
       }
-      await expect(collectEvents(config)).rejects.toThrow('Unsupported sync direction: local to local')
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Unsupported sync direction: local to local',
+      )
     })
   })
 
@@ -196,7 +202,6 @@ describe('synchronize', () => {
       expect(skipEvents).toHaveLength(1)
       expect(skipEvents[0]?.message).toBe('files are the same')
     })
-
   })
 
   describe('dry-run mode', () => {

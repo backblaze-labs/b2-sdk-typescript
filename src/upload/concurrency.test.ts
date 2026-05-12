@@ -107,7 +107,7 @@ describe('Semaphore', () => {
     // Manually: acquire one slot, then release it
     // Since we need to test release when queue is empty but current > 0,
     // we acquire first then release.
-    const acquirePromise = sem.acquire()
+    void sem.acquire()
     // acquire resolves synchronously (below limit), so available drops
     expect(sem.available).toBe(1)
 
@@ -182,6 +182,6 @@ describe('mapConcurrent', () => {
       }),
     ])
 
-    expect(settled[0]!.status).toBe('rejected')
+    expect(settled[0]?.status).toBe('rejected')
   })
 })

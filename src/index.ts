@@ -8,9 +8,20 @@
  * @packageDocumentation
  */
 
-export { B2Client, type B2ClientOptions } from './client.js'
-export { Bucket } from './bucket.js'
+export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.js'
+export {
+  Bucket,
+  type DeleteAllDeleteEvent,
+  type DeleteAllErrorEvent,
+  type DeleteAllEvent,
+  type DeleteAllSkipEvent,
+  type DeleteError,
+  type DeleteManyResult,
+  type DeleteTarget,
+} from './bucket.js'
 export { B2Object } from './object.js'
+
+export type { UploadWriteHandle } from './upload/stream.js'
 
 export { RawClient, type RawClientOptions } from './raw/index.js'
 
@@ -28,6 +39,7 @@ export {
   BadRequestError,
   BadUploadUrlError,
   ChecksumMismatchError,
+  B2InsufficientCapabilityError,
   NetworkError,
   classifyError,
 } from './errors/index.js'

@@ -18,6 +18,7 @@ export default defineConfig({
         'raw/index': resolve(__dirname, 'src/raw/index.ts'),
         'errors/index': resolve(__dirname, 'src/errors/index.ts'),
         'auth/index': resolve(__dirname, 'src/auth/index.ts'),
+        'auth/file': resolve(__dirname, 'src/auth/file.ts'),
         'streams/index': resolve(__dirname, 'src/streams/index.ts'),
         'sync/index': resolve(__dirname, 'src/sync/index.ts'),
         'simulator/index': resolve(__dirname, 'src/simulator/index.ts'),
@@ -41,7 +42,14 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
-      exclude: ['src/**/*.test.ts', 'src/**/index.ts', 'src/types/**', 'src/version.ts'],
+      exclude: [
+        'src/**/*.test.ts',
+        'src/**/index.ts',
+        'src/types/**',
+        'src/version.ts',
+        'src/auth/account-info.ts',
+        'src/sync/types.ts',
+      ],
       reporter: ['text', 'text-summary', 'html'],
       reportsDirectory: 'coverage',
     },

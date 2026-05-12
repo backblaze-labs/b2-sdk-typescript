@@ -24,9 +24,7 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeResponse(
-  overrides: Partial<B2ErrorResponse> = {},
-): B2ErrorResponse {
+function makeResponse(overrides: Partial<B2ErrorResponse> = {}): B2ErrorResponse {
   return {
     status: overrides.status ?? 400,
     code: overrides.code ?? 'bad_request',
@@ -51,8 +49,12 @@ describe('B2Error', () => {
 
   it('computes retryable as true for transient status codes', () => {
     expect(new B2Error(makeResponse({ status: 408, code: 'request_timeout' })).retryable).toBe(true)
-    expect(new B2Error(makeResponse({ status: 429, code: 'too_many_requests' })).retryable).toBe(true)
-    expect(new B2Error(makeResponse({ status: 503, code: 'service_unavailable' })).retryable).toBe(true)
+    expect(new B2Error(makeResponse({ status: 429, code: 'too_many_requests' })).retryable).toBe(
+      true,
+    )
+    expect(new B2Error(makeResponse({ status: 503, code: 'service_unavailable' })).retryable).toBe(
+      true,
+    )
   })
 
   it('computes retryable as true for expired_auth_token regardless of status', () => {
@@ -63,7 +65,9 @@ describe('B2Error', () => {
   it('computes retryable as false for non-transient errors', () => {
     expect(new B2Error(makeResponse({ status: 400, code: 'bad_request' })).retryable).toBe(false)
     expect(new B2Error(makeResponse({ status: 403, code: 'access_denied' })).retryable).toBe(false)
-    expect(new B2Error(makeResponse({ status: 404, code: 'file_not_present' })).retryable).toBe(false)
+    expect(new B2Error(makeResponse({ status: 404, code: 'file_not_present' })).retryable).toBe(
+      false,
+    )
   })
 
   it('stores requestId when provided in options', () => {

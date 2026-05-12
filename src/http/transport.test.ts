@@ -4,12 +4,16 @@ import type { HttpRequest, HttpResponse, HttpTransport } from './transport.js'
 import { FetchTransport, RetryTransport } from './transport.js'
 
 // ---------------------------------------------------------------------------
-// Mock sleep so retry tests don't actually wait
+// Inject a no-op sleep into RetryTransport so retry tests don't actually wait.
+// Module-level mocking (vi.mock + vi.importActual / importOriginal) differs
+// between vitest and Bun's vitest-compat, so dependency injection is the
+// portable approach.
 // ---------------------------------------------------------------------------
-vi.mock('./retry.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./retry.js')>()
-  return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) }
-})
+const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.resolve()
+type RetryTransportOpts = ConstructorParameters<typeof RetryTransport>[0]
+function makeRetryTransport(opts: Omit<RetryTransportOpts, 'sleepImpl'>): RetryTransport {
+  return new RetryTransport({ ...opts, sleepImpl: noSleep })
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -197,7 +201,7 @@ describe('RetryTransport', () => {
       const okResponse = mockResponse(200, { ok: true })
       innerTransport.send.mockResolvedValue(okResponse)
 
-      const transport = new RetryTransport({ transport: innerTransport })
+      const transport = makeRetryTransport({ transport: innerTransport })
       const result = await transport.send(baseRequest)
 
       expect(result).toBe(okResponse)
@@ -208,7 +212,7 @@ describe('RetryTransport', () => {
       const response204 = mockResponse(204, null)
       innerTransport.send.mockResolvedValue(response204)
 
-      const transport = new RetryTransport({ transport: innerTransport })
+      const transport = makeRetryTransport({ transport: innerTransport })
       const result = await transport.send(baseRequest)
 
       expect(result).toBe(response204)
@@ -231,7 +235,7 @@ describe('RetryTransport', () => {
         .mockResolvedValueOnce(error503)
         .mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -252,11 +256,9 @@ describe('RetryTransport', () => {
       const error408 = mockResponse(408, errorBody)
       const okResponse = mockResponse(200, { ok: true })
 
-      innerTransport.send
-        .mockResolvedValueOnce(error408)
-        .mockResolvedValueOnce(okResponse)
+      innerTransport.send.mockResolvedValueOnce(error408).mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -277,22 +279,24 @@ describe('RetryTransport', () => {
       const error429 = mockResponse(429, errorBody, { 'Retry-After': '2' })
       const okResponse = mockResponse(200, { ok: true })
 
-      innerTransport.send
-        .mockResolvedValueOnce(error429)
-        .mockResolvedValueOnce(okResponse)
+      innerTransport.send.mockResolvedValueOnce(error429).mockResolvedValueOnce(okResponse)
 
+      // Inject a spied sleep so we can assert it was invoked between attempts.
+      const sleepSpy = vi.fn().mockResolvedValue(undefined)
       const transport = new RetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100_000 },
+        sleepImpl: sleepSpy,
       })
       const result = await transport.send(baseRequest)
 
       expect(result).toBe(okResponse)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
-
-      // Verify that sleep was called (via the mock) with a delay derived from Retry-After
-      const { sleep: sleepFn } = await import('./retry.js')
-      expect(sleepFn).toHaveBeenCalled()
+      expect(sleepSpy).toHaveBeenCalled()
+      // The first arg of the first call is the delay in ms; with Retry-After: 2s
+      // computeBackoff returns 2000ms (capped at maxRetryDelayMs).
+      const firstDelay = sleepSpy.mock.calls[0]?.[0] as number
+      expect(firstDelay).toBe(2000)
     })
   })
 
@@ -307,11 +311,9 @@ describe('RetryTransport', () => {
       const okResponse = mockResponse(200, { ok: true })
       const onReauth = vi.fn().mockResolvedValue(undefined)
 
-      innerTransport.send
-        .mockResolvedValueOnce(error401)
-        .mockResolvedValueOnce(okResponse)
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         onReauth,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
@@ -329,7 +331,7 @@ describe('RetryTransport', () => {
 
       innerTransport.send.mockResolvedValue(error401)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -351,7 +353,7 @@ describe('RetryTransport', () => {
 
       innerTransport.send.mockResolvedValue(error403)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -366,7 +368,7 @@ describe('RetryTransport', () => {
 
       innerTransport.send.mockResolvedValue(error400)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -381,7 +383,7 @@ describe('RetryTransport', () => {
 
       innerTransport.send.mockResolvedValue(error403)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -410,7 +412,7 @@ describe('RetryTransport', () => {
       // Always return 503
       innerTransport.send.mockResolvedValue(error503)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -425,7 +427,7 @@ describe('RetryTransport', () => {
       const error503 = mockResponse(503, errorBody)
       innerTransport.send.mockResolvedValue(error503)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -452,7 +454,7 @@ describe('RetryTransport', () => {
         .mockRejectedValueOnce(new TypeError('Failed to fetch'))
         .mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -465,7 +467,7 @@ describe('RetryTransport', () => {
     it('throws NetworkError after max retries on persistent network failure', async () => {
       innerTransport.send.mockRejectedValue(new TypeError('Failed to fetch'))
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -485,11 +487,9 @@ describe('RetryTransport', () => {
     it('wraps non-Error thrown values as NetworkError with generic message', async () => {
       const okResponse = mockResponse(200, { ok: true })
 
-      innerTransport.send
-        .mockRejectedValueOnce('string error')
-        .mockResolvedValueOnce(okResponse)
+      innerTransport.send.mockRejectedValueOnce('string error').mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -509,7 +509,7 @@ describe('RetryTransport', () => {
       const abortError = new DOMException('The operation was aborted', 'AbortError')
       innerTransport.send.mockRejectedValue(abortError)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -522,7 +522,7 @@ describe('RetryTransport', () => {
       const abortError = new DOMException('Aborted', 'AbortError')
       innerTransport.send.mockRejectedValue(abortError)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -543,12 +543,10 @@ describe('RetryTransport', () => {
 
   describe('B2Error re-thrown without wrapping', () => {
     it('re-throws B2Error from inner transport without wrapping', async () => {
-      const b2Err = new B2Error(
-        { status: 500, code: 'internal_error', message: 'Internal error' },
-      )
+      const b2Err = new B2Error({ status: 500, code: 'internal_error', message: 'Internal error' })
       innerTransport.send.mockRejectedValue(b2Err)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -566,7 +564,7 @@ describe('RetryTransport', () => {
       const netErr = new NetworkError('custom network error')
       innerTransport.send.mockRejectedValue(netErr)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -591,17 +589,17 @@ describe('RetryTransport', () => {
         status: 503,
         headers: new Headers(),
         body: null,
-        json: async () => { throw new Error('invalid json') },
+        json: async () => {
+          throw new Error('invalid json')
+        },
         text: async () => 'not json',
         arrayBuffer: async () => new ArrayBuffer(0),
       }
       const okResponse = mockResponse(200, { ok: true })
 
-      innerTransport.send
-        .mockResolvedValueOnce(badResponse)
-        .mockResolvedValueOnce(okResponse)
+      innerTransport.send.mockResolvedValueOnce(badResponse).mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -616,13 +614,15 @@ describe('RetryTransport', () => {
         status: 500,
         headers: new Headers(),
         body: null,
-        json: async () => { throw new Error('parse error') },
+        json: async () => {
+          throw new Error('parse error')
+        },
         text: async () => '',
         arrayBuffer: async () => new ArrayBuffer(0),
       }
       innerTransport.send.mockResolvedValue(badResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -652,7 +652,7 @@ describe('RetryTransport', () => {
       const error503 = mockResponse(503, errorBody)
       innerTransport.send.mockResolvedValue(error503)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -674,7 +674,7 @@ describe('RetryTransport', () => {
       })
       innerTransport.send.mockResolvedValue(errorResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -693,7 +693,7 @@ describe('RetryTransport', () => {
       const errorResponse = mockResponse(429, errorBody, { 'Retry-After': '5' })
       innerTransport.send.mockResolvedValue(errorResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
@@ -718,7 +718,7 @@ describe('RetryTransport', () => {
       const error503 = mockResponse(503, errorBody)
       innerTransport.send.mockResolvedValue(error503)
 
-      const transport = new RetryTransport({ transport: innerTransport })
+      const transport = makeRetryTransport({ transport: innerTransport })
 
       await expect(transport.send(baseRequest)).rejects.toThrow('Unavailable')
       // default maxRetries is 5, so: initial + 5 retries = 6 calls total
@@ -748,7 +748,7 @@ describe('RetryTransport', () => {
         .mockResolvedValueOnce(error503)
         .mockResolvedValueOnce(okResponse)
 
-      const transport = new RetryTransport({
+      const transport = makeRetryTransport({
         transport: innerTransport,
         onReauth,
         retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },

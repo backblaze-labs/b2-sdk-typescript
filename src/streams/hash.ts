@@ -27,6 +27,7 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
         },
       }
     }
+    /* v8 ignore next 3 -- non-Node runtime fallback, unreachable in Node tests */
   } catch {
     nodeCreateHash = null
   }
@@ -80,6 +81,7 @@ export class IncrementalSha1 {
       return this.nodeHash.digest('hex')
     }
 
+    /* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable */
     const combined = new Uint8Array(this.totalLength)
     let offset = 0
     for (const chunk of this.chunks) {
@@ -89,6 +91,7 @@ export class IncrementalSha1 {
 
     const hashBuffer = await crypto.subtle.digest('SHA-1', combined.buffer as ArrayBuffer)
     return hexEncode(new Uint8Array(hashBuffer))
+    /* v8 ignore stop */
   }
 
   /**
@@ -101,6 +104,7 @@ export class IncrementalSha1 {
   }
 }
 
+/* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable (browser/edge runtimes) */
 /**
  * Convert a byte array to a lowercase hex string.
  * @param bytes - The raw bytes to encode as hexadecimal characters.
@@ -114,6 +118,7 @@ function hexEncode(bytes: Uint8Array): string {
   }
   return hex.join('')
 }
+/* v8 ignore stop */
 
 /**
  * Compute the SHA-1 hex digest of a complete byte array in one shot.
@@ -128,6 +133,7 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
     h.update(data)
     return h.digest('hex')
   }
+  /* v8 ignore next 2 -- WebCrypto fallback, only reachable when node:crypto is unavailable */
   const hashBuffer = await crypto.subtle.digest('SHA-1', data.buffer as ArrayBuffer)
   return hexEncode(new Uint8Array(hashBuffer))
 }

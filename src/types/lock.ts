@@ -25,6 +25,12 @@ export interface UpdateFileRetentionRequest {
   readonly fileId: FileId
   /** New retention settings for the file. */
   readonly fileRetention: FileRetentionValue
+  /**
+   * When `true`, allows shortening a governance-mode retention period. Requires
+   * the `bypassGovernance` capability on the application key. Has no effect on
+   * compliance-mode retention.
+   */
+  readonly bypassGovernance?: boolean
 }
 
 /**

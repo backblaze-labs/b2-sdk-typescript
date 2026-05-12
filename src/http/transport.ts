@@ -97,6 +97,14 @@ export interface RetryTransportOptions {
   readonly retry?: Partial<RetryOptions>
   /** Callback invoked on expired auth token errors to refresh credentials before retrying. */
   readonly onReauth?: () => Promise<void>
+  /**
+   * Sleep implementation used between retry attempts. Defaults to the real
+   * `sleep` from `./retry.js`. Test code can inject a no-op to avoid real
+   * delays without relying on module mocking (which differs across runners).
+   *
+   * @internal
+   */
+  readonly sleepImpl?: (ms: number, signal?: AbortSignal) => Promise<void>
 }
 
 /**
@@ -111,6 +119,8 @@ export class RetryTransport implements HttpTransport {
   private readonly options: RetryOptions
   /** Optional callback to refresh auth credentials on 401. */
   private readonly onReauth?: () => Promise<void>
+  /** Sleep implementation used between retries; injectable for tests. */
+  private readonly sleepImpl: (ms: number, signal?: AbortSignal) => Promise<void>
 
   /**
    * Creates a new RetryTransport.
@@ -120,6 +130,7 @@ export class RetryTransport implements HttpTransport {
     this.inner = opts.transport
     this.options = { ...DEFAULT_RETRY_OPTIONS, ...opts.retry }
     if (opts.onReauth !== undefined) this.onReauth = opts.onReauth
+    this.sleepImpl = opts.sleepImpl ?? sleep
   }
 
   /**
@@ -136,7 +147,7 @@ export class RetryTransport implements HttpTransport {
       if (attempt > 0 && lastError) {
         const retryAfter = lastError instanceof NetworkError ? undefined : lastError.retryAfter
         const delay = computeBackoff(attempt - 1, this.options, retryAfter)
-        await sleep(delay, request.signal)
+        await this.sleepImpl(delay, request.signal)
       }
 
       try {

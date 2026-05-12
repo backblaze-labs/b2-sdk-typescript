@@ -1,4 +1,5 @@
 import type { B2Client } from './client.js'
+import { copyLargeFile } from './copy/large.js'
 import { type DownloadResult, downloadByName } from './download/single.js'
 import { B2Object } from './object.js'
 import type { ProgressListener } from './streams/progress.js'
@@ -26,8 +27,68 @@ import type {
   GetBucketNotificationRulesResponse,
 } from './types/notifications.js'
 import type { ReplicationConfiguration } from './types/replication.js'
+import { Semaphore } from './upload/concurrency.js'
 import { uploadLargeFile } from './upload/large.js'
 import { uploadSmallFile } from './upload/single.js'
+
+/** A target for bulk deletion: a file name and its specific version ID. */
+export interface DeleteTarget {
+  /** File name (path) of the version to delete. */
+  readonly fileName: string
+  /** Unique identifier of the file version. */
+  readonly fileId: FileId
+}
+
+/** Per-target error encountered during bulk deletion. */
+export interface DeleteError {
+  /** The target that failed. */
+  readonly target: DeleteTarget
+  /** The error thrown by the underlying `deleteFileVersion` call. */
+  readonly error: Error
+}
+
+/** Aggregate result of a {@link Bucket.deleteMany} run. */
+export interface DeleteManyResult {
+  /** Number of file versions successfully deleted. */
+  readonly deleted: number
+  /** Per-target failures. Empty on full success. */
+  readonly errors: readonly DeleteError[]
+}
+
+/** Emitted by {@link Bucket.deleteAll} once a file version has been successfully deleted. */
+export interface DeleteAllDeleteEvent {
+  /** Discriminant identifying a successful delete. */
+  readonly type: 'delete'
+  /** File name of the deleted version. */
+  readonly fileName: string
+  /** Unique identifier of the deleted version. */
+  readonly fileId: FileId
+}
+
+/** Emitted by {@link Bucket.deleteAll} when a single delete call fails (other versions keep streaming). */
+export interface DeleteAllErrorEvent {
+  /** Discriminant identifying a per-version delete failure. */
+  readonly type: 'error'
+  /** File name of the version that failed to delete. */
+  readonly fileName: string
+  /** Unique identifier of the version that failed to delete. */
+  readonly fileId: FileId
+  /** Human-readable failure reason taken from the underlying error. */
+  readonly message: string
+}
+
+/** Emitted by {@link Bucket.deleteAll} in `dryRun` mode for every version that would have been deleted. */
+export interface DeleteAllSkipEvent {
+  /** Discriminant identifying a dry-run skip. */
+  readonly type: 'skip'
+  /** File name of the version that would have been deleted. */
+  readonly fileName: string
+  /** Unique identifier of the version that would have been deleted. */
+  readonly fileId: FileId
+}
+
+/** Event yielded by {@link Bucket.deleteAll} as it streams through file versions. */
+export type DeleteAllEvent = DeleteAllDeleteEvent | DeleteAllErrorEvent | DeleteAllSkipEvent
 
 /**
  * Handle to a B2 bucket providing upload, download, listing, and management operations.
@@ -229,6 +290,42 @@ export class Bucket {
   }
 
   /**
+   * Looks up the latest visible version of a file by name.
+   * Uses `listFileNames` under the hood; returns `null` when the file does not
+   * exist or its latest version is a hide marker.
+   * @param fileName - The exact file path to look up.
+   *
+   * @returns The latest {@link FileVersion}, or `null` if not found.
+   */
+  async getFileInfoByName(fileName: string): Promise<FileVersion | null> {
+    const resp = await this.listFileNames({ prefix: fileName, maxFileCount: 1 })
+    const match = resp.files.find((f) => f.fileName === fileName)
+    return match ?? null
+  }
+
+  /**
+   * Removes the latest hide marker for a file, restoring visibility of the
+   * previous upload. Returns the deleted hide marker, or `null` if there was
+   * no hide marker to remove (file is already visible or does not exist).
+   * @param fileName - The file path to unhide.
+   *
+   * @returns The deleted hide marker version, or `null` if nothing was hidden.
+   */
+  async unhide(fileName: string): Promise<FileVersion | null> {
+    // The latest version of a hidden file appears in listFileVersions but not
+    // in listFileNames. Walk versions until we find the hide marker on top.
+    const resp = await this.listFileVersions({ prefix: fileName, maxFileCount: 100 })
+    const versions = resp.files.filter((f) => f.fileName === fileName)
+    if (versions.length === 0) return null
+    // listFileVersions sorts by name asc then upload timestamp desc, so the
+    // first entry is the latest version.
+    const latest = versions[0]
+    if (!latest || latest.action !== 'hide') return null
+    await this.deleteFileVersion(fileName, latest.fileId)
+    return latest
+  }
+
+  /**
    * Hides a file by creating a hide marker. The file remains in version history but is no longer visible in `listFileNames`.
    * @param fileName - The file path to hide.
    *
@@ -253,6 +350,98 @@ export class Bucket {
       this.client.accountInfo.getAuthToken(),
       { fileName, fileId },
     )
+  }
+
+  /**
+   * Deletes many file versions with bounded concurrency. Errors from individual
+   * deletes are collected and returned rather than thrown, so partial success
+   * does not abort the run.
+   * @param targets - File versions to delete.
+   * @param options - Optional concurrency override (default 10).
+   *
+   * @returns A summary of successes and per-target errors.
+   */
+  async deleteMany(
+    targets: readonly DeleteTarget[],
+    options?: { concurrency?: number },
+  ): Promise<DeleteManyResult> {
+    const concurrency = options?.concurrency ?? 10
+    const sem = new Semaphore(concurrency)
+    let deleted = 0
+    const errors: DeleteError[] = []
+
+    await Promise.all(
+      targets.map(async (target) => {
+        await sem.acquire()
+        try {
+          await this.deleteFileVersion(target.fileName, target.fileId)
+          deleted++
+        } catch (err) {
+          errors.push({
+            target,
+            error: err instanceof Error ? err : new Error(String(err)),
+          })
+        } finally {
+          sem.release()
+        }
+      }),
+    )
+
+    return { deleted, errors }
+  }
+
+  /**
+   * Async generator that streams every file version in the bucket (optionally
+   * filtered by prefix) and deletes each one. Yields a {@link DeleteAllEvent}
+   * per file version. With `dryRun: true`, no deletes are performed but `skip`
+   * events are still emitted.
+   * @param options - Optional prefix filter, page size, and dry-run flag.
+   *
+   * @returns An async generator of per-file events.
+   */
+  async *deleteAll(options?: {
+    /** Only delete file versions whose names start with this prefix. */
+    prefix?: string
+    /** Number of file versions fetched per API page (default 1000). */
+    pageSize?: number
+    /** If true, yield `skip` events without actually deleting anything. */
+    dryRun?: boolean
+  }): AsyncGenerator<DeleteAllEvent> {
+    const dryRun = options?.dryRun ?? false
+    const pageSize = options?.pageSize ?? 1000
+
+    let startFileName: string | undefined
+    let startFileId: FileId | undefined
+    for (;;) {
+      const page = await this.listFileVersions({
+        maxFileCount: pageSize,
+        ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
+        ...(startFileName !== undefined ? { startFileName } : {}),
+        ...(startFileId !== undefined ? { startFileId } : {}),
+      })
+
+      for (const version of page.files) {
+        if (dryRun) {
+          yield { type: 'skip', fileName: version.fileName, fileId: version.fileId }
+          continue
+        }
+        try {
+          await this.deleteFileVersion(version.fileName, version.fileId)
+          yield { type: 'delete', fileName: version.fileName, fileId: version.fileId }
+        } catch (err) {
+          yield {
+            type: 'error',
+            fileName: version.fileName,
+            fileId: version.fileId,
+            message: err instanceof Error ? err.message : String(err),
+          }
+        }
+      }
+
+      if (!page.nextFileName) break
+      startFileName = page.nextFileName
+      startFileId = page.nextFileId ?? undefined
+    }
   }
 
   /**
@@ -282,6 +471,53 @@ export class Bucket {
       this.client.accountInfo.getAuthToken(),
       options,
     )
+  }
+
+  /**
+   * Copies a file via the server-side multipart protocol. Each part is copied
+   * by reference through `b2_copy_part`; data never traverses the client. Falls
+   * back to a single `copyFile` call when the source fits within a single part.
+   * @param options - Copy parameters including source file ID, destination name, part size, and concurrency.
+   *
+   * @returns Metadata for the newly created destination file version.
+   */
+  async copyLargeFile(options: {
+    /** File ID of the source file to copy. */
+    sourceFileId: FileId
+    /** Destination file name in the target bucket. */
+    fileName: string
+    /** Target bucket ID. Defaults to this bucket if omitted. */
+    destinationBucketId?: BucketId
+    /** Override content type for the destination. */
+    contentType?: string
+    /** Custom file info for the destination. */
+    fileInfo?: Record<string, string>
+    /** Server-side encryption for the destination file. */
+    destinationServerSideEncryption?: EncryptionSetting
+    /** SSE-C settings for the source if it was uploaded with SSE-C. */
+    sourceServerSideEncryption?: EncryptionSetting
+    /** Part size in bytes. Defaults to the account's recommended part size. */
+    partSize?: number
+    /** Maximum number of parts copied in parallel. Defaults to 4. */
+    concurrency?: number
+  }): Promise<FileVersion> {
+    return copyLargeFile(this.client.raw, this.client.accountInfo, {
+      sourceFileId: options.sourceFileId,
+      fileName: options.fileName,
+      ...(options.destinationBucketId !== undefined
+        ? { destinationBucketId: options.destinationBucketId }
+        : { destinationBucketId: this.id }),
+      ...(options.contentType !== undefined ? { contentType: options.contentType } : {}),
+      ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
+      ...(options.destinationServerSideEncryption !== undefined
+        ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
+        : {}),
+      ...(options.sourceServerSideEncryption !== undefined
+        ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
+        : {}),
+      ...(options.partSize !== undefined ? { partSize: options.partSize } : {}),
+      ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+    })
   }
 
   /**
@@ -380,14 +616,27 @@ export class Bucket {
    * @param fileName - The file path of the version to update.
    * @param fileId - The unique identifier of the file version.
    * @param retention - The new retention policy to apply.
+   * @param options - Optional flags. Set `bypassGovernance: true` to shorten governance-mode retention.
    *
    * @returns The updated file retention metadata.
    */
-  async updateFileRetention(fileName: string, fileId: FileId, retention: FileRetentionValue) {
+  async updateFileRetention(
+    fileName: string,
+    fileId: FileId,
+    retention: FileRetentionValue,
+    options?: { bypassGovernance?: boolean },
+  ) {
     return this.client.raw.updateFileRetention(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
-      { fileName, fileId, fileRetention: retention },
+      {
+        fileName,
+        fileId,
+        fileRetention: retention,
+        ...(options?.bypassGovernance !== undefined
+          ? { bypassGovernance: options.bypassGovernance }
+          : {}),
+      },
     )
   }
 

@@ -216,7 +216,8 @@ describe('B2Folder', () => {
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries).toHaveLength(1)
-    const entry = entries[0]!
+    const entry = entries[0]
+    if (!entry) throw new Error('expected at least one entry')
     expect(entry.relativePath).toBe('doc.txt')
 
     // The selected version should be the latest (largest content = v3)
@@ -227,9 +228,9 @@ describe('B2Folder', () => {
 
     // Versions should be sorted newest first (descending uploadTimestamp)
     for (let i = 1; i < entry.allVersions.length; i++) {
-      const prev = entry.allVersions[i - 1]!
-      const curr = entry.allVersions[i]!
-      expect(prev.uploadTimestamp).toBeGreaterThan(curr.uploadTimestamp)
+      const prev = entry.allVersions[i - 1]
+      const curr = entry.allVersions[i]
+      expect(prev?.uploadTimestamp).toBeGreaterThan(curr?.uploadTimestamp ?? 0)
     }
   })
 

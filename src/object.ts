@@ -11,6 +11,7 @@ import type { FileId } from './types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.js'
 import { uploadLargeFile } from './upload/large.js'
 import { uploadSmallFile } from './upload/single.js'
+import { type UploadWriteHandle, createWriteStream } from './upload/stream.js'
 
 /**
  * Handle to a specific file (by name) within a B2 bucket.
@@ -153,6 +154,42 @@ export class B2Object {
       fileId,
       totalSize,
       ...options,
+    })
+  }
+
+  /**
+   * Creates a Web `WritableStream` that uploads streamed data into this file
+   * using the multipart protocol. Pipe a `ReadableStream<Uint8Array>` into the
+   * returned `writable` and await `done` to get the final {@link FileVersion}.
+   *
+   * Note: streaming uploads do not support resume because the size and per-part
+   * hashes are not known in advance. Use {@link upload} with a buffered source
+   * when resume is required.
+   *
+   * @param options - Streaming upload parameters (part size, concurrency, encryption).
+   *
+   * @returns A handle with the writable sink and a completion promise.
+   */
+  createWriteStream(options?: {
+    /** MIME type. Defaults to `b2/x-auto`. */
+    contentType?: string
+    /** Custom key-value metadata stored with the file. */
+    fileInfo?: Record<string, string>
+    /** Server-side encryption applied to each part. */
+    serverSideEncryption?: EncryptionSetting
+    /** Target part size in bytes. Defaults to the account's recommended part size. */
+    partSize?: number
+    /** Maximum number of parts uploaded in parallel. Defaults to 4. */
+    concurrency?: number
+    /** Callback invoked with upload progress events. */
+    onProgress?: ProgressListener
+    /** Abort signal that cancels the upload and the unfinished large file. */
+    signal?: AbortSignal
+  }): UploadWriteHandle {
+    return createWriteStream(this.client.raw, this.client.accountInfo, {
+      bucketId: this.bucket.id,
+      fileName: this.fileName,
+      ...(options ?? {}),
     })
   }
 

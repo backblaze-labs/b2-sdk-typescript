@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.js'
+import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.js'
 import type { RawClient } from '../raw/index.js'
 import type { FileId } from '../types/ids.js'
 import { Semaphore } from '../upload/concurrency.js'
@@ -13,6 +14,8 @@ export interface ParallelDownloadOptions {
   readonly rangeSize?: number
   /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
+  /** Maximum retry attempts per range on transient failures. Defaults to 5. */
+  readonly maxRetries?: number
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
 }
@@ -39,6 +42,7 @@ export function createParallelDownloadStream(
   const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
   const concurrency = options.concurrency ?? 4
   const totalSize = options.totalSize
+  const retryOptions = { ...DEFAULT_RETRY_OPTIONS, maxRetries: options.maxRetries ?? 5 }
 
   const ranges: { start: number; end: number; index: number }[] = []
   let offset = 0
@@ -68,18 +72,15 @@ export function createParallelDownloadStream(
           try {
             abort?.throwIfAborted()
 
-            const resp = await raw.downloadFileById(
-              accountInfo.getDownloadUrl(),
-              accountInfo.getAuthToken(),
-              options.fileId as string,
-              {
-                range: `bytes=${range.start}-${range.end}`,
-                ...(abort !== undefined ? { signal: abort } : {}),
-              },
+            const data = await fetchRangeWithRetry(
+              raw,
+              accountInfo,
+              options.fileId,
+              range.start,
+              range.end,
+              retryOptions,
+              abort,
             )
-
-            if (!resp.body) throw new Error('Download chunk has no body')
-            const data = new Uint8Array(await readAll(resp.body))
             chunks[range.index] = data
 
             for (
@@ -112,6 +113,56 @@ export function createParallelDownloadStream(
       }
     },
   })
+}
+
+/**
+ * Fetches a single byte range with bounded retry on transient failures.
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param fileId - ID of the file being downloaded.
+ * @param start - Inclusive byte offset where the range begins.
+ * @param end - Inclusive byte offset where the range ends.
+ * @param retryOptions - Retry settings controlling attempts and backoff.
+ * @param signal - Optional abort signal that cancels the range and any pending retry.
+ *
+ * @returns The range's bytes, or throws after exhausting all retry attempts.
+ */
+async function fetchRangeWithRetry(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  fileId: FileId,
+  start: number,
+  end: number,
+  retryOptions: typeof DEFAULT_RETRY_OPTIONS,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array> {
+  let lastError: unknown
+  for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = computeBackoff(attempt - 1, retryOptions)
+      await sleep(delay, signal)
+    }
+    try {
+      signal?.throwIfAborted()
+      const resp = await raw.downloadFileById(
+        accountInfo.getDownloadUrl(),
+        accountInfo.getAuthToken(),
+        fileId as string,
+        {
+          range: `bytes=${start}-${end}`,
+          ...(signal !== undefined ? { signal } : {}),
+        },
+      )
+      if (!resp.body) throw new Error('Download chunk has no body')
+      return new Uint8Array(await readAll(resp.body))
+    } catch (err) {
+      lastError = err
+      // Honour AbortSignal cancellation: don't retry past an abort.
+      if (signal?.aborted) throw err
+      if (err instanceof DOMException && err.name === 'AbortError') throw err
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
 }
 
 /**

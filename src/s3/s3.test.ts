@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { createS3ClientConfig, presignGetObjectUrl } from './index.js'
 import type { AccountInfo } from '../auth/account-info.js'
+import { createS3ClientConfig, presignGetObjectUrl } from './index.js'
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
-function createMockAccountInfo(overrides: {
-  s3ApiUrl?: string
-  accountId?: string
-  authToken?: string
-} = {}): AccountInfo {
+function createMockAccountInfo(
+  overrides: {
+    s3ApiUrl?: string
+    accountId?: string
+    authToken?: string
+  } = {},
+): AccountInfo {
   const {
     s3ApiUrl = 'https://s3.us-west-004.backblazeb2.com',
     accountId = 'test-account-id',
@@ -137,12 +139,7 @@ describe('presignGetObjectUrl', () => {
   it('includes an expires timestamp', () => {
     vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
 
-    const url = presignGetObjectUrl(
-      'https://f004.backblazeb2.com',
-      'bucket',
-      'file.txt',
-      'token',
-    )
+    const url = presignGetObjectUrl('https://f004.backblazeb2.com', 'bucket', 'file.txt', 'token')
 
     const expectedExpires = FIXED_NOW_S + 3600
     expect(url).toContain(`expires=${expectedExpires}`)
@@ -153,12 +150,7 @@ describe('presignGetObjectUrl', () => {
   it('defaults to 3600 seconds', () => {
     vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
 
-    const url = presignGetObjectUrl(
-      'https://f004.backblazeb2.com',
-      'bucket',
-      'file.txt',
-      'token',
-    )
+    const url = presignGetObjectUrl('https://f004.backblazeb2.com', 'bucket', 'file.txt', 'token')
 
     const expectedExpires = FIXED_NOW_S + 3600
     expect(url).toContain(`expires=${expectedExpires}`)

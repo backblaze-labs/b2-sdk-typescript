@@ -6,9 +6,10 @@ import { ProgressTracker } from '../streams/progress.js'
 import type { ContentSource } from '../streams/source.js'
 import type { EncryptionSetting } from '../types/encryption.js'
 import type { FileVersion } from '../types/file.js'
-import type { BucketId } from '../types/ids.js'
+import type { BucketId, LargeFileId } from '../types/ids.js'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
 import { Semaphore } from './concurrency.js'
+import { collectPartSha1s, findResumeCandidate } from './resume.js'
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -36,6 +37,16 @@ export interface UploadLargeFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. Triggers cancellation of the large file. */
   readonly signal?: AbortSignal
+  /**
+   * If true, look for an unfinished large file with the same bucket and file name
+   * and skip parts whose locally-recomputed SHA-1 matches the server's.
+   */
+  readonly resume?: boolean
+  /**
+   * Explicit large file ID to resume into. Overrides {@link resume} discovery
+   * but the local `partSize` must still match the server's plan.
+   */
+  readonly resumeFileId?: LargeFileId
 }
 
 /** Describes a single part to be uploaded: its 1-based number, byte offset, and length. */
@@ -75,19 +86,61 @@ export async function uploadLargeFile(
   const parts = planParts(totalSize, partSize)
   const fileInfo: Record<string, string> = { ...options.fileInfo }
 
-  const startResp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-    bucketId: options.bucketId,
-    fileName: options.fileName,
-    contentType: options.contentType ?? 'b2/x-auto',
-    fileInfo,
-    ...(options.serverSideEncryption !== undefined
-      ? { serverSideEncryption: options.serverSideEncryption }
-      : {}),
-    ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-    ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
-  })
+  // --- Resume discovery (M11.1) ---
+  let largeFileId: LargeFileId
+  let preUploaded: ReadonlyMap<number, string>
 
-  const largeFileId = startResp.fileId
+  if (options.resumeFileId !== undefined) {
+    largeFileId = options.resumeFileId
+    preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
+  } else if (options.resume === true) {
+    const candidate = await findResumeCandidate(
+      raw,
+      accountInfo,
+      options.bucketId as string,
+      options.fileName,
+    )
+    if (candidate) {
+      largeFileId = candidate.fileId
+      preUploaded = candidate.uploadedPartSha1s
+    } else {
+      const startResp = await raw.startLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          contentType: options.contentType ?? 'b2/x-auto',
+          fileInfo,
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+          ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+          ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+        },
+      )
+      largeFileId = startResp.fileId
+      preUploaded = new Map<number, string>()
+    }
+  } else {
+    const startResp = await raw.startLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId: options.bucketId,
+        fileName: options.fileName,
+        contentType: options.contentType ?? 'b2/x-auto',
+        fileInfo,
+        ...(options.serverSideEncryption !== undefined
+          ? { serverSideEncryption: options.serverSideEncryption }
+          : {}),
+        ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+        ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+      },
+    )
+    largeFileId = startResp.fileId
+    preUploaded = new Map<number, string>()
+  }
 
   const partSha1s: string[] = new Array(parts.length)
   const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
@@ -105,6 +158,15 @@ export async function uploadLargeFile(
         const partSha1 = new IncrementalSha1()
         await partSha1.update(data)
         const sha1Hex = await partSha1.digest()
+
+        // Resume short-circuit: server already has this part with matching SHA-1
+        const serverSha1 = preUploaded.get(part.partNumber)
+        if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
+          partSha1s[part.partNumber - 1] = serverSha1
+          tracker.addBytes(data.byteLength)
+          tracker.completePart()
+          return
+        }
 
         let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId as string)
         if (!uploadEntry) {

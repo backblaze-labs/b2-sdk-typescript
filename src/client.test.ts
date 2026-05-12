@@ -990,6 +990,148 @@ describe('file retention and legal hold', () => {
     const info = await obj.getFileInfo(uploaded.fileId)
     expect(info.legalHold.value).toBe('on')
   })
+
+  it('updateFileRetention forwards bypassGovernance flag', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'bypass-test',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('bypass me')
+    const uploaded = await bucket.upload({
+      fileName: 'bypass.txt',
+      source: new BufferSource(data),
+    })
+
+    const retention = { mode: 'governance' as const, retainUntilTimestamp: Date.now() + 3600000 }
+    const result = await bucket.updateFileRetention('bypass.txt', uploaded.fileId, retention, {
+      bypassGovernance: true,
+    })
+    expect(result.fileRetention.mode).toBe('governance')
+  })
+})
+
+describe('B2Client.hasCapabilities', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('returns ok: true when every needed capability is present', () => {
+    const result = client.hasCapabilities(['listBuckets', 'readFiles', 'writeFiles'])
+    expect(result.ok).toBe(true)
+    expect(result.missing).toEqual([])
+  })
+
+  it('returns ok: false with the missing list when capabilities are absent', () => {
+    const result = client.hasCapabilities(['listBuckets', 'bypassGovernance' as never])
+    expect(result.ok).toBe(false)
+    expect(result.missing).toEqual(['bypassGovernance'])
+  })
+
+  it('handles an empty needed array', () => {
+    expect(client.hasCapabilities([])).toEqual({ ok: true, missing: [] })
+  })
+
+  it('throws if called before authorize', () => {
+    const unauth = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: new B2Simulator().transport(),
+    })
+    expect(() => unauth.hasCapabilities(['listBuckets'])).toThrow(/Not authorized/)
+  })
+})
+
+describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('getFileInfoByName returns the latest visible file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'gfibn',
+      bucketType: 'allPrivate',
+    })
+    const uploaded = await bucket.upload({
+      fileName: 'visible.txt',
+      source: new BufferSource(new TextEncoder().encode('hello')),
+    })
+
+    const info = await bucket.getFileInfoByName('visible.txt')
+    expect(info?.fileId).toBe(uploaded.fileId)
+    expect(info?.fileName).toBe('visible.txt')
+  })
+
+  it('getFileInfoByName returns null for unknown file', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'gfibn-missing',
+      bucketType: 'allPrivate',
+    })
+    const info = await bucket.getFileInfoByName('nope.txt')
+    expect(info).toBeNull()
+  })
+
+  it('getFileInfoByName returns null for a hidden file', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'gfibn-hidden',
+      bucketType: 'allPrivate',
+    })
+    await bucket.upload({
+      fileName: 'shy.txt',
+      source: new BufferSource(new TextEncoder().encode('shy')),
+    })
+    await bucket.hideFile('shy.txt')
+
+    const info = await bucket.getFileInfoByName('shy.txt')
+    expect(info).toBeNull()
+  })
+
+  it('unhide removes the hide marker and restores visibility', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unhide-test',
+      bucketType: 'allPrivate',
+    })
+    await bucket.upload({
+      fileName: 'restore.txt',
+      source: new BufferSource(new TextEncoder().encode('boo')),
+    })
+    await bucket.hideFile('restore.txt')
+    expect(await bucket.getFileInfoByName('restore.txt')).toBeNull()
+
+    const marker = await bucket.unhide('restore.txt')
+    expect(marker?.action).toBe('hide')
+
+    const restored = await bucket.getFileInfoByName('restore.txt')
+    expect(restored?.fileName).toBe('restore.txt')
+  })
+
+  it('unhide returns null when there is no hide marker on top', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unhide-noop',
+      bucketType: 'allPrivate',
+    })
+    await bucket.upload({
+      fileName: 'plain.txt',
+      source: new BufferSource(new TextEncoder().encode('plain')),
+    })
+
+    const result = await bucket.unhide('plain.txt')
+    expect(result).toBeNull()
+  })
+
+  it('unhide returns null when the file does not exist', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unhide-missing',
+      bucketType: 'allPrivate',
+    })
+    const result = await bucket.unhide('ghost.txt')
+    expect(result).toBeNull()
+  })
 })
 
 describe('B2Client constructor options', () => {
