@@ -889,6 +889,138 @@ describe('notification rules', () => {
   })
 })
 
+// --- File retention and legal hold tests ---
+
+describe('file retention and legal hold', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('updates file retention on a file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'retention-test',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('retain me')
+    const uploaded = await bucket.upload({
+      fileName: 'locked.txt',
+      source: new BufferSource(data),
+    })
+
+    const retention = { mode: 'compliance' as const, retainUntilTimestamp: Date.now() + 86400000 }
+    const result = await bucket.updateFileRetention('locked.txt', uploaded.fileId, retention)
+
+    expect(result.fileName).toBe('locked.txt')
+    expect(result.fileId).toBe(uploaded.fileId)
+    expect(result.fileRetention.mode).toBe('compliance')
+    expect(result.fileRetention.retainUntilTimestamp).toBe(retention.retainUntilTimestamp)
+  })
+
+  it('updates file legal hold on a file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'legal-hold-test',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('hold me')
+    const uploaded = await bucket.upload({
+      fileName: 'held.txt',
+      source: new BufferSource(data),
+    })
+
+    const result = await bucket.updateFileLegalHold('held.txt', uploaded.fileId, 'on')
+
+    expect(result.fileName).toBe('held.txt')
+    expect(result.fileId).toBe(uploaded.fileId)
+    expect(result.legalHold).toBe('on')
+  })
+
+  it('removes legal hold from a file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'legal-hold-off',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('release me')
+    const uploaded = await bucket.upload({
+      fileName: 'released.txt',
+      source: new BufferSource(data),
+    })
+
+    await bucket.updateFileLegalHold('released.txt', uploaded.fileId, 'on')
+    const result = await bucket.updateFileLegalHold('released.txt', uploaded.fileId, 'off')
+
+    expect(result.legalHold).toBe('off')
+  })
+
+  it('retention is reflected in file info after update', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'retention-info',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('check info')
+    const uploaded = await bucket.upload({
+      fileName: 'check.txt',
+      source: new BufferSource(data),
+    })
+
+    const retention = { mode: 'governance' as const, retainUntilTimestamp: Date.now() + 3600000 }
+    await bucket.updateFileRetention('check.txt', uploaded.fileId, retention)
+
+    const obj = bucket.file('check.txt')
+    const info = await obj.getFileInfo(uploaded.fileId)
+    expect(info.fileRetention.value).toEqual(retention)
+  })
+
+  it('legal hold is reflected in file info after update', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'legalhold-info',
+      bucketType: 'allPrivate',
+    })
+    const data = new TextEncoder().encode('check hold')
+    const uploaded = await bucket.upload({
+      fileName: 'holdcheck.txt',
+      source: new BufferSource(data),
+    })
+
+    await bucket.updateFileLegalHold('holdcheck.txt', uploaded.fileId, 'on')
+
+    const obj = bucket.file('holdcheck.txt')
+    const info = await obj.getFileInfo(uploaded.fileId)
+    expect(info.legalHold.value).toBe('on')
+  })
+})
+
+describe('B2Client constructor options', () => {
+  it('creates default FetchTransport when no transport is provided', () => {
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+    })
+    expect(client.raw).toBeTruthy()
+    expect(client.accountInfo).toBeTruthy()
+  })
+
+  it('creates FetchTransport with custom userAgent', () => {
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      userAgent: 'my-app/2.0',
+    })
+    expect(client.raw).toBeTruthy()
+  })
+
+  it('passes retry options through', () => {
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      retry: { maxRetries: 10 },
+    })
+    expect(client.raw).toBeTruthy()
+  })
+})
+
 describe('error classification', () => {
   it('classifies expired_auth_token as retryable', async () => {
     const { classifyError } = await import('./errors/index.js')

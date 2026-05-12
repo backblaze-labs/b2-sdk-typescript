@@ -1,0 +1,763 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { B2Error, ExpiredAuthTokenError, NetworkError } from '../errors/index.js'
+import type { HttpRequest, HttpResponse, HttpTransport } from './transport.js'
+import { FetchTransport, RetryTransport } from './transport.js'
+
+// ---------------------------------------------------------------------------
+// Mock sleep so retry tests don't actually wait
+// ---------------------------------------------------------------------------
+vi.mock('./retry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./retry.js')>()
+  return { ...actual, sleep: vi.fn().mockResolvedValue(undefined) }
+})
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Builds a minimal HttpResponse-like object for use with the mock inner transport. */
+const mockResponse = (
+  status: number,
+  body: unknown,
+  headers?: Record<string, string>,
+): HttpResponse => ({
+  status,
+  headers: new Headers(headers),
+  body: null,
+  json: async () => body as never,
+  text: async () => JSON.stringify(body),
+  arrayBuffer: async () => new ArrayBuffer(0),
+})
+
+/** A basic POST request used across most tests. */
+const baseRequest: HttpRequest = {
+  url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',
+  method: 'POST',
+  headers: { Authorization: 'token-123' },
+  body: JSON.stringify({ accountId: 'abc' }),
+}
+
+// ============================================================================
+// FetchTransport
+// ============================================================================
+
+describe('FetchTransport', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy
+  })
+
+  it('sets User-Agent header on requests', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport()
+    await transport.send({ url: 'https://example.com', method: 'GET' })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers as HeadersInit)
+    expect(headers.has('User-Agent')).toBe(true)
+    expect(headers.get('User-Agent')).toMatch(/^b2-sdk-ts\//)
+  })
+
+  it('uses a custom User-Agent prefix when provided', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport({ userAgent: 'my-app/1.0' })
+    await transport.send({ url: 'https://example.com', method: 'GET' })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers as HeadersInit)
+    expect(headers.get('User-Agent')).toMatch(/^my-app\/1\.0 b2-sdk-ts\//)
+  })
+
+  it('does not override an existing User-Agent header', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport()
+    await transport.send({
+      url: 'https://example.com',
+      method: 'GET',
+      headers: { 'User-Agent': 'custom-agent/2.0' },
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const headers = new Headers(init.headers as HeadersInit)
+    expect(headers.get('User-Agent')).toBe('custom-agent/2.0')
+  })
+
+  it('returns a structured HttpResponse with status, headers, json(), text()', async () => {
+    const payload = { buckets: [] }
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({ url: 'https://example.com', method: 'GET' })
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe('application/json')
+  })
+
+  it('json() parses the response body', async () => {
+    const payload = { buckets: [{ bucketName: 'test' }] }
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }))
+
+    const transport = new FetchTransport()
+    const response = await transport.send({ url: 'https://example.com', method: 'GET' })
+    const data = await response.json<typeof payload>()
+
+    expect(data).toEqual(payload)
+  })
+
+  it('text() returns the raw response body', async () => {
+    fetchSpy.mockResolvedValue(new Response('plain text response', { status: 200 }))
+
+    const transport = new FetchTransport()
+    const response = await transport.send({ url: 'https://example.com', method: 'GET' })
+    const text = await response.text()
+
+    expect(text).toBe('plain text response')
+  })
+
+  it('passes signal through to fetch', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+    const controller = new AbortController()
+
+    const transport = new FetchTransport()
+    await transport.send({
+      url: 'https://example.com',
+      method: 'GET',
+      signal: controller.signal,
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.signal).toBe(controller.signal)
+  })
+
+  it('does not include signal in fetch options when signal is undefined', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport()
+    await transport.send({ url: 'https://example.com', method: 'GET' })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.signal).toBeUndefined()
+  })
+
+  it('passes method and body through to fetch', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+    const bodyPayload = JSON.stringify({ accountId: 'abc' })
+
+    const transport = new FetchTransport()
+    await transport.send({
+      url: 'https://api.example.com/endpoint',
+      method: 'POST',
+      body: bodyPayload,
+    })
+
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.example.com/endpoint')
+    expect(init.method).toBe('POST')
+    expect(init.body).toBe(bodyPayload)
+  })
+
+  it('sends null body when body is not provided', async () => {
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport()
+    await transport.send({ url: 'https://example.com', method: 'GET' })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.body).toBeNull()
+  })
+})
+
+// ============================================================================
+// RetryTransport
+// ============================================================================
+
+describe('RetryTransport', () => {
+  let innerTransport: HttpTransport & { send: ReturnType<typeof vi.fn> }
+
+  beforeEach(() => {
+    innerTransport = { send: vi.fn() }
+  })
+
+  // --------------------------------------------------------------------------
+  // Successful responses
+  // --------------------------------------------------------------------------
+
+  describe('successful responses', () => {
+    it('returns response on first success (200)', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+      innerTransport.send.mockResolvedValue(okResponse)
+
+      const transport = new RetryTransport({ transport: innerTransport })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns response for any 2xx status', async () => {
+      const response204 = mockResponse(204, null)
+      innerTransport.send.mockResolvedValue(response204)
+
+      const transport = new RetryTransport({ transport: innerTransport })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(response204)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Retry on 503 (service_unavailable)
+  // --------------------------------------------------------------------------
+
+  describe('retry on 503', () => {
+    it('retries on 503 and eventually succeeds', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'Service unavailable' }
+      const error503 = mockResponse(503, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(3)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Retry on 408 (request_timeout)
+  // --------------------------------------------------------------------------
+
+  describe('retry on 408', () => {
+    it('retries on 408 and eventually succeeds', async () => {
+      const errorBody = { status: 408, code: 'request_timeout', message: 'Request timeout' }
+      const error408 = mockResponse(408, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockResolvedValueOnce(error408)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Retry on 429 with Retry-After header
+  // --------------------------------------------------------------------------
+
+  describe('retry on 429 with Retry-After', () => {
+    it('retries on 429 and respects Retry-After header', async () => {
+      const errorBody = { status: 429, code: 'too_many_requests', message: 'Too many requests' }
+      const error429 = mockResponse(429, errorBody, { 'Retry-After': '2' })
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockResolvedValueOnce(error429)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100_000 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+
+      // Verify that sleep was called (via the mock) with a delay derived from Retry-After
+      const { sleep: sleepFn } = await import('./retry.js')
+      expect(sleepFn).toHaveBeenCalled()
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Reauth on 401 expired_auth_token
+  // --------------------------------------------------------------------------
+
+  describe('reauth on 401 expired_auth_token', () => {
+    it('calls onReauth and retries on expired auth token', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+      const onReauth = vi.fn().mockResolvedValue(undefined)
+
+      innerTransport.send
+        .mockResolvedValueOnce(error401)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('throws expired auth token error when no onReauth callback is provided', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+
+      innerTransport.send.mockResolvedValue(error401)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      // Without onReauth, expired_auth_token is still retryable, so it retries until maxRetries
+      // then throws on the last attempt
+      await expect(transport.send(baseRequest)).rejects.toThrow(ExpiredAuthTokenError)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Non-retryable errors throw immediately
+  // --------------------------------------------------------------------------
+
+  describe('non-retryable errors', () => {
+    it('throws immediately on 403 access_denied', async () => {
+      const errorBody = { status: 403, code: 'access_denied', message: 'Access denied' }
+      const error403 = mockResponse(403, errorBody)
+
+      innerTransport.send.mockResolvedValue(error403)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Access denied')
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws immediately on 400 bad_request', async () => {
+      const errorBody = { status: 400, code: 'bad_request', message: 'Bad request' }
+      const error400 = mockResponse(400, errorBody)
+
+      innerTransport.send.mockResolvedValue(error400)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Bad request')
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('non-retryable error is a B2Error instance', async () => {
+      const errorBody = { status: 403, code: 'access_denied', message: 'Access denied' }
+      const error403 = mockResponse(403, errorBody)
+
+      innerTransport.send.mockResolvedValue(error403)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(B2Error)
+        expect((err as B2Error).code).toBe('access_denied')
+        expect((err as B2Error).status).toBe(403)
+        expect((err as B2Error).retryable).toBe(false)
+      }
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Max retries exhausted
+  // --------------------------------------------------------------------------
+
+  describe('max retries exhausted', () => {
+    it('throws after max retries are exhausted on retryable errors', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'Service unavailable' }
+      const error503 = mockResponse(503, errorBody)
+
+      // Always return 503
+      innerTransport.send.mockResolvedValue(error503)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Service unavailable')
+      // initial attempt + 2 retries = 3 calls total
+      expect(innerTransport.send).toHaveBeenCalledTimes(3)
+    })
+
+    it('thrown error after max retries is a B2Error with retryable=true', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'Service unavailable' }
+      const error503 = mockResponse(503, errorBody)
+      innerTransport.send.mockResolvedValue(error503)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(B2Error)
+        expect((err as B2Error).retryable).toBe(true)
+      }
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Network errors (fetch TypeError)
+  // --------------------------------------------------------------------------
+
+  describe('network errors', () => {
+    it('wraps fetch TypeError as NetworkError and retries', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('throws NetworkError after max retries on persistent network failure', async () => {
+      innerTransport.send.mockRejectedValue(new TypeError('Failed to fetch'))
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(NetworkError)
+        expect((err as NetworkError).message).toBe('Failed to fetch')
+        expect((err as NetworkError).retryable).toBe(true)
+      }
+      // initial attempt + 2 retries = 3 calls
+      expect(innerTransport.send).toHaveBeenCalledTimes(3)
+    })
+
+    it('wraps non-Error thrown values as NetworkError with generic message', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockRejectedValueOnce('string error')
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // AbortError propagation
+  // --------------------------------------------------------------------------
+
+  describe('AbortError propagation', () => {
+    it('propagates AbortError without retry', async () => {
+      const abortError = new DOMException('The operation was aborted', 'AbortError')
+      innerTransport.send.mockRejectedValue(abortError)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('The operation was aborted')
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('thrown error is the original DOMException', async () => {
+      const abortError = new DOMException('Aborted', 'AbortError')
+      innerTransport.send.mockRejectedValue(abortError)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(DOMException)
+        expect((err as DOMException).name).toBe('AbortError')
+      }
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // B2Error / NetworkError re-thrown without wrapping
+  // --------------------------------------------------------------------------
+
+  describe('B2Error re-thrown without wrapping', () => {
+    it('re-throws B2Error from inner transport without wrapping', async () => {
+      const b2Err = new B2Error(
+        { status: 500, code: 'internal_error', message: 'Internal error' },
+      )
+      innerTransport.send.mockRejectedValue(b2Err)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBe(b2Err)
+      }
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('re-throws NetworkError from inner transport without wrapping', async () => {
+      const netErr = new NetworkError('custom network error')
+      innerTransport.send.mockRejectedValue(netErr)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBe(netErr)
+      }
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Error body parsing failure
+  // --------------------------------------------------------------------------
+
+  describe('error body parsing failure', () => {
+    it('uses fallback error body when json() throws', async () => {
+      const badResponse: HttpResponse = {
+        status: 503,
+        headers: new Headers(),
+        body: null,
+        json: async () => { throw new Error('invalid json') },
+        text: async () => 'not json',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockResolvedValueOnce(badResponse)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('fallback error body has correct status and code', async () => {
+      const badResponse: HttpResponse = {
+        status: 500,
+        headers: new Headers(),
+        body: null,
+        json: async () => { throw new Error('parse error') },
+        text: async () => '',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+      innerTransport.send.mockResolvedValue(badResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(B2Error)
+        expect((err as B2Error).status).toBe(500)
+        expect((err as B2Error).code).toBe('internal_error')
+        expect((err as B2Error).message).toBe('HTTP 500')
+      }
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Fall-through: lastError thrown when loop ends
+  // --------------------------------------------------------------------------
+
+  describe('loop exhaustion fallback', () => {
+    it('throws lastError when the retry loop completes without return or throw', async () => {
+      // With maxRetries=0, the loop runs once (attempt 0 only).
+      // A retryable error on the first (and only) attempt at attempt === maxRetries
+      // will throw immediately from the "attempt === this.options.maxRetries" branch.
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'Unavailable' }
+      const error503 = mockResponse(503, errorBody)
+      innerTransport.send.mockResolvedValue(error503)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Unavailable')
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Request ID and Retry-After headers are attached to errors
+  // --------------------------------------------------------------------------
+
+  describe('error metadata from response headers', () => {
+    it('attaches requestId from X-Bz-Request-Id header', async () => {
+      const errorBody = { status: 403, code: 'access_denied', message: 'Denied' }
+      const errorResponse = mockResponse(403, errorBody, {
+        'X-Bz-Request-Id': 'req-abc-123',
+      })
+      innerTransport.send.mockResolvedValue(errorResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(B2Error)
+        expect((err as B2Error).requestId).toBe('req-abc-123')
+      }
+    })
+
+    it('attaches retryAfter parsed from Retry-After header', async () => {
+      const errorBody = { status: 429, code: 'too_many_requests', message: 'Rate limited' }
+      const errorResponse = mockResponse(429, errorBody, { 'Retry-After': '5' })
+      innerTransport.send.mockResolvedValue(errorResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      try {
+        await transport.send(baseRequest)
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toBeInstanceOf(B2Error)
+        expect((err as B2Error).retryAfter).toBe(5)
+      }
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Default retry options
+  // --------------------------------------------------------------------------
+
+  describe('default retry options', () => {
+    it('uses DEFAULT_RETRY_OPTIONS when no retry config is provided', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'Unavailable' }
+      const error503 = mockResponse(503, errorBody)
+      innerTransport.send.mockResolvedValue(error503)
+
+      const transport = new RetryTransport({ transport: innerTransport })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Unavailable')
+      // default maxRetries is 5, so: initial + 5 retries = 6 calls total
+      expect(innerTransport.send).toHaveBeenCalledTimes(6)
+    })
+  })
+
+  // --------------------------------------------------------------------------
+  // Reauth with continue (does not consume a retry attempt)
+  // --------------------------------------------------------------------------
+
+  describe('reauth does not consume a retry attempt', () => {
+    it('onReauth + continue allows the full retry budget afterward', async () => {
+      const authError = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, authError)
+      const serviceError = { status: 503, code: 'service_unavailable', message: 'Down' }
+      const error503 = mockResponse(503, serviceError)
+      const okResponse = mockResponse(200, { ok: true })
+
+      const onReauth = vi.fn().mockResolvedValue(undefined)
+
+      // First call: 401 (triggers reauth + continue, does not increment attempt)
+      // Second call: 503 (retryable, attempt 0 still)
+      // Third call: success
+      innerTransport.send
+        .mockResolvedValueOnce(error401)
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      const result = await transport.send(baseRequest)
+      expect(result).toBe(okResponse)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(3)
+    })
+  })
+})

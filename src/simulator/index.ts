@@ -198,6 +198,14 @@ export class B2Simulator {
         )
       case 'b2_delete_key':
         return this.deleteKey(body as { applicationKeyId: string })
+      case 'b2_update_file_retention':
+        return this.updateFileRetention(
+          body as { fileName: string; fileId: string; fileRetention: { mode: 'compliance' | 'governance' | null; retainUntilTimestamp: number | null } },
+        )
+      case 'b2_update_file_legal_hold':
+        return this.updateFileLegalHold(
+          body as { fileName: string; fileId: string; legalHold: string },
+        )
       case 'b2_get_bucket_notification_rules':
         return this.getBucketNotificationRules(body as { bucketId: string })
       case 'b2_set_bucket_notification_rules':
@@ -884,6 +892,78 @@ export class B2Simulator {
         options: [],
       },
     }
+  }
+
+  // --- File lock ---
+
+  private updateFileRetention(req: {
+    fileName: string
+    fileId: string
+    fileRetention: { mode: 'compliance' | 'governance' | null; retainUntilTimestamp: number | null }
+  }): SimulatorJsonResponse {
+    for (const bucket of this.buckets.values()) {
+      const versions = bucket.files.get(req.fileName)
+      if (!versions) continue
+      const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
+      if (idx !== -1) {
+        const old = versions[idx]!
+        const updated: StoredFile = {
+          fileVersion: {
+            ...old.fileVersion,
+            fileRetention: {
+              isClientAuthorizedToRead: true,
+              value: req.fileRetention,
+            },
+          },
+          data: old.data,
+        }
+        versions[idx] = updated
+        return {
+          status: 200,
+          body: {
+            fileName: req.fileName,
+            fileId: req.fileId,
+            fileRetention: req.fileRetention,
+          },
+        }
+      }
+    }
+    return this.error(404, 'file_not_present', 'File not found')
+  }
+
+  private updateFileLegalHold(req: {
+    fileName: string
+    fileId: string
+    legalHold: string
+  }): SimulatorJsonResponse {
+    for (const bucket of this.buckets.values()) {
+      const versions = bucket.files.get(req.fileName)
+      if (!versions) continue
+      const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
+      if (idx !== -1) {
+        const old = versions[idx]!
+        const updated: StoredFile = {
+          fileVersion: {
+            ...old.fileVersion,
+            legalHold: {
+              isClientAuthorizedToRead: true,
+              value: req.legalHold as 'on' | 'off',
+            },
+          },
+          data: old.data,
+        }
+        versions[idx] = updated
+        return {
+          status: 200,
+          body: {
+            fileName: req.fileName,
+            fileId: req.fileId,
+            legalHold: req.legalHold,
+          },
+        }
+      }
+    }
+    return this.error(404, 'file_not_present', 'File not found')
   }
 
   // --- Notifications ---

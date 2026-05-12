@@ -146,6 +146,26 @@ describe('zipFolders', () => {
     }
     expect(pairs).toEqual([])
   })
+
+  it('yields dest-only when dest file sorts before source file', async () => {
+    const source = makeMemoryFolder([makeSyncPath('c.txt', 1000, 10)])
+    const dest = makeMemoryFolder([
+      makeSyncPath('a.txt', 1000, 20),
+      makeSyncPath('b.txt', 1000, 30),
+      makeSyncPath('c.txt', 1000, 10),
+    ])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      [null, 'a.txt'],
+      [null, 'b.txt'],
+      ['c.txt', 'c.txt'],
+    ])
+  })
 })
 
 describe('generateActions', () => {
