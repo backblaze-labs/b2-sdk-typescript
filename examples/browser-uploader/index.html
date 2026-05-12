@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>B2 Browser Uploader</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        max-width: 720px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+        background: #f8f9fa;
+        color: #333;
+      }
+
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .subtitle {
+        color: #666;
+        margin-bottom: 2rem;
+        font-size: 0.9rem;
+      }
+
+      #drop-zone {
+        border: 2px dashed #ccc;
+        border-radius: 8px;
+        padding: 3rem 2rem;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.2s;
+        background: #fff;
+        margin-bottom: 1.5rem;
+      }
+
+      #drop-zone:hover,
+      #drop-zone.dragover {
+        border-color: #e41937;
+        background: #fff5f5;
+      }
+
+      #drop-zone .icon {
+        font-size: 2.5rem;
+        margin-bottom: 0.5rem;
+      }
+
+      #drop-zone p {
+        color: #666;
+      }
+
+      #file-input {
+        display: none;
+      }
+
+      .status {
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        margin-bottom: 1rem;
+        font-size: 0.9rem;
+        min-height: 2.5rem;
+      }
+
+      .status.success {
+        background: #e8f5e9;
+        color: #2e7d32;
+      }
+
+      .status.error {
+        background: #ffebee;
+        color: #c62828;
+      }
+
+      #progress-bar {
+        display: none;
+        background: #e0e0e0;
+        border-radius: 4px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+        height: 24px;
+      }
+
+      #progress-fill {
+        background: #e41937;
+        height: 100%;
+        width: 0;
+        transition: width 0.3s;
+        text-align: center;
+        color: #fff;
+        font-size: 0.75rem;
+        line-height: 24px;
+      }
+
+      h2 {
+        font-size: 1.1rem;
+        margin-bottom: 0.75rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: #fff;
+        border-radius: 6px;
+        overflow: hidden;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      }
+
+      th {
+        background: #f5f5f5;
+        text-align: left;
+        padding: 0.6rem 0.75rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: #555;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      td {
+        padding: 0.6rem 0.75rem;
+        border-top: 1px solid #eee;
+        font-size: 0.85rem;
+        word-break: break-all;
+      }
+
+      .empty {
+        color: #999;
+        text-align: center;
+        padding: 2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>B2 Browser Uploader</h1>
+    <p class="subtitle">
+      Upload files directly from the browser to Backblaze B2 using the
+      <code>@backblaze/b2-sdk</code>.
+    </p>
+
+    <div id="drop-zone">
+      <div class="icon">&#128193;</div>
+      <p><strong>Drop a file here</strong> or click to browse</p>
+    </div>
+    <input type="file" id="file-input" />
+
+    <div id="status" class="status"></div>
+
+    <div id="progress-bar">
+      <div id="progress-fill"></div>
+    </div>
+
+    <h2>Files in bucket</h2>
+    <div id="file-list">
+      <p class="empty">Loading...</p>
+    </div>
+
+    <script type="module" src="./upload.ts"></script>
+  </body>
+</html>
