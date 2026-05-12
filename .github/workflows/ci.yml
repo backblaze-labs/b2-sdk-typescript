@@ -164,20 +164,9 @@ jobs:
           test -f dist/errors/index.js
           test -f dist/simulator/index.js
 
-  integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [lint, test-node, build]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm test:integration
-        env:
-          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
-          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+  # Real-B2 integration tests live in their own workflow (integration.yml),
+  # which runs the Node 22 + 24 matrix sequentially + the real-examples
+  # follow-up + a weekly schedule + workflow_dispatch. Having a duplicate
+  # `pnpm test:integration` job here would race that workflow for the same
+  # `sdk-test-*` buckets on every push to main, because GitHub Actions
+  # `concurrency:` groups do not span workflows.

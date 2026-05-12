@@ -60,3 +60,43 @@ jobs:
             echo "::warning::B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY secrets are not set; integration suite will skip every test."
           fi
           pnpm test:integration
+
+  real-examples:
+    name: Run examples against real B2 (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    # Run after the integration suite passes so a wire-format break shows up
+    # as an integration failure (sharp signal) rather than a confusing
+    # example-script failure.
+    needs: integration
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      fail-fast: false
+      # Same reason as the integration job: real-examples uses a separate
+      # `sdk-examples-*` bucket prefix, but we still serialize matrix entries
+      # for predictable cleanup and account-level rate-limit safety.
+      max-parallel: 1
+      matrix:
+        node-version: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The examples import `@backblaze/b2-sdk`, which resolves via the
+      # package.json `exports` map to `./dist/index.js`. Build dist/ so tsx
+      # can resolve the bare specifier the same way an `npm install`-ed
+      # consumer would.
+      - run: pnpm build
+      - name: Run the documented `npx tsx examples/...` commands end-to-end
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+        run: |
+          if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then
+            echo "::warning::B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY secrets are not set; skipping real-example runs."
+            exit 0
+          fi
+          npx tsx tests/real-examples/runner.ts
