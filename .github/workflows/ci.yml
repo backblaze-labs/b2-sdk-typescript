@@ -28,11 +28,19 @@ jobs:
       - run: pnpm run docs
 
   test-node:
-    name: Test (Node ${{ matrix.node-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }} / Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [22, 24]
+        include:
+          # Linux: full Node matrix (cheap runner minutes, baseline coverage).
+          - { os: ubuntu-latest, node-version: 22 }
+          - { os: ubuntu-latest, node-version: 24 }
+          # Windows: catches path-separator and NTFS-specific issues
+          # (LocalFolder normalises `\` to `/`, file.node.test.ts uses tmpdir).
+          # Node 22 only — Windows runner minutes are billed at 2x.
+          - { os: windows-latest, node-version: 22 }
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

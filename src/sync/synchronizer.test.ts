@@ -349,22 +349,32 @@ describe('synchronize', () => {
     // `node:fs/promises`, which is unavailable in non-Node runtimes.
     const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
     it.skipIf(!isNode)('executes download for source-only B2 file', async () => {
-      const mockBucket = makeMockBucket()
-      const sourceFile = makeB2SyncPath('remote.txt', 2000, 200)
-      const source = makeMemoryFolder([sourceFile], 'b2')
-      const dest = makeMemoryFolder([], 'local')
+      // Use a portable per-OS tmpdir so this test passes on Windows (where
+      // `/tmp/dest` would resolve to `C:\tmp\dest` and likely fail to create).
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-'))
+      try {
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('remote.txt', 2000, 200)
+        const source = makeMemoryFolder([sourceFile], 'b2')
+        const dest = makeMemoryFolder([], 'local')
 
-      const config: SynchronizerDownConfig = {
-        source: { ...source, type: 'b2' },
-        dest: { ...dest, type: 'local', root: '/tmp/dest' },
-        options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket: mockBucket as any,
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as any,
+        }
+
+        const events = await collectEvents(config)
+        const downloadEvents = events.filter((e) => e.type === 'download-done')
+        expect(downloadEvents).toHaveLength(1)
+        expect(downloadEvents[0]?.path).toBe('remote.txt')
+      } finally {
+        await rm(root, { recursive: true, force: true })
       }
-
-      const events = await collectEvents(config)
-      const downloadEvents = events.filter((e) => e.type === 'download-done')
-      expect(downloadEvents).toHaveLength(1)
-      expect(downloadEvents[0]?.path).toBe('remote.txt')
     })
   })
 })
