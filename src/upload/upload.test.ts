@@ -426,8 +426,8 @@ describe('uploadLargeFile resume', () => {
 
       // Upload part 1 with the matching SHA-1 the resume path will recompute locally.
       const part1Data = data.slice(0, 5_000_000)
-      const { createHash } = await import('node:crypto')
-      const part1Sha1 = createHash('sha1').update(part1Data).digest('hex')
+      const { sha1Hex } = await import('../streams/hash.js')
+      const part1Sha1 = await sha1Hex(part1Data)
 
       await client.raw.uploadPart(
         partUrl.uploadUrl,

@@ -59,6 +59,34 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: bun test src/
 
+  test-browser:
+    name: Test (Browser - ${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Install Playwright browser
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+      - run: pnpm test:browser
+        env:
+          # Limit the matrix shard to just this engine.
+          VITEST_BROWSER_INSTANCE: ${{ matrix.browser }}
+
   build:
     name: Build
     runs-on: ubuntu-latest

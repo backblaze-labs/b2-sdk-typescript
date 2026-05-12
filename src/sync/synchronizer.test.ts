@@ -345,7 +345,10 @@ describe('synchronize', () => {
   })
 
   describe('download direction actions', () => {
-    it('executes download for source-only B2 file', async () => {
+    // Skipped in browsers: the download action writes to local disk via
+    // `node:fs/promises`, which is unavailable in non-Node runtimes.
+    const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
+    it.skipIf(!isNode)('executes download for source-only B2 file', async () => {
       const mockBucket = makeMockBucket()
       const sourceFile = makeB2SyncPath('remote.txt', 2000, 200)
       const source = makeMemoryFolder([sourceFile], 'b2')

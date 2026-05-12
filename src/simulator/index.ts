@@ -9,17 +9,13 @@
  * @packageDocumentation
  */
 
-import { createHash } from 'node:crypto'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.js'
+import { sha1Hex } from '../streams/hash.js'
 import type { AuthorizeAccountResponse } from '../types/auth.js'
 import type { BucketInfo, BucketType } from '../types/bucket.js'
 import type { FileAction, FileVersion } from '../types/file.js'
 import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.js'
 import type { EventNotificationRule } from '../types/notifications.js'
-
-function simpleSha1Hex(data: Uint8Array): string {
-  return createHash('sha1').update(data).digest('hex')
-}
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -125,12 +121,12 @@ export class B2Simulator {
    *
    * @returns An object with HTTP status and JSON response body.
    */
-  handleRequest(
+  async handleRequest(
     _method: string,
     path: string,
     _headers: Record<string, string>,
     body: unknown,
-  ): SimulatorJsonResponse {
+  ): Promise<SimulatorJsonResponse> {
     const endpoint = path.split('/').pop() ?? ''
 
     switch (endpoint) {
@@ -199,7 +195,7 @@ export class B2Simulator {
           body as { fileId: string; startPartNumber?: number; maxPartCount?: number },
         )
       case 'b2_copy_part':
-        return this.copyPart(
+        return await this.copyPart(
           body as {
             sourceFileId: string
             largeFileId: string
@@ -852,12 +848,12 @@ export class B2Simulator {
     return { status: 200, body: { parts, nextPartNumber } }
   }
 
-  private copyPart(req: {
+  private async copyPart(req: {
     sourceFileId: string
     largeFileId: string
     partNumber: number
     range?: string
-  }): SimulatorJsonResponse {
+  }): Promise<SimulatorJsonResponse> {
     const large = this.largeFiles.get(req.largeFileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
@@ -884,8 +880,9 @@ export class B2Simulator {
       }
     }
 
-    // Hash the part data so list_parts can return a real SHA-1
-    const sha1 = simpleSha1Hex(partData)
+    // Hash the part data so list_parts can return a real SHA-1.
+    // sha1Hex is isomorphic (node:crypto in Node, WebCrypto in browsers).
+    const sha1 = await sha1Hex(partData)
     large.parts.set(req.partNumber, { data: new Uint8Array(partData), sha1 })
 
     return {
@@ -1207,7 +1204,7 @@ class SimulatorTransport implements HttpTransport {
           body = text
         }
       }
-      result = this.sim.handleRequest(request.method, parsedUrl.pathname, headers, body)
+      result = await this.sim.handleRequest(request.method, parsedUrl.pathname, headers, body)
     }
 
     const responseBody = JSON.stringify(result.body)

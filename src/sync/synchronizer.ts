@@ -1,6 +1,3 @@
-import { mkdir } from 'node:fs/promises'
-import { readFile, unlink, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
 import type { Bucket } from '../bucket.js'
 import { BufferSource } from '../streams/source.js'
 import type { FileId } from '../types/ids.js'
@@ -187,6 +184,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         source.absolutePath,
         source.size,
         async (absPath, relPath) => {
+          const { readFile } = await import('node:fs/promises')
           const data = await readFile(absPath)
           await bucket.upload({
             fileName: `${prefix}${relPath}`,
@@ -220,6 +218,8 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           offset += c.byteLength
         }
 
+        const { mkdir, writeFile } = await import('node:fs/promises')
+        const { dirname, join } = await import('node:path')
         const destPath = join(root, relPath)
         await mkdir(dirname(destPath), { recursive: true })
         await writeFile(destPath, combined)
@@ -263,6 +263,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
     deleteLocal(path: LocalSyncPath): SyncAction {
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
+        const { unlink } = await import('node:fs/promises')
         await unlink(absPath)
       })
     },

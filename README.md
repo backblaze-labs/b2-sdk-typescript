@@ -522,14 +522,16 @@ try {
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22+ | Primary target |
-| Bun | latest | Supported |
-| Deno | latest | Supported |
-| Browsers | last 2 evergreen | Supported |
-| Cloudflare Workers | - | Supported |
-| Vercel Edge | - | Supported |
+| Node.js | 22+ | Primary target. CI runs the full suite on Node 22 and 24. |
+| Bun | latest | Tested in CI via `bun test src/`. |
+| Deno | latest | Supported. |
+| Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
+| Cloudflare Workers | - | Supported. |
+| Vercel Edge | - | Supported. |
 
 Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22 is not supported (Node 20 reached EOL April 2026).
+
+The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 
 ## License
 

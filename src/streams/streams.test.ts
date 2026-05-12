@@ -1,4 +1,3 @@
-import { inspect } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
 import { EncryptionKey } from '../types/encryption.js'
 import { IncrementalSha1, sha1Hex } from './hash.js'
@@ -481,11 +480,27 @@ describe('EncryptionKey', () => {
     expect(str).toContain('[redacted')
   })
 
-  it('Node util.inspect (used by console.log) does not leak the key', async () => {
-    const key = await EncryptionKey.fromBytes(rawKey)
-    const inspected = inspect(key)
-    expect(inspected).not.toContain(key.customerKey)
-    expect(inspected).not.toContain(key.customerKeyMd5)
-    expect(inspected).toContain('[redacted')
+  // The `util.inspect` redaction assertion lives in
+  // `encryption-key.node.test.ts` because `node:util` has no browser analogue.
+
+  describe('MD5 computation against known vectors', () => {
+    // These cross-runtime assertions exercise whichever MD5 backend the
+    // current runtime selects (node:crypto in Node; the bundled pure-JS
+    // fallback in browsers / edge). The expected base64 values were
+    // computed with `openssl dgst -md5`.
+    it('produces the correct base64 MD5 of a 32-byte all-0x61 key', async () => {
+      const ek = await EncryptionKey.fromBytes(new Uint8Array(32).fill(0x61))
+      expect(ek.customerKeyMd5).toBe('Xsqb0+sHwAbNQ65I395/0w==')
+    })
+
+    it('produces the correct base64 MD5 of a 32-byte all-0x00 key', async () => {
+      const ek = await EncryptionKey.fromBytes(new Uint8Array(32))
+      expect(ek.customerKeyMd5).toBe('cLyPS3KoaSFGi/joRB3OUQ==')
+    })
+
+    it('produces the correct base64 MD5 of a 32-byte all-0xff key', async () => {
+      const ek = await EncryptionKey.fromBytes(new Uint8Array(32).fill(0xff))
+      expect(ek.customerKeyMd5).toBe('DX3EJmSXEA5IMfWzG2snTw==')
+    })
   })
 })

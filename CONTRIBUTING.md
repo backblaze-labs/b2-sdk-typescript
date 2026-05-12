@@ -25,13 +25,30 @@ pnpm test
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (target ≥ 95% statements) |
+| `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
 | `pnpm lint` | Check formatting + lint rules (Biome) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
 | `pnpm lint:docs` | Check JSDoc / TSDoc completeness with ESLint |
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
 | `pnpm docs` | Generate TypeDoc API documentation under `./docs` |
 
-CI also runs `bun test src/` against the same test suite. Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
+CI also runs `bun test src/` against the same test suite plus a per-engine browser matrix (Chromium / Firefox / WebKit). Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
+
+### Test file naming convention
+
+| Pattern | Where it runs |
+|---|---|
+| `**/*.test.ts` | Both Node (`pnpm test`) and Browser (`pnpm test:browser`) |
+| `**/*.node.test.ts` | Node only. Anything that imports `node:fs`, `node:os`, `node:util`, OS keychain, etc. |
+
+If a single test inside a shared file is Node-only (e.g. uses `node:util.inspect`), gate it with `it.skipIf(...)`:
+
+```ts
+const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
+it.skipIf(!isNode)('uses node:util.inspect', () => { ... })
+```
+
+One-time local browser setup: `pnpm exec playwright install chromium firefox webkit`. CI caches the binaries.
 
 ## Before submitting a PR
 

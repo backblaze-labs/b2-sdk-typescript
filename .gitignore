@@ -12,3 +12,7 @@ coverage/
 *.tgz
 .turbo/
 tmp/
+# Vitest browser-mode auto-captures a screenshot per failing test under
+# `__screenshots__/` next to the test file. They are useful when debugging a
+# CI failure (vitest prints the path), but should never be committed.
+**/__screenshots__/

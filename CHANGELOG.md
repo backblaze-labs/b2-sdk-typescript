@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — isomorphic test coverage
+
+- **Vitest browser-mode test suite** under `pnpm test:browser`. The full test surface (minus `*.node.test.ts` files) runs in real Chromium, Firefox, and WebKit via Playwright. CI parallelizes per engine via `VITEST_BROWSER_INSTANCE`.
+- **Isomorphic `B2Simulator`**: `handleRequest` is now `async` and the `b2_copy_part` handler uses the SDK's own `sha1Hex` (Node `node:crypto` lazy-loaded, WebCrypto fallback in browsers). Drops the previous `node:crypto.createHash` top-level import.
+- **Pure-JS MD5 fallback** in `EncryptionKey.fromBytes`. When `node:crypto.createHash` isn't available, the SDK computes MD5 in pure JS so SSE-C key construction stays cross-runtime. Verified against three RFC 1321 vectors in both Node and browsers.
+- **Lazy `node:fs/promises` and `node:path` imports** inside `src/sync/synchronizer.ts` action closures. The synchronizer module itself loads in browsers (B2-to-B2 sync works in a browser); only local-disk actions throw when invoked outside Node.
+- **Test file naming convention**: `*.node.test.ts` is skipped in browser mode. Renamed `src/auth/file.test.ts` → `file.node.test.ts`, `src/sync/scanners/scanners.test.ts` → `scanners.node.test.ts`. Added `src/streams/encryption-key.node.test.ts` for the `util.inspect` redaction assertion.
+
 ### Added — robustness
 
 - **Resume support for multipart uploads.** Pass `resume: true` (or an explicit `resumeFileId`) to `uploadLargeFile` or `Bucket.upload`. The engine queries `listUnfinishedLargeFiles` + `listParts` and skips parts whose locally-recomputed SHA-1 matches the server's. New `src/upload/resume.ts` with `findResumeCandidate` and `collectPartSha1s` helpers.

@@ -10,9 +10,10 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 
 ```bash
 pnpm build           # Vite library mode: ESM + CJS + DTS for all 9 subpath exports
-pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator
+pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator (Node)
 pnpm test:watch      # Vitest in watch mode
 pnpm test:coverage   # Vitest with v8 coverage (target: ≥ 95% statements)
+pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
 pnpm lint            # Biome: lint + format check
 pnpm lint:fix        # Biome: auto-fix
 pnpm lint:docs       # ESLint JSDoc/TSDoc strict checks
@@ -21,7 +22,16 @@ pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs
 ```
 
-CI runs all of these plus `bun test src/` (Bun's vitest-compat) on every push.
+CI runs all of these plus `bun test src/` (Bun's vitest-compat) and a per-engine `test:browser` matrix on every push.
+
+## Test file naming convention
+
+| Pattern | Where it runs |
+|---|---|
+| `**/*.test.ts` | Both Node (`pnpm test`) and Browser (`pnpm test:browser`) |
+| `**/*.node.test.ts` | Node only. Use for tests that touch `node:fs`, `node:os`, `node:util`, OS keychain, or anything else without a browser analogue |
+
+Browser tests run in real Chromium, Firefox, and WebKit via Playwright. Set `VITEST_BROWSER_INSTANCE=chromium|firefox|webkit` to restrict a local run to a single engine (CI matrix shards this way). One-time setup after `pnpm install`: `pnpm exec playwright install chromium firefox webkit`.
 
 ## Architecture
 
@@ -77,6 +87,8 @@ src/
 - **SSE-C key safety.** `EncryptionKey.fromBytes(rawKey)` computes MD5 internally and **redacts itself** in `toJSON()`, `toString()`, and Node's `util.inspect` custom symbol so the key never lands in logs.
 - **Simulator monotonic timestamps.** The simulator generates strictly-increasing `uploadTimestamp` values so version ordering is deterministic in tests (Date.now() ties broke version selection).
 - **No module-level test mocking.** Tests use dependency injection instead of `vi.mock` factories with `importOriginal` / `importActual`, which behave differently across vitest and Bun.
+- **Isomorphic simulator.** `B2Simulator.handleRequest` is `async` so the `b2_copy_part` handler can use the SDK's own `sha1Hex` (Node `node:crypto` lazy-loaded, WebCrypto fallback in browsers). This is why the entire test suite runs in browsers too.
+- **Sync engine fs imports are lazy.** `src/sync/synchronizer.ts` imports `node:fs/promises` and `node:path` via `await import(...)` *inside* the action closures, not at the module top level. Means the synchronizer loads in browsers (B2-to-B2 sync works in a browser); only the local-disk actions throw when invoked in a non-Node runtime.
 
 ## TypeScript strictness
 

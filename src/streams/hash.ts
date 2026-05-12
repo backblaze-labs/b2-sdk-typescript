@@ -16,6 +16,10 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
   try {
     // @ts-ignore -- node:crypto may not exist in browser/edge runtimes
     const crypto = await import('node:crypto')
+    // Vite's browser shim resolves the import but does not implement
+    // `createHash`. Probe explicitly so we fall through to the WebCrypto
+    // path instead of returning a broken factory.
+    if (typeof crypto.createHash !== 'function') throw new Error('createHash unavailable')
     nodeCreateHash = (algo: string) => {
       const h = crypto.createHash(algo)
       return {
