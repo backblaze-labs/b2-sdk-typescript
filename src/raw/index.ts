@@ -80,14 +80,24 @@ export class RawClient {
   /** @internal */
   private readonly transport: HttpTransport
 
-  /** Creates a new RawClient with the given transport. */
+  /**
+   * Creates a new RawClient with the given transport.
+   * @param options - The constructor configuration.
+   */
   constructor(options: RawClientOptions) {
     this.transport = options.transport
   }
 
   // --- Auth ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-authorize-account | b2_authorize_account}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-authorize-account | b2_authorize_account}.
+   * @param applicationKeyId - The application key ID for authentication.
+   * @param applicationKey - The application key secret.
+   * @param realmUrl - The B2 realm URL to authenticate against.
+   *
+   * @returns The authorization response with API URLs and credentials.
+   */
   async authorizeAccount(
     applicationKeyId: string,
     applicationKey: string,
@@ -105,7 +115,14 @@ export class RawClient {
 
   // --- Buckets ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-create-bucket | b2_create_bucket}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-create-bucket | b2_create_bucket}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The created bucket metadata.
+   */
   async createBucket(
     apiUrl: string,
     authToken: string,
@@ -114,7 +131,14 @@ export class RawClient {
     return this.postJson<BucketInfo>(apiUrl, authToken, 'b2_create_bucket', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-delete-bucket | b2_delete_bucket}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-delete-bucket | b2_delete_bucket}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The deleted bucket metadata.
+   */
   async deleteBucket(
     apiUrl: string,
     authToken: string,
@@ -123,7 +147,14 @@ export class RawClient {
     return this.postJson<BucketInfo>(apiUrl, authToken, 'b2_delete_bucket', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-buckets | b2_list_buckets}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-buckets | b2_list_buckets}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of matching buckets.
+   */
   async listBuckets(
     apiUrl: string,
     authToken: string,
@@ -132,7 +163,14 @@ export class RawClient {
     return this.postJson<ListBucketsResponse>(apiUrl, authToken, 'b2_list_buckets', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-update-bucket | b2_update_bucket}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-update-bucket | b2_update_bucket}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The updated bucket metadata.
+   */
   async updateBucket(
     apiUrl: string,
     authToken: string,
@@ -143,7 +181,14 @@ export class RawClient {
 
   // --- Files ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The upload URL and authorization token.
+   */
   async getUploadUrl(
     apiUrl: string,
     authToken: string,
@@ -157,6 +202,12 @@ export class RawClient {
    *
    * Unlike most methods, this posts directly to the `uploadUrl` obtained
    * from {@link getUploadUrl} rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param signal - An optional abort signal for cancellation.
+   *
+   * @returns The uploaded file version metadata.
    */
   async uploadFile(
     uploadUrl: string,
@@ -206,7 +257,14 @@ export class RawClient {
     return response.json<FileVersion>()
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-file-names | b2_list_file_names}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-file-names | b2_list_file_names}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of file names and optional continuation token.
+   */
   async listFileNames(
     apiUrl: string,
     authToken: string,
@@ -215,7 +273,14 @@ export class RawClient {
     return this.postJson<ListFileNamesResponse>(apiUrl, authToken, 'b2_list_file_names', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-file-versions | b2_list_file_versions}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-file-versions | b2_list_file_versions}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of file versions and optional continuation token.
+   */
   async listFileVersions(
     apiUrl: string,
     authToken: string,
@@ -229,7 +294,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-get-file-info | b2_get_file_info}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-file-info | b2_get_file_info}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The file version metadata.
+   */
   async getFileInfo(
     apiUrl: string,
     authToken: string,
@@ -238,7 +310,14 @@ export class RawClient {
     return this.postJson<FileVersion>(apiUrl, authToken, 'b2_get_file_info', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-hide-file | b2_hide_file}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-hide-file | b2_hide_file}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The hidden file version metadata.
+   */
   async hideFile(
     apiUrl: string,
     authToken: string,
@@ -247,7 +326,14 @@ export class RawClient {
     return this.postJson<FileVersion>(apiUrl, authToken, 'b2_hide_file', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-delete-file-version | b2_delete_file_version}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-delete-file-version | b2_delete_file_version}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The deleted file version identifier.
+   */
   async deleteFileVersion(
     apiUrl: string,
     authToken: string,
@@ -261,7 +347,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-copy-file | b2_copy_file}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-copy-file | b2_copy_file}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The copied file version metadata.
+   */
   async copyFile(
     apiUrl: string,
     authToken: string,
@@ -270,7 +363,14 @@ export class RawClient {
     return this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-copy-part | b2_copy_part}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-copy-part | b2_copy_part}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The copied part metadata.
+   */
   async copyPart(
     apiUrl: string,
     authToken: string,
@@ -281,7 +381,14 @@ export class RawClient {
 
   // --- Large Files ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-start-large-file | b2_start_large_file}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-start-large-file | b2_start_large_file}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The started large file metadata with file ID.
+   */
   async startLargeFile(
     apiUrl: string,
     authToken: string,
@@ -290,7 +397,14 @@ export class RawClient {
     return this.postJson<StartLargeFileResponse>(apiUrl, authToken, 'b2_start_large_file', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The upload part URL and authorization token.
+   */
   async getUploadPartUrl(
     apiUrl: string,
     authToken: string,
@@ -309,6 +423,12 @@ export class RawClient {
    *
    * Posts directly to the `uploadUrl` obtained from {@link getUploadPartUrl}
    * rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param signal - An optional abort signal for cancellation.
+   *
+   * @returns The uploaded part metadata.
    */
   async uploadPart(
     uploadUrl: string,
@@ -335,7 +455,14 @@ export class RawClient {
     return response.json<UploadPartResponse>()
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-finish-large-file | b2_finish_large_file}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-finish-large-file | b2_finish_large_file}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The completed file version metadata.
+   */
   async finishLargeFile(
     apiUrl: string,
     authToken: string,
@@ -344,7 +471,14 @@ export class RawClient {
     return this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-cancel-large-file | b2_cancel_large_file}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-cancel-large-file | b2_cancel_large_file}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The cancelled large file metadata.
+   */
   async cancelLargeFile(
     apiUrl: string,
     authToken: string,
@@ -358,7 +492,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-unfinished-large-files | b2_list_unfinished_large_files}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-unfinished-large-files | b2_list_unfinished_large_files}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of unfinished large files and optional continuation token.
+   */
   async listUnfinishedLargeFiles(
     apiUrl: string,
     authToken: string,
@@ -372,7 +513,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-parts | b2_list_parts}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-parts | b2_list_parts}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of uploaded parts and optional continuation token.
+   */
   async listParts(
     apiUrl: string,
     authToken: string,
@@ -383,7 +531,15 @@ export class RawClient {
 
   // --- Downloads ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-download-file-by-id | b2_download_file_by_id}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-download-file-by-id | b2_download_file_by_id}.
+   * @param downloadUrl - The B2 download base URL.
+   * @param authToken - The authorization token.
+   * @param fileId - The unique identifier of the file to download.
+   * @param options - Optional download parameters for range requests and cancellation.
+   *
+   * @returns The response headers, streaming body, and HTTP status code.
+   */
   async downloadFileById(
     downloadUrl: string,
     authToken: string,
@@ -417,7 +573,16 @@ export class RawClient {
     return { headers: response.headers, body: response.body, status: response.status }
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-download-file-by-name | b2_download_file_by_name}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-download-file-by-name | b2_download_file_by_name}.
+   * @param downloadUrl - The B2 download base URL.
+   * @param authToken - The authorization token.
+   * @param bucketName - The name of the bucket containing the file.
+   * @param fileName - The name of the file to download.
+   * @param options - Optional download parameters for range requests and cancellation.
+   *
+   * @returns The response headers, streaming body, and HTTP status code.
+   */
   async downloadFileByName(
     downloadUrl: string,
     authToken: string,
@@ -452,7 +617,14 @@ export class RawClient {
     return { headers: response.headers, body: response.body, status: response.status }
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-get-download-authorization | b2_get_download_authorization}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-download-authorization | b2_get_download_authorization}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The current session authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The download authorization token for the specified file prefix.
+   */
   async getDownloadAuthorization(
     apiUrl: string,
     authToken: string,
@@ -468,7 +640,14 @@ export class RawClient {
 
   // --- Keys ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-create-key | b2_create_key}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-create-key | b2_create_key}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The newly created application key with secret.
+   */
   async createKey(
     apiUrl: string,
     authToken: string,
@@ -477,7 +656,14 @@ export class RawClient {
     return this.postJson<FullApplicationKey>(apiUrl, authToken, 'b2_create_key', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-list-keys | b2_list_keys}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-keys | b2_list_keys}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The list of application keys and optional continuation token.
+   */
   async listKeys(
     apiUrl: string,
     authToken: string,
@@ -486,7 +672,14 @@ export class RawClient {
     return this.postJson<ListKeysResponse>(apiUrl, authToken, 'b2_list_keys', request)
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-delete-key | b2_delete_key}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-delete-key | b2_delete_key}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The deleted application key metadata.
+   */
   async deleteKey(
     apiUrl: string,
     authToken: string,
@@ -497,7 +690,14 @@ export class RawClient {
 
   // --- Retention / Legal Hold ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-update-file-retention | b2_update_file_retention}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-update-file-retention | b2_update_file_retention}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The updated file retention settings.
+   */
   async updateFileRetention(
     apiUrl: string,
     authToken: string,
@@ -511,7 +711,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-update-file-legal-hold | b2_update_file_legal_hold}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-update-file-legal-hold | b2_update_file_legal_hold}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The updated file legal hold status.
+   */
   async updateFileLegalHold(
     apiUrl: string,
     authToken: string,
@@ -527,7 +734,14 @@ export class RawClient {
 
   // --- Notifications ---
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules | b2_get_bucket_notification_rules}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules | b2_get_bucket_notification_rules}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The configured event notification rules for the specified bucket.
+   */
   async getBucketNotificationRules(
     apiUrl: string,
     authToken: string,
@@ -541,7 +755,14 @@ export class RawClient {
     )
   }
 
-  /** Calls {@link https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules | b2_set_bucket_notification_rules}. */
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules | b2_set_bucket_notification_rules}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   *
+   * @returns The updated bucket notification rules.
+   */
   async setBucketNotificationRules(
     apiUrl: string,
     authToken: string,
@@ -557,6 +778,15 @@ export class RawClient {
 
   // --- Internal ---
 
+  /**
+   * Sends a JSON POST request to the specified B2 API endpoint.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param endpoint - The B2 API endpoint name.
+   * @param body - The JSON request body.
+   *
+   * @returns The parsed JSON response.
+   */
   private async postJson<T>(
     apiUrl: string,
     authToken: string,
@@ -581,6 +811,11 @@ export class RawClient {
 import type { EncryptionSetting } from '../types/encryption.js'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.js'
 
+/**
+ * Applies server-side encryption headers to the request.
+ * @param headers - The mutable headers object to populate.
+ * @param encryption - The encryption settings, or undefined to skip.
+ */
 function applyEncryptionHeaders(
   headers: Record<string, string>,
   encryption: EncryptionSetting | undefined,
@@ -595,6 +830,11 @@ function applyEncryptionHeaders(
   }
 }
 
+/**
+ * Applies file retention headers to the request.
+ * @param headers - The mutable headers object to populate.
+ * @param retention - The retention settings, or undefined to skip.
+ */
 function applyRetentionHeaders(
   headers: Record<string, string>,
   retention: FileRetentionValue | undefined,
@@ -608,6 +848,11 @@ function applyRetentionHeaders(
   }
 }
 
+/**
+ * Applies the legal hold header to the request.
+ * @param headers - The mutable headers object to populate.
+ * @param legalHold - The legal hold value, or undefined to skip.
+ */
 function applyLegalHoldHeader(
   headers: Record<string, string>,
   legalHold: LegalHoldValue | undefined,

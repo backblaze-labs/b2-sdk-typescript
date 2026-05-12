@@ -165,7 +165,13 @@ export async function uploadLargeFile(
   }
 }
 
-/** Splits a total byte range into sequential, non-overlapping parts. */
+/**
+ * Splits a total byte range into sequential, non-overlapping parts.
+ * @param totalSize - The total file size in bytes.
+ * @param partSize - The size of each part in bytes.
+ *
+ * @returns An array of byte offset ranges for each part.
+ */
 function planParts(totalSize: number, partSize: number): PartPlan[] {
   const parts: PartPlan[] = []
   let offset = 0

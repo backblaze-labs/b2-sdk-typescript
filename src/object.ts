@@ -31,7 +31,13 @@ export class B2Object {
   private readonly client: B2Client
   private readonly bucket: Bucket
 
-  /** @internal */
+  /**
+   * @param client - The parent B2Client instance.
+   * @param bucket - The parent Bucket this object belongs to.
+   * @param fileName - The file path within the bucket.
+   *
+   * @internal
+   */
   constructor(client: B2Client, bucket: Bucket, fileName: string) {
     this.client = client
     this.bucket = bucket
@@ -105,6 +111,8 @@ export class B2Object {
    * Downloads a specific version of this file by ID.
    * @param fileId - The file version ID to download.
    * @param options - Optional range and abort signal.
+   *
+   * @returns The download result with response headers and body stream.
    */
   async downloadById(
     fileId: FileId,
@@ -151,6 +159,8 @@ export class B2Object {
   /**
    * Retrieves metadata for a specific file version.
    * @param fileId - The file version ID to look up.
+   *
+   * @returns The file version metadata.
    */
   async getFileInfo(fileId: FileId): Promise<FileVersion> {
     return this.client.raw.getFileInfo(
@@ -160,12 +170,19 @@ export class B2Object {
     )
   }
 
-  /** Hides this file by creating a hide marker at this file name. */
+  /**
+   * Hides this file by creating a hide marker at this file name.
+   *
+   * @returns Metadata for the newly created hide marker.
+   */
   async hide(): Promise<FileVersion> {
     return this.bucket.hideFile(this.fileName)
   }
 
-  /** Permanently deletes a specific version of this file. */
+  /**
+   * Permanently deletes a specific version of this file.
+   * @param fileId - The unique identifier of the file version to delete.
+   */
   async deleteVersion(fileId: FileId): Promise<void> {
     await this.bucket.deleteFileVersion(this.fileName, fileId)
   }

@@ -61,7 +61,10 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
 
-  /** Creates a new B2Client. Call {@link authorize} before making API requests. */
+  /**
+   * Creates a new B2Client. Call {@link authorize} before making API requests.
+   * @param options - Configuration including credentials, realm, and transport settings.
+   */
   constructor(options: B2ClientOptions) {
     this.applicationKeyId = options.applicationKeyId
     this.applicationKey = options.applicationKey
@@ -83,7 +86,11 @@ export class B2Client {
     this.raw = new RawClient({ transport: retryTransport })
   }
 
-  /** Authenticates with B2 and stores the authorization state. Must be called before other methods. */
+  /**
+   * Authenticates with B2 and stores the authorization state. Must be called before other methods.
+   *
+   * @returns The authorization response containing tokens, URLs, and capabilities.
+   */
   async authorize(): Promise<AuthorizeAccountResponse> {
     const auth = await this.raw.authorizeAccount(
       this.applicationKeyId,
@@ -139,6 +146,8 @@ export class B2Client {
 
   /**
    * Lists buckets in the account, optionally filtered by ID, name, or type.
+   * @param options - Optional filters for bucket ID, name, or type.
+   *
    * @returns An array of {@link Bucket} handles.
    */
   async listBuckets(options?: {
@@ -162,6 +171,8 @@ export class B2Client {
 
   /**
    * Looks up a single bucket by name.
+   * @param bucketName - The name of the bucket to find.
+   *
    * @returns The {@link Bucket} handle, or `null` if not found.
    */
   async getBucket(bucketName: string): Promise<Bucket | null> {
@@ -169,7 +180,12 @@ export class B2Client {
     return buckets[0] ?? null
   }
 
-  /** Permanently deletes a bucket. The bucket must be empty. */
+  /**
+   * Permanently deletes a bucket. The bucket must be empty.
+   * @param id - The unique identifier of the bucket to delete.
+   *
+   * @returns The deleted bucket metadata.
+   */
   async deleteBucket(id: BucketId): Promise<BucketInfo> {
     return this.raw.deleteBucket(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
       accountId: accountId(this.accountInfo.getAccountId()),
@@ -179,6 +195,8 @@ export class B2Client {
 
   /**
    * Creates a new application key with the specified capabilities.
+   * @param options - Key configuration including capabilities, name, and optional restrictions.
+   *
    * @returns The full key including the secret (only returned at creation time).
    */
   async createKey(options: {
@@ -199,7 +217,12 @@ export class B2Client {
     })
   }
 
-  /** Lists application keys in the account. */
+  /**
+   * Lists application keys in the account.
+   * @param options - Optional pagination settings.
+   *
+   * @returns A page of application keys with an optional continuation token.
+   */
   async listKeys(options?: {
     /** Maximum number of keys to return per request. */
     maxKeyCount?: number
@@ -212,7 +235,12 @@ export class B2Client {
     })
   }
 
-  /** Permanently deletes an application key. */
+  /**
+   * Permanently deletes an application key.
+   * @param applicationKeyId - The unique identifier of the key to delete.
+   *
+   * @returns The deleted application key metadata.
+   */
   async deleteKey(applicationKeyId: ApplicationKeyId): Promise<ApplicationKey> {
     return this.raw.deleteKey(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
       applicationKeyId,

@@ -38,7 +38,10 @@ export class ProgressTracker {
     this.startTime = Date.now()
   }
 
-  /** Record that additional bytes have been transferred and notify the listener. */
+  /**
+   * Record that additional bytes have been transferred and notify the listener.
+   * @param count - The number of additional bytes that were transferred.
+   */
   addBytes(count: number): void {
     this.bytesTransferred += count
     this.emit()

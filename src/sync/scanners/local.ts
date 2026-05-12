@@ -29,7 +29,11 @@ export class LocalFolder implements SyncFolder {
     }
   }
 
-  /** Recursively collects files from {@link dir} into {@link out}. */
+  /**
+   * Recursively collects files from {@link dir} into {@link out}.
+   * @param dir - Absolute path of the directory to scan.
+   * @param out - Accumulator array that receives discovered file entries.
+   */
   private async walk(dir: string, out: LocalSyncPath[]): Promise<void> {
     let entries: import('node:fs').Dirent[]
     try {

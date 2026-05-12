@@ -59,7 +59,12 @@ export class FetchTransport implements HttpTransport {
     this.userAgent = getUserAgent(options?.userAgent)
   }
 
-  /** Sends the request using the global `fetch` function. */
+  /**
+   * Sends the request using the global `fetch` function.
+   * @param request - The HTTP request to execute.
+   *
+   * @returns The HTTP response.
+   */
   async send(request: HttpRequest): Promise<HttpResponse> {
     const headers = new Headers(request.headers)
     if (!headers.has('User-Agent')) {
@@ -120,6 +125,9 @@ export class RetryTransport implements HttpTransport {
   /**
    * Sends the request with automatic retry on transient failures.
    * On expired auth tokens, calls {@link RetryTransportOptions.onReauth} and retries.
+   * @param request - The HTTP request to execute.
+   *
+   * @returns The HTTP response.
    */
   async send(request: HttpRequest): Promise<HttpResponse> {
     let lastError: B2Error | NetworkError | undefined

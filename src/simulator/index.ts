@@ -92,13 +92,21 @@ export class B2Simulator {
   private readonly keys = new Map<string, StoredKey>()
   private readonly notificationRules = new Map<string, EventNotificationRule[]>()
 
-  /** Creates an {@link HttpTransport} that routes requests to this simulator. */
+  /**
+   * Creates an {@link HttpTransport} that routes requests to this simulator.
+   * @returns A transport instance backed by this in-memory simulator.
+   */
   transport(): HttpTransport {
     return new SimulatorTransport(this)
   }
 
   /**
    * Dispatches a JSON API request to the appropriate handler.
+   * @param _method - The HTTP method (unused).
+   * @param path - The request URL path containing the B2 endpoint name.
+   * @param _headers - The HTTP request headers (unused).
+   * @param body - The parsed JSON request body.
+   *
    * @returns An object with HTTP status and JSON response body.
    */
   handleRequest(
@@ -207,6 +215,11 @@ export class B2Simulator {
   /**
    * Handles file and part upload requests (`b2_upload_file`, `b2_upload_part`).
    * Dispatches to the appropriate internal handler based on the URL.
+   * @param url - The upload endpoint URL used to determine the upload type.
+   * @param headers - The HTTP headers containing file metadata and authorization.
+   * @param data - The raw file or part content as bytes.
+   *
+   * @returns An object with HTTP status and JSON response body.
    */
   handleUpload(
     url: string,
@@ -222,6 +235,10 @@ export class B2Simulator {
   /**
    * Handles file download requests (`b2_download_file_by_id`, `/file/` by name).
    * Returns the file data along with B2 response headers.
+   * @param path - The request URL path identifying the file to download.
+   * @param headers - The HTTP request headers for range or authorization.
+   *
+   * @returns The download response containing file data and B2 headers.
    */
   handleDownload(path: string, headers: Record<string, string>): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {

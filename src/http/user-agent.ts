@@ -1,6 +1,10 @@
 import { VERSION } from '../version.js'
 
-/** Detects the current JavaScript runtime (Node, Deno, Bun, or browser). */
+/**
+ * Detects the current JavaScript runtime (Node, Deno, Bun, or browser).
+ *
+ * @returns A string identifier for the active runtime environment.
+ */
 function detectRuntime(): string {
   const g = globalThis as Record<string, unknown>
   if (typeof g['Deno'] !== 'undefined') return 'deno'
@@ -19,7 +23,7 @@ function detectRuntime(): string {
  *
  * @param custom - Optional prefix prepended to the default User-Agent.
  *
- * @returns The assembled User-Agent string.
+ * @returns The formatted User-Agent header string.
  */
 export function getUserAgent(custom?: string): string {
   const base = `b2-sdk-ts/${VERSION} (${detectRuntime()})`

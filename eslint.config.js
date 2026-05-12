@@ -57,8 +57,6 @@ export default tseslint.config({
     ],
 
     // ── @param validation ─────────────────────────────────────────
-    // Validate that @param names match actual parameters. Do not require
-    // @param for every destructured property (types are on the interface).
     'jsdoc/check-param-names': [
       'error',
       {
@@ -66,11 +64,23 @@ export default tseslint.config({
         useDefaultObjectProperties: false,
       },
     ],
+    'jsdoc/require-param': [
+      'error',
+      {
+        checkDestructured: false,
+        unnamedRootBase: ['options'],
+      },
+    ],
     'jsdoc/require-param-description': 'error',
+    'jsdoc/require-hyphen-before-param-description': ['error', 'always'],
 
     // ── @returns validation ───────────────────────────────────────
+    'jsdoc/require-returns': 'error',
     'jsdoc/require-returns-description': 'error',
     'jsdoc/require-returns-check': 'error',
+
+    // ── @throws validation ───────────────────────────────────────
+    'jsdoc/require-throws': 'error',
 
     // ── Tag validation ────────────────────────────────────────────
     'jsdoc/check-tag-names': [
@@ -92,13 +102,20 @@ export default tseslint.config({
         checkSetters: false,
       },
     ],
+    'jsdoc/require-description-complete-sentence': [
+      'error',
+      {
+        abbreviations: ['e.g.', 'i.e.', 'etc.', 'vs.'],
+      },
+    ],
+    'jsdoc/informative-docs': 'error',
 
     // ── Formatting / hygiene ──────────────────────────────────────
     'jsdoc/no-bad-blocks': 'error',
+    'jsdoc/no-blank-blocks': 'error',
     'jsdoc/multiline-blocks': 'error',
     'jsdoc/empty-tags': 'error',
 
-    // No {@link} or {@see} pointing to nonexistent symbols
     'jsdoc/check-line-alignment': 'off',
 
     // Tags must be in a consistent order

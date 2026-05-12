@@ -49,7 +49,12 @@ export class Bucket {
   readonly info: BucketInfo
   private readonly client: B2Client
 
-  /** @internal */
+  /**
+   * @param client - The parent B2Client instance.
+   * @param info - The bucket metadata from the API.
+   *
+   * @internal
+   */
   constructor(client: B2Client, info: BucketInfo) {
     this.client = client
     this.info = info
@@ -57,7 +62,12 @@ export class Bucket {
     this.name = info.bucketName
   }
 
-  /** Returns a {@link B2Object} handle for a specific file name in this bucket. */
+  /**
+   * Returns a {@link B2Object} handle for a specific file name in this bucket.
+   * @param fileName - The file path within the bucket.
+   *
+   * @returns A B2Object handle bound to this bucket and file name.
+   */
   file(fileName: string): B2Object {
     return new B2Object(this.client, this, fileName)
   }
@@ -136,6 +146,8 @@ export class Bucket {
 
   /**
    * Lists file names in this bucket (most recent versions only).
+   * @param options - Optional filtering and pagination settings.
+   *
    * @returns A page of file versions with an optional continuation token.
    */
   async listFileNames(options?: {
@@ -163,6 +175,8 @@ export class Bucket {
 
   /**
    * Lists all file versions in this bucket, including hidden files.
+   * @param options - Optional filtering and pagination settings.
+   *
    * @returns A page of file versions with an optional continuation token.
    */
   async listFileVersions(options?: {
@@ -214,7 +228,12 @@ export class Bucket {
     }
   }
 
-  /** Hides a file by creating a hide marker. The file remains in version history but is no longer visible in `listFileNames`. */
+  /**
+   * Hides a file by creating a hide marker. The file remains in version history but is no longer visible in `listFileNames`.
+   * @param fileName - The file path to hide.
+   *
+   * @returns Metadata for the newly created hide marker.
+   */
   async hideFile(fileName: string): Promise<FileVersion> {
     return this.client.raw.hideFile(
       this.client.accountInfo.getApiUrl(),
@@ -223,7 +242,11 @@ export class Bucket {
     )
   }
 
-  /** Permanently deletes a specific file version. Both file name and file ID are required. */
+  /**
+   * Permanently deletes a specific file version. Both file name and file ID are required.
+   * @param fileName - The file path of the version to delete.
+   * @param fileId - The unique identifier of the file version to delete.
+   */
   async deleteFileVersion(fileName: string, fileId: FileId): Promise<void> {
     await this.client.raw.deleteFileVersion(
       this.client.accountInfo.getApiUrl(),
@@ -296,7 +319,11 @@ export class Bucket {
     )
   }
 
-  /** Permanently deletes this bucket. The bucket must be empty (no file versions). */
+  /**
+   * Permanently deletes this bucket. The bucket must be empty (no file versions).
+   *
+   * @returns The deleted bucket metadata.
+   */
   async delete(): Promise<BucketInfo> {
     return this.client.deleteBucket(this.id)
   }
@@ -305,6 +332,8 @@ export class Bucket {
    * Gets a download authorization token scoped to a file name prefix in this bucket.
    * @param fileNamePrefix - Only authorize downloads of files starting with this prefix.
    * @param validDurationInSeconds - How long the authorization is valid (1-604800 seconds).
+   *
+   * @returns The download authorization response containing a time-limited token.
    */
   async getDownloadAuthorization(
     fileNamePrefix: string,
@@ -317,7 +346,11 @@ export class Bucket {
     )
   }
 
-  /** Gets the event notification rules configured for this bucket. */
+  /**
+   * Gets the event notification rules configured for this bucket.
+   *
+   * @returns The current notification rules for this bucket.
+   */
   async getNotificationRules(): Promise<GetBucketNotificationRulesResponse> {
     return this.client.raw.getBucketNotificationRules(
       this.client.accountInfo.getApiUrl(),
@@ -326,7 +359,12 @@ export class Bucket {
     )
   }
 
-  /** Replaces the event notification rules for this bucket. */
+  /**
+   * Replaces the event notification rules for this bucket.
+   * @param rules - The new set of notification rules to apply.
+   *
+   * @returns The updated notification rules for this bucket.
+   */
   async setNotificationRules(
     rules: EventNotificationRule[],
   ): Promise<GetBucketNotificationRulesResponse> {
@@ -337,7 +375,14 @@ export class Bucket {
     )
   }
 
-  /** Updates the file retention policy for a specific file version. Requires file lock on the bucket. */
+  /**
+   * Updates the file retention policy for a specific file version. Requires file lock on the bucket.
+   * @param fileName - The file path of the version to update.
+   * @param fileId - The unique identifier of the file version.
+   * @param retention - The new retention policy to apply.
+   *
+   * @returns The updated file retention metadata.
+   */
   async updateFileRetention(fileName: string, fileId: FileId, retention: FileRetentionValue) {
     return this.client.raw.updateFileRetention(
       this.client.accountInfo.getApiUrl(),
@@ -346,7 +391,14 @@ export class Bucket {
     )
   }
 
-  /** Updates the legal hold status for a specific file version. Requires file lock on the bucket. */
+  /**
+   * Updates the legal hold status for a specific file version. Requires file lock on the bucket.
+   * @param fileName - The file path of the version to update.
+   * @param fileId - The unique identifier of the file version.
+   * @param legalHold - The new legal hold status to apply.
+   *
+   * @returns The updated legal hold metadata.
+   */
   async updateFileLegalHold(fileName: string, fileId: FileId, legalHold: LegalHoldValue) {
     return this.client.raw.updateFileLegalHold(
       this.client.accountInfo.getApiUrl(),

@@ -43,7 +43,12 @@ export class UploadAction implements SyncAction {
     private readonly doUpload: (absolutePath: string, relativePath: string) => Promise<void>,
   ) {}
 
-  /** Uploads the file (unless dryRun) and returns an 'upload-done' event. */
+  /**
+   * Uploads the file (unless dryRun) and returns an 'upload-done' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doUpload(this.absolutePath, this.relativePath)
@@ -68,7 +73,12 @@ export class DownloadAction implements SyncAction {
     private readonly doDownload: (relativePath: string) => Promise<void>,
   ) {}
 
-  /** Downloads the file (unless dryRun) and returns a 'download-done' event. */
+  /**
+   * Downloads the file (unless dryRun) and returns a 'download-done' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doDownload(this.relativePath)
@@ -93,7 +103,12 @@ export class CopyAction implements SyncAction {
     private readonly doCopy: (relativePath: string) => Promise<void>,
   ) {}
 
-  /** Copies the file (unless dryRun) and returns a 'copy-done' event. */
+  /**
+   * Copies the file (unless dryRun) and returns a 'copy-done' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doCopy(this.relativePath)
@@ -117,7 +132,12 @@ export class HideAction implements SyncAction {
     private readonly doHide: (relativePath: string) => Promise<void>,
   ) {}
 
-  /** Hides the file (unless dryRun) and returns a 'hide' event. */
+  /**
+   * Hides the file (unless dryRun) and returns a 'hide' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doHide(this.relativePath)
@@ -143,7 +163,12 @@ export class DeleteRemoteAction implements SyncAction {
     private readonly doDelete: (fileId: string, fileName: string) => Promise<void>,
   ) {}
 
-  /** Deletes the remote file version (unless dryRun) and returns a 'delete-remote' event. */
+  /**
+   * Deletes the remote file version (unless dryRun) and returns a 'delete-remote' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doDelete(this.fileId, this.relativePath)
@@ -169,7 +194,12 @@ export class DeleteLocalAction implements SyncAction {
     private readonly doDelete: (absolutePath: string) => Promise<void>,
   ) {}
 
-  /** Deletes the local file (unless dryRun) and returns a 'delete-local' event. */
+  /**
+   * Deletes the local file (unless dryRun) and returns a 'delete-local' event.
+   * @param dryRun - Whether to simulate the action without making changes.
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(dryRun: boolean): Promise<SyncEvent> {
     if (!dryRun) {
       await this.doDelete(this.absolutePath)
@@ -193,7 +223,12 @@ export class SkipAction implements SyncAction {
     readonly reason: string,
   ) {}
 
-  /** Returns a 'skip' event with the reason message. No I/O is performed. */
+  /**
+   * Returns a 'skip' event with the reason message. No I/O is performed.
+   * @param _dryRun - Whether to simulate the action (unused for no-op).
+   *
+   * @returns An async generator yielding sync progress events.
+   */
   async execute(_dryRun: boolean): Promise<SyncEvent> {
     return { type: 'skip', path: this.relativePath, size: 0, message: this.reason }
   }

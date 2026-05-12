@@ -32,7 +32,7 @@ export interface SynchronizerConfig {
   readonly source: SyncFolder
   /** The folder to write files to. */
   readonly dest: SyncFolder
-  /** Options controlling comparison, deletion policy, concurrency, etc. */
+  /** Options controlling comparison, deletion policy, and concurrency. */
   readonly options: SyncOptions
 }
 
@@ -72,7 +72,15 @@ export interface SynchronizerDownConfig extends SynchronizerConfig {
   readonly bucket: Bucket
 }
 
-/** Infers the sync direction from the source and destination folder types. */
+/**
+ * Infers the sync direction from the source and destination folder types.
+ * @param source - The folder to read files from.
+ * @param dest - The folder to write files to.
+ *
+ * @returns The resolved sync direction based on folder types.
+ *
+ * @throws When the source and destination folder types form an unsupported combination.
+ */
 function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
   if (source.type === 'local' && dest.type === 'b2') return 'local-to-b2'
   if (source.type === 'b2' && dest.type === 'local') return 'b2-to-local'
@@ -158,7 +166,12 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 }
 
-/** Builds an {@link ActionFactory} wired to the bucket and paths in the given config. */
+/**
+ * Creates a configured sync engine wired to the bucket and paths in the given config.
+ * @param config - The synchronizer configuration containing source, destination, and options.
+ *
+ * @returns An action factory bound to the provided configuration.
+ */
 function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>

@@ -24,7 +24,7 @@ export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
  * @param options - Retry configuration with delay bounds.
  * @param retryAfter - Server-provided retry delay in seconds, if any.
  *
- * @returns Delay in milliseconds before the next retry.
+ * @returns The delay in milliseconds before the next retry attempt.
  */
 export function computeBackoff(
   attempt: number,
@@ -45,6 +45,8 @@ export function computeBackoff(
  *
  * @param ms - Delay in milliseconds.
  * @param signal - Optional abort signal to cancel the sleep early.
+ *
+ * @returns A promise that resolves when the delay elapses or rejects if aborted.
  */
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

@@ -114,7 +114,12 @@ export function createParallelDownloadStream(
   })
 }
 
-/** Reads an entire readable stream into a single Uint8Array. */
+/**
+ * Reads an entire readable stream into a single Uint8Array.
+ * @param stream - The readable stream to consume.
+ *
+ * @returns The concatenated bytes from the stream.
+ */
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const reader = stream.getReader()
   const parts: Uint8Array[] = []

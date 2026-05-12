@@ -107,7 +107,12 @@ export async function downloadByName(
   }
 }
 
-/** Extracts B2-specific download headers into a structured object. */
+/**
+ * Extracts B2-specific download headers into a structured object.
+ * @param headers - The HTTP response headers from the download.
+ *
+ * @returns The parsed download metadata.
+ */
 function extractDownloadHeaders(headers: Headers): DownloadHeaders {
   const fileInfo = parseFileInfoHeaders(headers)
 

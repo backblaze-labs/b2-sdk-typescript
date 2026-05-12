@@ -13,7 +13,10 @@ export class Semaphore {
   /** @param limit - Maximum number of concurrent acquisitions. */
   constructor(private readonly limit: number) {}
 
-  /** Acquires a slot, waiting if the limit has been reached. */
+  /**
+   * Acquires a slot, waiting if the limit has been reached.
+   * @returns A promise that resolves when a slot is available.
+   */
   async acquire(): Promise<void> {
     if (this.current < this.limit) {
       this.current++
@@ -34,7 +37,11 @@ export class Semaphore {
     }
   }
 
-  /** Number of slots currently available. */
+  /**
+   * Number of slots currently available.
+   *
+   * @returns The count of free concurrency slots.
+   */
   get available(): number {
     return this.limit - this.current
   }
