@@ -49,46 +49,15 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    // Fast tier: every `*.test.ts` except the slow tier. Slow tests live in
+    // `*.slow.test.ts` files and run under `pnpm test:slow` against
+    // `vitest.slow.config.ts`. The split lets PRs get green/red feedback in
+    // under a minute without sacrificing coverage of the multipart paths.
+    //
+    // `pnpm test:coverage` uses `vitest.coverage.config.ts` which runs the
+    // union of both tiers under the slow-tier constraints — that's the only
+    // config that owns coverage instrumentation and threshold gates.
     include: ['src/**/*.test.ts'],
-    // The multipart upload/copy/stream tests round-trip 5-15 MB Uint8Array
-    // buffers per test. Vitest defaults to one worker per CPU core, and each
-    // worker is its own Node process with its own ~2 GB default heap.
-    // On a 4-core GitHub-hosted runner that's 4 workers × 2 GB = 8 GB of
-    // potential resident memory, which exceeds the 7 GB of a macOS runner
-    // (and pushes Linux/Windows runners uncomfortably close). Capping at
-    // 2 forks keeps total demand bounded; combined with the
-    // NODE_OPTIONS=--max-old-space-size=4096 in CI workflows, each fork has
-    // ample headroom for the largest tests in the suite.
-    pool: 'forks',
-    poolOptions: {
-      forks: {
-        maxForks: 2,
-      },
-    },
-    coverage: {
-      provider: 'v8',
-      include: ['src/**/*.ts'],
-      exclude: [
-        'src/**/*.test.ts',
-        'src/**/index.ts',
-        'src/types/**',
-        'src/version.ts',
-        'src/auth/account-info.ts',
-        'src/sync/types.ts',
-      ],
-      reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],
-      reportsDirectory: 'coverage',
-      // CI gate: drop below these and the coverage job fails. Adjust upward
-      // as coverage improves; never adjust downward to paper over a drop.
-      // Current real values: 98.31% stmts / 90.3% branches / 98.47% funcs.
-      // We pin a half-point below current so a single test edit doesn't
-      // accidentally trip the gate.
-      thresholds: {
-        statements: 97,
-        lines: 97,
-        functions: 97,
-        branches: 89,
-      },
-    },
+    exclude: ['src/**/*.slow.test.ts', 'node_modules/**', 'dist/**'],
   },
 })

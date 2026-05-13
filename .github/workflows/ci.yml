@@ -27,8 +27,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm run docs
 
-  test-node:
-    name: Test (${{ matrix.os }} / Node ${{ matrix.node-version }})
+  test-fast:
+    name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,11 +56,32 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Vitest's default per-worker heap (~2 GB) is too tight for our test
-      # surface, which round-trips multi-MB buffers through upload + copy +
-      # stream multipart tests across many parallel workers. macOS runners
-      # were the first to OOM. Bumping to 4 GB gives ~2x headroom.
+      # Fast tier: every `*.test.ts` except `*.slow.test.ts`. Wall clock is
+      # <2 s locally and <30 s on the slowest CI runner — this is the job
+      # that gates PR feedback. Heavy multipart tests live in `*.slow.test.ts`
+      # and run in the `test-slow` job below.
       - run: pnpm test
+
+  test-slow:
+    name: Test slow (multipart)
+    # Slow tier is CPU/wall-clock-bound, not OS-specific. Multipart tests
+    # exercise the simulator's SHA-1 path which behaves identically across
+    # Linux/macOS/Windows. Run on Linux only (cheapest runner minutes) and
+    # only the current LTS Node — we cover OS + Node matrix surface in
+    # `test-fast` already.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # vitest.slow.config.ts pins maxForks: 1 (no CPU contention between
+      # heavy SHA-1 tests) and testTimeout: 180_000. Bump per-worker heap
+      # so the multi-MB buffers fit with room to spare.
+      - run: pnpm test:slow
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
@@ -78,7 +99,10 @@ jobs:
         with:
           bun-version: latest
       - run: pnpm install --frozen-lockfile
-      - run: bun test src/
+      # Bun runs every `*.test.ts` (including `*.slow.test.ts`). The slow
+      # multipart tests need a generous timeout — Bun's default 5 s isn't
+      # enough for the simulator's per-part SHA-1 of 5 MB+ buffers.
+      - run: bun test --timeout 180000 src/
 
   coverage:
     name: Coverage
@@ -92,10 +116,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run tests with coverage
-        # Vite/Vitest's `coverage.thresholds` config fails the run when any
-        # metric drops below the configured floor (see vite.config.ts).
-        # v8 coverage adds overhead on top of test memory; same 4 GB heap as
-        # the plain test job for safety.
+        # `pnpm test:coverage` uses vitest.coverage.config.ts, which runs the
+        # union of fast + slow tiers (the only config that covers the full
+        # codebase) with the slow tier's `maxForks: 1` and `testTimeout`.
+        # Coverage thresholds gate the job.
         run: pnpm test:coverage
         env:
           NODE_OPTIONS: --max-old-space-size=4096
