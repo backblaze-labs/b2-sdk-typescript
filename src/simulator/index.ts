@@ -599,6 +599,33 @@ export class B2Simulator {
       ...(req['corsRules'] !== undefined
         ? { corsRules: req['corsRules'] as BucketInfo['corsRules'] }
         : {}),
+      ...(req['replicationConfiguration'] !== undefined
+        ? {
+            replicationConfiguration: req[
+              'replicationConfiguration'
+            ] as BucketInfo['replicationConfiguration'],
+          }
+        : {}),
+      ...(req['defaultRetention'] !== undefined
+        ? {
+            defaultRetention: req['defaultRetention'] as BucketInfo['defaultRetention'],
+            fileLockConfiguration: {
+              isClientAuthorizedToRead: true,
+              value: {
+                isFileLockEnabled:
+                  bucket.info.fileLockConfiguration.value?.isFileLockEnabled ?? false,
+                defaultRetention: req['defaultRetention'] as BucketInfo['defaultRetention'],
+              },
+            },
+          }
+        : {}),
+      ...(req['defaultServerSideEncryption'] !== undefined
+        ? {
+            defaultServerSideEncryption: req[
+              'defaultServerSideEncryption'
+            ] as BucketInfo['defaultServerSideEncryption'],
+          }
+        : {}),
       revision: bucket.info.revision + 1,
     }
     this.buckets.set(req['bucketId'] as string, { info: updated, files: bucket.files })

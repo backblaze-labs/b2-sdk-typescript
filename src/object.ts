@@ -237,4 +237,46 @@ export class B2Object {
   async deleteVersion(fileId: FileId): Promise<void> {
     await this.bucket.deleteFileVersion(this.fileName, fileId)
   }
+
+  /**
+   * Sets or updates the Object Lock retention policy on a specific file
+   * version of this file.
+   *
+   * The bucket must have Object Lock enabled (`fileLockEnabled: true` at
+   * creation time). Governance-mode retention can be shortened or removed
+   * by passing `bypassGovernance: true` together with an application key
+   * that carries the `bypassGovernance` capability; compliance-mode
+   * retention cannot be shortened by anyone until the
+   * `retainUntilTimestamp` elapses.
+   *
+   * @param fileId - The file version to apply the policy to.
+   * @param retention - The retention policy to apply.
+   * @param options - Optional flag for shortening governance-mode retention.
+   *
+   * @returns Metadata for the updated file version.
+   */
+  async setRetention(
+    fileId: FileId,
+    retention: FileRetentionValue,
+    options?: { bypassGovernance?: boolean },
+  ) {
+    return this.bucket.updateFileRetention(this.fileName, fileId, retention, options)
+  }
+
+  /**
+   * Toggles the legal hold flag on a specific file version of this file.
+   *
+   * Legal hold is independent of retention: a file can be on legal hold
+   * without any retention policy, and vice versa. The bucket must have
+   * Object Lock enabled, and any caller must hold the `writeFileLegalHolds`
+   * capability.
+   *
+   * @param fileId - The file version to apply the flag to.
+   * @param legalHold - `'on'` to apply the hold, `'off'` to remove it.
+   *
+   * @returns Metadata for the updated file version.
+   */
+  async setLegalHold(fileId: FileId, legalHold: LegalHoldValue) {
+    return this.bucket.updateFileLegalHold(this.fileName, fileId, legalHold)
+  }
 }

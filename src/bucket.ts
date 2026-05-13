@@ -19,14 +19,14 @@ import type {
   ListFileVersionsResponse,
   MetadataDirective,
 } from './types/file.ts'
-import type { BucketId, FileId, LargeFileId } from './types/ids.ts'
+import type { ApplicationKeyId, BucketId, FileId, LargeFileId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import type {
   EventNotificationRule,
   GetBucketNotificationRulesResponse,
 } from './types/notifications.ts'
-import type { ReplicationConfiguration } from './types/replication.ts'
+import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
 import type { CancelLargeFileResponse } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
@@ -692,5 +692,206 @@ export class Bucket {
       this.client.accountInfo.getAuthToken(),
       { fileName, fileId, legalHold },
     )
+  }
+
+  /**
+   * Refetches this bucket's metadata from B2 so callers operating on
+   * replication / lifecycle / retention configuration always start from the
+   * server-of-record state.
+   *
+   * Bucket configuration is monotonically revisioned by B2: B2 increments
+   * `revision` on every accepted update. The local {@link info} snapshot
+   * captured at construction time goes stale as soon as anyone else (or any
+   * prior `update()` call) mutates the bucket, so the ergonomic
+   * add/remove helpers below always refresh before composing the next
+   * `setX()` call. The result is that each helper is safe to call without
+   * the caller having to thread BucketInfo through their code.
+   *
+   * @returns Fresh {@link BucketInfo} for this bucket.
+   *
+   * @throws If the bucket no longer exists.
+   */
+  private async refresh(): Promise<BucketInfo> {
+    const fresh = await this.client.listBuckets({ bucketId: this.id })
+    const found = fresh[0]
+    if (!found) throw new Error(`Bucket ${this.id} not found`)
+    return found.info
+  }
+
+  /**
+   * Returns the current cross-region replication configuration, refetched
+   * from B2.
+   *
+   * Use this when you need to read replication state without composing a
+   * write. For add/remove flows the helper methods below handle the
+   * refresh-then-set sequence for you.
+   *
+   * @returns The current {@link ReplicationConfiguration}.
+   */
+  async getReplication(): Promise<ReplicationConfiguration> {
+    const fresh = await this.refresh()
+    return fresh.replicationConfiguration
+  }
+
+  /**
+   * Replaces this bucket's complete replication configuration.
+   * @param replication - The new configuration. Pass an empty source/destination
+   *   pair (`{ asReplicationSource: null, asReplicationDestination: null }`)
+   *   to clear replication entirely.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async setReplication(replication: ReplicationConfiguration): Promise<BucketInfo> {
+    return this.update({ replicationConfiguration: replication })
+  }
+
+  /**
+   * Adds (or replaces by `replicationRuleName`) a single replication rule
+   * on this bucket while leaving any other rules, the source key, and the
+   * destination key mapping untouched.
+   *
+   * When this is the very first source-side rule, `sourceApplicationKeyId`
+   * must be supplied to seed `asReplicationSource.sourceApplicationKeyId`;
+   * for subsequent calls the existing source key is reused unless the
+   * caller explicitly overrides it.
+   *
+   * @param rule - The replication rule to add or replace.
+   * @param options - Optional source application key ID override (or seed
+   *   when no source side exists yet).
+   *
+   * @returns The updated bucket metadata.
+   *
+   * @throws If no source-side replication exists yet and the caller did
+   *   not supply `sourceApplicationKeyId`.
+   */
+  async addReplicationRule(
+    rule: ReplicationRule,
+    options?: { sourceApplicationKeyId?: ApplicationKeyId },
+  ): Promise<BucketInfo> {
+    const current = (await this.refresh()).replicationConfiguration
+    const existingSource = current.asReplicationSource
+    const sourceKey = options?.sourceApplicationKeyId ?? existingSource?.sourceApplicationKeyId
+    if (!sourceKey) {
+      throw new Error(
+        'addReplicationRule: no existing source-side replication; pass options.sourceApplicationKeyId',
+      )
+    }
+    const existingRules = existingSource?.replicationRules ?? []
+    const without = existingRules.filter((r) => r.replicationRuleName !== rule.replicationRuleName)
+    return this.setReplication({
+      asReplicationSource: {
+        sourceApplicationKeyId: sourceKey,
+        replicationRules: [...without, rule],
+      },
+      asReplicationDestination: current.asReplicationDestination,
+    })
+  }
+
+  /**
+   * Removes a single replication rule by name. No-ops cleanly when the rule
+   * is not present (returns the unchanged-but-revision-bumped bucket info).
+   *
+   * @param replicationRuleName - Name of the rule to remove.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async removeReplicationRule(replicationRuleName: string): Promise<BucketInfo> {
+    const current = (await this.refresh()).replicationConfiguration
+    const existingSource = current.asReplicationSource
+    if (!existingSource) {
+      return this.setReplication(current)
+    }
+    const filtered = existingSource.replicationRules.filter(
+      (r) => r.replicationRuleName !== replicationRuleName,
+    )
+    return this.setReplication({
+      asReplicationSource: {
+        sourceApplicationKeyId: existingSource.sourceApplicationKeyId,
+        replicationRules: filtered,
+      },
+      asReplicationDestination: current.asReplicationDestination,
+    })
+  }
+
+  /**
+   * Returns the current lifecycle rules for this bucket, refetched from B2.
+   *
+   * @returns The current array of {@link LifecycleRule}s.
+   */
+  async getLifecycleRules(): Promise<readonly LifecycleRule[]> {
+    const fresh = await this.refresh()
+    return fresh.lifecycleRules
+  }
+
+  /**
+   * Replaces this bucket's lifecycle rules in their entirety.
+   * @param rules - The new rule set. Pass `[]` to remove all lifecycle
+   *   automation.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async setLifecycleRules(rules: readonly LifecycleRule[]): Promise<BucketInfo> {
+    return this.update({ lifecycleRules: [...rules] })
+  }
+
+  /**
+   * Adds (or replaces, matched by `fileNamePrefix`) a single lifecycle rule
+   * while leaving any other rules untouched.
+   *
+   * Matching on prefix mirrors B2's own data model: each unique prefix can
+   * have at most one rule, and a `b2_update_bucket` call that contains two
+   * rules with the same prefix is rejected. The helper enforces this for
+   * the caller.
+   *
+   * @param rule - The lifecycle rule to add or replace.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async addLifecycleRule(rule: LifecycleRule): Promise<BucketInfo> {
+    const current = await this.getLifecycleRules()
+    const without = current.filter((r) => r.fileNamePrefix !== rule.fileNamePrefix)
+    return this.setLifecycleRules([...without, rule])
+  }
+
+  /**
+   * Removes a single lifecycle rule by prefix. No-ops cleanly when the rule
+   * is not present.
+   *
+   * @param fileNamePrefix - The prefix of the rule to remove.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async removeLifecycleRule(fileNamePrefix: string): Promise<BucketInfo> {
+    const current = await this.getLifecycleRules()
+    return this.setLifecycleRules(current.filter((r) => r.fileNamePrefix !== fileNamePrefix))
+  }
+
+  /**
+   * Returns the current default Object Lock retention policy for new
+   * uploads to this bucket, refetched from B2.
+   *
+   * @returns The default {@link BucketRetentionPolicy} (which may be
+   *   `{ mode: 'none', period: null }` when Object Lock is enabled on the
+   *   bucket but no default is set).
+   */
+  async getDefaultRetention(): Promise<BucketRetentionPolicy> {
+    const fresh = await this.refresh()
+    return fresh.defaultRetention
+  }
+
+  /**
+   * Sets (or clears, by passing `{ mode: 'none', period: null }`) the
+   * default Object Lock retention policy applied to new uploads.
+   *
+   * Object Lock must already be enabled on the bucket. Buckets created
+   * without `fileLockEnabled: true` cannot accept a default retention
+   * policy and B2 will reject this call.
+   *
+   * @param policy - The new default retention policy.
+   *
+   * @returns The updated bucket metadata.
+   */
+  async setDefaultRetention(policy: BucketRetentionPolicy): Promise<BucketInfo> {
+    return this.update({ defaultRetention: policy })
   }
 }

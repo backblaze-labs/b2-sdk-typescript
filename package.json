@@ -90,6 +90,16 @@
         "default": "./dist/simulator/index.cjs"
       }
     },
+    "./notifications": {
+      "import": {
+        "types": "./dist/notifications/index.d.ts",
+        "default": "./dist/notifications/index.js"
+      },
+      "require": {
+        "types": "./dist/notifications/index.d.cts",
+        "default": "./dist/notifications/index.cjs"
+      }
+    },
     "./s3": {
       "import": {
         "types": "./dist/s3/index.d.ts",
