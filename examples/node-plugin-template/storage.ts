@@ -160,8 +160,8 @@ export class B2Storage {
 
   /**
    * List keys under a prefix relative to the adapter's configured prefix.
-   * Returns up to `limit` results in one call; use the SDK's `listAllFiles`
-   * generator directly when you need full pagination.
+   * Returns up to `limit` results in one call; use the SDK's
+   * `paginateFileNames` iterator directly when you need full pagination.
    *
    * @param prefix - Prefix relative to the adapter's configured prefix.
    * @param limit - Maximum results to return (1-10000). Default `1000`.

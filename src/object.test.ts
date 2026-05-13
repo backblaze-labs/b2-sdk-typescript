@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { Capability } from './types/auth.ts'
+import { BucketType } from './types/bucket.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -52,7 +54,7 @@ describe('B2Object coverage', () => {
   it('downloadById returns the correct file content', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-dl-id',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('download-by-id-body')
     const uploaded = await bucket.upload({
@@ -72,7 +74,7 @@ describe('B2Object coverage', () => {
   it('getFileInfo returns metadata matching the upload', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-info',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('info payload')
     const uploaded = await bucket.upload({
@@ -94,7 +96,7 @@ describe('B2Object coverage', () => {
   it('hide() creates a hide marker and removes the file from name listing', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-hide-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await bucket.upload({
       fileName: 'will-hide.txt',
@@ -113,7 +115,7 @@ describe('B2Object coverage', () => {
   it('deleteVersion() removes a specific file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-delver-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const uploaded = await bucket.upload({
       fileName: 'ephemeral.txt',
@@ -143,25 +145,25 @@ describe('B2Client high-level key management', () => {
 
   it('createKey() returns a full application key', async () => {
     const key = await client.createKey({
-      capabilities: ['readFiles', 'writeFiles'],
+      capabilities: [Capability.ReadFiles, Capability.WriteFiles],
       keyName: 'hl-test-key',
     })
 
     expect(key.keyName).toBe('hl-test-key')
     expect(key.applicationKeyId).toBeTruthy()
     expect(key.applicationKey).toBeTruthy()
-    expect(key.capabilities).toContain('readFiles')
-    expect(key.capabilities).toContain('writeFiles')
+    expect(key.capabilities).toContain(Capability.ReadFiles)
+    expect(key.capabilities).toContain(Capability.WriteFiles)
   })
 
   it('createKey() with bucket scope and name prefix', async () => {
     const bucket = await client.createBucket({
       bucketName: 'key-scope-hl',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const key = await client.createKey({
-      capabilities: ['readFiles'],
+      capabilities: [Capability.ReadFiles],
       keyName: 'scoped-hl',
       bucketId: bucket.id,
       namePrefix: 'images/',
@@ -173,7 +175,7 @@ describe('B2Client high-level key management', () => {
 
   it('listKeys() returns keys created via the high-level API', async () => {
     await client.createKey({
-      capabilities: ['listBuckets'],
+      capabilities: [Capability.ListBuckets],
       keyName: 'list-me',
     })
 
@@ -182,13 +184,13 @@ describe('B2Client high-level key management', () => {
     expect(result.keys.length).toBeGreaterThanOrEqual(1)
     const found = result.keys.find((k) => k.keyName === 'list-me')
     expect(found).toBeTruthy()
-    expect(found?.capabilities).toContain('listBuckets')
+    expect(found?.capabilities).toContain(Capability.ListBuckets)
   })
 
   it('listKeys() respects maxKeyCount for pagination', async () => {
-    await client.createKey({ capabilities: ['readFiles'], keyName: 'pk-a' })
-    await client.createKey({ capabilities: ['readFiles'], keyName: 'pk-b' })
-    await client.createKey({ capabilities: ['readFiles'], keyName: 'pk-c' })
+    await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-a' })
+    await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-b' })
+    await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-c' })
 
     const page = await client.listKeys({ maxKeyCount: 2 })
     expect(page.keys).toHaveLength(2)
@@ -197,7 +199,7 @@ describe('B2Client high-level key management', () => {
 
   it('deleteKey() removes the key from subsequent listings', async () => {
     const key = await client.createKey({
-      capabilities: ['writeFiles'],
+      capabilities: [Capability.WriteFiles],
       keyName: 'delete-hl',
     })
 
@@ -219,8 +221,8 @@ describe('B2Client listBuckets with filter options', () => {
   })
 
   it('listBuckets() with bucketName filter passes the option through', async () => {
-    await client.createBucket({ bucketName: 'alpha', bucketType: 'allPrivate' })
-    await client.createBucket({ bucketName: 'beta', bucketType: 'allPublic' })
+    await client.createBucket({ bucketName: 'alpha', bucketType: BucketType.AllPrivate })
+    await client.createBucket({ bucketName: 'beta', bucketType: BucketType.AllPublic })
 
     // The simulator does not filter server-side, but the high-level method
     // still exercises the code path that builds and sends the request with
@@ -232,10 +234,10 @@ describe('B2Client listBuckets with filter options', () => {
   })
 
   it('listBuckets() with bucketTypes filter passes the option through', async () => {
-    await client.createBucket({ bucketName: 'priv-bucket', bucketType: 'allPrivate' })
-    await client.createBucket({ bucketName: 'pub-bucket', bucketType: 'allPublic' })
+    await client.createBucket({ bucketName: 'priv-bucket', bucketType: BucketType.AllPrivate })
+    await client.createBucket({ bucketName: 'pub-bucket', bucketType: BucketType.AllPublic })
 
-    const buckets = await client.listBuckets({ bucketTypes: ['allPrivate'] })
+    const buckets = await client.listBuckets({ bucketTypes: [BucketType.AllPrivate] })
     // Same note: simulator returns all, but the code path is exercised.
     expect(buckets.length).toBeGreaterThanOrEqual(1)
   })
@@ -243,7 +245,7 @@ describe('B2Client listBuckets with filter options', () => {
   it('listBuckets() with bucketId filter passes the option through', async () => {
     const bucket = await client.createBucket({
       bucketName: 'by-id-filter',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const buckets = await client.listBuckets({ bucketId: bucket.id })
@@ -253,7 +255,7 @@ describe('B2Client listBuckets with filter options', () => {
 
 // ---------------------------------------------------------------------------
 // Bucket - coverage for listFileVersions, hideFile, deleteFileVersion,
-//          listAllFiles async generator, getDownloadAuthorization, copyFile
+//          paginateFileNames async iterator, getDownloadAuthorization, copyFile
 // ---------------------------------------------------------------------------
 
 describe('Bucket coverage', () => {
@@ -267,7 +269,7 @@ describe('Bucket coverage', () => {
   it('listFileVersions() returns uploads and hide markers together', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -292,7 +294,7 @@ describe('Bucket coverage', () => {
   it('listFileVersions() paginates with startFileName', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-page-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     for (let i = 0; i < 4; i++) {
       await bucket.upload({
@@ -316,7 +318,7 @@ describe('Bucket coverage', () => {
   it('hideFile() makes the file invisible in listFileNames but visible in listFileVersions', async () => {
     const bucket = await client.createBucket({
       bucketName: 'hide-vis-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -339,7 +341,7 @@ describe('Bucket coverage', () => {
   it('deleteFileVersion() removes only the targeted version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'del-ver-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const v1 = await bucket.upload({
@@ -360,10 +362,10 @@ describe('Bucket coverage', () => {
     expect(remaining[0]?.fileId).not.toBe(v1.fileId)
   })
 
-  it('listAllFiles() async generator yields all files across pages', async () => {
+  it('paginateFileNames() async iterator yields all files across pages', async () => {
     const bucket = await client.createBucket({
       bucketName: 'allfiles-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const names: string[] = []
@@ -377,17 +379,17 @@ describe('Bucket coverage', () => {
     }
 
     const collected: string[] = []
-    for await (const file of bucket.listAllFiles({ pageSize: 3 })) {
+    for await (const file of bucket.paginateFileNames({ pageSize: 3 })) {
       collected.push(file.fileName)
     }
 
     expect(collected).toEqual(names)
   })
 
-  it('listAllFiles() with prefix only yields matching files', async () => {
+  it('paginateFileNames() with prefix only yields matching files', async () => {
     const bucket = await client.createBucket({
       bucketName: 'allfiles-pfx',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -404,7 +406,7 @@ describe('Bucket coverage', () => {
     })
 
     const collected: string[] = []
-    for await (const file of bucket.listAllFiles({ prefix: 'logs/' })) {
+    for await (const file of bucket.paginateFileNames({ prefix: 'logs/' })) {
       collected.push(file.fileName)
     }
 
@@ -415,7 +417,7 @@ describe('Bucket coverage', () => {
   it('getDownloadAuthorization() returns a scoped token', async () => {
     const bucket = await client.createBucket({
       bucketName: 'dl-auth-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const auth = await bucket.getDownloadAuthorization('docs/', 7200)
@@ -427,7 +429,7 @@ describe('Bucket coverage', () => {
   it('copyFile() copies content within the same bucket', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('original bytes')
     const original = await bucket.upload({
@@ -453,11 +455,11 @@ describe('Bucket coverage', () => {
   it('copyFile() copies to a different bucket', async () => {
     const src = await client.createBucket({
       bucketName: 'cp-src-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const dst = await client.createBucket({
       bucketName: 'cp-dst-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('cross bucket data')
     const original = await src.upload({
@@ -499,7 +501,7 @@ describe('B2Object download and stream coverage', () => {
   it('download() returns the correct file content by name', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-dl-name',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('download-by-name-body')
     await bucket.upload({
@@ -519,7 +521,7 @@ describe('B2Object download and stream coverage', () => {
   it('download() with range returns partial content', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-dl-range',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('hello world range test')
     await bucket.upload({
@@ -539,7 +541,7 @@ describe('B2Object download and stream coverage', () => {
   it('createReadStream() returns the full file via parallel download', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-stream',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('parallel download stream content here')
     const uploaded = await bucket.upload({
@@ -561,7 +563,7 @@ describe('B2Object download and stream coverage', () => {
   it('upload() routes to large file path when source exceeds recommended part size', async () => {
     const bucket = await client.createBucket({
       bucketName: 'obj-large-route',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     vi.spyOn(client.accountInfo, 'getRecommendedPartSize').mockReturnValue(10)

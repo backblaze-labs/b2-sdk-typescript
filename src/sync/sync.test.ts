@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { FileVersion } from '../types/file.ts'
+import { EncryptionMode } from '../types/encryption.ts'
+import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
@@ -23,7 +24,7 @@ function makeLocalSyncPath(
 function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: number): B2SyncPath {
   const fv: FileVersion = {
     accountId: 'acc' as unknown as AccountId,
-    action: 'upload',
+    action: FileAction.Upload,
     bucketId: 'bucket' as unknown as BucketId,
     contentLength: size,
     contentMd5: null,
@@ -35,7 +36,7 @@ function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: numbe
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
     replicationStatus: null,
-    serverSideEncryption: { mode: 'none' },
+    serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: modTimeMillis,
   }
   return { relativePath, modTimeMillis, size, selectedVersion: fv, allVersions: [fv] }

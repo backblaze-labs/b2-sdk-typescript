@@ -1,8 +1,32 @@
-/** Supported server-side encryption algorithm. Currently only AES-256 is supported. */
-export type EncryptionAlgorithm = 'AES256'
+/** Named constants for the supported server-side encryption algorithms. */
+export const EncryptionAlgorithm = {
+  /** AES with a 256-bit key. The only algorithm B2 currently supports. */
+  Aes256: 'AES256',
+} as const
 
-/** Server-side encryption mode for files stored in B2. */
-export type EncryptionMode = 'SSE-B2' | 'SSE-C' | 'none'
+/** Supported server-side encryption algorithm. Derived from {@link EncryptionAlgorithm}. */
+export type EncryptionAlgorithm = (typeof EncryptionAlgorithm)[keyof typeof EncryptionAlgorithm]
+
+/**
+ * Named constants for the server-side encryption mode used by a file.
+ *
+ * Most callers should use the {@link SSE_B2}, {@link SSE_NONE}, and
+ * {@link sseCustomer} helpers below which return complete
+ * {@link EncryptionSetting} objects. These constants are useful when you
+ * need the bare mode discriminator (e.g., when introspecting a file's
+ * current encryption setting).
+ */
+export const EncryptionMode = {
+  /** B2-managed encryption keys. */
+  SseB2: 'SSE-B2',
+  /** Customer-provided encryption keys. */
+  SseC: 'SSE-C',
+  /** No encryption. */
+  None: 'none',
+} as const
+
+/** Server-side encryption mode for files stored in B2. Derived from {@link EncryptionMode}. */
+export type EncryptionMode = (typeof EncryptionMode)[keyof typeof EncryptionMode]
 
 /** Server-side encryption using B2-managed keys (SSE-B2). */
 export interface SseB2Setting {

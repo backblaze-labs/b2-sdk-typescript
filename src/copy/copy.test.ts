@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { BucketType } from '../types/bucket.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
 
 /**
@@ -50,7 +52,7 @@ describe('copyLargeFile', () => {
   it('falls back to single copyFile when source fits in one part', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-small-src',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('small enough for one part')
     const uploaded = await bucket.upload({
@@ -75,7 +77,7 @@ describe('copyLargeFile', () => {
   it('Bucket.copyLargeFile() exposes the orchestrator on the bucket handle', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-bucket-method',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('via bucket method')
     const uploaded = await bucket.upload({
@@ -95,7 +97,7 @@ describe('copyLargeFile', () => {
   it('clamps a too-small partSize up to the account minimum and falls back to copyFile', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-clamp-min',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('tiny content under min part size')
     const uploaded = await bucket.upload({
@@ -142,7 +144,7 @@ describe('copyLargeFile', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-meta-fast',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('fast path with metadata')
     const uploaded = await bucket.upload({
@@ -157,8 +159,11 @@ describe('copyLargeFile', () => {
       partSize: 5_000_000,
       contentType: 'text/plain',
       fileInfo: customInfo,
-      destinationServerSideEncryption: { mode: 'SSE-B2', algorithm: 'AES256' },
-      sourceServerSideEncryption: { mode: 'none' },
+      destinationServerSideEncryption: {
+        mode: EncryptionMode.SseB2,
+        algorithm: EncryptionAlgorithm.Aes256,
+      },
+      sourceServerSideEncryption: { mode: EncryptionMode.None },
     })
 
     expect(copied.fileName).toBe('meta-fast.txt')
@@ -169,9 +174,9 @@ describe('copyLargeFile', () => {
     expect(body['contentType']).toBe('text/plain')
     expect(body['fileInfo']).toEqual(customInfo)
     expect(body['destinationServerSideEncryption']).toEqual({
-      mode: 'SSE-B2',
-      algorithm: 'AES256',
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
     })
-    expect(body['sourceServerSideEncryption']).toEqual({ mode: 'none' })
+    expect(body['sourceServerSideEncryption']).toEqual({ mode: EncryptionMode.None })
   })
 })

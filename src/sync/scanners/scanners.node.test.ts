@@ -6,7 +6,9 @@ import type { Bucket } from '../../bucket.ts'
 import { B2Client } from '../../client.ts'
 import { B2Simulator } from '../../simulator/index.ts'
 import { BufferSource } from '../../streams/source.ts'
-import type { FileVersion } from '../../types/file.ts'
+import { BucketType } from '../../types/bucket.ts'
+import { EncryptionMode } from '../../types/encryption.ts'
+import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
@@ -141,7 +143,7 @@ describe('B2Folder', () => {
   it('scans an empty bucket and yields nothing', async () => {
     const bucket = await client.createBucket({
       bucketName: 'empty-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const folder = new B2Folder(bucket)
@@ -153,7 +155,7 @@ describe('B2Folder', () => {
   it('scans a bucket with files and yields them sorted by name', async () => {
     const bucket = await client.createBucket({
       bucketName: 'sorted-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     // Upload in non-alphabetical order
@@ -180,7 +182,7 @@ describe('B2Folder', () => {
   it('excludes hidden files', async () => {
     const bucket = await client.createBucket({
       bucketName: 'hide-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({ fileName: 'keep.txt', source: new BufferSource(enc.encode('keep')) })
@@ -201,7 +203,7 @@ describe('B2Folder', () => {
   it('groups multiple versions and picks the latest', async () => {
     const bucket = await client.createBucket({
       bucketName: 'version-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     // Upload the same file three times to create multiple versions.
@@ -240,7 +242,7 @@ describe('B2Folder', () => {
   it('respects prefix filtering', async () => {
     const bucket = await client.createBucket({
       bucketName: 'prefix-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -272,7 +274,7 @@ describe('B2Folder', () => {
     // use a bucket that only contains files under the target prefix.
     const photosBucket = await client.createBucket({
       bucketName: 'photos-only',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await photosBucket.upload({
       fileName: 'photos/cat.jpg',
@@ -293,7 +295,7 @@ describe('B2Folder', () => {
     // Similarly for docs
     const docsBucket = await client.createBucket({
       bucketName: 'docs-only',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await docsBucket.upload({
       fileName: 'docs/guide.md',
@@ -331,7 +333,7 @@ describe('B2Folder', () => {
     function makeFileVersion(name: string, ts: number): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
-        action: 'upload',
+        action: FileAction.Upload,
         bucketId: 'b' as unknown as BucketId,
         contentLength: 1,
         contentMd5: null,
@@ -343,7 +345,7 @@ describe('B2Folder', () => {
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
         replicationStatus: null,
-        serverSideEncryption: { mode: 'none' },
+        serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
     }
@@ -384,7 +386,7 @@ describe('B2Folder', () => {
     function makeFileVersion(name: string, ts: number): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
-        action: 'upload',
+        action: FileAction.Upload,
         bucketId: 'b' as unknown as BucketId,
         contentLength: 1,
         contentMd5: null,
@@ -396,7 +398,7 @@ describe('B2Folder', () => {
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
         replicationStatus: null,
-        serverSideEncryption: { mode: 'none' },
+        serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
     }

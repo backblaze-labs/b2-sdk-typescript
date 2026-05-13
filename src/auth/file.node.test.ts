@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
+import { BucketType } from '../types/bucket.ts'
 import { FileAccountInfo } from './file.ts'
 
 describe('FileAccountInfo', () => {
@@ -131,7 +132,7 @@ describe('FileAccountInfo', () => {
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'pool-delegate',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const entry = { uploadUrl: 'http://u', authorizationToken: 'tok' }

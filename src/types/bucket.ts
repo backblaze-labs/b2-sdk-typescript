@@ -2,8 +2,31 @@ import type { EncryptionSetting } from './encryption.ts'
 import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
-/** Access level for a B2 bucket. */
-export type BucketType = 'allPublic' | 'allPrivate' | 'snapshot' | 'restricted'
+/**
+ * Named constants for the bucket access level.
+ *
+ * The {@link BucketType} type alias is derived from the values of this
+ * object, so the const is the single source of truth: adding a key here
+ * automatically widens the type union.
+ *
+ * @example
+ * ```ts
+ * await client.createBucket({ bucketName: 'logs', bucketType: BucketType.AllPrivate })
+ * ```
+ */
+export const BucketType = {
+  /** Publicly downloadable without authentication. */
+  AllPublic: 'allPublic',
+  /** Requires a valid auth token to download. */
+  AllPrivate: 'allPrivate',
+  /** Internal snapshot bucket type, generally not user-created. */
+  Snapshot: 'snapshot',
+  /** B2-restricted bucket (e.g., for S3-compatible workflows). */
+  Restricted: 'restricted',
+} as const
+
+/** Access level for a B2 bucket. Derived from {@link BucketType}. */
+export type BucketType = (typeof BucketType)[keyof typeof BucketType]
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -41,8 +64,23 @@ export interface CorsRule {
   readonly maxAgeSeconds: number
 }
 
-/** Bucket-level Object Lock retention mode. */
-export type BucketRetentionMode = 'compliance' | 'governance' | 'none'
+/**
+ * Named constants for the bucket-level Object Lock retention mode.
+ *
+ * Pair with {@link BucketRetentionPolicy} when setting a bucket's default
+ * retention: `{ mode: BucketRetentionMode.Compliance, period: { duration: 30, unit: 'days' } }`.
+ */
+export const BucketRetentionMode = {
+  /** Files cannot be deleted or modified during the retention period, even by the account owner. */
+  Compliance: 'compliance',
+  /** Files cannot be deleted during retention except by callers with the `bypassGovernance` capability. */
+  Governance: 'governance',
+  /** No default retention is applied to new uploads. */
+  None: 'none',
+} as const
+
+/** Bucket-level Object Lock retention mode. Derived from {@link BucketRetentionMode}. */
+export type BucketRetentionMode = (typeof BucketRetentionMode)[keyof typeof BucketRetentionMode]
 
 /** Duration and unit for a retention period. */
 export interface RetentionPeriod {

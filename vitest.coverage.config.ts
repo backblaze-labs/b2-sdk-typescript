@@ -64,14 +64,14 @@ export default defineConfig({
       reportsDirectory: 'coverage',
       // CI gate: drop below these and the coverage job fails. Adjust upward
       // as coverage improves; never adjust downward to paper over a drop.
-      // Current real values: 98.5% stmts / 90.95% branches / 98.47% funcs.
+      // Current real values: 99.41% stmts / 92.93% branches / 98.63% funcs.
       // Pinned a half-point below current so a single test edit doesn't
       // accidentally trip the gate.
       thresholds: {
-        statements: 97,
-        lines: 97,
-        functions: 97,
-        branches: 89,
+        statements: 99,
+        lines: 99,
+        functions: 98,
+        branches: 92,
       },
     },
   },

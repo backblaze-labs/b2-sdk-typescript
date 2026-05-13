@@ -1,0 +1,263 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { B2Client } from '../client.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { B2Simulator } from '../simulator/index.ts'
+import { BufferSource } from '../streams/source.ts'
+import { BucketType } from '../types/bucket.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
+import { uploadLargeFile } from './large.ts'
+
+/**
+ * Branch-coverage tests for `uploadLargeFile` and `uploadSmallFile`. These
+ * exercise the error-handling and option-spreading paths that the success-
+ * focused `upload.test.ts` and `upload.slow.test.ts` files don't touch:
+ *
+ *   - `uploadLargeFile` catch block: `accountInfo.evictPartUploadUrl` + rethrow
+ *     when `b2_upload_part` fails.
+ *   - `uploadLargeFile` outer cleanup: `cancelLargeFile` itself failing inside
+ *     the catch (best-effort swallow).
+ *   - `uploadLargeFile` resume=true with no candidate: the spread branches
+ *     for `serverSideEncryption`, `fileRetention`, and `legalHold` inside
+ *     the start-large-file call.
+ *   - `uploadSmallFile` catch block: `accountInfo.evictUploadUrl` + rethrow.
+ *
+ * Every test uses a `minimumPartSize: 100_000` simulator so the multipart
+ * round-trip fits comfortably under the fast-tier budget.
+ */
+
+function makeSmallPartClient(): {
+  client: B2Client
+  sim: B2Simulator
+  inner: HttpTransport
+} {
+  const sim = new B2Simulator({ minimumPartSize: 100_000 })
+  const inner = sim.transport()
+  const client = new B2Client({
+    applicationKeyId: 'test-key-id',
+    applicationKey: 'test-key',
+    transport: inner,
+  })
+  return { client, sim, inner }
+}
+
+function jsonErrorResponse(status: number, code: string, message: string): HttpResponse {
+  const body = JSON.stringify({ status, code, message })
+  return {
+    status,
+    headers: new Headers({ 'Content-Type': 'application/json' }),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body))
+        controller.close()
+      },
+    }),
+    json: <T>() => Promise.resolve(JSON.parse(body) as T),
+    text: () => Promise.resolve(body),
+    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
+  }
+}
+
+describe('uploadLargeFile cleanup paths', () => {
+  it('evicts the part upload URL and rethrows when b2_upload_part fails', async () => {
+    // Wrap the simulator so the second `b2_upload_part` call returns 400.
+    // The first part must succeed so that we reach the catch block on a
+    // subsequent part, exercising lines 201-204 in upload/large.ts (the
+    // evict-then-rethrow path).
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadPartCalls = 0
+    const failing: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part')) {
+          uploadPartCalls += 1
+          if (uploadPartCalls > 1) {
+            return jsonErrorResponse(400, 'bad_request', 'simulated upload_part failure')
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: failing,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-part-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    // Two full parts so we definitely hit `b2_upload_part` twice.
+    const data = new Uint8Array(partSize * 2)
+    for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'boom.bin',
+        source: new BufferSource(data),
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow(/simulated upload_part failure/)
+
+    // The outer catch must have called cancelLargeFile so no orphan file
+    // is left behind.
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'boom.bin')).toBeUndefined()
+  })
+
+  it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
+    // Force EVERY `b2_upload_part` to fail AND `b2_cancel_large_file` to
+    // fail, so the outer cleanup's inner try/catch hits line 223-225 (the
+    // best-effort swallow). The original upload_part error must still be
+    // the one that propagates to the caller.
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const inner = sim.transport()
+    const failing: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part')) {
+          return jsonErrorResponse(400, 'bad_request', 'simulated upload_part failure')
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          return jsonErrorResponse(500, 'internal_error', 'simulated cancel failure')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: failing,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'cancel-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const data = new Uint8Array(partSize * 2)
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'cleanup-boom.bin',
+        source: new BufferSource(data),
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow(/upload_part failure/)
+  })
+})
+
+describe('uploadLargeFile resume=true with no candidate', () => {
+  let client: B2Client
+  let bucketId: string
+
+  beforeEach(async () => {
+    const { client: c } = makeSmallPartClient()
+    client = c
+    await client.authorize()
+    const b = await client.createBucket({
+      bucketName: 'resume-no-candidate',
+      bucketType: BucketType.AllPrivate,
+    })
+    bucketId = b.id
+  })
+
+  it('forwards serverSideEncryption when no resume candidate exists (line 115-117)', async () => {
+    // resume=true with no unfinished candidate falls through to the
+    // start_large_file branch at lines 107-121. With SSE-B2 supplied we
+    // hit the conditional spread at 115-117.
+    const partSize = 100_000
+    const data = new Uint8Array(partSize * 2)
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'resume-sse.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+      resume: true,
+      serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
+    })
+    expect(result.fileName).toBe('resume-sse.bin')
+    expect(result.contentLength).toBe(data.byteLength)
+  })
+
+  it('forwards fileRetention when no resume candidate exists (line 118)', async () => {
+    const partSize = 100_000
+    const data = new Uint8Array(partSize * 2)
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'resume-retention.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+      resume: true,
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: Date.now() + 86_400_000,
+      },
+    })
+    expect(result.fileName).toBe('resume-retention.bin')
+  })
+
+  it('forwards legalHold when no resume candidate exists (line 119)', async () => {
+    const partSize = 100_000
+    const data = new Uint8Array(partSize * 2)
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'resume-hold.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+      resume: true,
+      legalHold: LegalHoldValue.On,
+    })
+    expect(result.fileName).toBe('resume-hold.bin')
+  })
+})
+
+describe('uploadSmallFile cleanup path', () => {
+  it('evicts the upload URL and rethrows when b2_upload_file fails', async () => {
+    // Force b2_upload_file to return 400. uploadSmallFile's catch at lines
+    // 97-100 must call evictUploadUrl and rethrow.
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const failing: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_file') && !req.url.includes('b2_upload_part')) {
+          return jsonErrorResponse(400, 'bad_request', 'simulated upload_file failure')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: failing,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-small-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'small-boom.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toThrow(/simulated upload_file failure/)
+  })
+})

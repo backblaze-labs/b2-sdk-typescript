@@ -20,6 +20,15 @@ export default tseslint.config({
   settings: {
     jsdoc: {
       mode: 'typescript',
+      // Canonicalise generic-doc tag names to the TSDoc form. Without this,
+      // `eslint-plugin-jsdoc`'s auto-fix rewrites `@typeParam` to JSDoc's
+      // `@template`, which `eslint-plugin-tsdoc`'s `tsdoc/syntax` rule then
+      // rejects as undefined. The two plugins disagree on the canonical
+      // name; this setting tells jsdoc to prefer TSDoc's form so they
+      // agree.
+      tagNamePreference: {
+        template: 'typeParam',
+      },
     },
   },
   rules: {

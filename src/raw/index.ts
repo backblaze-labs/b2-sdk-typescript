@@ -800,7 +800,7 @@ export class RawClient {
 
 // --- Header helpers ---
 
-import type { EncryptionSetting } from '../types/encryption.ts'
+import { EncryptionAlgorithm, EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 
 /**
@@ -812,11 +812,11 @@ function applyEncryptionHeaders(
   headers: Record<string, string>,
   encryption: EncryptionSetting | undefined,
 ): void {
-  if (!encryption || encryption.mode === 'none') return
-  if (encryption.mode === 'SSE-B2') {
-    headers['X-Bz-Server-Side-Encryption'] = 'AES256'
-  } else if (encryption.mode === 'SSE-C') {
-    headers['X-Bz-Server-Side-Encryption-Customer-Algorithm'] = 'AES256'
+  if (!encryption || encryption.mode === EncryptionMode.None) return
+  if (encryption.mode === EncryptionMode.SseB2) {
+    headers['X-Bz-Server-Side-Encryption'] = EncryptionAlgorithm.Aes256
+  } else if (encryption.mode === EncryptionMode.SseC) {
+    headers['X-Bz-Server-Side-Encryption-Customer-Algorithm'] = EncryptionAlgorithm.Aes256
     headers['X-Bz-Server-Side-Encryption-Customer-Key'] = encryption.customerKey
     headers['X-Bz-Server-Side-Encryption-Customer-Key-Md5'] = encryption.customerKeyMd5
   }
@@ -827,8 +827,8 @@ function applyEncryptionHeaders(
  * uploaded with customer-managed keys.
  */
 export interface SseCDownloadKey {
-  /** Encryption algorithm. Always `'AES256'`. */
-  readonly algorithm: 'AES256'
+  /** Encryption algorithm. Always `EncryptionAlgorithm.Aes256` (`'AES256'`). */
+  readonly algorithm: EncryptionAlgorithm
   /** Base64-encoded customer-provided decryption key. */
   readonly customerKey: string
   /** Base64-encoded MD5 digest of the decryption key. */
@@ -889,7 +889,10 @@ function buildDownloadRequestHeaders(
   const headers: Record<string, string> = { Authorization: authToken }
   if (options?.range) headers['Range'] = options.range
   if (options?.serverSideEncryption) {
-    applyEncryptionHeaders(headers, { mode: 'SSE-C', ...options.serverSideEncryption })
+    applyEncryptionHeaders(headers, {
+      mode: EncryptionMode.SseC,
+      ...options.serverSideEncryption,
+    })
   }
   return headers
 }

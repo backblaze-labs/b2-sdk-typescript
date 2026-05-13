@@ -3,6 +3,9 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { BucketType } from '../types/bucket.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
 import { uploadSmallFile } from './single.ts'
 
@@ -55,7 +58,10 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'plan-parts', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({
+      bucketName: 'plan-parts',
+      bucketType: BucketType.AllPrivate,
+    })
   })
 
   it('uploads small data as a single part when partSize is clamped', async () => {
@@ -142,7 +148,7 @@ describe('uploadLargeFile cancellation', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'cancel', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({ bucketName: 'cancel', bucketType: BucketType.AllPrivate })
   })
 
   it('cancels when signal is already aborted', async () => {
@@ -175,7 +181,10 @@ describe('uploadSmallFile edge cases', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'small-upload', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({
+      bucketName: 'small-upload',
+      bucketType: BucketType.AllPrivate,
+    })
   })
 
   it('uploads an empty file (zero bytes)', async () => {
@@ -274,7 +283,7 @@ describe('uploadSmallFile edge cases', () => {
       bucketId: bucket.id,
       fileName: 'sse.txt',
       source: new BufferSource(data),
-      serverSideEncryption: { mode: 'SSE-B2', algorithm: 'AES256' },
+      serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
     })
 
     expect(result.fileName).toBe('sse.txt')
@@ -286,8 +295,11 @@ describe('uploadSmallFile edge cases', () => {
       bucketId: bucket.id,
       fileName: 'locked.txt',
       source: new BufferSource(data),
-      fileRetention: { mode: 'compliance', retainUntilTimestamp: Date.now() + 86400000 },
-      legalHold: 'on',
+      fileRetention: {
+        mode: RetentionMode.Compliance,
+        retainUntilTimestamp: Date.now() + 86400000,
+      },
+      legalHold: LegalHoldValue.On,
     })
 
     expect(result.fileName).toBe('locked.txt')
@@ -317,7 +329,7 @@ describe('Bucket.upload() routing', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'routing', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({ bucketName: 'routing', bucketType: BucketType.AllPrivate })
   })
 
   it('routes to small file upload when below recommended part size', async () => {

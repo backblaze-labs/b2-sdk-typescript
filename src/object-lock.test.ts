@@ -3,6 +3,8 @@ import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { BucketType } from './types/bucket.ts'
+import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
 /**
  * Tests for the per-file Object Lock convenience methods added to
@@ -22,7 +24,7 @@ async function setup(): Promise<{ bucket: Bucket; client: B2Client }> {
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'lock-bucket',
-    bucketType: 'allPrivate',
+    bucketType: BucketType.AllPrivate,
   })
   return { bucket, client }
 }
@@ -42,10 +44,11 @@ describe('B2Object.setRetention', () => {
     })
 
     const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days from now
-    const result = await bucket
-      .file('locked.bin')
-      .setRetention(uploaded.fileId, { mode: 'compliance', retainUntilTimestamp: expiresAt })
-    expect(result.fileRetention.mode).toBe('compliance')
+    const result = await bucket.file('locked.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Compliance,
+      retainUntilTimestamp: expiresAt,
+    })
+    expect(result.fileRetention.mode).toBe(RetentionMode.Compliance)
     expect(result.fileRetention.retainUntilTimestamp).toBe(expiresAt)
   })
 
@@ -56,9 +59,10 @@ describe('B2Object.setRetention', () => {
     })
     const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
 
-    await bucket
-      .file('gov.bin')
-      .setRetention(uploaded.fileId, { mode: 'governance', retainUntilTimestamp: expiresAt })
+    await bucket.file('gov.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: expiresAt,
+    })
 
     // Shorten the period: requires bypassGovernance: true with a key that has
     // the matching capability. Simulator accepts the flag without enforcing
@@ -68,7 +72,7 @@ describe('B2Object.setRetention', () => {
       .file('gov.bin')
       .setRetention(
         uploaded.fileId,
-        { mode: 'governance', retainUntilTimestamp: earlier },
+        { mode: RetentionMode.Governance, retainUntilTimestamp: earlier },
         { bypassGovernance: true },
       )
     expect(shortened.fileRetention.retainUntilTimestamp).toBe(earlier)
@@ -80,7 +84,7 @@ describe('B2Object.setRetention', () => {
       source: new BufferSource(new Uint8Array([1])),
     })
     await bucket.file('clear.bin').setRetention(uploaded.fileId, {
-      mode: 'governance',
+      mode: RetentionMode.Governance,
       retainUntilTimestamp: Date.now() + 86_400_000,
     })
 
@@ -108,8 +112,8 @@ describe('B2Object.setLegalHold', () => {
       fileName: 'hold.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    const result = await bucket.file('hold.bin').setLegalHold(uploaded.fileId, 'on')
-    expect(result.legalHold).toBe('on')
+    const result = await bucket.file('hold.bin').setLegalHold(uploaded.fileId, LegalHoldValue.On)
+    expect(result.legalHold).toBe(LegalHoldValue.On)
   })
 
   it('turns the legal hold flag off', async () => {
@@ -117,9 +121,9 @@ describe('B2Object.setLegalHold', () => {
       fileName: 'hold.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    await bucket.file('hold.bin').setLegalHold(uploaded.fileId, 'on')
-    const off = await bucket.file('hold.bin').setLegalHold(uploaded.fileId, 'off')
-    expect(off.legalHold).toBe('off')
+    await bucket.file('hold.bin').setLegalHold(uploaded.fileId, LegalHoldValue.On)
+    const off = await bucket.file('hold.bin').setLegalHold(uploaded.fileId, LegalHoldValue.Off)
+    expect(off.legalHold).toBe(LegalHoldValue.Off)
   })
 
   it('legal hold is independent of retention (can be set without retention)', async () => {
@@ -127,8 +131,10 @@ describe('B2Object.setLegalHold', () => {
       fileName: 'hold-only.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    const result = await bucket.file('hold-only.bin').setLegalHold(uploaded.fileId, 'on')
-    expect(result.legalHold).toBe('on')
+    const result = await bucket
+      .file('hold-only.bin')
+      .setLegalHold(uploaded.fileId, LegalHoldValue.On)
+    expect(result.legalHold).toBe(LegalHoldValue.On)
     // Retention should still be unset on this file version.
     const info = await bucket.file('hold-only.bin').getFileInfo(uploaded.fileId)
     expect(info.fileRetention?.value).toBeNull()

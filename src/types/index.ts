@@ -24,16 +24,16 @@ export type {
   ApiInfo,
   AuthorizeAccountRequest,
   AuthorizeAccountResponse,
-  Capability,
   GroupsApiInfo,
   StorageApiInfo,
 } from './auth.ts'
+// `Capability` is forwarded here as both type and value because the source
+// module declares them together via the const-object enum pattern.
+export { Capability } from './auth.ts'
 
 export type {
   BucketInfo,
-  BucketRetentionMode,
   BucketRetentionPolicy,
-  BucketType,
   RetentionPeriod,
   CorsRule,
   CreateBucketRequest,
@@ -43,6 +43,8 @@ export type {
   ListBucketsResponse,
   UpdateBucketRequest,
 } from './bucket.ts'
+// `BucketType` and `BucketRetentionMode` are forwarded as both type and value.
+export { BucketRetentionMode, BucketType } from './bucket.ts'
 
 export type {
   CopyFileRequest,
@@ -50,7 +52,6 @@ export type {
   CopyPartResponse,
   DeleteFileVersionRequest,
   DeleteFileVersionResponse,
-  FileAction,
   FileVersion,
   GetFileInfoRequest,
   HideFileRequest,
@@ -58,8 +59,9 @@ export type {
   ListFileNamesResponse,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
-  MetadataDirective,
 } from './file.ts'
+// `FileAction` and `MetadataDirective` are forwarded as both type and value.
+export { FileAction, MetadataDirective } from './file.ts'
 
 export type {
   CancelLargeFileRequest,
@@ -91,24 +93,29 @@ export type {
 } from './download.ts'
 
 export type {
-  EncryptionAlgorithm,
-  EncryptionMode,
   EncryptionSetting,
   NoEncryption,
   SseB2Setting,
   SseCCustomerSetting,
 } from './encryption.ts'
-export { SSE_B2, SSE_NONE, sseCustomer } from './encryption.ts'
+// `EncryptionAlgorithm` and `EncryptionMode` are forwarded as both type and value.
+export {
+  EncryptionAlgorithm,
+  EncryptionMode,
+  SSE_B2,
+  SSE_NONE,
+  sseCustomer,
+} from './encryption.ts'
 
 export type {
   FileRetentionValue,
-  LegalHoldValue,
-  RetentionMode,
   UpdateFileLegalHoldRequest,
   UpdateFileLegalHoldResponse,
   UpdateFileRetentionRequest,
   UpdateFileRetentionResponse,
 } from './lock.ts'
+// `LegalHoldValue` and `RetentionMode` are forwarded as both type and value.
+export { LegalHoldValue, RetentionMode } from './lock.ts'
 
 export type {
   ApplicationKey,
@@ -128,11 +135,12 @@ export type {
 
 export type {
   EventNotificationRule,
-  EventType,
   GetBucketNotificationRulesRequest,
   GetBucketNotificationRulesResponse,
   SetBucketNotificationRulesRequest,
   SetBucketNotificationRulesResponse,
 } from './notifications.ts'
+// `EventType` is forwarded as both type and value.
+export { EventType } from './notifications.ts'
 
 export type { B2ErrorCode, B2ErrorResponse } from './errors.ts'

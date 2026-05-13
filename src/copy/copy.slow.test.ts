@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { BucketType } from '../types/bucket.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
 
 /**
@@ -59,7 +61,7 @@ describe('copyLargeFile (slow)', () => {
   it('multipart-copies a file whose size exceeds partSize', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-large-src',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const content = deterministic(5_000_010)
@@ -107,7 +109,7 @@ describe('copyLargeFile (slow)', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-fail',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(15_000_000)
     const uploaded = await bucket.upload({
@@ -137,11 +139,11 @@ describe('copyLargeFile (slow)', () => {
   it('copies across buckets', async () => {
     const src = await client.createBucket({
       bucketName: 'copy-cross-src',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const dst = await client.createBucket({
       bucketName: 'copy-cross-dst',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const content = deterministic(5_000_010)
@@ -192,7 +194,7 @@ describe('copyLargeFile (slow)', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-meta-multi',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(10_000_000)
     const uploaded = await bucket.upload({
@@ -203,8 +205,8 @@ describe('copyLargeFile (slow)', () => {
     })
 
     const customInfo = { 'src-tag': 'mp', stage: 'overrides' }
-    const sseDest = { mode: 'SSE-B2', algorithm: 'AES256' } as const
-    const sseSrc = { mode: 'none' } as const
+    const sseDest = { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 } as const
+    const sseSrc = { mode: EncryptionMode.None } as const
     const copied = await copyLargeFile(c.raw, c.accountInfo, {
       sourceFileId: uploaded.fileId,
       fileName: 'meta-multi.bin',
@@ -257,7 +259,7 @@ describe('copyLargeFile (slow)', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-inherit-ct',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(10_000_000)
     const uploaded = await bucket.upload({
@@ -298,7 +300,7 @@ describe('copyLargeFile (slow)', () => {
     await smallClient.authorize()
     const bucket = await smallClient.createBucket({
       bucketName: 'copy-default-conc',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(200_000)
     const uploaded = await bucket.upload({
@@ -336,7 +338,7 @@ describe('copyLargeFile (slow)', () => {
     await smallClient.authorize()
     const bucket = await smallClient.createBucket({
       bucketName: 'copy-exact-boundary',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     // Exactly 2 parts of 100_000 each, no remainder.
     const content = deterministic(200_000)
@@ -382,7 +384,7 @@ describe('copyLargeFile (slow)', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-finish-fail',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(10_000_000)
     const uploaded = await bucket.upload({
@@ -434,7 +436,7 @@ describe('copyLargeFile (slow)', () => {
     await c.authorize()
     const bucket = await c.createBucket({
       bucketName: 'copy-cancel-fail',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const content = deterministic(15_000_000)
     const uploaded = await bucket.upload({

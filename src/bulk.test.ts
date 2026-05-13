@@ -3,6 +3,7 @@ import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { BucketType } from './types/bucket.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -34,7 +35,10 @@ describe('Bucket.deleteMany', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'bulk-many', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({
+      bucketName: 'bulk-many',
+      bucketType: BucketType.AllPrivate,
+    })
   })
 
   it('deletes every supplied target and reports the count', async () => {
@@ -79,7 +83,10 @@ describe('Bucket.deleteAll', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
-    bucket = await client.createBucket({ bucketName: 'bulk-all', bucketType: 'allPrivate' })
+    bucket = await client.createBucket({
+      bucketName: 'bulk-all',
+      bucketType: BucketType.AllPrivate,
+    })
   })
 
   it('streams delete events for every file version in the bucket', async () => {

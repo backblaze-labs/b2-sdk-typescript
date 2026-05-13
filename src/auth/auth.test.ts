@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { AuthorizeAccountResponse } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
@@ -22,7 +22,7 @@ const mockAuth: AuthorizeAccountResponse = {
       bucketName: null,
       namePrefix: null,
       allowed: {
-        capabilities: ['listBuckets', 'readFiles'],
+        capabilities: [Capability.ListBuckets, Capability.ReadFiles],
         bucketId: null,
         bucketName: null,
         namePrefix: null,

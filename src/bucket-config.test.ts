@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
-import type { LifecycleRule } from './types/bucket.ts'
+import { BucketRetentionMode, BucketType, type LifecycleRule } from './types/bucket.ts'
 import { applicationKeyId, bucketId as bucketIdOf } from './types/ids.ts'
 import type { ReplicationRule } from './types/replication.ts'
 
@@ -24,7 +24,7 @@ async function makeBucket(): Promise<{ bucket: Bucket; client: B2Client }> {
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'cfg-bucket',
-    bucketType: 'allPrivate',
+    bucketType: BucketType.AllPrivate,
   })
   return { bucket, client }
 }
@@ -252,21 +252,21 @@ describe('Bucket.defaultRetention helpers', () => {
 
   it('setDefaultRetention persists a compliance-mode policy', async () => {
     const after = await bucket.setDefaultRetention({
-      mode: 'compliance',
+      mode: BucketRetentionMode.Compliance,
       period: { duration: 30, unit: 'days' },
     })
-    expect(after.defaultRetention.mode).toBe('compliance')
+    expect(after.defaultRetention.mode).toBe(BucketRetentionMode.Compliance)
     expect(after.defaultRetention.period?.duration).toBe(30)
     expect(after.defaultRetention.period?.unit).toBe('days')
   })
 
   it('setDefaultRetention round-trips via getDefaultRetention', async () => {
     await bucket.setDefaultRetention({
-      mode: 'governance',
+      mode: BucketRetentionMode.Governance,
       period: { duration: 7, unit: 'years' },
     })
     const fetched = await bucket.getDefaultRetention()
-    expect(fetched.mode).toBe('governance')
+    expect(fetched.mode).toBe(BucketRetentionMode.Governance)
     expect(fetched.period?.duration).toBe(7)
     expect(fetched.period?.unit).toBe('years')
   })

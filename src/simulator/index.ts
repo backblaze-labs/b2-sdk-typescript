@@ -11,10 +11,12 @@
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import type { AuthorizeAccountResponse } from '../types/auth.ts'
-import type { BucketInfo, BucketType } from '../types/bucket.ts'
-import type { FileAction, FileVersion } from '../types/file.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
+import { EncryptionMode } from '../types/encryption.ts'
+import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.ts'
+import type { RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 
 interface StoredFile {
@@ -94,6 +96,14 @@ export interface B2SimulatorOptions {
    * on the slowest CI runners, which trips vitest's IPC RPC timeout.
    */
   minimumPartSize?: number
+  /**
+   * The recommended part size the simulator advertises in
+   * `b2_authorize_account` responses (`apiInfo.storageApi.recommendedPartSize`).
+   * Defaults to `100_000_000` to mirror production B2. Lower this when a test
+   * needs to exercise the SDK's "use the recommended size when the caller
+   * omits `partSize`" default-branch without uploading 100 MB of bytes.
+   */
+  recommendedPartSize?: number
 }
 
 /**
@@ -119,6 +129,7 @@ export class B2Simulator {
   private readonly keys = new Map<string, StoredKey>()
   private readonly notificationRules = new Map<string, EventNotificationRule[]>()
   private readonly minimumPartSize: number
+  private readonly recommendedPartSize: number
 
   /**
    * Constructs a new in-memory B2 simulator.
@@ -126,6 +137,7 @@ export class B2Simulator {
    */
   constructor(options: B2SimulatorOptions = {}) {
     this.minimumPartSize = options.minimumPartSize ?? 5_000_000
+    this.recommendedPartSize = options.recommendedPartSize ?? 100_000_000
   }
 
   /**
@@ -213,7 +225,14 @@ export class B2Simulator {
       case 'b2_cancel_large_file':
         return this.cancelLargeFile(body as { fileId: string })
       case 'b2_list_unfinished_large_files':
-        return this.listUnfinishedLargeFiles(body as { bucketId: string })
+        return this.listUnfinishedLargeFiles(
+          body as {
+            bucketId: string
+            namePrefix?: string
+            startFileId?: string
+            maxFileCount?: number
+          },
+        )
       case 'b2_list_parts':
         return this.listParts(
           body as { fileId: string; startPartNumber?: number; maxPartCount?: number },
@@ -254,7 +273,7 @@ export class B2Simulator {
             fileName: string
             fileId: string
             fileRetention: {
-              mode: 'compliance' | 'governance' | null
+              mode: RetentionMode | null
               retainUntilTimestamp: number | null
             }
           },
@@ -387,7 +406,7 @@ export class B2Simulator {
       contentType,
       data.byteLength,
       sha1,
-      'upload',
+      FileAction.Upload,
     )
     const stored: StoredFile = { fileVersion, data }
     const existing = bucket.files.get(fileName)
@@ -423,7 +442,7 @@ export class B2Simulator {
         partNumber,
         contentLength: data.byteLength,
         contentSha1: sha1,
-        serverSideEncryption: { mode: 'none' },
+        serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: Date.now(),
       },
     }
@@ -452,7 +471,7 @@ export class B2Simulator {
       const versions = bucket.files.get(fileName)
       if (!versions || versions.length === 0) break
       const latest = versions[versions.length - 1]
-      if (!latest || latest.fileVersion.action === 'hide') {
+      if (!latest || latest.fileVersion.action === FileAction.Hide) {
         return { status: 404, headers: {}, data: null }
       }
       return this.serveFile(latest, range)
@@ -510,24 +529,24 @@ export class B2Simulator {
             downloadUrl: 'http://localhost:0',
             infoType: 'storageApi',
             namePrefix: null,
-            recommendedPartSize: 100_000_000,
+            recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: 'http://localhost:0',
             allowed: {
               capabilities: [
-                'listBuckets',
-                'readBuckets',
-                'writeBuckets',
-                'deleteBuckets',
-                'listFiles',
-                'readFiles',
-                'writeFiles',
-                'deleteFiles',
-                'listKeys',
-                'writeKeys',
-                'deleteKeys',
-                'shareFiles',
-                'readBucketNotifications',
-                'writeBucketNotifications',
+                Capability.ListBuckets,
+                Capability.ReadBuckets,
+                Capability.WriteBuckets,
+                Capability.DeleteBuckets,
+                Capability.ListFiles,
+                Capability.ReadFiles,
+                Capability.WriteFiles,
+                Capability.DeleteFiles,
+                Capability.ListKeys,
+                Capability.WriteKeys,
+                Capability.DeleteKeys,
+                Capability.ShareFiles,
+                Capability.ReadBucketNotifications,
+                Capability.WriteBucketNotifications,
               ],
               bucketId: null,
               bucketName: null,
@@ -557,15 +576,18 @@ export class B2Simulator {
       bucketType: req.bucketType,
       bucketInfo: {},
       corsRules: [],
-      defaultServerSideEncryption: { mode: 'none' },
+      defaultServerSideEncryption: { mode: EncryptionMode.None },
       fileLockConfiguration: {
         isClientAuthorizedToRead: true,
-        value: { isFileLockEnabled: false, defaultRetention: { mode: 'none', period: null } },
+        value: {
+          isFileLockEnabled: false,
+          defaultRetention: { mode: BucketRetentionMode.None, period: null },
+        },
       },
       lifecycleRules: [],
       options: [],
       revision: 1,
-      defaultRetention: { mode: 'none', period: null },
+      defaultRetention: { mode: BucketRetentionMode.None, period: null },
       replicationConfiguration: { asReplicationSource: null, asReplicationDestination: null },
     }
     this.buckets.set(bid as string, { info, files: new Map() })
@@ -658,7 +680,7 @@ export class B2Simulator {
     let allFiles = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .map(([_, versions]) => versions[versions.length - 1])
-      .filter((v): v is StoredFile => v !== undefined && v.fileVersion.action !== 'hide')
+      .filter((v): v is StoredFile => v !== undefined && v.fileVersion.action !== FileAction.Hide)
       .map((v) => v.fileVersion)
       .sort((a, b) => a.fileName.localeCompare(b.fileName))
 
@@ -730,7 +752,7 @@ export class B2Simulator {
       'application/octet-stream',
       0,
       'none',
-      'hide',
+      FileAction.Hide,
     )
     const existing = bucket.files.get(req.fileName)
     const stored: StoredFile = { fileVersion, data: new Uint8Array(0) }
@@ -788,7 +810,7 @@ export class B2Simulator {
       sourceStored.fileVersion.contentType,
       sourceStored.data.byteLength,
       sourceStored.fileVersion.contentSha1 ?? 'none',
-      'copy',
+      FileAction.Copy,
     )
     const copied: StoredFile = { fileVersion, data: new Uint8Array(sourceStored.data) }
     const existing = destBucket.files.get(req.fileName)
@@ -872,7 +894,7 @@ export class B2Simulator {
       large.contentType,
       totalSize,
       'none',
-      'upload',
+      FileAction.Upload,
     )
     const stored: StoredFile = { fileVersion, data: combined }
     const existing = bucket.files.get(large.fileName)
@@ -901,18 +923,42 @@ export class B2Simulator {
     }
   }
 
-  private listUnfinishedLargeFiles(req: { bucketId: string }): SimulatorJsonResponse {
-    const files = [...this.largeFiles.values()]
+  private listUnfinishedLargeFiles(req: {
+    bucketId: string
+    namePrefix?: string
+    startFileId?: string
+    maxFileCount?: number
+  }): SimulatorJsonResponse {
+    const prefix = req.namePrefix ?? ''
+    const max = req.maxFileCount ?? 100
+
+    // Real B2 orders unfinished large files by fileName ascending. Sort
+    // here so pagination (via startFileId) is deterministic.
+    const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
-      .map((f) => ({
-        fileId: f.fileId,
-        fileName: f.fileName,
-        accountId: this.accountId,
-        bucketId: f.bucketId,
-        contentType: f.contentType,
-        fileInfo: f.fileInfo,
-      }))
-    return { status: 200, body: { files, nextFileId: null } }
+      .filter((f) => f.fileName.startsWith(prefix))
+      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+
+    // `startFileId` is the cursor returned from a prior page. Skip past
+    // (and including) the entry with that fileId.
+    let startIndex = 0
+    if (req.startFileId !== undefined) {
+      const found = candidates.findIndex((f) => f.fileId === req.startFileId)
+      startIndex = found >= 0 ? found : 0
+    }
+
+    const slice = candidates.slice(startIndex, startIndex + max)
+    const files = slice.map((f) => ({
+      fileId: f.fileId,
+      fileName: f.fileName,
+      accountId: this.accountId,
+      bucketId: f.bucketId,
+      contentType: f.contentType,
+      fileInfo: f.fileInfo,
+    }))
+    const hasMore = startIndex + max < candidates.length
+    const nextFileId = hasMore ? (candidates[startIndex + max]?.fileId ?? null) : null
+    return { status: 200, body: { files, nextFileId } }
   }
 
   private listParts(req: {
@@ -1106,7 +1152,7 @@ export class B2Simulator {
   private updateFileRetention(req: {
     fileName: string
     fileId: string
-    fileRetention: { mode: 'compliance' | 'governance' | null; retainUntilTimestamp: number | null }
+    fileRetention: { mode: RetentionMode | null; retainUntilTimestamp: number | null }
   }): SimulatorJsonResponse {
     for (const bucket of this.buckets.values()) {
       const versions = bucket.files.get(req.fileName)
@@ -1220,7 +1266,7 @@ export class B2Simulator {
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
       replicationStatus: null,
-      serverSideEncryption: { mode: 'none' },
+      serverSideEncryption: { mode: EncryptionMode.None },
       uploadTimestamp: monotonicTimestamp(),
     }
   }

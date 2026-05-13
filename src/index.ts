@@ -72,6 +72,24 @@ export type { DownloadResult } from './download/single.ts'
 
 export { SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.ts'
 
+// Generic pagination helpers. Most callers want the `paginateX()` method
+// on `Bucket` / `B2Client`; these are the underlying building blocks for
+// paginating raw endpoints or composing custom iteration shapes.
+export { paginateItems, paginatePages } from './util/paginator.ts'
+export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'
+
+// Named-constant enum objects paired with the string-literal type aliases.
+// These give users IDE autocomplete and typo protection
+// (`BucketType.AllPrivate` instead of `'allPrivate'`) without breaking the
+// existing string-literal call sites. Each export here has a matching type
+// of the same name forwarded by the `export type *` line below.
+export { BucketRetentionMode, BucketType } from './types/bucket.ts'
+export { Capability } from './types/auth.ts'
+export { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
+export { EventType } from './types/notifications.ts'
+export { FileAction, MetadataDirective } from './types/file.ts'
+export { LegalHoldValue, RetentionMode } from './types/lock.ts'
+
 export type * from './types/index.ts'
 
 export { VERSION } from './version.ts'

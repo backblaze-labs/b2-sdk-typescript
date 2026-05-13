@@ -1,10 +1,43 @@
 import type { FileId } from './ids.ts'
 
-/** File-level Object Lock retention mode. */
-export type RetentionMode = 'compliance' | 'governance'
+/**
+ * Named constants for the file-level Object Lock retention mode.
+ *
+ * @example
+ * ```ts
+ * await object.setRetention(fileId, {
+ *   mode: RetentionMode.Compliance,
+ *   retainUntilTimestamp: Date.now() + 86_400_000,
+ * })
+ * ```
+ */
+export const RetentionMode = {
+  /** Locked: cannot be deleted or modified until `retainUntilTimestamp`, even by the account owner. */
+  Compliance: 'compliance',
+  /** Locked: can be shortened by callers holding the `bypassGovernance` capability. */
+  Governance: 'governance',
+} as const
 
-/** Legal hold status for a file: `'on'` to apply, `'off'` to remove. */
-export type LegalHoldValue = 'on' | 'off'
+/** File-level Object Lock retention mode. Derived from {@link RetentionMode}. */
+export type RetentionMode = (typeof RetentionMode)[keyof typeof RetentionMode]
+
+/**
+ * Named constants for the file legal-hold status.
+ *
+ * @example
+ * ```ts
+ * await object.setLegalHold(fileId, LegalHoldValue.On)
+ * ```
+ */
+export const LegalHoldValue = {
+  /** Apply the legal hold. */
+  On: 'on',
+  /** Remove the legal hold. */
+  Off: 'off',
+} as const
+
+/** Legal hold status for a file. Derived from {@link LegalHoldValue}. */
+export type LegalHoldValue = (typeof LegalHoldValue)[keyof typeof LegalHoldValue]
 
 /** Retention settings for a specific file version under Object Lock. */
 export interface FileRetentionValue {

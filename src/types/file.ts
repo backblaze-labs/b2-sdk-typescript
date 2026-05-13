@@ -3,14 +3,36 @@ import type { AccountId, BucketId, FileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
 /**
- * The action that created a file version.
+ * Named constants for the action that created a file version.
+ *
+ * @example
+ * ```ts
+ * if (file.action === FileAction.Hide) { ... }
+ * ```
+ */
+export const FileAction = {
+  /** Large file upload started but not yet finished. */
+  Start: 'start',
+  /** Normal upload (small or finished large file). */
+  Upload: 'upload',
+  /** Hide marker (soft delete). */
+  Hide: 'hide',
+  /** Virtual folder marker. */
+  Folder: 'folder',
+  /** Created via server-side copy. */
+  Copy: 'copy',
+} as const
+
+/**
+ * The action that created a file version. Derived from {@link FileAction}.
+ *
  * - `'start'`: large file upload started but not yet finished.
  * - `'upload'`: file was uploaded normally.
  * - `'hide'`: file was hidden (soft-deleted).
  * - `'folder'`: virtual folder marker.
  * - `'copy'`: file was created via server-side copy.
  */
-export type FileAction = 'start' | 'upload' | 'hide' | 'folder' | 'copy'
+export type FileAction = (typeof FileAction)[keyof typeof FileAction]
 
 /**
  * Complete metadata for a single file version in B2.
@@ -141,11 +163,22 @@ export interface DeleteFileVersionResponse {
 }
 
 /**
- * Controls how metadata is handled during a file copy.
- * - `'COPY'`: preserve the source file's metadata.
- * - `'REPLACE'`: use the metadata provided in the copy request.
+ * Named constants for how metadata is handled during a file copy.
+ *
+ * @example
+ * ```ts
+ * await bucket.copyFile({ ..., metadataDirective: MetadataDirective.Replace })
+ * ```
  */
-export type MetadataDirective = 'COPY' | 'REPLACE'
+export const MetadataDirective = {
+  /** Preserve the source file's contentType and fileInfo. */
+  Copy: 'COPY',
+  /** Use the values provided in the copy request. */
+  Replace: 'REPLACE',
+} as const
+
+/** Controls how metadata is handled during a file copy. Derived from {@link MetadataDirective}. */
+export type MetadataDirective = (typeof MetadataDirective)[keyof typeof MetadataDirective]
 
 /** Request parameters for the `b2_copy_file` API call. Performs a server-side file copy. */
 export interface CopyFileRequest {

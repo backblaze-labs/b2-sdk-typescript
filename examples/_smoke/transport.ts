@@ -13,7 +13,7 @@
  * they just add to the pre-seeded sim.
  */
 
-import { B2Client } from '@backblaze/b2-sdk'
+import { B2Client, BucketType } from '@backblaze/b2-sdk'
 import type { HttpTransport } from '@backblaze/b2-sdk'
 import { B2Simulator } from '@backblaze/b2-sdk/simulator'
 import { BufferSource } from '@backblaze/b2-sdk/streams'
@@ -45,7 +45,7 @@ export async function smokeTransport(): Promise<HttpTransport | undefined> {
   await setup.authorize()
   const bucket = await setup.createBucket({
     bucketName: SMOKE_BUCKET,
-    bucketType: 'allPrivate',
+    bucketType: BucketType.AllPrivate,
   })
   await bucket.upload({
     fileName: SMOKE_FILE,

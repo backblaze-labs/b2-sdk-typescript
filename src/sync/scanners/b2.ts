@@ -1,5 +1,5 @@
 import type { Bucket } from '../../bucket.ts'
-import type { FileVersion } from '../../types/file.ts'
+import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { B2SyncPath, SyncFolder } from '../types.ts'
 
 /**
@@ -56,7 +56,7 @@ export class B2Folder implements SyncFolder {
     for (const [fileName, versions] of sorted) {
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const selected = versions[0]
-      if (!selected || selected.action === 'hide') continue
+      if (!selected || selected.action === FileAction.Hide) continue
 
       const relativePath = this.prefix !== '' ? fileName.slice(this.prefix.length) : fileName
 

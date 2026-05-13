@@ -1,19 +1,51 @@
 import type { BucketId } from './ids.ts'
 
 /**
- * B2 event types that can trigger notifications.
- * Wildcard patterns (e.g., `'b2:ObjectCreated:*'`) match all sub-events in that category.
+ * Named constants for the B2 event types that can trigger notifications.
+ *
+ * Wildcard variants (`ObjectCreatedAll`, `ObjectDeletedAll`) subscribe to
+ * every sub-event in their category.
+ *
+ * @example
+ * ```ts
+ * await bucket.setNotificationRules([
+ *   {
+ *     name: 'all-uploads',
+ *     eventTypes: [EventType.ObjectCreatedAll],
+ *     isEnabled: true,
+ *     isSuspended: false,
+ *     objectNamePrefix: '',
+ *     suspensionReason: '',
+ *     targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+ *   },
+ * ])
+ * ```
  */
-export type EventType =
-  | 'b2:ObjectCreated:*'
-  | 'b2:ObjectCreated:Upload'
-  | 'b2:ObjectCreated:MultipartUpload'
-  | 'b2:ObjectCreated:Copy'
-  | 'b2:ObjectCreated:Replica'
-  | 'b2:ObjectCreated:Hide'
-  | 'b2:ObjectDeleted:*'
-  | 'b2:ObjectDeleted:Delete'
-  | 'b2:ObjectDeleted:LifecycleRule'
+export const EventType = {
+  /** Wildcard: any `b2:ObjectCreated:*` sub-event. */
+  ObjectCreatedAll: 'b2:ObjectCreated:*',
+  /** A small-file upload (`b2_upload_file`). */
+  ObjectCreatedUpload: 'b2:ObjectCreated:Upload',
+  /** A multipart upload completed (`b2_finish_large_file`). */
+  ObjectCreatedMultipartUpload: 'b2:ObjectCreated:MultipartUpload',
+  /** A server-side copy (`b2_copy_file` or `b2_copy_part`). */
+  ObjectCreatedCopy: 'b2:ObjectCreated:Copy',
+  /** A replica delivered via cross-region replication. */
+  ObjectCreatedReplica: 'b2:ObjectCreated:Replica',
+  /** A hide marker was created (`b2_hide_file`). */
+  ObjectCreatedHide: 'b2:ObjectCreated:Hide',
+  /** Wildcard: any `b2:ObjectDeleted:*` sub-event. */
+  ObjectDeletedAll: 'b2:ObjectDeleted:*',
+  /** A version was permanently deleted (`b2_delete_file_version`). */
+  ObjectDeletedDelete: 'b2:ObjectDeleted:Delete',
+  /** A version was removed by a lifecycle rule. */
+  ObjectDeletedLifecycleRule: 'b2:ObjectDeleted:LifecycleRule',
+} as const
+
+/**
+ * B2 event types that can trigger notifications. Derived from {@link EventType}.
+ */
+export type EventType = (typeof EventType)[keyof typeof EventType]
 
 /** A rule that defines which bucket events trigger webhook notifications and where they are sent. */
 export interface EventNotificationRule {

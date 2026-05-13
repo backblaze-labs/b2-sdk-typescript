@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { Capability } from './types/auth.ts'
+import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
+import { EventType } from './types/notifications.ts'
 
 function makeClient(): { client: B2Client; sim: B2Simulator } {
   const sim = new B2Simulator()
@@ -50,7 +53,7 @@ describe('B2Client with simulator', () => {
   it('creates and lists buckets', async () => {
     const bucket = await client.createBucket({
       bucketName: 'test-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     expect(bucket.name).toBe('test-bucket')
@@ -62,17 +65,17 @@ describe('B2Client with simulator', () => {
   })
 
   it('prevents duplicate bucket names', async () => {
-    await client.createBucket({ bucketName: 'my-bucket', bucketType: 'allPrivate' })
+    await client.createBucket({ bucketName: 'my-bucket', bucketType: BucketType.AllPrivate })
 
     await expect(
-      client.createBucket({ bucketName: 'my-bucket', bucketType: 'allPrivate' }),
+      client.createBucket({ bucketName: 'my-bucket', bucketType: BucketType.AllPrivate }),
     ).rejects.toThrow('Bucket name already in use')
   })
 
   it('deletes a bucket', async () => {
     const bucket = await client.createBucket({
       bucketName: 'to-delete',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.delete()
@@ -82,7 +85,7 @@ describe('B2Client with simulator', () => {
   })
 
   it('gets a bucket by name', async () => {
-    await client.createBucket({ bucketName: 'find-me', bucketType: 'allPublic' })
+    await client.createBucket({ bucketName: 'find-me', bucketType: BucketType.AllPublic })
 
     const found = await client.getBucket('find-me')
     expect(found).not.toBeNull()
@@ -92,7 +95,7 @@ describe('B2Client with simulator', () => {
   it('uploads and lists files', async () => {
     const bucket = await client.createBucket({
       bucketName: 'upload-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const data = new TextEncoder().encode('hello b2 sdk')
@@ -116,7 +119,7 @@ describe('B2Client with simulator', () => {
   it('uploads multiple files and iterates with async generator', async () => {
     const bucket = await client.createBucket({
       bucketName: 'multi-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const names = ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt']
@@ -128,7 +131,7 @@ describe('B2Client with simulator', () => {
     }
 
     const collected: string[] = []
-    for await (const file of bucket.listAllFiles()) {
+    for await (const file of bucket.paginateFileNames()) {
       collected.push(file.fileName)
     }
 
@@ -138,7 +141,7 @@ describe('B2Client with simulator', () => {
   it('uses B2Object handle for upload', async () => {
     const bucket = await client.createBucket({
       bucketName: 'object-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const obj = bucket.file('docs/readme.md')
@@ -186,7 +189,7 @@ describe('B2Client SSRF guard', () => {
                 s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
                 absoluteMinimumPartSize: 5_000_000,
                 recommendedPartSize: 100_000_000,
-                capabilities: ['readFiles', 'writeFiles'],
+                capabilities: [Capability.ReadFiles, Capability.WriteFiles],
                 bucketId: null,
                 bucketName: null,
                 namePrefix: null,
@@ -247,7 +250,7 @@ describe('B2Client SSRF guard', () => {
                 s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
                 absoluteMinimumPartSize: 5_000_000,
                 recommendedPartSize: 100_000_000,
-                capabilities: ['readFiles'],
+                capabilities: [Capability.ReadFiles],
                 bucketId: null,
                 bucketName: null,
                 namePrefix: null,
@@ -291,7 +294,10 @@ describe('downloads', () => {
   })
 
   it('downloads a file by name', async () => {
-    const bucket = await client.createBucket({ bucketName: 'dl-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'dl-test',
+      bucketType: BucketType.AllPrivate,
+    })
     const content = new TextEncoder().encode('download me')
     await bucket.upload({ fileName: 'hello.txt', source: new BufferSource(content) })
 
@@ -304,7 +310,10 @@ describe('downloads', () => {
   })
 
   it('downloads a file by id via B2Object', async () => {
-    const bucket = await client.createBucket({ bucketName: 'dl-id', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'dl-id',
+      bucketType: BucketType.AllPrivate,
+    })
     const content = new TextEncoder().encode('by-id content')
     const uploaded = await bucket.upload({
       fileName: 'byid.bin',
@@ -319,7 +328,10 @@ describe('downloads', () => {
   })
 
   it('downloads a range of bytes', async () => {
-    const bucket = await client.createBucket({ bucketName: 'dl-range', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'dl-range',
+      bucketType: BucketType.AllPrivate,
+    })
     const content = new TextEncoder().encode('0123456789abcdef')
     await bucket.upload({ fileName: 'range.bin', source: new BufferSource(content) })
 
@@ -330,7 +342,10 @@ describe('downloads', () => {
   })
 
   it('throws on download of missing file', async () => {
-    const bucket = await client.createBucket({ bucketName: 'dl-miss', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'dl-miss',
+      bucketType: BucketType.AllPrivate,
+    })
 
     await expect(bucket.download('nope.txt')).rejects.toThrow()
   })
@@ -347,7 +362,10 @@ describe('file operations', () => {
   })
 
   it('gets file info', async () => {
-    const bucket = await client.createBucket({ bucketName: 'info-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'info-test',
+      bucketType: BucketType.AllPrivate,
+    })
     const data = new TextEncoder().encode('info content')
     const uploaded = await bucket.upload({
       fileName: 'info.txt',
@@ -365,7 +383,10 @@ describe('file operations', () => {
   })
 
   it('hides a file and excludes it from listing', async () => {
-    const bucket = await client.createBucket({ bucketName: 'hide-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'hide-test',
+      bucketType: BucketType.AllPrivate,
+    })
     await bucket.upload({
       fileName: 'visible.txt',
       source: new BufferSource(new TextEncoder().encode('see me')),
@@ -386,7 +407,10 @@ describe('file operations', () => {
   })
 
   it('hides a file via B2Object.hide()', async () => {
-    const bucket = await client.createBucket({ bucketName: 'obj-hide', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'obj-hide',
+      bucketType: BucketType.AllPrivate,
+    })
     await bucket.upload({
       fileName: 'to-hide.txt',
       source: new BufferSource(new TextEncoder().encode('data')),
@@ -401,7 +425,10 @@ describe('file operations', () => {
   })
 
   it('deletes a file version', async () => {
-    const bucket = await client.createBucket({ bucketName: 'del-ver', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'del-ver',
+      bucketType: BucketType.AllPrivate,
+    })
     const uploaded = await bucket.upload({
       fileName: 'delete-me.txt',
       source: new BufferSource(new TextEncoder().encode('bye')),
@@ -414,7 +441,10 @@ describe('file operations', () => {
   })
 
   it('deletes via B2Object.deleteVersion()', async () => {
-    const bucket = await client.createBucket({ bucketName: 'obj-del', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'obj-del',
+      bucketType: BucketType.AllPrivate,
+    })
     const uploaded = await bucket.upload({
       fileName: 'obj-delete.txt',
       source: new BufferSource(new TextEncoder().encode('data')),
@@ -428,7 +458,10 @@ describe('file operations', () => {
   })
 
   it('copies a file within the same bucket', async () => {
-    const bucket = await client.createBucket({ bucketName: 'copy-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'copy-test',
+      bucketType: BucketType.AllPrivate,
+    })
     const content = new TextEncoder().encode('copy this')
     const original = await bucket.upload({
       fileName: 'original.txt',
@@ -450,8 +483,14 @@ describe('file operations', () => {
   })
 
   it('copies a file to a different bucket', async () => {
-    const src = await client.createBucket({ bucketName: 'copy-src', bucketType: 'allPrivate' })
-    const dest = await client.createBucket({ bucketName: 'copy-dest', bucketType: 'allPrivate' })
+    const src = await client.createBucket({
+      bucketName: 'copy-src',
+      bucketType: BucketType.AllPrivate,
+    })
+    const dest = await client.createBucket({
+      bucketName: 'copy-dest',
+      bucketType: BucketType.AllPrivate,
+    })
     const content = new TextEncoder().encode('cross-bucket')
     const original = await src.upload({
       fileName: 'source.bin',
@@ -485,7 +524,7 @@ describe('list file versions', () => {
   it('lists all versions of a file including hidden', async () => {
     const bucket = await client.createBucket({
       bucketName: 'versions-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -510,7 +549,7 @@ describe('list file versions', () => {
   it('respects maxFileCount in versions listing', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-page',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     for (let i = 0; i < 5; i++) {
       await bucket.upload({
@@ -538,19 +577,19 @@ describe('update bucket', () => {
   it('updates bucket type', async () => {
     const bucket = await client.createBucket({
       bucketName: 'update-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     expect(bucket.info.bucketType).toBe('allPrivate')
 
-    const updated = await bucket.update({ bucketType: 'allPublic' })
-    expect(updated.bucketType).toBe('allPublic')
+    const updated = await bucket.update({ bucketType: BucketType.AllPublic })
+    expect(updated.bucketType).toBe(BucketType.AllPublic)
     expect(updated.revision).toBe(2)
   })
 
   it('updates bucket info metadata', async () => {
     const bucket = await client.createBucket({
       bucketName: 'meta-update',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const updated = await bucket.update({
@@ -571,7 +610,10 @@ describe('large file operations', () => {
   })
 
   it('starts, uploads parts, and finishes a large file', async () => {
-    const bucket = await client.createBucket({ bucketName: 'large-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'large-test',
+      bucketType: BucketType.AllPrivate,
+    })
 
     const startResp = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
@@ -634,7 +676,7 @@ describe('large file operations', () => {
   it('cancels a large file', async () => {
     const bucket = await client.createBucket({
       bucketName: 'large-cancel',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const startResp = await client.raw.startLargeFile(
@@ -661,7 +703,7 @@ describe('large file operations', () => {
   it('lists unfinished large files', async () => {
     const bucket = await client.createBucket({
       bucketName: 'large-list',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await client.raw.startLargeFile(
@@ -700,7 +742,7 @@ describe('Bucket large-file high-level helpers', () => {
   it('cancelLargeFile cleans up an in-progress upload via the Bucket handle', async () => {
     const bucket = await client.createBucket({
       bucketName: 'cancel-via-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const startResp = await client.raw.startLargeFile(
@@ -719,7 +761,7 @@ describe('Bucket large-file high-level helpers', () => {
   it('listUnfinishedLargeFiles exposes unfinished uploads scoped to this bucket', async () => {
     const bucket = await client.createBucket({
       bucketName: 'list-unfinished',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await client.raw.startLargeFile(
@@ -752,7 +794,7 @@ describe('download authorization', () => {
   it('gets a download authorization token', async () => {
     const bucket = await client.createBucket({
       bucketName: 'dl-auth',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const auth = await bucket.getDownloadAuthorization('photos/', 3600)
@@ -775,7 +817,7 @@ describe('listing with prefix and pagination', () => {
   it('filters files by prefix', async () => {
     const bucket = await client.createBucket({
       bucketName: 'prefix-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await bucket.upload({
       fileName: 'photos/a.jpg',
@@ -799,7 +841,10 @@ describe('listing with prefix and pagination', () => {
   })
 
   it('paginates file listing with maxFileCount', async () => {
-    const bucket = await client.createBucket({ bucketName: 'page-test', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'page-test',
+      bucketType: BucketType.AllPrivate,
+    })
     for (let i = 0; i < 5; i++) {
       await bucket.upload({
         fileName: `file-${String(i).padStart(2, '0')}.txt`,
@@ -822,7 +867,7 @@ describe('listing with prefix and pagination', () => {
   it('async generator iterates all pages', async () => {
     const bucket = await client.createBucket({
       bucketName: 'allfiles-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const fileNames: string[] = []
     for (let i = 0; i < 10; i++) {
@@ -835,7 +880,7 @@ describe('listing with prefix and pagination', () => {
     }
 
     const collected: string[] = []
-    for await (const file of bucket.listAllFiles({ pageSize: 3 })) {
+    for await (const file of bucket.paginateFileNames({ pageSize: 3 })) {
       collected.push(file.fileName)
     }
 
@@ -856,7 +901,7 @@ describe('file versioning', () => {
   it('uploading same name creates new version, download returns latest', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-dl',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -879,7 +924,7 @@ describe('file versioning', () => {
   it('hidden file throws on download', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-hide-dl',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -910,7 +955,7 @@ describe('key management', () => {
       client.accountInfo.getAuthToken(),
       {
         accountId: accountId(client.accountInfo.getAccountId()),
-        capabilities: ['readFiles', 'writeFiles'],
+        capabilities: [Capability.ReadFiles, Capability.WriteFiles],
         keyName: 'test-key',
       },
     )
@@ -918,8 +963,8 @@ describe('key management', () => {
     expect(key.keyName).toBe('test-key')
     expect(key.applicationKeyId).toBeTruthy()
     expect(key.applicationKey).toBeTruthy()
-    expect(key.capabilities).toContain('readFiles')
-    expect(key.capabilities).toContain('writeFiles')
+    expect(key.capabilities).toContain(Capability.ReadFiles)
+    expect(key.capabilities).toContain(Capability.WriteFiles)
 
     const listing = await client.raw.listKeys(
       client.accountInfo.getApiUrl(),
@@ -940,7 +985,7 @@ describe('key management', () => {
       client.accountInfo.getAuthToken(),
       {
         accountId: accountId(client.accountInfo.getAccountId()),
-        capabilities: ['listBuckets'],
+        capabilities: [Capability.ListBuckets],
         keyName: 'to-delete',
       },
     )
@@ -963,14 +1008,17 @@ describe('key management', () => {
 
   it('creates a key scoped to a bucket', async () => {
     const { accountId } = await import('./types/ids.ts')
-    const bucket = await client.createBucket({ bucketName: 'key-scope', bucketType: 'allPrivate' })
+    const bucket = await client.createBucket({
+      bucketName: 'key-scope',
+      bucketType: BucketType.AllPrivate,
+    })
 
     const key = await client.raw.createKey(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
       {
         accountId: accountId(client.accountInfo.getAccountId()),
-        capabilities: ['readFiles'],
+        capabilities: [Capability.ReadFiles],
         keyName: 'scoped-key',
         bucketId: bucket.id,
         namePrefix: 'photos/',
@@ -995,7 +1043,7 @@ describe('notification rules', () => {
   it('gets empty notification rules for new bucket', async () => {
     const bucket = await client.createBucket({
       bucketName: 'notif-empty',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const rules = await bucket.getNotificationRules()
@@ -1006,11 +1054,11 @@ describe('notification rules', () => {
   it('sets and gets notification rules', async () => {
     const bucket = await client.createBucket({
       bucketName: 'notif-set',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const rule = {
-      eventTypes: ['b2:ObjectCreated:*'] as const,
+      eventTypes: [EventType.ObjectCreatedAll] as const,
       isEnabled: true,
       isSuspended: false,
       name: 'upload-webhook',
@@ -1036,12 +1084,12 @@ describe('notification rules', () => {
   it('replaces notification rules', async () => {
     const bucket = await client.createBucket({
       bucketName: 'notif-replace',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.setNotificationRules([
       {
-        eventTypes: ['b2:ObjectCreated:*'],
+        eventTypes: [EventType.ObjectCreatedAll],
         isEnabled: true,
         isSuspended: false,
         name: 'rule-1',
@@ -1053,7 +1101,7 @@ describe('notification rules', () => {
 
     await bucket.setNotificationRules([
       {
-        eventTypes: ['b2:ObjectDeleted:*'],
+        eventTypes: [EventType.ObjectDeletedAll],
         isEnabled: true,
         isSuspended: false,
         name: 'rule-2',
@@ -1082,7 +1130,7 @@ describe('file retention and legal hold', () => {
   it('updates file retention on a file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'retention-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('retain me')
     const uploaded = await bucket.upload({
@@ -1102,7 +1150,7 @@ describe('file retention and legal hold', () => {
   it('updates file legal hold on a file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'legal-hold-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('hold me')
     const uploaded = await bucket.upload({
@@ -1120,7 +1168,7 @@ describe('file retention and legal hold', () => {
   it('removes legal hold from a file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'legal-hold-off',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('release me')
     const uploaded = await bucket.upload({
@@ -1137,7 +1185,7 @@ describe('file retention and legal hold', () => {
   it('retention is reflected in file info after update', async () => {
     const bucket = await client.createBucket({
       bucketName: 'retention-info',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('check info')
     const uploaded = await bucket.upload({
@@ -1156,7 +1204,7 @@ describe('file retention and legal hold', () => {
   it('legal hold is reflected in file info after update', async () => {
     const bucket = await client.createBucket({
       bucketName: 'legalhold-info',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('check hold')
     const uploaded = await bucket.upload({
@@ -1174,7 +1222,7 @@ describe('file retention and legal hold', () => {
   it('updateFileRetention forwards bypassGovernance flag', async () => {
     const bucket = await client.createBucket({
       bucketName: 'bypass-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const data = new TextEncoder().encode('bypass me')
     const uploaded = await bucket.upload({
@@ -1199,15 +1247,19 @@ describe('B2Client.hasCapabilities', () => {
   })
 
   it('returns ok: true when every needed capability is present', () => {
-    const result = client.hasCapabilities(['listBuckets', 'readFiles', 'writeFiles'])
+    const result = client.hasCapabilities([
+      Capability.ListBuckets,
+      Capability.ReadFiles,
+      Capability.WriteFiles,
+    ])
     expect(result.ok).toBe(true)
     expect(result.missing).toEqual([])
   })
 
   it('returns ok: false with the missing list when capabilities are absent', () => {
-    const result = client.hasCapabilities(['listBuckets', 'bypassGovernance' as never])
+    const result = client.hasCapabilities([Capability.ListBuckets, Capability.BypassGovernance])
     expect(result.ok).toBe(false)
-    expect(result.missing).toEqual(['bypassGovernance'])
+    expect(result.missing).toEqual([Capability.BypassGovernance])
   })
 
   it('handles an empty needed array', () => {
@@ -1220,7 +1272,7 @@ describe('B2Client.hasCapabilities', () => {
       applicationKey: 'test-key',
       transport: new B2Simulator().transport(),
     })
-    expect(() => unauth.hasCapabilities(['listBuckets'])).toThrow(/Not authorized/)
+    expect(() => unauth.hasCapabilities([Capability.ListBuckets])).toThrow(/Not authorized/)
   })
 })
 
@@ -1235,7 +1287,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('getFileInfoByName returns the latest visible file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'gfibn',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const uploaded = await bucket.upload({
       fileName: 'visible.txt',
@@ -1250,7 +1302,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('getFileInfoByName returns null for unknown file', async () => {
     const bucket = await client.createBucket({
       bucketName: 'gfibn-missing',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const info = await bucket.getFileInfoByName('nope.txt')
     expect(info).toBeNull()
@@ -1259,7 +1311,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('getFileInfoByName returns null for a hidden file', async () => {
     const bucket = await client.createBucket({
       bucketName: 'gfibn-hidden',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await bucket.upload({
       fileName: 'shy.txt',
@@ -1274,7 +1326,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('unhide removes the hide marker and restores visibility', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-test',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await bucket.upload({
       fileName: 'restore.txt',
@@ -1293,7 +1345,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('unhide returns null when there is no hide marker on top', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-noop',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     await bucket.upload({
       fileName: 'plain.txt',
@@ -1307,7 +1359,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
   it('unhide returns null when the file does not exist', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-missing',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
     const result = await bucket.unhide('ghost.txt')
     expect(result).toBeNull()

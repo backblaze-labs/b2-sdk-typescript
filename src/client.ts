@@ -21,6 +21,7 @@ import type { ApplicationKeyId, BucketId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
 import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.ts'
 import type { ReplicationConfiguration } from './types/replication.ts'
+import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
 /** Result of {@link B2Client.hasCapabilities}. */
 export interface CapabilityCheckResult {
@@ -279,6 +280,36 @@ export class B2Client {
       accountId: accountId(this.accountInfo.getAccountId()),
       ...options,
     })
+  }
+
+  /**
+   * Async iterator that yields every application key on the account,
+   * automatically handling pagination via `listKeys`.
+   *
+   * @param options - Pagination + abort options. `pageSize` is forwarded
+   *   to `maxKeyCount`; the default is 1000.
+   *
+   * @returns An async iterable of {@link ApplicationKey} entries.
+   *
+   * @example
+   * ```ts
+   * for await (const key of client.paginateKeys()) {
+   *   console.log(key.keyName, key.capabilities)
+   * }
+   * ```
+   */
+  paginateKeys(options?: PaginatorOptions): AsyncIterableIterator<ApplicationKey> {
+    return paginateItems(
+      async (cursor: ApplicationKeyId | undefined) => {
+        const resp = await this.listKeys({
+          maxKeyCount: options?.pageSize ?? 1000,
+          ...(cursor !== undefined ? { startApplicationKeyId: cursor } : {}),
+        })
+        return { page: resp, nextCursor: resp.nextApplicationKeyId ?? undefined }
+      },
+      (page) => page.keys,
+      options?.signal,
+    )
   }
 
   /**

@@ -27,10 +27,11 @@ import type {
   GetBucketNotificationRulesResponse,
 } from './types/notifications.ts'
 import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
-import type { CancelLargeFileResponse } from './types/upload.ts'
+import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import { uploadSmallFile } from './upload/single.ts'
+import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
 /** A target for bulk deletion: a file name and its specific version ID. */
 export interface DeleteTarget {
@@ -255,33 +256,153 @@ export class Bucket {
   }
 
   /**
-   * Async generator that iterates over all files in the bucket, automatically handling pagination.
-   * @param options - Optional prefix, delimiter, and page size.
+   * Async iterator that yields the latest visible version of every file in
+   * the bucket, automatically handling pagination via `listFileNames`.
    *
-   * @returns An async generator of individual {@link FileVersion} objects.
+   * Hidden files (those whose latest version is a hide marker) are NOT
+   * yielded by this iterator. Use {@link paginateFileVersions} when you
+   * need full version history.
+   *
+   * @param options - Filter + pagination + abort options. `pageSize` is
+   *   forwarded to `b2_list_file_names`'s `maxFileCount` (default 1000,
+   *   B2-capped at 10000).
+   *
+   * @returns An async iterable of {@link FileVersion} entries.
+   *
+   * @example
+   * ```ts
+   * for await (const file of bucket.paginateFileNames({ prefix: 'photos/' })) {
+   *   console.log(file.fileName, file.contentLength)
+   * }
+   * ```
    */
-  async *listAllFiles(options?: {
-    /** Only list files with names starting with this prefix. */
-    prefix?: string
-    /** Delimiter for virtual directory grouping. */
-    delimiter?: string
-    /** Number of files to fetch per API call (default 1000). */
-    pageSize?: number
-  }): AsyncGenerator<FileVersion> {
-    let startFileName: string | undefined
-    for (;;) {
-      const resp = await this.listFileNames({
-        ...(startFileName !== undefined ? { startFileName } : {}),
-        maxFileCount: options?.pageSize ?? 1000,
-        ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
-        ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
-      })
-      for (const file of resp.files) {
-        yield file
-      }
-      if (!resp.nextFileName) break
-      startFileName = resp.nextFileName
-    }
+  paginateFileNames(
+    options?: {
+      /** Only yield files whose names start with this prefix. */
+      prefix?: string
+      /** Delimiter for virtual directory grouping (typically `'/'`). */
+      delimiter?: string
+    } & PaginatorOptions,
+  ): AsyncIterableIterator<FileVersion> {
+    return paginateItems(
+      async (cursor: string | undefined) => {
+        const resp = await this.listFileNames({
+          maxFileCount: options?.pageSize ?? 1000,
+          ...(cursor !== undefined ? { startFileName: cursor } : {}),
+          ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
+          ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+        })
+        return { page: resp, nextCursor: resp.nextFileName ?? undefined }
+      },
+      (page) => page.files,
+      options?.signal,
+    )
+  }
+
+  /**
+   * Async iterator that yields every version of every file in the bucket,
+   * including hidden files and historical versions, automatically handling
+   * pagination via `listFileVersions`.
+   *
+   * The two-cursor `(nextFileName, nextFileId)` continuation that the raw
+   * endpoint exposes is threaded internally; callers iterate flat.
+   *
+   * @param options - Filter + pagination + abort options.
+   *
+   * @returns An async iterable of {@link FileVersion} entries.
+   */
+  paginateFileVersions(
+    options?: {
+      /** Only yield versions whose names start with this prefix. */
+      prefix?: string
+      /** Delimiter for virtual directory grouping. */
+      delimiter?: string
+    } & PaginatorOptions,
+  ): AsyncIterableIterator<FileVersion> {
+    type Cursor = { fileName: string; fileId: FileId | undefined }
+    return paginateItems(
+      async (cursor: Cursor | undefined) => {
+        const resp = await this.listFileVersions({
+          maxFileCount: options?.pageSize ?? 1000,
+          ...(cursor !== undefined ? { startFileName: cursor.fileName } : {}),
+          ...(cursor?.fileId !== undefined ? { startFileId: cursor.fileId } : {}),
+          ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
+          ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+        })
+        const nextCursor: Cursor | undefined =
+          resp.nextFileName !== null
+            ? { fileName: resp.nextFileName, fileId: resp.nextFileId ?? undefined }
+            : undefined
+        return { page: resp, nextCursor }
+      },
+      (page) => page.files,
+      options?.signal,
+    )
+  }
+
+  /**
+   * Async iterator that yields every unfinished large file in the bucket,
+   * automatically handling pagination via `listUnfinishedLargeFiles`.
+   *
+   * Useful for janitorial scripts that want to inspect or cancel abandoned
+   * multipart uploads (typically followed by {@link cancelLargeFile} on
+   * the underlying raw client).
+   *
+   * @param options - Filter + pagination + abort options. `pageSize` is
+   *   B2-capped at 100 for this endpoint.
+   *
+   * @returns An async iterable of unfinished-large-file metadata entries.
+   */
+  paginateUnfinishedLargeFiles(
+    options?: {
+      /** Only yield large files whose names start with this prefix. */
+      namePrefix?: string
+    } & PaginatorOptions,
+  ): AsyncIterableIterator<UnfinishedLargeFile> {
+    return paginateItems(
+      async (cursor: LargeFileId | undefined) => {
+        const resp = await this.listUnfinishedLargeFiles({
+          maxFileCount: options?.pageSize ?? 100,
+          ...(cursor !== undefined ? { startFileId: cursor } : {}),
+          ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
+        })
+        return { page: resp, nextCursor: resp.nextFileId ?? undefined }
+      },
+      (page) => page.files,
+      options?.signal,
+    )
+  }
+
+  /**
+   * Async iterator that yields every uploaded part for a specific large
+   * file, automatically handling pagination via `listParts`.
+   *
+   * @param largeFileId - The unfinished large file to enumerate parts of.
+   * @param options - Pagination + abort options. `pageSize` is B2-capped
+   *   at 1000 for this endpoint; the default is 1000.
+   *
+   * @returns An async iterable of {@link PartInfo} entries.
+   */
+  paginateParts(
+    largeFileId: LargeFileId,
+    options?: PaginatorOptions,
+  ): AsyncIterableIterator<PartInfo> {
+    return paginateItems(
+      async (cursor: number | undefined) => {
+        const resp = await this.client.raw.listParts(
+          this.client.accountInfo.getApiUrl(),
+          this.client.accountInfo.getAuthToken(),
+          {
+            fileId: largeFileId,
+            maxPartCount: options?.pageSize ?? 1000,
+            ...(cursor !== undefined ? { startPartNumber: cursor } : {}),
+          },
+        )
+        return { page: resp, nextCursor: resp.nextPartNumber ?? undefined }
+      },
+      (page) => page.parts,
+      options?.signal,
+    )
   }
 
   /**

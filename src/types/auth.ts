@@ -1,36 +1,80 @@
 import type { AccountId, AuthToken, BucketId } from './ids.ts'
 
 /**
- * A B2 API capability that can be granted to an application key.
- * Each capability controls access to a specific set of API operations.
+ * Named constants for the B2 API capabilities that can be granted to an
+ * application key. Each capability controls access to a specific set of
+ * API operations.
+ *
+ * Use these when constructing the `capabilities` array for an application
+ * key request, or when checking required capabilities via
+ * `B2Client.hasCapabilities`.
+ *
+ * @example
+ * ```ts
+ * const check = client.hasCapabilities([Capability.WriteFiles, Capability.ReadFiles])
+ * if (!check.ok) throw new Error(`missing: ${check.missing.join(', ')}`)
+ * ```
  */
-export type Capability =
-  | 'listKeys'
-  | 'writeKeys'
-  | 'deleteKeys'
-  | 'listBuckets'
-  | 'listAllBucketNames'
-  | 'readBuckets'
-  | 'writeBuckets'
-  | 'deleteBuckets'
-  | 'readBucketRetentions'
-  | 'writeBucketRetentions'
-  | 'readBucketEncryption'
-  | 'writeBucketEncryption'
-  | 'readBucketReplications'
-  | 'writeBucketReplications'
-  | 'readBucketNotifications'
-  | 'writeBucketNotifications'
-  | 'listFiles'
-  | 'readFiles'
-  | 'shareFiles'
-  | 'writeFiles'
-  | 'deleteFiles'
-  | 'readFileLegalHolds'
-  | 'writeFileLegalHolds'
-  | 'readFileRetentions'
-  | 'writeFileRetentions'
-  | 'bypassGovernance'
+export const Capability = {
+  /** List application keys. */
+  ListKeys: 'listKeys',
+  /** Create new application keys. */
+  WriteKeys: 'writeKeys',
+  /** Delete application keys. */
+  DeleteKeys: 'deleteKeys',
+  /** List buckets (subject to key restrictions). */
+  ListBuckets: 'listBuckets',
+  /** List bucket names without other metadata. */
+  ListAllBucketNames: 'listAllBucketNames',
+  /** Read bucket settings. */
+  ReadBuckets: 'readBuckets',
+  /** Create and update buckets. */
+  WriteBuckets: 'writeBuckets',
+  /** Remove existing buckets from the account. */
+  DeleteBuckets: 'deleteBuckets',
+  /** Read bucket-level Object Lock retention settings. */
+  ReadBucketRetentions: 'readBucketRetentions',
+  /** Modify bucket-level Object Lock retention settings. */
+  WriteBucketRetentions: 'writeBucketRetentions',
+  /** Read default bucket encryption settings. */
+  ReadBucketEncryption: 'readBucketEncryption',
+  /** Modify default bucket encryption settings. */
+  WriteBucketEncryption: 'writeBucketEncryption',
+  /** Read bucket replication configuration. */
+  ReadBucketReplications: 'readBucketReplications',
+  /** Modify bucket replication configuration. */
+  WriteBucketReplications: 'writeBucketReplications',
+  /** Read bucket event-notification rules. */
+  ReadBucketNotifications: 'readBucketNotifications',
+  /** Modify bucket event-notification rules. */
+  WriteBucketNotifications: 'writeBucketNotifications',
+  /** List file names and versions. */
+  ListFiles: 'listFiles',
+  /** Download files. */
+  ReadFiles: 'readFiles',
+  /** Mint download authorisation tokens. */
+  ShareFiles: 'shareFiles',
+  /** Upload files. */
+  WriteFiles: 'writeFiles',
+  /** Delete file versions. */
+  DeleteFiles: 'deleteFiles',
+  /** Read per-file legal hold flags. */
+  ReadFileLegalHolds: 'readFileLegalHolds',
+  /** Modify per-file legal hold flags. */
+  WriteFileLegalHolds: 'writeFileLegalHolds',
+  /** Read per-file Object Lock retention settings. */
+  ReadFileRetentions: 'readFileRetentions',
+  /** Modify per-file Object Lock retention settings. */
+  WriteFileRetentions: 'writeFileRetentions',
+  /** Shorten governance-mode retention. */
+  BypassGovernance: 'bypassGovernance',
+} as const
+
+/**
+ * A B2 API capability that can be granted to an application key. Derived
+ * from {@link Capability}.
+ */
+export type Capability = (typeof Capability)[keyof typeof Capability]
 
 /** Describes the capabilities and scope restrictions of an authorized application key. */
 export interface AllowedInfo {
