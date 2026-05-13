@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — security
+
+- **SSRF / URL-substitution guard** in the default `FetchTransport`. After `B2Client.authorize()`, the transport rejects any URL whose host falls outside the realm's parent domain (`backblazeb2.com`, `backblaze.com`) plus user-supplied allow-list entries. Literal IPv4/IPv6 addresses, `localhost`, `metadata.google.internal`, `*.internal`, and `*.local` are rejected unconditionally. New `B2SsrfError` (non-retryable, attaches the offending URL). New public `UrlGuard` class and `deriveAllowedSuffixes()` helper exported from the main entry. Of 29 audited B2 packages in the npm ecosystem, none ship SSRF protection. See [SSRF guard](README.md#ssrf-guard).
+- **`B2ClientOptions.allowedHostSuffixes`** — optional extra hosts merged into the guard's allow-list after authorize, for self-hosted proxies / debugging.
+- **Audit-derived regression tests** anchored to specific ecosystem failure modes:
+  - `src/upload/resume.safety.node.test.ts` fails if the resume module ever imports `node:fs` (prevents s3up-style on-disk uploadId leak).
+  - Concurrency invariants on `UploadUrlPool` (no double-issue, evict-on-held safety, key isolation, 1000-cycle stress).
+  - Monotonicity assertion on `onProgress` event sequences during multipart uploads.
+
+### Added — source-level isomorphism
+
+- **`.ts` extensions on every internal relative import.** `tsconfig.json` enables `allowImportingTsExtensions` + `rewriteRelativeImportExtensions`. One source tree now runs unmodified in Node 22+, Bun, Deno (no build step, no `node_modules`, no `npm:` shim), browsers, Cloudflare Workers, and Vercel Edge. Vite rewrites the extensions during build so consumers still see `./foo.js` in dist/.
+- **Deno typecheck workflow** verifies the property on every push: `deno check examples/...` resolves `@backblaze/b2-sdk` straight at `../src/*.ts` via `examples/deno.json`. If a `.js` extension ever sneaks back into an internal import, the workflow fails immediately.
+- **JSON-imported version constant.** `src/version.ts` does `import pkg from '../package.json' with { type: 'json' }; export const VERSION = pkg.version`. Bumping the package version automatically propagates to the User-Agent header and the published artifact — no separate `src/version.ts` to maintain, no sync script. Rollup tree-shakes the JSON down to a 133-byte module containing only the version field; no devDependency or metadata leak to consumers.
+
+### Added — telemetry & identity
+
+- **Stable, greppable User-Agent.** Format: `b2-sdk-ts/<version> (typescript; @backblaze/b2-sdk; <runtime>; [os; ][arch])`. Both `b2-sdk-ts/` (stable product token) and `@backblaze/b2-sdk` (npm package name) are part of the documented contract — log queries can match either. Runtime detection covers Node, Bun, Deno, and browser; OS + arch reported on non-browser runtimes. Custom `userAgent` from `B2ClientOptions` is prepended verbatim. New exported constants `SDK_PRODUCT` and `SDK_PACKAGE` from `@backblaze/b2-sdk`.
+
+### Added — CI & examples
+
+- **`real-examples` CI job** runs every documented `npx tsx examples/...` command against a real B2 account after the integration suite passes (Node 22 + 24, serialised). The runner asserts content round-trip equality for both `node-download` and `node-backup-cli restore`. A renamed flag, swapped argument order, or stale README command fails CI before reaching users.
+- **`smoke-examples` CI job** runs the same examples against an in-memory `B2Simulator` on every push and PR — zero credentials, zero network, zero cost. Exercises the `npx tsx`/`exports`-map resolution path the same way an `npm install`-ed consumer would.
+- **Real-B2 integration workflow** (`.github/workflows/integration.yml`) runs the integration suite sequentially across Node 22 + 24 with `max-parallel: 1`, on push, PR, weekly schedule, and `workflow_dispatch`. Defensive `sdk-test-*` bucket sweep at startup absorbs leftovers from crashed runs.
+- **Examples Deno + Bun typecheck jobs.** `bunx tsc --noEmit -p examples/tsconfig.json` and `deno check` (via `examples/deno.json` import map) run on every push.
+
+### Changed — lint gate
+
+- **`pnpm lint` now uses `biome check --error-on-warnings`.** Any warning — not just an error — fails CI. The previous 17 baseline warnings (all `lint/suspicious/noExplicitAny` in test mocks) were converted to `as unknown as <RealType>` casts.
+
+### Changed — CI matrix timeouts
+
+- **`LARGE_TEST_TIMEOUT = 60_000`** applied to copy + write-stream tests in `src/copy/copy.test.ts` and `src/upload/stream.test.ts`, matching the existing calibration in `src/upload/upload.test.ts`. macOS GitHub-hosted runners are ~2-3× slower than typical local Macs for the simulator's per-part SHA-1 computation; the previous hardcoded 30 s budget was getting clipped on bad scheduling ticks.
+
+### Added — docs
+
+- **Bundle-size table** in the Quality section, measured per-subpath via Bun's bundler with tree-shaking enabled (main entry: ~9.6 KB gzipped; `/errors`: 670 B gzipped; `/streams`: 801 B gzipped; `/simulator`: 5.3 KB gzipped).
+- **Source-isomorphism section** in the README documenting how `deno check examples/` against `src/` works without a build step.
+- **Identifying your traffic (User-Agent)** section in the README documents the contract and how to prepend an application prefix.
+
 ### Added — isomorphic test coverage
 
 - **Vitest browser-mode test suite** under `pnpm test:browser`. The full test surface (minus `*.node.test.ts` files) runs in real Chromium, Firefox, and WebKit via Playwright. CI parallelizes per engine via `VITEST_BROWSER_INSTANCE`.

@@ -486,6 +486,29 @@ const client = new B2Client({
 })
 ```
 
+## Identifying your traffic (User-Agent)
+
+Every request the SDK issues carries a User-Agent header that Backblaze can grep server logs by:
+
+```
+b2-sdk-ts/0.1.0 (typescript; @backblaze/b2-sdk; node/24.14.1; linux; x64)
+```
+
+Both `b2-sdk-ts/` (stable product token) and `@backblaze/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
+
+The version is read straight from `package.json` via a JSON import attribute, so bumping the package version automatically propagates to the UA, the published artifact, and the runtime constant. There is no second source of truth to keep in sync.
+
+To prepend your own application identifier:
+
+```ts
+const client = new B2Client({
+  applicationKeyId,
+  applicationKey,
+  userAgent: 'my-app/1.0',
+})
+// → "my-app/1.0 b2-sdk-ts/0.1.0 (typescript; @backblaze/b2-sdk; node/24.14.1; linux; x64)"
+```
+
 ## SSRF guard
 
 The default `FetchTransport` ships an allow-list guard that rejects any URL whose host falls outside the authorized B2 realm. This defends against URL-substitution attacks where a compromised or hostile B2 endpoint could return an upload URL pointing at an internal service (e.g. cloud metadata at `169.254.169.254`) and trick the SDK into making an authenticated request to it.
@@ -630,10 +653,13 @@ This SDK is held to standards most B2 packages aren't.
 | Signal | Value |
 |---|---|
 | Statement coverage | **≥ 95%** (CI-gated) |
-| Test count | 520+ passing on Node, 1,431+ across 3 browser engines |
+| Test count | 528+ passing on Node, 1,431+ across 3 browser engines |
 | Runtime matrix | Linux × (Node 22, Node 24), Windows × (Node 22, Node 24), macOS × (Node 22, Node 24), plus Bun, plus Chromium/Firefox/WebKit |
 | TypeScript strictness | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` + `verbatimModuleSyntax` |
+| Lint gate | `biome check --error-on-warnings` — any warning fails CI |
 | Doc coverage | TypeDoc + ESLint JSDoc rules treat warnings as errors |
+| Real-B2 integration | Dedicated CI workflow (sequential Node 22 + 24), creates and tears down ephemeral buckets per run |
+| Cookbook examples in CI | Every `npx tsx examples/...` command from the docs runs end-to-end in CI, against the in-memory simulator on every push and against real B2 after the integration suite passes |
 | Bundle hygiene | `sideEffects: false`, subpath exports for tree-shaking |
 | Runtime dependencies | **zero** in the core package |
 

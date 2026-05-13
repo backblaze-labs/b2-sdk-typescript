@@ -87,17 +87,13 @@ function detectPlatform(): Platform {
 /**
  * Build the User-Agent header value the SDK sends on every B2 request.
  *
- * Default format:
- * ```
- * b2-sdk-ts/<version> (typescript; @backblaze/b2-sdk; <runtime>; <os>; <arch>)
- * ```
- *
- * `<os>` and `<arch>` are omitted when not detectable (e.g. inside a browser).
- * A custom prefix from {@link import('../client.ts').B2ClientOptions.userAgent}
- * is prepended verbatim so app-level identifiers come first:
- * ```
- * my-app/1.0 b2-sdk-ts/0.1.0 (typescript; @backblaze/b2-sdk; node/24.14.1; linux; x64)
- * ```
+ * The product token, npm package name, language label, runtime, OS, and
+ * architecture are emitted in that order, separated by semicolons inside a
+ * single parenthesised comment block. OS and architecture are omitted on
+ * runtimes that don't expose them (notably browsers). A custom prefix passed
+ * via `B2ClientOptions.userAgent` is prepended verbatim so app-level
+ * identifiers come first. See the README "Identifying your traffic" section
+ * for examples.
  *
  * @param custom - Optional prefix prepended to the default User-Agent.
  *

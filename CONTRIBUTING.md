@@ -26,10 +26,12 @@ pnpm test
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (target ≥ 95% statements) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
-| `pnpm lint` | Check formatting + lint rules (Biome) |
+| `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
 | `pnpm lint:docs` | Check JSDoc / TSDoc completeness with ESLint |
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
+| `pnpm typecheck:examples` | Typecheck the cookbook examples against `src/` |
+| `pnpm test:integration` | Run integration tests against real B2 (auto-skips without credentials) |
 | `pnpm docs` | Generate TypeDoc API documentation under `./docs` |
 
 CI also runs `bun test src/` against the same test suite plus a per-engine browser matrix (Chromium / Firefox / WebKit). Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
@@ -53,13 +55,15 @@ One-time local browser setup: `pnpm exec playwright install chromium firefox web
 ## Before submitting a PR
 
 1. `pnpm typecheck` passes with zero errors
-2. `pnpm test` passes with all tests green
-3. `pnpm test:coverage` keeps coverage at or above 95% statements
-4. `pnpm lint` and `pnpm lint:docs` both pass with no errors
-5. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
-6. If you added a new public API, add a test using the `B2Simulator`
-7. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
-8. If you added a new exported type used in any public method signature, re-export it from `src/index.ts` (TypeDoc fails the docs job otherwise)
+2. `pnpm typecheck:examples` passes with zero errors
+3. `pnpm test` passes with all tests green
+4. `pnpm test:coverage` keeps coverage at or above 95% statements
+5. `pnpm lint` and `pnpm lint:docs` both pass with **zero warnings** (the `lint` script uses `--error-on-warnings`)
+6. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
+7. If you added a new public API, add a test using the `B2Simulator`
+8. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
+9. If you added a new exported type used in any public method signature, re-export it from `src/index.ts` (TypeDoc fails the docs job otherwise)
+10. If you added a new internal relative import, use the `.ts` extension (`import { x } from './foo.ts'`). The Deno typecheck job in `.github/workflows/examples.yml` fails immediately if a `.js` extension slips in.
 
 ## Code style
 
