@@ -4,6 +4,7 @@ import { B2Client } from './client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { makeClient } from './test-utils/index.ts'
 import { BucketType } from './types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
 
@@ -25,13 +26,7 @@ import { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
  */
 
 function makeSmallPartClient(): { client: B2Client } {
-  const sim = new B2Simulator({ minimumPartSize: 100_000 })
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client }
+  return makeClient({ minimumPartSize: 100_000 })
 }
 
 describe('Bucket.copyLargeFile branch coverage', () => {

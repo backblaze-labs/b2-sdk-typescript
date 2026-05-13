@@ -7,9 +7,8 @@
 
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { B2Client } from '@backblaze/b2-sdk'
 import { BufferSource } from '@backblaze/b2-sdk/streams'
-import { smokeTransport } from './_smoke/transport.ts'
+import { setupClient } from './_smoke/cli.ts'
 
 async function main() {
   const bucketName = process.argv[2]
@@ -20,20 +19,7 @@ async function main() {
     process.exit(1)
   }
 
-  const keyId = process.env.B2_APPLICATION_KEY_ID
-  const key = process.env.B2_APPLICATION_KEY
-  if (!keyId || !key) {
-    console.error('Set B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY environment variables')
-    process.exit(1)
-  }
-
-  const transport = await smokeTransport()
-  const client = new B2Client({
-    applicationKeyId: keyId,
-    applicationKey: key,
-    ...(transport !== undefined ? { transport } : {}),
-  })
-  await client.authorize()
+  const client = await setupClient()
   console.log(`Authorized as ${client.accountInfo.getAccountId()}`)
 
   const bucket = await client.getBucket(bucketName)

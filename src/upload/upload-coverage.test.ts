@@ -3,6 +3,7 @@ import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { jsonErrorResponse, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -31,31 +32,8 @@ function makeSmallPartClient(): {
   sim: B2Simulator
   inner: HttpTransport
 } {
-  const sim = new B2Simulator({ minimumPartSize: 100_000 })
-  const inner = sim.transport()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: inner,
-  })
-  return { client, sim, inner }
-}
-
-function jsonErrorResponse(status: number, code: string, message: string): HttpResponse {
-  const body = JSON.stringify({ status, code, message })
-  return {
-    status,
-    headers: new Headers({ 'Content-Type': 'application/json' }),
-    body: new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(body))
-        controller.close()
-      },
-    }),
-    json: <T>() => Promise.resolve(JSON.parse(body) as T),
-    text: () => Promise.resolve(body),
-    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
-  }
+  const { client, sim } = makeClient({ minimumPartSize: 100_000 })
+  return { client, sim, inner: sim.transport() }
 }
 
 describe('uploadLargeFile cleanup paths', () => {

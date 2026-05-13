@@ -83,7 +83,7 @@ export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'
 // (`BucketType.AllPrivate` instead of `'allPrivate'`) without breaking the
 // existing string-literal call sites. Each export here has a matching type
 // of the same name forwarded by the `export type *` line below.
-export { BucketRetentionMode, BucketType } from './types/bucket.ts'
+export { BucketRetentionMode, BucketType, CorsOperation } from './types/bucket.ts'
 export { Capability } from './types/auth.ts'
 export { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
 export { EventType } from './types/notifications.ts'

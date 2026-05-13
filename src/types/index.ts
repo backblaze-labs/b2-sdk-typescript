@@ -43,8 +43,9 @@ export type {
   ListBucketsResponse,
   UpdateBucketRequest,
 } from './bucket.ts'
-// `BucketType` and `BucketRetentionMode` are forwarded as both type and value.
-export { BucketRetentionMode, BucketType } from './bucket.ts'
+// `BucketType`, `BucketRetentionMode`, and `CorsOperation` are forwarded as
+// both type and value.
+export { BucketRetentionMode, BucketType, CorsOperation } from './bucket.ts'
 
 export type {
   CopyFileRequest,

@@ -15,7 +15,12 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
-import type { AccountId, AuthToken, BucketId, FileId } from '../types/ids.ts'
+import {
+  type AuthToken,
+  accountId as accountIdOf,
+  bucketId as bucketIdOf,
+  fileId as fileIdOf,
+} from '../types/ids.ts'
 import type { RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 
@@ -518,7 +523,10 @@ export class B2Simulator {
     return {
       status: 200,
       body: {
-        accountId: this.accountId as unknown as AccountId,
+        accountId: accountIdOf(this.accountId),
+        // `AuthToken` has no public factory by design — auth tokens are
+        // minted by B2, not constructed by user code. The simulator is
+        // the only legitimate place that needs to forge one.
         authorizationToken: 'sim_auth_token' as unknown as AuthToken,
         apiInfo: {
           storageApi: {
@@ -568,9 +576,9 @@ export class B2Simulator {
         return this.error(400, 'duplicate_bucket_name', 'Bucket name already in use')
       }
     }
-    const bid = genId('b2_bucket') as unknown as BucketId
+    const bid = bucketIdOf(genId('b2_bucket'))
     const info: BucketInfo = {
-      accountId: req.accountId as unknown as AccountId,
+      accountId: accountIdOf(req.accountId),
       bucketId: bid,
       bucketName: req.bucketName,
       bucketType: req.bucketType,
@@ -1253,14 +1261,14 @@ export class B2Simulator {
     action: FileAction,
   ): FileVersion {
     return {
-      accountId: this.accountId as unknown as AccountId,
+      accountId: accountIdOf(this.accountId),
       action,
-      bucketId: bucketId as unknown as BucketId,
+      bucketId: bucketIdOf(bucketId),
       contentLength,
       contentMd5: null,
       contentSha1,
       contentType,
-      fileId: genId('4_z') as unknown as FileId,
+      fileId: fileIdOf(genId('4_z')),
       fileInfo: {},
       fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: null },

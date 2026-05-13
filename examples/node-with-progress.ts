@@ -12,9 +12,9 @@
 
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { B2Client } from '@backblaze/b2-sdk'
 import { BufferSource } from '@backblaze/b2-sdk/streams'
 import type { ProgressListener } from '@backblaze/b2-sdk/streams'
+import { setupClient } from './_smoke/cli.ts'
 
 /**
  * Wraps a {@link ProgressListener} so it fires at most every `everyMs`
@@ -64,15 +64,7 @@ async function main() {
     process.exit(1)
   }
 
-  const keyId = process.env.B2_APPLICATION_KEY_ID
-  const key = process.env.B2_APPLICATION_KEY
-  if (!keyId || !key) {
-    console.error('Set B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY')
-    process.exit(1)
-  }
-
-  const client = new B2Client({ applicationKeyId: keyId, applicationKey: key })
-  await client.authorize()
+  const client = await setupClient()
 
   const bucket = await client.getBucket(bucketName)
   if (!bucket) {

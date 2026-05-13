@@ -1,19 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.ts'
-import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
+import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
+import { makeClient } from './test-utils/index.ts'
 import { BucketType } from './types/bucket.ts'
-
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
 
 async function uploadN(bucket: Bucket, n: number, prefix = ''): Promise<DeleteTarget[]> {
   const targets: DeleteTarget[] = []

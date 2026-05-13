@@ -2,44 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { makeClient, readStream } from '../test-utils/index.ts'
 import type { FileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 import { downloadById, downloadByName } from './single.ts'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  let total = 0
-  for (const c of chunks) total += c.byteLength
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    result.set(c, offset)
-    offset += c.byteLength
-  }
-  return result
-}
 
 function decode(data: Uint8Array): string {
   return new TextDecoder().decode(data)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { readStream } from '../test-utils/index.ts'
 import type { FileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 
@@ -11,25 +12,6 @@ import { createParallelDownloadStream } from './parallel.ts'
  * `pnpm test` (fast feedback) skips it; `pnpm test:slow` and
  * `pnpm test:coverage` pick it up.
  */
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  let total = 0
-  for (const c of chunks) total += c.byteLength
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    result.set(c, offset)
-    offset += c.byteLength
-  }
-  return result
-}
 
 describe('createParallelDownloadStream per-range retry', () => {
   function createFlakyTransport(

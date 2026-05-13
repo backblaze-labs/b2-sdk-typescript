@@ -3,41 +3,7 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
-
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  let total = 0
-  for (const c of chunks) total += c.byteLength
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    result.set(c, offset)
-    offset += c.byteLength
-  }
-  return result
-}
-
-function deterministic(size: number): Uint8Array {
-  const buf = new Uint8Array(size)
-  for (let i = 0; i < size; i++) buf[i] = i % 251
-  return buf
-}
+import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 
 function chunkedReadable(data: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
   let offset = 0
@@ -66,7 +32,7 @@ describe('B2Object.createWriteStream', () => {
 
   it('pipes a chunked ReadableStream through createWriteStream and round-trips bytes', async () => {
     const total = 5_000_010
-    const data = deterministic(total)
+    const data = deterministicBytes(total)
     const source = chunkedReadable(data, 128 * 1024)
 
     const { writable, done } = bucket.file('streamed.bin').createWriteStream({
@@ -86,7 +52,7 @@ describe('B2Object.createWriteStream', () => {
   })
 
   it('invokes the onProgress listener as parts complete', async () => {
-    const data = deterministic(5_000_010)
+    const data = deterministicBytes(5_000_010)
     const events: { bytesTransferred: number; partsCompleted: number }[] = []
     const { writable, done } = bucket.file('progress.bin').createWriteStream({
       partSize: 5_000_000,
@@ -151,9 +117,9 @@ describe('B2Object.createWriteStream', () => {
     // dispatches a part. close() then has to flush a pending queue with
     // length > 1, exercising the multi-chunk merge branch in dispatchPart.
     const partSize = 5_000_000
-    const chunkA = deterministic(1_000)
-    const chunkB = deterministic(2_000)
-    const chunkC = deterministic(3_000)
+    const chunkA = deterministicBytes(1_000)
+    const chunkB = deterministicBytes(2_000)
+    const chunkC = deterministicBytes(3_000)
 
     const { writable, done } = bucket.file('merged.bin').createWriteStream({
       partSize,
@@ -196,7 +162,7 @@ describe('B2Object.createWriteStream', () => {
       bucketType: 'allPrivate',
     })
     const partSize = 100_000
-    const data = deterministic(partSize * 2)
+    const data = deterministicBytes(partSize * 2)
 
     const { writable, done } = smallBucket.file('exact.bin').createWriteStream({
       partSize,
@@ -217,7 +183,7 @@ describe('B2Object.createWriteStream', () => {
     // partSize=1000 is well below the simulator's 5_000_000 minimum. The
     // implementation must raise it; otherwise the simulator rejects the
     // small parts and the test would fail.
-    const data = deterministic(5_000_010)
+    const data = deterministicBytes(5_000_010)
 
     const { writable, done } = bucket.file('clamped.bin').createWriteStream({
       partSize: 1_000,
@@ -278,7 +244,7 @@ describe('B2Object.createWriteStream', () => {
       bucketType: 'allPrivate',
     })
 
-    const data = deterministic(5_000_010)
+    const data = deterministicBytes(5_000_010)
     const { writable, done } = failBucket.file('boom.bin').createWriteStream({
       partSize: 5_000_000,
       concurrency: 1,
@@ -317,7 +283,7 @@ describe('B2Object.createWriteStream', () => {
 
     const writer = writable.getWriter()
     // First write ships a part (5MB), forcing startLargeFile.
-    await writer.write(deterministic(5_000_000))
+    await writer.write(deterministicBytes(5_000_000))
     // Give the engine a tick so startLargeFile resolves and largeFileId
     // becomes non-null before we abort.
     await new Promise((r) => setTimeout(r, 50))
@@ -356,7 +322,7 @@ describe('B2Object.createWriteStream', () => {
     })
     const partSize = 100_000
     const total = partSize * 2 + 123
-    const data = deterministic(total)
+    const data = deterministicBytes(total)
 
     let offset = 0
     const slowSource = new ReadableStream<Uint8Array>({
@@ -392,7 +358,7 @@ describe('B2Object.createWriteStream', () => {
     // Exercises the SSE conditional-spread branches in both startLargeFile
     // and the per-part uploadPart call. The simulator accepts SSE-B2
     // without further setup.
-    const data = deterministic(5_000_010)
+    const data = deterministicBytes(5_000_010)
     const { writable, done } = bucket.file('sse-stream.bin').createWriteStream({
       partSize: 5_000_000,
       concurrency: 1,
@@ -452,7 +418,7 @@ describe('B2Object.createWriteStream', () => {
       bucketType: 'allPrivate',
     })
 
-    const data = deterministic(5_000_010)
+    const data = deterministicBytes(5_000_010)
     const { writable, done } = failBucket.file('cleanup-boom.bin').createWriteStream({
       partSize: 5_000_000,
       concurrency: 1,
@@ -519,7 +485,7 @@ describe('B2Object.createWriteStream', () => {
 
     const writer = writable.getWriter()
     // Ship one full part so startLargeFile resolves and largeFileId is set.
-    await writer.write(deterministic(5_000_000))
+    await writer.write(deterministicBytes(5_000_000))
     // Wait so the in-flight part finishes and largeFileId is populated.
     await new Promise((r) => setTimeout(r, 200))
 
@@ -579,7 +545,7 @@ describe('B2Object.createWriteStream', () => {
 
     const writer = writable.getWriter()
     // Ship one full part. The task fires-and-forgets; write() returns.
-    await writer.write(deterministic(5_000_000))
+    await writer.write(deterministicBytes(5_000_000))
     // Give the in-flight task time to fail and latch `errored`.
     await new Promise((r) => setTimeout(r, 300))
 

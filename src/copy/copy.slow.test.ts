@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
@@ -14,41 +15,6 @@ import { copyLargeFile } from './large.ts'
  * pins `maxForks: 1` and `testTimeout: 180_000`, so individual tests don't
  * need their own timeout arguments.
  */
-
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  let total = 0
-  for (const c of chunks) total += c.byteLength
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    result.set(c, offset)
-    offset += c.byteLength
-  }
-  return result
-}
-
-function deterministic(size: number): Uint8Array {
-  const buf = new Uint8Array(size)
-  for (let i = 0; i < size; i++) buf[i] = i % 251
-  return buf
-}
 
 describe('copyLargeFile (slow)', () => {
   let client: B2Client
@@ -64,7 +30,7 @@ describe('copyLargeFile (slow)', () => {
       bucketType: BucketType.AllPrivate,
     })
 
-    const content = deterministic(5_000_010)
+    const content = deterministicBytes(5_000_010)
     const uploaded = await bucket.upload({
       fileName: 'big.bin',
       source: new BufferSource(content),
@@ -111,7 +77,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-fail',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(15_000_000)
+    const content = deterministicBytes(15_000_000)
     const uploaded = await bucket.upload({
       fileName: 'src.bin',
       source: new BufferSource(content),
@@ -146,7 +112,7 @@ describe('copyLargeFile (slow)', () => {
       bucketType: BucketType.AllPrivate,
     })
 
-    const content = deterministic(5_000_010)
+    const content = deterministicBytes(5_000_010)
     const uploaded = await src.upload({
       fileName: 'src.bin',
       source: new BufferSource(content),
@@ -196,7 +162,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-meta-multi',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(10_000_000)
+    const content = deterministicBytes(10_000_000)
     const uploaded = await bucket.upload({
       fileName: 'meta-multi-src.bin',
       source: new BufferSource(content),
@@ -261,7 +227,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-inherit-ct',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(10_000_000)
+    const content = deterministicBytes(10_000_000)
     const uploaded = await bucket.upload({
       fileName: 'inherit-src.bin',
       source: new BufferSource(content),
@@ -302,7 +268,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-default-conc',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(200_000)
+    const content = deterministicBytes(200_000)
     const uploaded = await bucket.upload({
       fileName: 'def-conc-src.bin',
       source: new BufferSource(content),
@@ -341,7 +307,7 @@ describe('copyLargeFile (slow)', () => {
       bucketType: BucketType.AllPrivate,
     })
     // Exactly 2 parts of 100_000 each, no remainder.
-    const content = deterministic(200_000)
+    const content = deterministicBytes(200_000)
     const uploaded = await bucket.upload({
       fileName: 'exact-src.bin',
       source: new BufferSource(content),
@@ -386,7 +352,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-finish-fail',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(10_000_000)
+    const content = deterministicBytes(10_000_000)
     const uploaded = await bucket.upload({
       fileName: 'finish-src.bin',
       source: new BufferSource(content),
@@ -438,7 +404,7 @@ describe('copyLargeFile (slow)', () => {
       bucketName: 'copy-cancel-fail',
       bucketType: BucketType.AllPrivate,
     })
-    const content = deterministic(15_000_000)
+    const content = deterministicBytes(15_000_000)
     const uploaded = await bucket.upload({
       fileName: 'cancel-src.bin',
       source: new BufferSource(content),

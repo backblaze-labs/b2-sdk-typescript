@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
-import { B2Client } from '../client.ts'
-import { B2Simulator } from '../simulator/index.ts'
+import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
+import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { uploadLargeFile } from './large.ts'
 
 /**
@@ -13,43 +13,6 @@ import { uploadLargeFile } from './large.ts'
  * `pnpm test:coverage` pick it up. The slow vitest config pins
  * `maxForks: 1` and `testTimeout: 180_000`.
  */
-
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
-
-async function readStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  const chunks: Uint8Array[] = []
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    chunks.push(value)
-  }
-  let total = 0
-  for (const c of chunks) total += c.byteLength
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const c of chunks) {
-    result.set(c, offset)
-    offset += c.byteLength
-  }
-  return result
-}
-
-function deterministicBytes(size: number): Uint8Array {
-  const buf = new Uint8Array(size)
-  for (let i = 0; i < size; i++) {
-    buf[i] = i % 251
-  }
-  return buf
-}
 
 describe('uploadLargeFile (real multipart, data > minPartSize)', () => {
   let client: B2Client

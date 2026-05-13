@@ -6,6 +6,7 @@ import { ProgressTracker } from '../streams/progress.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
+import { bestEffort } from '../util/best-effort.ts'
 import { Semaphore } from './concurrency.ts'
 
 /** Options for creating a streaming multipart upload sink. */
@@ -242,14 +243,16 @@ export function createWriteStream(
         )
         resolveDone(result)
       } catch (err) {
-        if (largeFileId !== null) {
-          try {
-            await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-              fileId: largeFileId,
-            })
-          } catch {
-            // Best-effort cleanup.
-          }
+        // Capture into a const so the bestEffort closure sees a non-null
+        // `fileId`; closures don't observe the outer `!== null` narrowing
+        // because the variable is mutable across the lambda boundary.
+        const fileIdToCancel = largeFileId
+        if (fileIdToCancel !== null) {
+          await bestEffort(() =>
+            raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+              fileId: fileIdToCancel,
+            }),
+          )
         }
         rejectDone(err)
         throw err
@@ -257,14 +260,13 @@ export function createWriteStream(
     },
 
     async abort(reason: unknown): Promise<void> {
-      if (largeFileId !== null) {
-        try {
-          await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-            fileId: largeFileId,
-          })
-        } catch {
-          // Best-effort cleanup.
-        }
+      const fileIdToCancel = largeFileId
+      if (fileIdToCancel !== null) {
+        await bestEffort(() =>
+          raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+            fileId: fileIdToCancel,
+          }),
+        )
       }
       rejectDone(reason instanceof Error ? reason : new Error(String(reason)))
     },

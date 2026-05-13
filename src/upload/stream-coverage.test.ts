@@ -3,6 +3,8 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
+import { makeClient } from '../test-utils/index.ts'
+import { BucketType } from '../types/bucket.ts'
 
 /**
  * Branch-coverage tests for `createWriteStream` in `upload/stream.ts`. The
@@ -25,26 +27,16 @@ import { B2Simulator } from '../simulator/index.ts'
  * simulator so the slow multipart paths fit comfortably in the fast tier.
  */
 
-function makeClient(): { client: B2Client; sim: B2Simulator } {
-  const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  return { client, sim }
-}
-
 describe('createWriteStream branch coverage', () => {
   let client: B2Client
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 200_000 }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'stream-cov',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
   })
 
@@ -91,7 +83,7 @@ describe('createWriteStream branch coverage', () => {
     await failClient.authorize()
     const failBucket = await failClient.createBucket({
       bucketName: 'string-err',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     const { writable, done } = failBucket.file('string-err.bin').createWriteStream({

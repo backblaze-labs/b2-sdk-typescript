@@ -4,6 +4,7 @@ import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, FileId } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
+import { bestEffort } from '../util/best-effort.ts'
 
 /** Options for a server-side multipart copy. */
 export interface CopyLargeFileOptions {
@@ -132,13 +133,11 @@ export async function copyLargeFile(
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    try {
-      await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+    await bestEffort(() =>
+      raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
         fileId: largeFileId,
-      })
-    } catch {
-      // Best-effort cleanup
-    }
+      }),
+    )
     throw err
   }
 }

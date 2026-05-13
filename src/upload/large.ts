@@ -8,6 +8,7 @@ import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
+import { bestEffort } from '../util/best-effort.ts'
 import { Semaphore } from './concurrency.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
 
@@ -216,13 +217,11 @@ export async function uploadLargeFile(
 
     return result
   } catch (err) {
-    try {
-      await raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+    await bestEffort(() =>
+      raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
         fileId: largeFileId,
-      })
-    } catch {
-      // Best-effort cleanup
-    }
+      }),
+    )
     throw err
   }
 }

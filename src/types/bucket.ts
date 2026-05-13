@@ -38,6 +38,50 @@ export interface LifecycleRule {
   readonly fileNamePrefix: string
 }
 
+/**
+ * Named constants for the B2 + S3 operations a CORS rule can permit.
+ *
+ * @example
+ * ```ts
+ * await bucket.update({
+ *   corsRules: [{
+ *     corsRuleName: 'browser-downloads',
+ *     allowedOrigins: ['https://example.com'],
+ *     allowedOperations: [CorsOperation.B2DownloadFileByName, CorsOperation.S3Get],
+ *     allowedHeaders: null,
+ *     exposeHeaders: null,
+ *     maxAgeSeconds: 3600,
+ *   }],
+ * })
+ * ```
+ */
+export const CorsOperation = {
+  /** Native B2 download-by-name request. */
+  B2DownloadFileByName: 'b2_download_file_by_name',
+  /** Native B2 download-by-id request. */
+  B2DownloadFileById: 'b2_download_file_by_id',
+  /** Native B2 small-file upload. */
+  B2UploadFile: 'b2_upload_file',
+  /** Native B2 multipart-part upload. */
+  B2UploadPart: 'b2_upload_part',
+  /** S3-compatible DELETE. */
+  S3Delete: 's3_delete',
+  /** S3-compatible GET. */
+  S3Get: 's3_get',
+  /** S3-compatible HEAD. */
+  S3Head: 's3_head',
+  /** S3-compatible POST. */
+  S3Post: 's3_post',
+  /** S3-compatible PUT. */
+  S3Put: 's3_put',
+} as const
+
+/**
+ * A B2 or S3 operation that a CORS rule can permit. Derived from
+ * {@link CorsOperation}.
+ */
+export type CorsOperation = (typeof CorsOperation)[keyof typeof CorsOperation]
+
 /** Cross-Origin Resource Sharing (CORS) rule for browser-based access to a bucket. */
 export interface CorsRule {
   /** Unique name identifying this CORS rule within the bucket. */
@@ -45,17 +89,7 @@ export interface CorsRule {
   /** Origins allowed to make cross-origin requests (e.g., `'https://example.com'`). */
   readonly allowedOrigins: readonly string[]
   /** B2 and S3 operations permitted by this rule. */
-  readonly allowedOperations: readonly (
-    | 'b2_download_file_by_name'
-    | 'b2_download_file_by_id'
-    | 'b2_upload_file'
-    | 'b2_upload_part'
-    | 's3_delete'
-    | 's3_get'
-    | 's3_head'
-    | 's3_post'
-    | 's3_put'
-  )[]
+  readonly allowedOperations: readonly CorsOperation[]
   /** Request headers allowed in preflight requests, or null if none are allowed. */
   readonly allowedHeaders: readonly string[] | null
   /** Response headers exposed to the browser, or null if none are exposed. */

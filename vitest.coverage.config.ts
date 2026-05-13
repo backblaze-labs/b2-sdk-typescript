@@ -59,6 +59,10 @@ export default defineConfig({
         'src/version.ts',
         'src/auth/account-info.ts',
         'src/sync/types.ts',
+        // Test helpers are imported only by other tests; never bundled into
+        // production builds (no entry in vite.config.ts). Excluding here
+        // keeps the denominator focused on shipped code.
+        'src/test-utils/**',
       ],
       reporter: ['text', 'text-summary', 'html', 'json-summary', 'lcov'],
       reportsDirectory: 'coverage',
