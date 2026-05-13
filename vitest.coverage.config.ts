@@ -40,6 +40,14 @@ export default defineConfig({
     isolate: false,
     testTimeout: 180_000,
     hookTimeout: 60_000,
+    // Survive tinypool's hard-coded ~60 s `onTaskUpdate` RPC timeout that
+    // sometimes fires under v8 coverage instrumentation when the main thread
+    // is busy merging coverage payloads from a just-finished long test. The
+    // error is internal to the vitest-worker IPC layer, not a real test
+    // failure — without this flag, the unhandled error aborts the rest of
+    // the run (we'd see ~5/27 files reported and coverage collapse to ~66%
+    // because the remaining files never get scheduled).
+    dangerouslyIgnoreUnhandledErrors: true,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
