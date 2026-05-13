@@ -6,6 +6,15 @@
  * {@link B2Error.retryable | retryable} flags. Use {@link classifyError} to convert
  * a raw error response into the appropriate subclass.
  *
+ * Convention: `B2Error` and its subclasses represent failures returned by
+ * the B2 API. Programming errors and SDK preconditions (e.g. "not yet
+ * authorized", "stream consumed twice", "called before init") use the
+ * native `Error` constructor instead. Two outliers extend `Error` directly
+ * rather than `B2Error` because they originate inside the SDK before any
+ * B2 request is made: {@link B2InsufficientCapabilityError} (raised by
+ * `B2Client.hasCapabilities`) and {@link B2SsrfError} (raised by the
+ * default `UrlGuard` before `fetch`).
+ *
  * @packageDocumentation
  */
 
@@ -173,7 +182,17 @@ export class BadRequestError extends B2Error {
   }
 }
 
-/** Thrown when an upload URL is no longer valid and must be refreshed. */
+/**
+ * Thrown when an upload URL is no longer valid and must be refreshed.
+ *
+ * Forward-compat insurance: B2 does not currently surface a distinct error
+ * code for this case, so `classifyError` never actually instantiates this
+ * class today. It's exported so consumers can `instanceof`-test against it
+ * in a future where B2 documents a `bad_upload_url` (or similar) error
+ * code and the `classifyError` switch gets a matching case.
+ *
+ * @internal
+ */
 export class BadUploadUrlError extends B2Error {
   /**
    * Creates a new BadUploadUrlError instance.
@@ -186,7 +205,18 @@ export class BadUploadUrlError extends B2Error {
   }
 }
 
-/** Thrown when the uploaded file's SHA-1 checksum does not match the expected value. */
+/**
+ * Thrown when the uploaded file's SHA-1 checksum does not match the
+ * expected value.
+ *
+ * Forward-compat insurance: the B2 API rejects mismatched uploads with a
+ * generic `bad_request` rather than a dedicated code, so `classifyError`
+ * never actually instantiates this class today. Kept exported for
+ * `instanceof` checks and so a future B2 schema change is a one-line
+ * addition to the `classifyError` switch.
+ *
+ * @internal
+ */
 export class ChecksumMismatchError extends B2Error {
   /**
    * Creates a new ChecksumMismatchError instance.
@@ -288,6 +318,15 @@ function isTransient(status: number, code: B2ErrorCode): boolean {
 /**
  * Maps a B2 error response to the appropriate {@link B2Error} subclass.
  * Uses the error code for exact matching, then falls back to HTTP status codes.
+ *
+ * Maintainer note: when B2 documents a new error code, add a `case`
+ * branch below pointing at the matching {@link B2Error} subclass. Unknown
+ * codes fall through to the HTTP-status-based heuristic and finally to a
+ * generic `B2Error` — that's safe but loses semantic specificity (the
+ * caller can't `instanceof` against a precise subclass and the retry
+ * decision relies on status alone). The `B2ErrorCode` union in
+ * `src/types/errors.ts` should also gain the new code at the same time
+ * so the switch is exhaustive again.
  *
  * @param response - Parsed B2 error response body.
  * @param options - Optional retry and request metadata from response headers.

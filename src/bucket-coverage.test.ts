@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
-import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
 import { makeClient } from './test-utils/index.ts'
@@ -123,46 +122,15 @@ describe('Bucket.copyLargeFile branch coverage', () => {
 
 describe('Bucket.deleteAll error-yield path', () => {
   it('yields an error event when an individual deleteFileVersion call fails', async () => {
-    // Upload two files, then wrap the transport so the SECOND
-    // b2_delete_file_version call fails. deleteAll should yield one
-    // `delete` event (success) and one `error` event, then keep going to
-    // completion. Lines 470-476 in bucket.ts handle the error yield.
+    // Upload two files, then have the SECOND b2_delete_file_version call
+    // fail. deleteAll should yield one `delete` event (success) and one
+    // `error` event, then keep going to completion. Lines 470-476 in
+    // bucket.ts handle the error yield.
     const sim = new B2Simulator()
-    const inner = sim.transport()
-    let deleteCalls = 0
-    const failing: HttpTransport = {
-      async send(req: HttpRequest): Promise<HttpResponse> {
-        if (req.url.includes('b2_delete_file_version')) {
-          deleteCalls += 1
-          if (deleteCalls === 2) {
-            const body = JSON.stringify({
-              status: 400,
-              code: 'bad_request',
-              message: 'simulated delete failure',
-            })
-            return {
-              status: 400,
-              headers: new Headers({ 'Content-Type': 'application/json' }),
-              body: new ReadableStream({
-                start(c) {
-                  c.enqueue(new TextEncoder().encode(body))
-                  c.close()
-                },
-              }),
-              json: <T>() => Promise.resolve(JSON.parse(body) as T),
-              text: () => Promise.resolve(body),
-              arrayBuffer: () =>
-                Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
-            }
-          }
-        }
-        return inner.send(req)
-      },
-    }
     const client = new B2Client({
       applicationKeyId: 'k',
       applicationKey: 'k',
-      transport: failing,
+      transport: sim.transport(),
       retry: { maxRetries: 0 },
     })
     await client.authorize()
@@ -178,6 +146,16 @@ describe('Bucket.deleteAll error-yield path', () => {
     await bucket.upload({
       fileName: 'b.txt',
       source: new BufferSource(new Uint8Array([2])),
+    })
+
+    // Skip the first b2_delete_file_version, fail the second once.
+    sim.injectFailure({
+      on: 'b2_delete_file_version',
+      skip: 1,
+      count: 1,
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated delete failure',
     })
 
     const events: Array<{ type: string; fileName: string }> = []

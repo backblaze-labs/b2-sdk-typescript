@@ -20,6 +20,18 @@
  *
  * Users supplying a custom `transport` to `B2Client` bypass the guard. That
  * is their responsibility to document for their threat model.
+ *
+ * Threat-model note: the guard checks the URL's hostname before the
+ * `fetch()` call. It does NOT pin the resolved IP. A DNS rebinding attack
+ * could in principle resolve a permitted hostname to an internal IP between
+ * the guard's check and `fetch()`'s own resolution. This is theoretical
+ * against B2 because the allow-list is locked to a small set of stable
+ * Backblaze hostnames (the realm's apiUrl/downloadUrl/s3ApiUrl plus the
+ * `backblaze.com` parent), and DNS rebinding requires a hostname under
+ * attacker control. Defense in depth — pinning the IP from the first
+ * resolution and rejecting subsequent mismatches — would break legitimate
+ * CDN failovers and is not justified at this surface area. If your
+ * threat model requires it, supply a custom transport that does.
  */
 
 import { B2SsrfError } from '../errors/index.ts'

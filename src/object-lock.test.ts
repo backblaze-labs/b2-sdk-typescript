@@ -140,3 +140,101 @@ describe('B2Object.setLegalHold', () => {
     expect(info.fileRetention?.value).toBeNull()
   })
 })
+
+/**
+ * Simulator object-lock enforcement on `deleteFileVersion`. Real B2 returns
+ * `400 file_lock_*_protected` codes for protected versions; this suite
+ * locks the simulator into matching that behaviour so SDK tests no longer
+ * silently pass deletes that production would reject.
+ */
+describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
+  let bucket: Bucket
+
+  beforeEach(async () => {
+    ;({ bucket } = await setup())
+  })
+
+  it('rejects delete of a compliance-mode retained version (no bypass possible)', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'compliance.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
+    await bucket.file('compliance.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Compliance,
+      retainUntilTimestamp: expiresAt,
+    })
+    await expect(bucket.deleteFileVersion('compliance.bin', uploaded.fileId)).rejects.toThrow(
+      /compliance/,
+    )
+    // Even passing bypassGovernance must not work for compliance mode.
+    await expect(
+      bucket.deleteFileVersion('compliance.bin', uploaded.fileId, {
+        bypassGovernance: true,
+      }),
+    ).rejects.toThrow(/compliance/)
+  })
+
+  it('rejects delete of a governance-mode retained version without bypass flag', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'gov.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
+    await bucket.file('gov.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: expiresAt,
+    })
+    await expect(bucket.deleteFileVersion('gov.bin', uploaded.fileId)).rejects.toThrow(/governance/)
+  })
+
+  it('allows delete of a governance-mode retained version with bypassGovernance: true', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'gov-bypass.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
+    await bucket.file('gov-bypass.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: expiresAt,
+    })
+    await expect(
+      bucket.deleteFileVersion('gov-bypass.bin', uploaded.fileId, {
+        bypassGovernance: true,
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('rejects delete of a legal-hold-protected version (bypass does not help)', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'hold.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await bucket.file('hold.bin').setLegalHold(uploaded.fileId, LegalHoldValue.On)
+    await expect(bucket.deleteFileVersion('hold.bin', uploaded.fileId)).rejects.toThrow(
+      /legal hold/,
+    )
+    // bypassGovernance is for retention, not legal hold.
+    await expect(
+      bucket.deleteFileVersion('hold.bin', uploaded.fileId, {
+        bypassGovernance: true,
+      }),
+    ).rejects.toThrow(/legal hold/)
+    // Releasing the hold permits the delete.
+    await bucket.file('hold.bin').setLegalHold(uploaded.fileId, LegalHoldValue.Off)
+    await expect(bucket.deleteFileVersion('hold.bin', uploaded.fileId)).resolves.toBeUndefined()
+  })
+
+  it('allows delete of an expired governance-mode retention without bypass', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'expired.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    // Retention timestamp in the past — already expired at upload time.
+    await bucket.file('expired.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: Date.now() - 1000,
+    })
+    await expect(bucket.deleteFileVersion('expired.bin', uploaded.fileId)).resolves.toBeUndefined()
+  })
+})

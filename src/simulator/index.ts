@@ -89,6 +89,70 @@ export interface SimulatorDownloadResponse {
 }
 
 /**
+ * Specification for a synthetic failure to return from the simulator's
+ * transport. See {@link B2Simulator.injectFailure}.
+ */
+export interface FaultSpec {
+  /**
+   * URL substring matched against `request.url`. The fault triggers on
+   * every request whose URL contains this substring. Typically a B2
+   * endpoint name like `'b2_upload_part'`, `'b2_authorize_account'`,
+   * `'b2_download_file_by_id'`, or `'/file/'` for download-by-name.
+   */
+  readonly on: string
+  /** HTTP status to return. Defaults to `503`. */
+  readonly status?: number
+  /** B2 error code to return in the JSON body. Defaults to `'service_unavailable'`. */
+  readonly code?: string
+  /** Human-readable message. Defaults to `'simulated failure'`. */
+  readonly message?: string
+  /**
+   * Number of matched requests to fail before the fault retires. Defaults
+   * to `Number.POSITIVE_INFINITY` (every matched request fails until
+   * cleared). Set to e.g. `3` to fail the next 3 matched requests then
+   * stop.
+   */
+  readonly count?: number
+  /**
+   * Number of matched requests to let through before failures start.
+   * Defaults to `0` (fail from the first matched request). Set to e.g.
+   * `2` to let the first 2 succeed and start failing on the 3rd.
+   */
+  readonly skip?: number
+  /**
+   * If set, the synthetic response includes a `Retry-After: <n>` header
+   * (in seconds). Used to exercise the retry transport's
+   * `Retry-After`-respecting backoff path.
+   */
+  readonly retryAfter?: number
+}
+
+/**
+ * Handle returned by {@link B2Simulator.injectFailure} so a specific
+ * fault registration can be torn down without affecting other faults.
+ */
+export interface FaultHandle {
+  /**
+   * Remove this fault registration. Idempotent: calling twice is a no-op.
+   * Faults whose `count` budget has already been exhausted retire
+   * automatically and do not need to be cleared explicitly.
+   */
+  clear(): void
+}
+
+/**
+ * Internal book-keeping for an active {@link FaultSpec}. Tracks the
+ * remaining skip/count budget across matched requests and a unique id so
+ * the registration can be torn down individually.
+ */
+interface ActiveFault {
+  readonly id: number
+  readonly spec: FaultSpec
+  remainingSkip: number
+  remainingCount: number
+}
+
+/**
  * Options for constructing a {@link B2Simulator}.
  */
 export interface B2SimulatorOptions {
@@ -135,6 +199,8 @@ export class B2Simulator {
   private readonly notificationRules = new Map<string, EventNotificationRule[]>()
   private readonly minimumPartSize: number
   private readonly recommendedPartSize: number
+  private readonly faults: ActiveFault[] = []
+  private nextFaultId = 1
 
   /**
    * Constructs a new in-memory B2 simulator.
@@ -151,6 +217,96 @@ export class B2Simulator {
    */
   transport(): HttpTransport {
     return new SimulatorTransport(this)
+  }
+
+  /**
+   * Register a synthetic failure to inject on requests whose URL contains
+   * `spec.on`. Use this to exercise retry / backoff / error-handling
+   * paths in tests without hand-rolling a wrapping `HttpTransport`. The
+   * fault is consumed in registration order on each matched request;
+   * once its `count` budget is exhausted it auto-retires.
+   *
+   * Faults are checked BEFORE the simulator's real handlers run, so a
+   * matched request never touches in-memory state — failed uploads
+   * don't create partial parts, failed deletes don't remove anything.
+   *
+   * @param spec - The failure to inject. See {@link FaultSpec}.
+   *
+   * @returns A handle whose `clear()` method removes this specific
+   *   fault registration (other faults remain in effect).
+   *
+   * @example
+   * ```ts
+   * // Fail the next 2 b2_upload_part calls with 503, then succeed.
+   * sim.injectFailure({ on: 'b2_upload_part', status: 503, count: 2 })
+   *
+   * // Fail every b2_authorize_account with 401 + Retry-After: 5.
+   * const handle = sim.injectFailure({
+   *   on: 'b2_authorize_account',
+   *   status: 401,
+   *   code: 'expired_auth_token',
+   *   retryAfter: 5,
+   * })
+   * // ... later
+   * handle.clear()
+   * ```
+   */
+  injectFailure(spec: FaultSpec): FaultHandle {
+    const id = this.nextFaultId++
+    const fault: ActiveFault = {
+      id,
+      spec,
+      remainingSkip: spec.skip ?? 0,
+      remainingCount: spec.count ?? Number.POSITIVE_INFINITY,
+    }
+    this.faults.push(fault)
+    return {
+      clear: () => {
+        const idx = this.faults.findIndex((f) => f.id === id)
+        if (idx !== -1) this.faults.splice(idx, 1)
+      },
+    }
+  }
+
+  /**
+   * Remove every registered fault. Equivalent to calling `.clear()` on
+   * every handle returned by {@link injectFailure}, plus a defensive
+   * reset for tests that re-use a simulator across cases.
+   */
+  clearFaults(): void {
+    this.faults.length = 0
+  }
+
+  /**
+   * Internal: checks the registered faults for a match on the given URL
+   * and consumes one if it should fire. Called from
+   * {@link SimulatorTransport.send} before any real handler runs.
+   *
+   * @param url - The request URL to match against each fault's `on`
+   *   substring.
+   *
+   * @returns The fault to apply, or `null` if no fault should fire.
+   *
+   * @internal
+   */
+  consumeMatchingFault(url: string): FaultSpec | null {
+    for (let i = 0; i < this.faults.length; i++) {
+      const fault = this.faults[i] as ActiveFault
+      if (!url.includes(fault.spec.on)) continue
+      if (fault.remainingSkip > 0) {
+        fault.remainingSkip -= 1
+        continue
+      }
+      if (fault.remainingCount <= 0) continue
+      fault.remainingCount -= 1
+      if (fault.remainingCount <= 0) {
+        // Auto-retire when the count budget is spent so subsequent
+        // requests see the next-matching fault (or no fault).
+        this.faults.splice(i, 1)
+      }
+      return fault.spec
+    }
+    return null
   }
 
   /**
@@ -209,7 +365,9 @@ export class B2Simulator {
       case 'b2_hide_file':
         return this.hideFile(body as { bucketId: string; fileName: string })
       case 'b2_delete_file_version':
-        return this.deleteFileVersion(body as { fileId: string; fileName: string })
+        return this.deleteFileVersion(
+          body as { fileId: string; fileName: string; bypassGovernance?: boolean },
+        )
       case 'b2_copy_file':
         return this.copyFile(
           body as { sourceFileId: string; fileName: string; destinationBucketId?: string },
@@ -454,16 +612,9 @@ export class B2Simulator {
   }
 
   private downloadById(fileId: string, range?: string): SimulatorDownloadResponse {
-    for (const bucket of this.buckets.values()) {
-      for (const versions of bucket.files.values()) {
-        for (const stored of versions) {
-          if ((stored.fileVersion.fileId as string) === fileId) {
-            return this.serveFile(stored, range)
-          }
-        }
-      }
-    }
-    return { status: 404, headers: {}, data: null }
+    const found = this.findFile(fileId)
+    if (found === null) return { status: 404, headers: {}, data: null }
+    return this.serveFile(found.stored, range)
   }
 
   private downloadByName(
@@ -715,7 +866,7 @@ export class B2Simulator {
 
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
-    let allVersions = [...bucket.files.entries()]
+    const allVersions = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .flatMap(([_, versions]) => versions.map((v) => v.fileVersion))
       .sort((a, b) => {
@@ -724,30 +875,47 @@ export class B2Simulator {
         return b.uploadTimestamp - a.uploadTimestamp
       })
 
-    if (req.startFileName) {
-      const start = req.startFileName
-      allVersions = allVersions.filter((f) => f.fileName >= start)
+    // Pagination cursor: `(startFileName, startFileId)` is composite. B2
+    // returns BOTH at a page boundary and expects the client to pass BOTH
+    // back. Using only `startFileName` would miss intervening versions of
+    // a file with many versions (page 2 would replay page 1's last entry
+    // instead of resuming at the next version). The cursor is inclusive
+    // on the start: callers replay the boundary entry as page N+1's first
+    // item.
+    let startIdx = 0
+    if (req.startFileName !== undefined) {
+      const startName = req.startFileName
+      const startId = req.startFileId
+      // Walk forward to the first entry that matches the cursor. Two
+      // sub-cases: (a) `startFileId` was supplied — advance to the exact
+      // (name, id) pair, falling back to the first entry of that name if
+      // the id has been deleted; (b) no `startFileId` — advance to the
+      // first entry whose name is >= `startFileName`.
+      const nameIdx = allVersions.findIndex((f) => f.fileName >= startName)
+      if (nameIdx === -1) {
+        startIdx = allVersions.length
+      } else if (startId !== undefined) {
+        const exactIdx = allVersions.findIndex(
+          (f, i) => i >= nameIdx && (f.fileId as string) === startId,
+        )
+        startIdx = exactIdx !== -1 ? exactIdx : nameIdx
+      } else {
+        startIdx = nameIdx
+      }
     }
 
-    const files = allVersions.slice(0, max)
-    const nextFileName = allVersions.length > max ? (allVersions[max]?.fileName ?? null) : null
-    const nextFileId =
-      allVersions.length > max ? ((allVersions[max]?.fileId as string) ?? null) : null
+    const sliced = allVersions.slice(startIdx, startIdx + max)
+    const hasMore = startIdx + max < allVersions.length
+    const nextFileName = hasMore ? (allVersions[startIdx + max]?.fileName ?? null) : null
+    const nextFileId = hasMore ? ((allVersions[startIdx + max]?.fileId as string) ?? null) : null
 
-    return { status: 200, body: { files, nextFileName, nextFileId } }
+    return { status: 200, body: { files: sliced, nextFileName, nextFileId } }
   }
 
   private getFileInfo(req: { fileId: string }): SimulatorJsonResponse {
-    for (const bucket of this.buckets.values()) {
-      for (const versions of bucket.files.values()) {
-        for (const stored of versions) {
-          if ((stored.fileVersion.fileId as string) === req.fileId) {
-            return { status: 200, body: stored.fileVersion }
-          }
-        }
-      }
-    }
-    return this.error(404, 'file_not_present', 'File not found')
+    const found = this.findFile(req.fileId)
+    if (found === null) return this.error(404, 'file_not_present', 'File not found')
+    return { status: 200, body: found.stored.fileVersion }
   }
 
   private hideFile(req: { bucketId: string; fileName: string }): SimulatorJsonResponse {
@@ -772,43 +940,72 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private deleteFileVersion(req: { fileId: string; fileName: string }): {
+  private deleteFileVersion(req: {
+    fileId: string
+    fileName: string
+    bypassGovernance?: boolean
+  }): {
     status: number
     body: unknown
   } {
-    for (const bucket of this.buckets.values()) {
-      const versions = bucket.files.get(req.fileName)
-      if (!versions) continue
-      const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
-      if (idx !== -1) {
-        versions.splice(idx, 1)
-        if (versions.length === 0) bucket.files.delete(req.fileName)
-        return { status: 200, body: { fileId: req.fileId, fileName: req.fileName } }
-      }
+    const found = this.findFile(req.fileId)
+    if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
+      return this.error(400, 'file_not_present', 'File version not found')
     }
-    return this.error(400, 'file_not_present', 'File version not found')
+
+    // Object Lock enforcement. Real B2 surfaces three distinct error
+    // codes for protected file versions; the simulator returns the same
+    // shapes so test code exercising the typed `B2Error` hierarchy hits
+    // realistic responses.
+    const fv = found.stored.fileVersion
+    const retention = fv.fileRetention?.value
+    const legalHold = fv.legalHold?.value
+    const now = Date.now()
+
+    if (legalHold === 'on') {
+      return this.error(
+        400,
+        'file_lock_legal_hold_protected',
+        'File is on legal hold and cannot be deleted',
+      )
+    }
+    if (
+      retention?.mode === 'compliance' &&
+      retention.retainUntilTimestamp !== null &&
+      retention.retainUntilTimestamp > now
+    ) {
+      return this.error(
+        400,
+        'file_lock_compliance_protected',
+        `File is under compliance-mode retention and cannot be deleted until ${new Date(retention.retainUntilTimestamp).toISOString()}`,
+      )
+    }
+    if (
+      retention?.mode === 'governance' &&
+      retention.retainUntilTimestamp !== null &&
+      retention.retainUntilTimestamp > now &&
+      req.bypassGovernance !== true
+    ) {
+      return this.error(
+        400,
+        'file_lock_governance_protected',
+        'File is under governance-mode retention; pass bypassGovernance: true to delete',
+      )
+    }
+
+    found.versions.splice(found.index, 1)
+    if (found.versions.length === 0) found.bucket.files.delete(req.fileName)
+    return { status: 200, body: { fileId: req.fileId, fileName: req.fileName } }
   }
 
   private copyFile(req: { sourceFileId: string; fileName: string; destinationBucketId?: string }): {
     status: number
     body: unknown
   } {
-    let sourceStored: StoredFile | undefined
-    let sourceBucketId: string | undefined
-    for (const [bid, bucket] of this.buckets.entries()) {
-      for (const versions of bucket.files.values()) {
-        for (const stored of versions) {
-          if ((stored.fileVersion.fileId as string) === req.sourceFileId) {
-            sourceStored = stored
-            sourceBucketId = bid
-          }
-        }
-      }
-    }
-    if (!sourceStored || !sourceBucketId)
-      return this.error(404, 'file_not_present', 'Source file not found')
-
-    const destBucketId = req.destinationBucketId ?? sourceBucketId
+    const found = this.findFile(req.sourceFileId)
+    if (found === null) return this.error(404, 'file_not_present', 'Source file not found')
+    const sourceStored = found.stored
+    const destBucketId = req.destinationBucketId ?? found.bucketId
     const destBucket = this.buckets.get(destBucketId)
     if (!destBucket) return this.error(400, 'bad_bucket_id', 'Destination bucket not found')
 
@@ -1006,17 +1203,9 @@ export class B2Simulator {
     const large = this.largeFiles.get(req.largeFileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
-    let sourceStored: StoredFile | undefined
-    for (const bucket of this.buckets.values()) {
-      for (const versions of bucket.files.values()) {
-        for (const stored of versions) {
-          if ((stored.fileVersion.fileId as string) === req.sourceFileId) {
-            sourceStored = stored
-          }
-        }
-      }
-    }
-    if (!sourceStored) return this.error(404, 'file_not_present', 'Source file not found')
+    const found = this.findFile(req.sourceFileId)
+    if (found === null) return this.error(404, 'file_not_present', 'Source file not found')
+    const sourceStored = found.stored
 
     let partData = sourceStored.data
     if (req.range) {
@@ -1162,34 +1351,25 @@ export class B2Simulator {
     fileId: string
     fileRetention: { mode: RetentionMode | null; retainUntilTimestamp: number | null }
   }): SimulatorJsonResponse {
-    for (const bucket of this.buckets.values()) {
-      const versions = bucket.files.get(req.fileName)
-      if (!versions) continue
-      const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
-      const old = idx === -1 ? undefined : versions[idx]
-      if (old !== undefined) {
-        const updated: StoredFile = {
-          fileVersion: {
-            ...old.fileVersion,
-            fileRetention: {
-              isClientAuthorizedToRead: true,
-              value: req.fileRetention,
-            },
-          },
-          data: old.data,
-        }
-        versions[idx] = updated
-        return {
-          status: 200,
-          body: {
-            fileName: req.fileName,
-            fileId: req.fileId,
-            fileRetention: req.fileRetention,
-          },
-        }
-      }
+    const found = this.findFile(req.fileId)
+    if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
+      return this.error(404, 'file_not_present', 'File not found')
     }
-    return this.error(404, 'file_not_present', 'File not found')
+    found.versions[found.index] = {
+      fileVersion: {
+        ...found.stored.fileVersion,
+        fileRetention: { isClientAuthorizedToRead: true, value: req.fileRetention },
+      },
+      data: found.stored.data,
+    }
+    return {
+      status: 200,
+      body: {
+        fileName: req.fileName,
+        fileId: req.fileId,
+        fileRetention: req.fileRetention,
+      },
+    }
   }
 
   private updateFileLegalHold(req: {
@@ -1197,34 +1377,28 @@ export class B2Simulator {
     fileId: string
     legalHold: string
   }): SimulatorJsonResponse {
-    for (const bucket of this.buckets.values()) {
-      const versions = bucket.files.get(req.fileName)
-      if (!versions) continue
-      const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === req.fileId)
-      const old = idx === -1 ? undefined : versions[idx]
-      if (old !== undefined) {
-        const updated: StoredFile = {
-          fileVersion: {
-            ...old.fileVersion,
-            legalHold: {
-              isClientAuthorizedToRead: true,
-              value: req.legalHold as 'on' | 'off',
-            },
-          },
-          data: old.data,
-        }
-        versions[idx] = updated
-        return {
-          status: 200,
-          body: {
-            fileName: req.fileName,
-            fileId: req.fileId,
-            legalHold: req.legalHold,
-          },
-        }
-      }
+    const found = this.findFile(req.fileId)
+    if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
+      return this.error(404, 'file_not_present', 'File not found')
     }
-    return this.error(404, 'file_not_present', 'File not found')
+    found.versions[found.index] = {
+      fileVersion: {
+        ...found.stored.fileVersion,
+        legalHold: {
+          isClientAuthorizedToRead: true,
+          value: req.legalHold as 'on' | 'off',
+        },
+      },
+      data: found.stored.data,
+    }
+    return {
+      status: 200,
+      body: {
+        fileName: req.fileName,
+        fileId: req.fileId,
+        legalHold: req.legalHold,
+      },
+    }
   }
 
   // --- Notifications ---
@@ -1251,6 +1425,41 @@ export class B2Simulator {
   }
 
   // --- Helpers ---
+
+  /**
+   * Locates a stored file version by its `fileId`, scanning every bucket.
+   *
+   * Returns enough context to support read-only inspection (`stored`,
+   * `bucketId`) AND in-place mutation (`versions`, `index`) so callers
+   * that need to splice the version out can do so without re-scanning.
+   *
+   * Real B2 fileIds embed the bucketId, so production lookups are O(1);
+   * the simulator's flat ID generator (`genId('4_z')`) doesn't, so this
+   * is O(buckets × files × versions). Acceptable for tests.
+   *
+   * @param fileId - The file version ID to locate.
+   *
+   * @returns The location of the matching version, or `null` if not found.
+   */
+  private findFile(fileId: string): {
+    stored: StoredFile
+    bucketId: string
+    bucket: StoredBucket
+    versions: StoredFile[]
+    index: number
+  } | null {
+    for (const [bid, bucket] of this.buckets.entries()) {
+      for (const versions of bucket.files.values()) {
+        const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === fileId)
+        if (idx !== -1) {
+          // Non-null asserted via the findIndex guard above.
+          const stored = versions[idx] as StoredFile
+          return { stored, bucketId: bid, bucket, versions, index: idx }
+        }
+      }
+    }
+    return null
+  }
 
   private makeFileVersion(
     bucketId: string,
@@ -1284,11 +1493,55 @@ export class B2Simulator {
   }
 }
 
+/**
+ * Build a synthetic {@link HttpResponse} from a consumed {@link FaultSpec}.
+ * Mirrors the shape of real B2 error responses so the SDK's
+ * `RetryTransport` / `classifyError` paths see realistic input.
+ *
+ * @param fault - The fault spec to render.
+ *
+ * @returns An `HttpResponse` ready to return from `transport.send`.
+ */
+function buildFaultResponse(fault: FaultSpec): HttpResponse {
+  const status = fault.status ?? 503
+  const code = fault.code ?? 'service_unavailable'
+  const message = fault.message ?? 'simulated failure'
+  const body = JSON.stringify({ status, code, message })
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  if (fault.retryAfter !== undefined) {
+    headers.set('Retry-After', String(fault.retryAfter))
+  }
+  return {
+    status,
+    headers,
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body))
+        controller.close()
+      },
+    }),
+    json: <T>() => Promise.resolve(JSON.parse(body) as T),
+    text: () => Promise.resolve(body),
+    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
+  }
+}
+
 class SimulatorTransport implements HttpTransport {
   constructor(private readonly sim: B2Simulator) {}
 
   async send(request: HttpRequest): Promise<HttpResponse> {
     const url = request.url
+
+    // Fault injection: synthetic failures registered via
+    // `B2Simulator.injectFailure()` run BEFORE any real handler, so a
+    // matched request never reaches in-memory state. This is what
+    // exercises the SDK's retry / classification paths against
+    // realistic error responses in tests.
+    const fault = this.sim.consumeMatchingFault(url)
+    if (fault !== null) {
+      return buildFaultResponse(fault)
+    }
+
     const headers: Record<string, string> = {}
     if (request.headers) {
       for (const [k, v] of Object.entries(request.headers)) {

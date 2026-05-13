@@ -457,14 +457,32 @@ export class Bucket {
 
   /**
    * Permanently deletes a specific file version. Both file name and file ID are required.
+   *
+   * If the file is under Object Lock retention, B2 will reject the
+   * delete: compliance-mode files cannot be deleted until the retention
+   * expires; governance-mode files require `bypassGovernance: true`
+   * AND a calling key with the `bypassGovernance` capability. Files on
+   * legal hold cannot be deleted by anyone until the hold is removed.
+   *
    * @param fileName - The file path of the version to delete.
    * @param fileId - The unique identifier of the file version to delete.
+   * @param options - Optional flag for bypassing governance retention.
    */
-  async deleteFileVersion(fileName: string, fileId: FileId): Promise<void> {
+  async deleteFileVersion(
+    fileName: string,
+    fileId: FileId,
+    options?: { bypassGovernance?: boolean },
+  ): Promise<void> {
     await this.client.raw.deleteFileVersion(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
-      { fileName, fileId },
+      {
+        fileName,
+        fileId,
+        ...(options?.bypassGovernance !== undefined
+          ? { bypassGovernance: options.bypassGovernance }
+          : {}),
+      },
     )
   }
 

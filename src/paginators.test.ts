@@ -118,6 +118,32 @@ describe('Bucket.paginateFileVersions', () => {
     expect(seen.filter((n) => n === 'a.txt').length).toBe(2)
     expect(seen.filter((n) => n === 'b.txt').length).toBe(2)
   })
+
+  it('threads the (startFileName, startFileId) cursor correctly across many versions of one file', async () => {
+    // Regression test for a pagination bug where the simulator only
+    // honoured `startFileName` and ignored `startFileId`. With many
+    // versions of a single file, paginating with a small pageSize would
+    // replay the last entry of page N as the first entry of page N+1
+    // and skip intervening versions. The fix threads both cursor
+    // components composite-style.
+    const { bucket } = await setup()
+    const N = 7
+    for (let i = 0; i < N; i++) {
+      await bucket.upload({
+        fileName: 'single.bin',
+        source: new BufferSource(new TextEncoder().encode(`v${i}`)),
+      })
+    }
+    // Paginate with a pageSize that doesn't evenly divide N so the
+    // boundary lands inside the version stack.
+    const seenFileIds: string[] = []
+    for await (const v of bucket.paginateFileVersions({ pageSize: 2 })) {
+      seenFileIds.push(v.fileId)
+    }
+    // Every version must appear exactly once, no duplicates and no drops.
+    expect(seenFileIds.length).toBe(N)
+    expect(new Set(seenFileIds).size).toBe(N)
+  })
 })
 
 describe('Bucket.paginateUnfinishedLargeFiles', () => {
