@@ -20,13 +20,26 @@ export default defineConfig({
     exclude: ['node_modules/**', 'dist/**'],
     // Slow tier's constraints: serialized forks (no CPU contention between
     // CPU-bound multipart tests) and generous wall-clock budget.
+    //
+    // `singleFork: true` keeps every test file running in the same long-lived
+    // fork. With `maxForks: 1` plus default per-file forking, vitest's IPC
+    // (tinypool's `onTaskUpdate` RPC) has a hard-coded ~60 s timeout that
+    // fires when an individual test runs >60 s — and v8 coverage
+    // instrumentation 3-4×'s the wall clock of the multipart SHA-1 tests,
+    // pushing several over 60 s. A single shared fork keeps the RPC
+    // connection warm across file boundaries and avoids the timeout.
     pool: 'forks',
     poolOptions: {
       forks: {
-        maxForks: 1,
+        singleFork: true,
       },
     },
+    // Disable per-file isolation so the single fork can actually run all
+    // files sequentially without restart. Tests already create fresh
+    // `B2Simulator` instances per file, so we don't need vitest's isolation.
+    isolate: false,
     testTimeout: 180_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
