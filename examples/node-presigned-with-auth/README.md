@@ -15,7 +15,7 @@ Browser ─── GET /file/<id> ───►  Your backend
 Browser ◄─── 302 to B2 ────── B2 serves the file
 ```
 
-Of 29 npm-published B2 packages surveyed, **only one** (`nodebb-plugin-backblaze-b2-s3-uploads`) implements this pattern. Everyone else either exposes the raw presign primitive or skips authorization entirely. This example shows the safe shape using `@backblaze/b2-sdk`.
+This example shows the safe shape using `@backblaze/b2-sdk` — the application key never leaves the backend, the signed URL is scoped to a single file-name prefix, and the token is short-lived enough that a leak's blast radius is bounded.
 
 ## Files
 

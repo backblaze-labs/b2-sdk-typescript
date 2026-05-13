@@ -16,15 +16,17 @@ b2-backup restore  b2://my-bucket/photos ./restored
 - **Retry built-in**: every B2 request goes through the SDK's `RetryTransport` (exponential backoff, jitter, `Retry-After` honoured) so transient 503s don't crash the run.
 - **Resume across runs**: a crashed snapshot doesn't lose the files it already finished. The manifest is updated as each upload succeeds, so the next run only re-uploads what's still missing.
 
-## Why this exists
+## What "production-shaped" means here
 
-Of 29 npm-published B2 packages, **4 are backup tools**. Backup is the single most common B2 application outside generic storage. But the existing tools either:
-- Don't encrypt by default (the `--encrypt` flag is opt-in), or
-- Use insecure schemes (key derived from filename, key reused across files), or
-- Don't resume (a crash mid-backup means re-uploading everything), or
-- Don't manifest-diff (every run uploads everything).
+Backup is one of the most common B2 applications, and it has a handful of properties that are easy to get wrong if you start from scratch. This example bakes them in by default:
 
-This example shows what good looks like in <600 LoC, with a passphrase-derived KEK and per-file DEKs.
+- **Encryption is on, not opt-in.** Every file is wrapped with a per-file random DEK before it leaves the machine; B2 only ever sees ciphertext.
+- **One DEK per file, not one for the whole repo.** A leak of one ciphertext doesn't compromise the others.
+- **The DEK is *never* derived from the filename or path.** A key derived from a stable input lets an attacker who learns one mapping decrypt everything.
+- **Resume is server-side.** A crash mid-snapshot doesn't force a full re-upload — the next run picks up where the manifest left off.
+- **Manifest-diff** keeps each run incremental: only files whose plaintext SHA-1 changed get re-uploaded.
+
+The whole flow fits in under 600 lines with a passphrase-derived KEK and per-file DEKs.
 
 ## Files
 

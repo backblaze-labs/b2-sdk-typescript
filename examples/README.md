@@ -119,7 +119,7 @@ Production-shaped recipes that combine the SDK with adjacent infrastructure. Eac
 
 ### Presigned URLs with auth (downloads)
 
-A Hono backend that gates B2 downloads behind your own access-control check, then mints a short-lived signed URL. The pattern most plugins get wrong (29 surveyed packages, only one does it correctly).
+A Hono backend that gates B2 downloads behind your own access-control check, then mints a short-lived signed URL. The presigned URL is scoped to the file's prefix and expires after a configurable TTL, so a leaked token compromises one prefix, not the whole bucket.
 
 ```bash
 B2_APPLICATION_KEY_ID=… B2_APPLICATION_KEY=… B2_BUCKET=my-bucket \

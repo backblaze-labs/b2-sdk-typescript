@@ -2,9 +2,12 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Bucket } from '../../bucket.ts'
 import { B2Client } from '../../client.ts'
 import { B2Simulator } from '../../simulator/index.ts'
 import { BufferSource } from '../../streams/source.ts'
+import type { FileVersion } from '../../types/file.ts'
+import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -318,5 +321,112 @@ describe('B2Folder', () => {
       'photos/cat.jpg',
       'photos/dog.jpg',
     ])
+  })
+
+  // Pagination: when listFileVersions returns nextFileName, B2Folder must
+  // continue the loop with startFileName + startFileId until the server runs
+  // out of pages. The simulator's default page size is large enough that real
+  // tests don't trigger pagination, so we drive it with a mock bucket.
+  it('paginates through listFileVersions until nextFileName is null', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: 'upload',
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: 'none' },
+        uploadTimestamp: ts,
+      }
+    }
+    const calls: Array<{ startFileName?: string; startFileId?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { startFileName?: string; startFileId?: string }) {
+        calls.push({
+          ...(opts?.startFileName !== undefined ? { startFileName: opts.startFileName } : {}),
+          ...(opts?.startFileId !== undefined ? { startFileId: opts.startFileId } : {}),
+        })
+        if (opts?.startFileName === undefined) {
+          return {
+            files: [makeFileVersion('a.txt', 1), makeFileVersion('b.txt', 2)],
+            nextFileName: 'c.txt',
+            nextFileId: 'fid_c.txt',
+          }
+        }
+        return {
+          files: [makeFileVersion('c.txt', 3), makeFileVersion('d.txt', 4)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt'])
+    // Two paginated calls: first without a cursor, second with the cursor returned.
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual({})
+    expect(calls[1]).toEqual({ startFileName: 'c.txt', startFileId: 'fid_c.txt' })
+  })
+
+  // Edge: the second page returns nextFileName but nextFileId === null (rare
+  // but allowed by the API). The continuation must omit startFileId.
+  it('continues paginating when nextFileId is null', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: 'upload',
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: 'none' },
+        uploadTimestamp: ts,
+      }
+    }
+    const calls: Array<{ startFileName?: string; startFileId?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { startFileName?: string; startFileId?: string }) {
+        calls.push({
+          ...(opts?.startFileName !== undefined ? { startFileName: opts.startFileName } : {}),
+          ...(opts?.startFileId !== undefined ? { startFileId: opts.startFileId } : {}),
+        })
+        if (opts?.startFileName === undefined) {
+          return {
+            files: [makeFileVersion('a.txt', 1)],
+            nextFileName: 'b.txt',
+            nextFileId: null,
+          }
+        }
+        return {
+          files: [makeFileVersion('b.txt', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['a.txt', 'b.txt'])
+    // The continuation forwards startFileName; nextFileId === null propagates
+    // through, which is acceptable for the listFileVersions contract.
+    expect(calls[1]?.startFileName).toBe('b.txt')
   })
 })

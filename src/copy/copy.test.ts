@@ -222,4 +222,379 @@ describe('copyLargeFile', () => {
     },
     LARGE_TEST_TIMEOUT,
   )
+
+  it('clamps a too-small partSize up to the account minimum and falls back to copyFile', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'copy-clamp-min',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('tiny content under min part size')
+    const uploaded = await bucket.upload({
+      fileName: 'tiny.bin',
+      source: new BufferSource(content),
+    })
+
+    // partSize: 1000 is below absoluteMinimumPartSize (5_000_000 in the
+    // simulator). The orchestrator must clamp to the minimum, which then
+    // exceeds the content length, taking the single-call fast path.
+    const copied = await copyLargeFile(client.raw, client.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'tiny-copy.bin',
+      partSize: 1000,
+    })
+
+    expect(copied.fileName).toBe('tiny-copy.bin')
+    expect(copied.action).toBe('copy')
+    expect(copied.contentLength).toBe(content.byteLength)
+  })
+
+  it('forwards contentType, fileInfo, and SSE overrides through the single-copy fast path', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const captured: { endpoint: string; body: Record<string, unknown> }[] = []
+    const transport = {
+      async send(req: Parameters<typeof inner.send>[0]) {
+        if (typeof req.body === 'string') {
+          const endpoint = req.url.split('/').pop() ?? ''
+          try {
+            captured.push({ endpoint, body: JSON.parse(req.body) as Record<string, unknown> })
+          } catch {
+            // not all bodies are JSON
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const c = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-meta-fast',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('fast path with metadata')
+    const uploaded = await bucket.upload({
+      fileName: 'meta-src.txt',
+      source: new BufferSource(content),
+    })
+
+    const customInfo = { 'src-tag': 'hello', author: 'tester' }
+    const copied = await copyLargeFile(c.raw, c.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'meta-fast.txt',
+      partSize: 5_000_000,
+      contentType: 'text/plain',
+      fileInfo: customInfo,
+      destinationServerSideEncryption: { mode: 'SSE-B2', algorithm: 'AES256' },
+      sourceServerSideEncryption: { mode: 'none' },
+    })
+
+    expect(copied.fileName).toBe('meta-fast.txt')
+
+    const copyFileCall = captured.find((c) => c.endpoint === 'b2_copy_file')
+    expect(copyFileCall).toBeDefined()
+    const body = copyFileCall?.body ?? {}
+    expect(body['contentType']).toBe('text/plain')
+    expect(body['fileInfo']).toEqual(customInfo)
+    expect(body['destinationServerSideEncryption']).toEqual({
+      mode: 'SSE-B2',
+      algorithm: 'AES256',
+    })
+    expect(body['sourceServerSideEncryption']).toEqual({ mode: 'none' })
+  })
+
+  it(
+    'forwards contentType, fileInfo, and SSE overrides through the multipart path',
+    async () => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      const captured: { endpoint: string; body: Record<string, unknown> }[] = []
+      const transport = {
+        async send(req: Parameters<typeof inner.send>[0]) {
+          if (typeof req.body === 'string') {
+            const endpoint = req.url.split('/').pop() ?? ''
+            try {
+              captured.push({ endpoint, body: JSON.parse(req.body) as Record<string, unknown> })
+            } catch {
+              // not all bodies are JSON
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const c = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+      })
+      await c.authorize()
+      const bucket = await c.createBucket({
+        bucketName: 'copy-meta-multi',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(10_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'meta-multi-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      const customInfo = { 'src-tag': 'mp', stage: 'overrides' }
+      const sseDest = { mode: 'SSE-B2', algorithm: 'AES256' } as const
+      const sseSrc = { mode: 'none' } as const
+      const copied = await copyLargeFile(c.raw, c.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'meta-multi.bin',
+        partSize: 5_000_000,
+        concurrency: 1,
+        contentType: 'application/octet-stream',
+        fileInfo: customInfo,
+        destinationServerSideEncryption: sseDest,
+        sourceServerSideEncryption: sseSrc,
+      })
+
+      expect(copied.fileName).toBe('meta-multi.bin')
+
+      const startCall = captured.find((c) => c.endpoint === 'b2_start_large_file')
+      expect(startCall).toBeDefined()
+      const startBody = startCall?.body ?? {}
+      expect(startBody['contentType']).toBe('application/octet-stream')
+      expect(startBody['fileInfo']).toEqual(customInfo)
+      expect(startBody['serverSideEncryption']).toEqual(sseDest)
+
+      const copyPartCalls = captured.filter((c) => c.endpoint === 'b2_copy_part')
+      expect(copyPartCalls.length).toBeGreaterThan(0)
+      for (const part of copyPartCalls) {
+        expect(part.body['sourceServerSideEncryption']).toEqual(sseSrc)
+        expect(part.body['destinationServerSideEncryption']).toEqual(sseDest)
+      }
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'inherits source contentType when no override is supplied',
+    async () => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      const startBodies: Record<string, unknown>[] = []
+      const transport = {
+        async send(req: Parameters<typeof inner.send>[0]) {
+          if (typeof req.body === 'string' && req.url.includes('b2_start_large_file')) {
+            try {
+              startBodies.push(JSON.parse(req.body) as Record<string, unknown>)
+            } catch {
+              // ignore
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const c = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+      })
+      await c.authorize()
+      const bucket = await c.createBucket({
+        bucketName: 'copy-inherit-ct',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(10_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'inherit-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+        contentType: 'image/png',
+      })
+
+      const copied = await copyLargeFile(c.raw, c.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'inherit-dst.bin',
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      expect(copied.fileName).toBe('inherit-dst.bin')
+      expect(startBodies.length).toBe(1)
+      expect(startBodies[0]?.['contentType']).toBe('image/png')
+      // Default fileInfo is the empty object when no override is supplied.
+      expect(startBodies[0]?.['fileInfo']).toEqual({})
+      // No SSE override means the field is omitted from start_large_file.
+      expect(startBodies[0]?.['serverSideEncryption']).toBeUndefined()
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'multipart-copies with default concurrency when none is specified',
+    async () => {
+      const bucket = await client.createBucket({
+        bucketName: 'copy-default-conc',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(10_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'def-conc-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      const copied = await copyLargeFile(client.raw, client.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'def-conc-dst.bin',
+        partSize: 5_000_000,
+        // concurrency omitted: exercises the default-of-4 branch.
+      })
+
+      expect(copied.fileName).toBe('def-conc-dst.bin')
+      expect(copied.contentLength).toBe(content.byteLength)
+
+      const dl = await bucket.download('def-conc-dst.bin')
+      const data = await readStream(dl.body)
+      expect(data).toEqual(content)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'handles exact N-part boundary where size equals N * partSize',
+    async () => {
+      const bucket = await client.createBucket({
+        bucketName: 'copy-exact-boundary',
+        bucketType: 'allPrivate',
+      })
+      // Exactly 2 parts of 5_000_000 each, no remainder.
+      const content = deterministic(10_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'exact-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      const copied = await copyLargeFile(client.raw, client.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'exact-dst.bin',
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      expect(copied.fileName).toBe('exact-dst.bin')
+      expect(copied.contentLength).toBe(content.byteLength)
+
+      const dl = await bucket.download('exact-dst.bin')
+      const data = await readStream(dl.body)
+      expect(data).toEqual(content)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'cancels the unfinished large file when b2_finish_large_file fails',
+    async () => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      const transport = {
+        async send(req: Parameters<typeof inner.send>[0]) {
+          if (req.url.includes('b2_finish_large_file')) {
+            throw new Error('forced finish failure')
+          }
+          return inner.send(req)
+        },
+      }
+      const c = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 0 },
+      })
+      await c.authorize()
+      const bucket = await c.createBucket({
+        bucketName: 'copy-finish-fail',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(10_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'finish-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      await expect(
+        copyLargeFile(c.raw, c.accountInfo, {
+          sourceFileId: uploaded.fileId,
+          fileName: 'finish-fail.bin',
+          partSize: 5_000_000,
+          concurrency: 1,
+        }),
+      ).rejects.toThrow(/finish failure/)
+
+      const unfinished = await c.raw.listUnfinishedLargeFiles(
+        c.accountInfo.getApiUrl(),
+        c.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      expect(unfinished.files.find((f) => f.fileName === 'finish-fail.bin')).toBeUndefined()
+    },
+    LARGE_TEST_TIMEOUT,
+  )
+
+  it(
+    'swallows errors from b2_cancel_large_file during cleanup',
+    async () => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      let copyPartCalls = 0
+      const transport = {
+        async send(req: Parameters<typeof inner.send>[0]) {
+          if (req.url.includes('b2_copy_part')) {
+            copyPartCalls++
+            if (copyPartCalls > 1) throw new Error('forced copy_part failure')
+          }
+          if (req.url.includes('b2_cancel_large_file')) {
+            throw new Error('forced cancel failure')
+          }
+          return inner.send(req)
+        },
+      }
+      const c = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 0 },
+      })
+      await c.authorize()
+      const bucket = await c.createBucket({
+        bucketName: 'copy-cancel-fail',
+        bucketType: 'allPrivate',
+      })
+      const content = deterministic(15_000_000)
+      const uploaded = await bucket.upload({
+        fileName: 'cancel-src.bin',
+        source: new BufferSource(content),
+        partSize: 5_000_000,
+        concurrency: 1,
+      })
+
+      // The orchestrator must surface the original copy_part error,
+      // not the secondary failure from the best-effort cancel call.
+      await expect(
+        copyLargeFile(c.raw, c.accountInfo, {
+          sourceFileId: uploaded.fileId,
+          fileName: 'cancel-fail.bin',
+          partSize: 5_000_000,
+          concurrency: 1,
+        }),
+      ).rejects.toThrow(/copy_part failure/)
+    },
+    LARGE_TEST_TIMEOUT,
+  )
 })

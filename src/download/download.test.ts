@@ -535,6 +535,165 @@ describe('createParallelDownloadStream', () => {
     expect(result[40]).toBe(160)
     expect(result[49]).toBe(151)
   })
+
+  // Branch: single-range case (totalSize <= rangeSize). The chunking loop
+  // produces exactly one range and the post-Promise.all flush emits it.
+  it('handles a single-range download (totalSize <= rangeSize)', async () => {
+    const fileData = new Uint8Array(50)
+    for (let i = 0; i < 50; i++) fileData[i] = i
+    const fakeFileId = 'fake-single-range'
+    const transport = createMockTransport(fileData, fakeFileId)
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 50,
+      rangeSize: 100, // larger than file -> single range
+      concurrency: 4,
+    })
+
+    const result = await readStream(stream)
+    expect(result.byteLength).toBe(50)
+    for (let i = 0; i < 50; i++) expect(result[i]).toBe(i)
+  })
+
+  // Branch: response with body === null triggers the explicit "no body" throw
+  // inside fetchRangeWithRetry. Without retries, the error propagates and
+  // the controller errors the stream.
+  it('errors the stream when a range response has no body', async () => {
+    const fakeFileId = 'no-body'
+    const transport: HttpTransport = {
+      async send(request: HttpRequest): Promise<HttpResponse> {
+        if (request.url.includes('b2_authorize_account')) {
+          const body = {
+            accountId: 'mock_account',
+            authorizationToken: 'mock_token',
+            apiInfo: {
+              storageApi: {
+                absoluteMinimumPartSize: 5_000_000,
+                apiUrl: 'http://mock:0',
+                bucketId: null,
+                bucketName: null,
+                downloadUrl: 'http://mock:0',
+                infoType: 'storageApi',
+                namePrefix: null,
+                recommendedPartSize: 100_000_000,
+                s3ApiUrl: 'http://mock:0',
+                allowed: {
+                  capabilities: [],
+                  bucketId: null,
+                  bucketName: null,
+                  namePrefix: null,
+                },
+              },
+            },
+            applicationKeyExpirationTimestamp: null,
+          }
+          return {
+            status: 200,
+            headers: new Headers({ 'Content-Type': 'application/json' }),
+            body: new ReadableStream({
+              start(c) {
+                c.enqueue(new TextEncoder().encode(JSON.stringify(body)))
+                c.close()
+              },
+            }),
+            json: <T>() => Promise.resolve(body as T),
+            text: () => Promise.resolve(JSON.stringify(body)),
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+          }
+        }
+        // The interesting branch: body === null on a 200 OK.
+        return {
+          status: 200,
+          headers: new Headers({ 'Content-Length': '0' }),
+          body: null,
+          json: () => Promise.reject(new Error('no body')),
+          text: () => Promise.resolve(''),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        }
+      },
+    }
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+      maxRetries: 0,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/no body/i)
+  })
+
+  // Branch: AbortSignal already aborted when the stream starts. The first
+  // task's `abort?.throwIfAborted()` should fire before any fetch happens.
+  it('errors the stream when the abort signal is already aborted at start', async () => {
+    const fileData = new Uint8Array(100)
+    const fakeFileId = 'pre-aborted'
+    const transport = createMockTransport(fileData, fakeFileId)
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const controller = new AbortController()
+    controller.abort()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+      signal: controller.signal,
+    })
+
+    await expect(readStream(stream)).rejects.toBeDefined()
+  })
+
+  // Branch: rangeSize and concurrency at their defaults (options omitted).
+  // Exercises the `?? 10 * 1024 * 1024` and `?? 4` fallbacks at the top of
+  // createParallelDownloadStream.
+  it('falls back to default rangeSize and concurrency when omitted', async () => {
+    const fileData = new Uint8Array(64)
+    for (let i = 0; i < 64; i++) fileData[i] = i + 1
+    const fakeFileId = 'defaults'
+    const transport = createMockTransport(fileData, fakeFileId)
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    // 64 bytes is well under the 10 MB default rangeSize, so we get one range.
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 64,
+    })
+
+    const result = await readStream(stream)
+    expect(result.byteLength).toBe(64)
+    expect(result[0]).toBe(1)
+    expect(result[63]).toBe(64)
+  })
 })
 
 // ---------------------------------------------------------------------------

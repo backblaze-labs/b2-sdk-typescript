@@ -123,6 +123,16 @@ Integration tests (real B2) are gated on `B2_APPLICATION_KEY_ID` + `B2_APPLICATI
 
 Biome handles formatting and linting. 2-space indent, single quotes, trailing commas, 100-char line width. Run `pnpm lint:fix` before submitting.
 
+## User-facing docs policy
+
+`README.md`, `CONTRIBUTING.md`, `SECURITY.md`, `examples/**/README.md`, and any other doc shipped to npm or rendered on the repo's landing page are **for users**, not for marketing or internal scorecards. When editing these files:
+
+- **No comparisons that name or shame competing packages.** Don't list "X of 29 npm packages ship without Y" or single out `backblaze-b2`, `s3mini`, `storage-abstraction`, etc. as cautionary tales. Readers came here to use *this* SDK, not to hear about anyone else.
+- **No internal quality scorecards.** Coverage percentages, runtime matrices, test counts, lint-gate semantics, "this SDK is held to standards most aren't" — that's contributor / maintainer signal. It belongs in `CONTRIBUTING.md`, `CHANGELOG.md`, the CI workflow files, or this `CLAUDE.md` — not in the user-facing README.
+- **Describe what the SDK does, how to use it, and what to watch out for**, in that order. If a section's primary purpose is to make us look good rather than help a user complete a task, cut it.
+
+If you find yourself reaching for "by comparison", "of N audited packages", "most other SDKs don't", or a coverage / test-count badge inside a usage doc, stop and put it somewhere internal.
+
 ## Git policy
 
 Do not run `git add`, `git commit`, `git push`, `git rebase`, `gh pr create`, or any command that mutates git history unless the user explicitly asks for that specific action in the current turn. Edit files freely; suggest commands the user could run.

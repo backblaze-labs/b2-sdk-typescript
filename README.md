@@ -53,69 +53,6 @@ const file = await bucket.upload({
 console.log(`Uploaded: ${file.fileName} (${file.contentLength} bytes)`)
 ```
 
-## The 30-second pitch
-
-Same upload as above, but the way a real production app would write it. **Everything below is built in**: no extra dependencies, no plugin glue.
-
-```ts
-import { B2Client, BlobSource } from '@backblaze/b2-sdk'
-import { B2Error, CapExceededError } from '@backblaze/b2-sdk/errors'
-
-const client = new B2Client({
-  applicationKeyId: process.env.B2_APPLICATION_KEY_ID,
-  applicationKey: process.env.B2_APPLICATION_KEY,
-  // Transient B2 errors retry automatically with exponential backoff + jitter
-  // and the Retry-After header. Expired auth tokens trigger one reauth.
-  retry: { maxRetries: 8, maxRetryDelayMs: 60_000 },
-})
-await client.authorize()
-const bucket = await client.getBucket('my-app-data')
-if (!bucket) throw new Error('bucket not found')
-
-try {
-  const result = await bucket.upload({
-    fileName: 'archive.tar.gz',
-    source: new BlobSource(myBlob),    // 12 GB Blob from a browser or fs.openAsBlob in Node
-    partSize: 64 * 1024 * 1024,        // 64 MB parts, uploaded in parallel
-    concurrency: 8,
-    resume: true,                       // resume after a crash: skip parts whose SHA-1 matches the server
-    onProgress: ({ bytesTransferred, totalBytes, partsCompleted, totalParts }) => {
-      const pct = ((bytesTransferred / totalBytes) * 100).toFixed(1)
-      process.stdout.write(`\r${pct}% · ${partsCompleted}/${totalParts} parts`)
-    },
-    signal: AbortSignal.timeout(30 * 60_000),
-  })
-  console.log(`\n✓ uploaded ${result.fileName}`)
-} catch (err) {
-  if (err instanceof CapExceededError) {
-    console.error('Cap exceeded: upgrade your plan')
-  } else if (err instanceof B2Error) {
-    // Typed B2 error with `.code`, `.status`, `.retryable`, `.requestId`
-    console.error(`B2 ${err.code} (${err.status}, retryable=${err.retryable})`)
-  } else {
-    throw err
-  }
-}
-```
-
-What's in that snippet that you don't get elsewhere:
-
-| | This SDK | `backblaze-b2` (49k dl/mo) | `s3mini` (100k dl/mo) |
-|---|---|---|---|
-| TypeScript-first (types as source, not `.d.ts` afterthought) | ✓ | ✗ | ✓ |
-| Multipart **resume** after a crash | ✓ | ✗ | ✗ |
-| Automatic retry with backoff + jitter + `Retry-After` | ✓ | partial | ✗ |
-| Per-range retry on parallel downloads | ✓ | ✗ | ✗ |
-| Typed `B2Error` hierarchy with `.retryable` | ✓ | ✗ | ✗ |
-| Bulk delete primitives (`deleteMany` / `deleteAll`) | ✓ | ✗ | ✗ |
-| Server-side multipart copy (`copyLargeFile`) | ✓ | ✗ | ✗ |
-| SSE-C with self-redacting `EncryptionKey` (never leaks in logs) | ✓ | ✗ | ✗ |
-| `bucket.hasCapabilities([...])` for fail-fast permission checks | ✓ | ✗ | ✗ |
-| Works in Cloudflare Workers / Vercel Edge / browsers | ✓ | ✗ | ✓ |
-| In-memory `B2Simulator` for tests (no network) | ✓ | ✗ | ✗ |
-
-Source: [ecosystem audit](https://github.com/backblaze-labs/b2-typescript-sdk/tree/main/docs/ecosystem-audit) of 29 npm-published B2 packages.
-
 ## Features
 
 ### Buckets
@@ -534,7 +471,7 @@ new B2Client({
 })
 ```
 
-Of 29 audited B2 packages in the npm ecosystem, **zero** ship SSRF protection. Passing a custom `transport` opts out of the guard (your transport, your threat model).
+Passing a custom `transport` opts out of the guard (your transport, your threat model).
 
 ## Retry behavior
 
@@ -627,67 +564,25 @@ try {
 }
 ```
 
-## No abstraction tax
+## B2-native primitives, with an S3 escape hatch
 
-Multi-cloud abstractions are common in the npm B2 ecosystem (`storage-abstraction`, `nestjs-storage`, `storage-kit`, `file-manager`). They all trade B2-specific primitives for a lowest-common-denominator S3 surface. The result is that you can't easily use B2-only features when you need them.
+The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct access to features that live in B2's native API:
 
-`@backblaze/b2-sdk` takes the opposite stance: **B2-native primitives plus an S3 escape hatch**, never the other way around.
+- **Per-part and whole-file SHA-1 verification** on multipart uploads.
+- **`b2_copy_part` server-side multipart copy** via `bucket.copyLargeFile()` — no client-side bytes touched.
+- **File retention + legal hold** (object lock) on `bucket.updateFileRetention()` and `bucket.updateFileLegalHold()`.
+- **Time-scoped download tokens** via `bucket.getDownloadAuthorization()` for sharing without exposing the application key.
+- **Replication configuration** via `bucket.update({ replicationConfiguration })`.
+- **Event notification rules** via `bucket.getNotificationRules()` and `bucket.setNotificationRules()`.
+- **Application key restrictions** (per-bucket, per-prefix, per-capability) via `client.createKey()`.
 
-| Feature | This SDK | Typical multi-cloud abstraction |
-|---|---|---|
-| Native large-file SHA-1 verification (per part + whole file) | ✓ | ✗ (S3 doesn't expose) |
-| `b2_copy_part` server-side multipart copy | ✓ | ✗ (falls back to client-side copy) |
-| File retention + legal hold (object lock) | ✓ | partial |
-| `b2_get_download_authorization` time-scoped tokens | ✓ | ✗ |
-| Replication configuration | ✓ | ✗ |
-| Bucket event notifications | ✓ | ✗ |
-| Application key restrictions + capabilities | ✓ | ✗ |
-| S3-compatible API when you want it | via `@backblaze/b2-sdk/s3` | (primary surface) |
-
-If you need to switch storage providers later, switch the SDK. Don't pay the tax up front.
-
-## Quality
-
-This SDK is held to standards most B2 packages aren't.
-
-| Signal | Value |
-|---|---|
-| Statement coverage | **≥ 95%** (CI-gated) |
-| Test count | 528+ passing on Node, 1,431+ across 3 browser engines |
-| Runtime matrix | Linux × (Node 22, Node 24), Windows × (Node 22, Node 24), macOS × (Node 22, Node 24), plus Bun, plus Chromium/Firefox/WebKit |
-| TypeScript strictness | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` + `verbatimModuleSyntax` |
-| Lint gate | `biome check --error-on-warnings` — any warning fails CI |
-| Doc coverage | TypeDoc + ESLint JSDoc rules treat warnings as errors |
-| Real-B2 integration | Dedicated CI workflow (sequential Node 22 + 24), creates and tears down ephemeral buckets per run |
-| Cookbook examples in CI | Every `npx tsx examples/...` command from the docs runs end-to-end in CI, against the in-memory simulator on every push and against real B2 after the integration suite passes |
-| Bundle hygiene | `sideEffects: false`, subpath exports for tree-shaking |
-| Runtime dependencies | **zero** in the core package |
-
-By comparison, of 29 npm-published B2 packages surveyed:
-- 17 / 29 ship with **no test framework**
-- 18 / 29 are **JavaScript-only** (no first-class TypeScript types)
-- 5 / 29 ship with **no retry logic**, including the most-downloaded S3 client
-
-### Bundle sizes
-
-Per-subpath bundle sizes for a tree-shaken browser build (Bun + minify, `node:*` and `@aws-sdk/*` external):
-
-| Subpath | Minified | Gzipped |
-|---|---|---|
-| `@backblaze/b2-sdk` (typical: `B2Client` + `BufferSource`) | 36.1 KB | 9.6 KB |
-| `@backblaze/b2-sdk/errors` (`B2Error` + `classifyError`) | 2.1 KB | 670 B |
-| `@backblaze/b2-sdk/streams` (`IncrementalSha1`, source adapters) | 1.8 KB | 801 B |
-| `@backblaze/b2-sdk/simulator` (full in-memory B2 for tests) | 19.2 KB | 5.3 KB |
-
-Numbers are auto-checked at build time. Most apps consume only the main entry, paying ~10 KB gzipped, dwarfed by typical app dependencies.
+When you want S3 compatibility instead — for tooling that already speaks S3, or for the Bandwidth Alliance proxy pattern — `@backblaze/b2-sdk/s3` exposes `createS3ClientConfig()` and `presignGetObjectUrl()` so the same SDK covers both surfaces.
 
 ## Source isomorphism
 
-Most "isomorphic" SDKs are isomorphic at the *built artifact* level: you run `pnpm build`, the resulting `dist/` works in every runtime. The raw `src/` only runs in tsc.
+The SDK is isomorphic at the **source** level, not just at the built artifact level. Every internal import uses a `.ts` extension (`import { foo } from './foo.ts'`, not `'./foo.js'`), `tsconfig.json` has `allowImportingTsExtensions: true` + `rewriteRelativeImportExtensions: true`, and Vite rewrites the extensions to `.js` during build so npm consumers still see a normal `dist/`.
 
-This SDK is isomorphic at the *source* level. Every internal import uses a `.ts` extension (`import { foo } from './foo.ts'`, not `'./foo.js'`), `tsconfig.json` has `allowImportingTsExtensions: true` + `rewriteRelativeImportExtensions: true`, and Vite handles the `.ts` to `.js` rewrite during build.
-
-What this means in practice:
+What this means in practice: you can point a runtime straight at `src/` without a build step.
 
 ```bash
 # Deno reads src/ directly. No `pnpm build`, no node_modules, no npm: shim.
@@ -700,14 +595,7 @@ bun examples/node-list-buckets.ts
 node --experimental-strip-types examples/node-list-buckets.ts
 ```
 
-| Capability | Most "isomorphic" SDKs | This SDK |
-|---|---|---|
-| Built `dist/` works everywhere | ✓ | ✓ |
-| `deno check` against `src/` (no build) | ✗ | ✓ |
-| `bun run src/...` (no build) | ✗ | ✓ |
-| Source published 1:1 to JSR | ✗ | possible |
-
-CI proves this every commit: [`.github/workflows/examples.yml`](.github/workflows/examples.yml) runs `deno check` and `bunx tsc` against `examples/` resolving to `../src/*.ts`. If a `.js` extension ever sneaks back into an internal import, that workflow fails.
+So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/` tree that runs in Node, Bun, and Deno without a build. Useful when extending the SDK locally, contributing PRs, or vendoring the source into a Deno project.
 
 ## Runtime support
 

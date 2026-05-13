@@ -2,7 +2,7 @@
 
 Backblaze B2 and Cloudflare are members of the [Bandwidth Alliance](https://www.cloudflare.com/bandwidth-alliance/), which means **egress from B2 to Cloudflare is free**. Putting a Cloudflare Worker (or just a CDN-cached domain) in front of your B2 bucket can drop your egress bill to zero.
 
-Of 29 npm-published B2 packages surveyed, only one (`cfb2`, 69 dl/mo) demonstrates this pattern. Yet the savings can be substantial for any read-heavy workload.
+For any read-heavy workload, the savings can be substantial — Cloudflare's edge cache absorbs repeat requests, and origin fetches from B2 to Cloudflare don't count against your B2 egress bill.
 
 ## What this Worker does
 
