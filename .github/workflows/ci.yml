@@ -56,7 +56,13 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Vitest's default per-worker heap (~2 GB) is too tight for our test
+      # surface, which round-trips multi-MB buffers through upload + copy +
+      # stream multipart tests across many parallel workers. macOS runners
+      # were the first to OOM. Bumping to 4 GB gives ~2x headroom.
       - run: pnpm test
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
   test-bun:
     name: Test (Bun)
@@ -88,7 +94,11 @@ jobs:
       - name: Run tests with coverage
         # Vite/Vitest's `coverage.thresholds` config fails the run when any
         # metric drops below the configured floor (see vite.config.ts).
+        # v8 coverage adds overhead on top of test memory; same 4 GB heap as
+        # the plain test job for safety.
         run: pnpm test:coverage
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
       - name: Publish coverage summary to the job log
         if: always()
         run: |

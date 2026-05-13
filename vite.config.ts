@@ -50,6 +50,21 @@ export default defineConfig({
   test: {
     globals: true,
     include: ['src/**/*.test.ts'],
+    // The multipart upload/copy/stream tests round-trip 5-15 MB Uint8Array
+    // buffers per test. Vitest defaults to one worker per CPU core, and each
+    // worker is its own Node process with its own ~2 GB default heap.
+    // On a 4-core GitHub-hosted runner that's 4 workers × 2 GB = 8 GB of
+    // potential resident memory, which exceeds the 7 GB of a macOS runner
+    // (and pushes Linux/Windows runners uncomfortably close). Capping at
+    // 2 forks keeps total demand bounded; combined with the
+    // NODE_OPTIONS=--max-old-space-size=4096 in CI workflows, each fork has
+    // ample headroom for the largest tests in the suite.
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        maxForks: 2,
+      },
+    },
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],
