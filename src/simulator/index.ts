@@ -82,6 +82,21 @@ export interface SimulatorDownloadResponse {
 }
 
 /**
+ * Options for constructing a {@link B2Simulator}.
+ */
+export interface B2SimulatorOptions {
+  /**
+   * The minimum part size the simulator advertises in `b2_authorize_account`
+   * responses (`apiInfo.storageApi.absoluteMinimumPartSize`). Defaults to
+   * `5_000_000` to mirror production B2. Lower this in tests that exercise
+   * multipart control-flow branches but don't need realistic part sizes,
+   * because v8 coverage instrumentation pushes 5 MB+ part hashing past 60 s
+   * on the slowest CI runners, which trips vitest's IPC RPC timeout.
+   */
+  minimumPartSize?: number
+}
+
+/**
  * In-memory B2 simulator for testing. Implements the B2 native API at the
  * request/response level without any network I/O. Supports 25+ operations
  * including buckets, files, large files, keys, and notifications.
@@ -97,21 +112,6 @@ export interface SimulatorDownloadResponse {
  * await client.authorize()
  * ```
  */
-/**
- * Options for constructing a {@link B2Simulator}.
- */
-export interface B2SimulatorOptions {
-  /**
-   * The minimum part size the simulator advertises in `b2_authorize_account`
-   * responses (`apiInfo.storageApi.absoluteMinimumPartSize`). Defaults to
-   * `5_000_000` to mirror production B2. Lower this in tests that exercise
-   * multipart control-flow branches but don't need realistic part sizes —
-   * v8 coverage instrumentation pushes 5 MB+ part hashing past 60 s on the
-   * slowest CI runners, which trips vitest's IPC RPC timeout.
-   */
-  minimumPartSize?: number
-}
-
 export class B2Simulator {
   private readonly buckets = new Map<string, StoredBucket>()
   private readonly accountId = 'sim_account_0001'
@@ -121,6 +121,7 @@ export class B2Simulator {
   private readonly minimumPartSize: number
 
   /**
+   * Constructs a new in-memory B2 simulator.
    * @param options - Optional simulator overrides. See {@link B2SimulatorOptions}.
    */
   constructor(options: B2SimulatorOptions = {}) {
