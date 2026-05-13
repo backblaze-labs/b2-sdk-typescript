@@ -97,12 +97,35 @@ export interface SimulatorDownloadResponse {
  * await client.authorize()
  * ```
  */
+/**
+ * Options for constructing a {@link B2Simulator}.
+ */
+export interface B2SimulatorOptions {
+  /**
+   * The minimum part size the simulator advertises in `b2_authorize_account`
+   * responses (`apiInfo.storageApi.absoluteMinimumPartSize`). Defaults to
+   * `5_000_000` to mirror production B2. Lower this in tests that exercise
+   * multipart control-flow branches but don't need realistic part sizes —
+   * v8 coverage instrumentation pushes 5 MB+ part hashing past 60 s on the
+   * slowest CI runners, which trips vitest's IPC RPC timeout.
+   */
+  minimumPartSize?: number
+}
+
 export class B2Simulator {
   private readonly buckets = new Map<string, StoredBucket>()
   private readonly accountId = 'sim_account_0001'
   private readonly largeFiles = new Map<string, LargeFileInProgress>()
   private readonly keys = new Map<string, StoredKey>()
   private readonly notificationRules = new Map<string, EventNotificationRule[]>()
+  private readonly minimumPartSize: number
+
+  /**
+   * @param options - Optional simulator overrides. See {@link B2SimulatorOptions}.
+   */
+  constructor(options: B2SimulatorOptions = {}) {
+    this.minimumPartSize = options.minimumPartSize ?? 5_000_000
+  }
 
   /**
    * Creates an {@link HttpTransport} that routes requests to this simulator.
@@ -479,7 +502,7 @@ export class B2Simulator {
         authorizationToken: 'sim_auth_token' as unknown as AuthToken,
         apiInfo: {
           storageApi: {
-            absoluteMinimumPartSize: 5_000_000,
+            absoluteMinimumPartSize: this.minimumPartSize,
             apiUrl: 'http://localhost:0',
             bucketId: null,
             bucketName: null,

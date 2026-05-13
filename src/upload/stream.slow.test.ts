@@ -182,19 +182,32 @@ describe('B2Object.createWriteStream', () => {
   it('closes cleanly when total bytes are an exact partSize multiple (no remainder)', async () => {
     // Write 2 * partSize so the inner write() loop ships both parts and
     // close() sees pendingBytes === 0 (the "skip dispatchPart" branch).
-    const partSize = 5_000_000
+    // Uses a small-part simulator so this control-flow test stays under the
+    // ~60 s vitest IPC RPC budget when v8 coverage instrumentation is on.
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+    })
+    await smallClient.authorize()
+    const smallBucket = await smallClient.createBucket({
+      bucketName: 'exact-stream',
+      bucketType: 'allPrivate',
+    })
+    const partSize = 100_000
     const data = deterministic(partSize * 2)
 
-    const { writable, done } = bucket.file('exact.bin').createWriteStream({
+    const { writable, done } = smallBucket.file('exact.bin').createWriteStream({
       partSize,
       concurrency: 2,
     })
 
-    await chunkedReadable(data, 256 * 1024).pipeTo(writable)
+    await chunkedReadable(data, 8 * 1024).pipeTo(writable)
     const result = await done
 
     expect(result.contentLength).toBe(partSize * 2)
-    const dl = await bucket.download('exact.bin')
+    const dl = await smallBucket.download('exact.bin')
     const got = await readStream(dl.body)
     expect(got.byteLength).toBe(partSize * 2)
     expect(got).toEqual(data)
@@ -326,8 +339,22 @@ describe('B2Object.createWriteStream', () => {
     // The semaphore in the engine serialises part uploads, so the second
     // part has to wait on the semaphore's release, exercising the queue
     // throttling path. The pull() in the source is intentionally async so
-    // the WritableStream backpressure protocol is exercised.
-    const partSize = 5_000_000
+    // the WritableStream backpressure protocol is exercised. Uses a
+    // small-part simulator so the test stays under the ~60 s vitest IPC
+    // RPC budget when v8 coverage instrumentation is on — the backpressure
+    // path is what we're testing, not 5 MB part hashing.
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+    })
+    await smallClient.authorize()
+    const smallBucket = await smallClient.createBucket({
+      bucketName: 'slow-stream',
+      bucketType: 'allPrivate',
+    })
+    const partSize = 100_000
     const total = partSize * 2 + 123
     const data = deterministic(total)
 
@@ -341,13 +368,13 @@ describe('B2Object.createWriteStream', () => {
           controller.close()
           return
         }
-        const end = Math.min(offset + 64 * 1024, data.byteLength)
+        const end = Math.min(offset + 4 * 1024, data.byteLength)
         controller.enqueue(data.slice(offset, end))
         offset = end
       },
     })
 
-    const { writable, done } = bucket.file('slow.bin').createWriteStream({
+    const { writable, done } = smallBucket.file('slow.bin').createWriteStream({
       partSize,
       concurrency: 1,
     })
@@ -356,7 +383,7 @@ describe('B2Object.createWriteStream', () => {
     const result = await done
 
     expect(result.contentLength).toBe(total)
-    const dl = await bucket.download('slow.bin')
+    const dl = await smallBucket.download('slow.bin')
     const got = await readStream(dl.body)
     expect(got).toEqual(data)
   })

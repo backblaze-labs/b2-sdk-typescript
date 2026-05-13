@@ -285,22 +285,33 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('multipart-copies with default concurrency when none is specified', async () => {
-    const bucket = await client.createBucket({
+    // Uses a small-part simulator so this default-concurrency branch test
+    // stays under the ~60 s vitest IPC RPC budget when v8 coverage
+    // instrumentation is on. The default-of-4 branch in copyLargeFile is
+    // independent of part size.
+    const smallSim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: smallSim.transport(),
+    })
+    await smallClient.authorize()
+    const bucket = await smallClient.createBucket({
       bucketName: 'copy-default-conc',
       bucketType: 'allPrivate',
     })
-    const content = deterministic(10_000_000)
+    const content = deterministic(200_000)
     const uploaded = await bucket.upload({
       fileName: 'def-conc-src.bin',
       source: new BufferSource(content),
-      partSize: 5_000_000,
+      partSize: 100_000,
       concurrency: 1,
     })
 
-    const copied = await copyLargeFile(client.raw, client.accountInfo, {
+    const copied = await copyLargeFile(smallClient.raw, smallClient.accountInfo, {
       sourceFileId: uploaded.fileId,
       fileName: 'def-conc-dst.bin',
-      partSize: 5_000_000,
+      partSize: 100_000,
       // concurrency omitted: exercises the default-of-4 branch.
     })
 
@@ -313,23 +324,33 @@ describe('copyLargeFile (slow)', () => {
   })
 
   it('handles exact N-part boundary where size equals N * partSize', async () => {
-    const bucket = await client.createBucket({
+    // Uses a small-part simulator so the exact-N-part-boundary control-flow
+    // test stays under the ~60 s vitest IPC RPC budget when v8 coverage
+    // instrumentation is on. The boundary logic is independent of part size.
+    const smallSim = new B2Simulator({ minimumPartSize: 100_000 })
+    const smallClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: smallSim.transport(),
+    })
+    await smallClient.authorize()
+    const bucket = await smallClient.createBucket({
       bucketName: 'copy-exact-boundary',
       bucketType: 'allPrivate',
     })
-    // Exactly 2 parts of 5_000_000 each, no remainder.
-    const content = deterministic(10_000_000)
+    // Exactly 2 parts of 100_000 each, no remainder.
+    const content = deterministic(200_000)
     const uploaded = await bucket.upload({
       fileName: 'exact-src.bin',
       source: new BufferSource(content),
-      partSize: 5_000_000,
+      partSize: 100_000,
       concurrency: 1,
     })
 
-    const copied = await copyLargeFile(client.raw, client.accountInfo, {
+    const copied = await copyLargeFile(smallClient.raw, smallClient.accountInfo, {
       sourceFileId: uploaded.fileId,
       fileName: 'exact-dst.bin',
-      partSize: 5_000_000,
+      partSize: 100_000,
       concurrency: 1,
     })
 
