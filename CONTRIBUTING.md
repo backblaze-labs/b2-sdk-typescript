@@ -29,6 +29,7 @@ pnpm test
 | `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
 | `pnpm lint:docs` | Check JSDoc / TSDoc completeness with ESLint |
+| `pnpm lint:spelling` | Spell-check comments + docs with CSpell (config: `cspell.config.yaml`, project dictionary: `.cspell/project-words.txt`) |
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
 | `pnpm typecheck:examples` | Typecheck the cookbook examples against `src/` |
 | `pnpm test:integration` | Run integration tests against real B2 (auto-skips without credentials) |
@@ -58,7 +59,7 @@ One-time local browser setup: `pnpm exec playwright install chromium firefox web
 2. `pnpm typecheck:examples` passes with zero errors
 3. `pnpm test` passes with all tests green
 4. `pnpm test:coverage` keeps coverage at or above 95% statements
-5. `pnpm lint` and `pnpm lint:docs` both pass with **zero warnings** (the `lint` script uses `--error-on-warnings`)
+5. `pnpm lint`, `pnpm lint:docs`, and `pnpm lint:spelling` all pass with **zero warnings** (the `lint` script uses `--error-on-warnings`). If CSpell flags a legitimate term, add it to `.cspell/project-words.txt` rather than inlining `// cspell:ignore`
 6. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
 7. If you added a new public API, add a test using the `B2Simulator`
 8. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible

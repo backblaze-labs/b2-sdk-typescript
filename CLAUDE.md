@@ -17,6 +17,7 @@ pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Pla
 pnpm lint            # Biome: lint + format check
 pnpm lint:fix        # Biome: auto-fix
 pnpm lint:docs       # ESLint JSDoc/TSDoc strict checks
+pnpm lint:spelling   # CSpell: comments + docs (config: cspell.config.yaml, dict: .cspell/project-words.txt)
 pnpm typecheck       # tsc --noEmit (strict + exactOptionalPropertyTypes)
 pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs

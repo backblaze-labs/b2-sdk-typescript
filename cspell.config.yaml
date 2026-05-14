@@ -1,0 +1,81 @@
+# cspell configuration for @backblaze/b2-sdk.
+#
+# Scope: comments, JSDoc, README / CHANGELOG / CONTRIBUTING / SECURITY,
+# and string literals across `src/`, `examples/`, and the top-level docs.
+# Generated output (`dist/`, `docs/`, `coverage/`) is excluded so we don't
+# spell-check tree-shaken / minified artifacts. Lockfiles are excluded
+# because they contain hashes and registry-encoded names that aren't
+# meaningfully spell-checkable.
+#
+# Project-specific terminology lives in `.cspell/project-words.txt`. Adding
+# a new word there is preferred over inlining `// cspell:ignore foo`
+# directives because the central list is auditable and reusable.
+version: '0.2'
+language: en
+
+# Built-in dictionaries. `softwareTerms` + `typescript` + `node` cover the
+# vast majority of programmer vocabulary; the project list fills the rest.
+dictionaries:
+  - typescript
+  - node
+  - npm
+  - html
+  - css
+  - softwareTerms
+  - bash
+  - filetypes
+  - en_US
+  - misc
+  - project-words
+
+dictionaryDefinitions:
+  - name: project-words
+    path: ./.cspell/project-words.txt
+    addWords: true
+
+# Don't scan generated trees or non-text artifacts.
+ignorePaths:
+  - node_modules/**
+  - dist/**
+  - docs/**
+  - coverage/**
+  - pnpm-lock.yaml
+  - '*.snap'
+  - '.git/**'
+  - '.cspell/**'
+  - examples/browser-uploader/dist/**
+
+# Files cspell scans by default in addition to those listed via the CLI.
+files:
+  - 'src/**/*.ts'
+  - 'examples/**/*.ts'
+  - 'examples/**/*.md'
+  - '*.md'
+  - 'CLAUDE.md'
+
+# Patterns we never want to flag, even inside otherwise-scanned files.
+# - SHA-1 / SHA-256 hex strings: long contiguous hex looks like gibberish but isn't.
+# - Base64 / base32 blobs: same.
+# - URLs: cspell handles these natively, but reinforcing prevents false positives.
+patterns:
+  - name: long-hex
+    pattern: /\b[0-9a-f]{16,}\b/gi
+  - name: base64-blob
+    pattern: '/[A-Za-z0-9+/]{20,}={0,2}/g'
+  # Percent-encoded URL escapes. Without this, `%5Btest` is split as
+  # `Btest` (the `%5` is consumed as digits + the `B` is treated as a
+  # word start), which surfaces spurious "Btest", "Bkey", "Etop", "Ffile"
+  # findings in `src/raw/encoding.test.ts` and similar.
+  - name: percent-encoded
+    pattern: /%[0-9A-Fa-f]{2}/g
+ignoreRegExpList:
+  - long-hex
+  - base64-blob
+  - percent-encoded
+  - Urls
+  - Email
+
+# Allow ALLCAPS_SNAKE constants and camelCase / PascalCase identifiers to
+# split on case boundaries when spell-checked. This lets us catch typos in
+# multi-word names like `applicaitonKeyId` (typo on "application").
+allowCompoundWords: true
