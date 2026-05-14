@@ -7,6 +7,14 @@ export default defineConfig({
     dts({
       rollupTypes: false,
       include: ['src'],
+      // Without this exclude, `vite-plugin-dts` walks every `.ts` file under
+      // `src/` and emits a `.d.ts` for it — including ~40 test files and the
+      // `test-utils/` helper module. These artifacts shipped to npm via the
+      // `package.json` "files" entry without serving any consumer purpose
+      // (the runtime `.js`/`.cjs` outputs are clean because they're driven
+      // by the explicit `lib.entry` map below). Excluding here keeps the
+      // declaration output aligned with the runtime entry points.
+      exclude: ['src/**/*.test.ts', 'src/test-utils/**'],
       outDir: 'dist',
       // Source uses .ts import extensions (source-isomorphism). vite-plugin-dts
       // doesn't honour `rewriteRelativeImportExtensions` even when passed via
