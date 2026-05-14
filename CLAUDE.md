@@ -48,7 +48,7 @@ Single npm package with subpath exports:
 | `@backblaze/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
 | `@backblaze/b2-sdk/sync` | `src/sync/index.ts` | Local/B2 sync engine: LocalFolder, B2Folder, synchronize() |
 | `@backblaze/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
-| `@backblaze/b2-sdk/notifications` | `src/notifications/webhook.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
+| `@backblaze/b2-sdk/notifications` | `src/notifications/index.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
 | `@backblaze/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignGetObjectUrl |
 
 ## Source layout

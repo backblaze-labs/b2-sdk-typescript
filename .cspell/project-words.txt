@@ -126,7 +126,6 @@ accountId
 ackgowledge
 allowprivate
 allpublic
-allpublic
 applicationkey
 applicationkeyid
 asReplicationDestination
@@ -164,7 +163,6 @@ downloadByName
 downloadFileById
 downloadFileByName
 downloadUrl
-endianness
 encodeURIComponent
 errored
 evict
@@ -185,7 +183,6 @@ getUploadPartUrl
 getUploadUrl
 hexdigest
 hideFile
-hostnames
 incrementalsha
 issuedTokens
 isomorphic
@@ -335,7 +332,6 @@ preorder
 producible
 re-auth
 re-authorize
-reauthorize
 reauthorisation
 rebrand
 re-brand
@@ -350,11 +346,8 @@ short-circuit
 short-circuits
 spec
 spec-compliant
-subpaths
 tieup
 tieups
-typecheck
-typechecked
 unaffected
 unblocked
 unsubscribe
@@ -390,14 +383,12 @@ quickstart
 serialise
 serialised
 serializable
-sharded
 specialise
 specialised
 syncs
 unauthorise
 unauthorised
 unicode
-upserts
 utilise
 utilised
 
@@ -455,14 +446,12 @@ debounced
 desync
 discoverability
 distros
-discoverable
 dominator
 ergonomics
 ergonomic
 graceful
 gracefully
 greppable
-hardcoded
 hashable
 idempotent
 imperative
@@ -487,7 +476,6 @@ sourcemap
 sourcemaps
 subdomain
 subdomains
-sublist
 subprocess
 subprocesses
 substrate
