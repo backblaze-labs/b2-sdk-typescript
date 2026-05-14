@@ -279,14 +279,20 @@ export class B2Client {
    * @returns A page of application keys with an optional continuation token.
    */
   async listKeys(options?: {
-    /** Maximum number of keys to return per request. */
-    maxKeyCount?: number
+    /**
+     * Maximum number of keys to return per request. Forwarded to the
+     * raw API's `maxKeyCount` parameter.
+     */
+    pageSize?: number
     /** Start listing after this key ID (for pagination). */
     startApplicationKeyId?: ApplicationKeyId
   }): Promise<ListKeysResponse> {
     return this.raw.listKeys(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
       accountId: accountId(this.accountInfo.getAccountId()),
-      ...options,
+      ...(options?.pageSize !== undefined ? { maxKeyCount: options.pageSize } : {}),
+      ...(options?.startApplicationKeyId !== undefined
+        ? { startApplicationKeyId: options.startApplicationKeyId }
+        : {}),
     })
   }
 
@@ -310,7 +316,7 @@ export class B2Client {
     return paginateItems(
       async (cursor: ApplicationKeyId | undefined) => {
         const resp = await this.listKeys({
-          maxKeyCount: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? 1000,
           ...(cursor !== undefined ? { startApplicationKeyId: cursor } : {}),
         })
         return { page: resp, nextCursor: resp.nextApplicationKeyId ?? undefined }

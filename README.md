@@ -172,22 +172,28 @@ const stream = obj.createReadStream(fileId, totalSize, {
 ### File operations
 
 ```ts
-// List files (paginated)
-const listing = await bucket.listFileNames({ prefix: 'photos/', maxFileCount: 100 })
+// List files (single page)
+const listing = await bucket.listFileNames({ prefix: 'photos/', pageSize: 100 })
 
 // Iterate all files (async generator, handles pagination)
-for await (const file of bucket.listAllFiles({ prefix: 'logs/' })) {
+for await (const file of bucket.paginateFileNames({ prefix: 'logs/' })) {
   console.log(file.fileName, file.contentLength)
 }
 
 // Look up the latest visible version by name (returns null if missing or hidden)
 const info = await bucket.getFileInfoByName('hello.txt')
 
+// Fetch metadata without transferring the body (HTTP HEAD). Returns a
+// body-less result so callers never have to drain a (logically empty)
+// HEAD response stream themselves.
+const { headers } = await bucket.head('hello.txt')
+console.log(headers.contentLength, headers.contentSha1)
+
 // Hide a file (soft delete)
 await bucket.hideFile('old-config.json')
 
 // Restore visibility by removing the latest hide marker
-await bucket.unhide('old-config.json')
+await bucket.unhideFile('old-config.json')
 
 // Delete a specific file version
 await bucket.deleteFileVersion('file.txt', fileId)
@@ -370,7 +376,7 @@ The SDK is organized into subpath exports for tree-shaking:
 // High-level facade (most users need only this)
 import { B2Client, Bucket, B2Object } from '@backblaze/b2-sdk'
 
-// Low-level 1:1 API bindings (all 37 B2 native endpoints)
+// Low-level 1:1 API bindings for the B2 native endpoints the SDK uses
 import { RawClient } from '@backblaze/b2-sdk/raw'
 
 // Error types for catch blocks

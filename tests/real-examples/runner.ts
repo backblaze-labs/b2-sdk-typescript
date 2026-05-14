@@ -52,7 +52,7 @@ function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
 }
 
 async function emptyAndDeleteBucket(b: Bucket): Promise<void> {
-  for await (const file of b.listAllFiles()) {
+  for await (const file of b.paginateFileNames()) {
     await b.deleteFileVersion(file.fileName, file.fileId)
   }
   // Listing all files returns only the latest version; clean up the rest too.

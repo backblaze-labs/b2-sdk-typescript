@@ -40,7 +40,7 @@ Single npm package with subpath exports:
 | Export | Entry | Purpose |
 |---|---|---|
 | `@backblaze/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
-| `@backblaze/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for all 37 B2 native API endpoints |
+| `@backblaze/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for the 31 B2 native API endpoints the SDK exposes |
 | `@backblaze/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 13 subclasses + classifyError() |
 | `@backblaze/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
 | `@backblaze/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
@@ -56,7 +56,7 @@ src/
   types/         Branded IDs, DTOs, enums (ids.ts, auth.ts, bucket.ts, file.ts, upload.ts, ...)
   errors/        B2Error hierarchy + classifyError + isTransient + B2InsufficientCapabilityError
   http/          HttpTransport, FetchTransport, RetryTransport (injectable sleepImpl), retry math
-  raw/           RawClient (all 37 endpoints), B2-specific percent-encoding
+  raw/           RawClient (31 native endpoints), B2-specific percent-encoding
   auth/          AccountInfo interface, InMemoryAccountInfo, FileAccountInfo, UploadUrlPool, realms
   streams/       IncrementalSha1 (Node crypto / WebCrypto), ContentSource adapters, EncryptionKey
   upload/        uploadSmallFile, uploadLargeFile (multipart + resume), createWriteStream, concurrency
@@ -66,8 +66,8 @@ src/
   s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl)
   simulator/     B2Simulator + SimulatorTransport for testing
   client.ts      B2Client high-level facade + hasCapabilities + CapabilityCheckResult
-  bucket.ts      Bucket: upload/download/list/copy/copyLargeFile/deleteMany/deleteAll/unhide/...
-  object.ts      B2Object: upload, download, createReadStream, createWriteStream, getFileInfo
+  bucket.ts      Bucket: upload/download/head/list/copy/copyLargeFile/deleteMany/deleteAll/unhideFile/...
+  object.ts      B2Object: upload, download, head, createReadStream, createWriteStream, getFileInfo
   index.ts       Public API re-exports
   version.ts     VERSION constant
 ```

@@ -4,6 +4,7 @@ import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/ind
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
 import type { DownloadHeaders } from '../types/download.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
+import { bestEffort } from '../util/best-effort.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 
 /** Result of a single-request file download. */
@@ -12,6 +13,17 @@ export interface DownloadResult {
   readonly headers: DownloadHeaders
   /** Streaming body of the downloaded file. */
   readonly body: ReadableStream<Uint8Array>
+}
+
+/**
+ * Result of a HEAD-style metadata fetch. Unlike {@link DownloadResult},
+ * this shape has **no** `body` field — the SDK consumes and discards the
+ * (logically empty) HEAD response body internally so callers never have
+ * to remember to `body.cancel()` after a metadata-only fetch.
+ */
+export interface HeadResult {
+  /** Parsed B2 response headers (content type, SHA-1, file info, etc.). */
+  readonly headers: DownloadHeaders
 }
 
 /** Shared download options exposed at the high-level facade. */
@@ -59,6 +71,26 @@ export interface DownloadByIdOptions extends DownloadCommonOptions {
 
 /** Options for downloading a file by bucket name and file path. */
 export interface DownloadByNameOptions extends DownloadCommonOptions {
+  /** Name of the bucket containing the file. */
+  readonly bucketName: string
+  /** Full file name (path) within the bucket. */
+  readonly fileName: string
+}
+
+/**
+ * Shared HEAD options. Mirrors {@link DownloadCommonOptions} but omits
+ * `method` (always HEAD) and `onProgress` (no body to track).
+ */
+type HeadCommonOptions = Omit<DownloadCommonOptions, 'method' | 'onProgress'>
+
+/** Options for a HEAD-by-ID request. */
+export interface HeadByIdOptions extends HeadCommonOptions {
+  /** ID of the file version to inspect. */
+  readonly fileId: FileId
+}
+
+/** Options for a HEAD-by-name request. */
+export interface HeadByNameOptions extends HeadCommonOptions {
   /** Name of the bucket containing the file. */
   readonly bucketName: string
   /** Full file name (path) within the bucket. */
@@ -130,6 +162,85 @@ export async function downloadByName(
     headers,
     body: instrumentProgress(resp.body ?? emptyStream(), headers.contentLength, options.onProgress),
   }
+}
+
+/**
+ * Issues a HEAD-by-ID request and returns parsed headers only. Drains
+ * the (logically empty) response body internally so callers don't have
+ * to remember to `body.cancel()` themselves.
+ *
+ * Prefer this over `downloadById({ method: 'HEAD' })` — same wire-level
+ * effect, but the caller-facing result has no `body` field at all so
+ * there's nothing to clean up.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param options - HEAD parameters (file ID + the same response-header
+ *   overrides and abort signal that `downloadById` accepts).
+ *
+ * @returns Parsed download headers (no body field).
+ */
+export async function headById(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: HeadByIdOptions,
+): Promise<HeadResult> {
+  const resp = await raw.downloadFileById(
+    accountInfo.getDownloadUrl(),
+    accountInfo.getAuthToken(),
+    options.fileId as string,
+    { ...toRawDownloadOptions(options), method: 'HEAD' },
+  )
+  // Body for HEAD is normally `null` per the fetch spec. Some transports
+  // (notably the SDK's `B2Simulator`) synthesize a non-null body for
+  // shape consistency. In either case, cancelling is a no-op for the
+  // caller; wrap in `bestEffort` so a stream-lifecycle quirk in a
+  // future runtime can't fail an otherwise-successful HEAD.
+  if (resp.body !== null) {
+    // Bind to a local so the type narrowing carries into the closure;
+    // bare `resp.body` in the lambda would re-broaden to `... | null`.
+    const body = resp.body
+    await bestEffort(() => body.cancel())
+  }
+  return { headers: extractDownloadHeaders(resp.headers) }
+}
+
+/**
+ * Issues a HEAD-by-name request and returns parsed headers only. Drains
+ * the (logically empty) response body internally so callers don't have
+ * to remember to `body.cancel()` themselves.
+ *
+ * Prefer this over `downloadByName({ method: 'HEAD' })` — same wire-level
+ * effect, but the caller-facing result has no `body` field at all so
+ * there's nothing to clean up.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param options - HEAD parameters (bucket + file name + the same
+ *   response-header overrides and abort signal that `downloadByName`
+ *   accepts).
+ *
+ * @returns Parsed download headers (no body field).
+ */
+export async function headByName(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: HeadByNameOptions,
+): Promise<HeadResult> {
+  const resp = await raw.downloadFileByName(
+    accountInfo.getDownloadUrl(),
+    accountInfo.getAuthToken(),
+    options.bucketName,
+    options.fileName,
+    { ...toRawDownloadOptions(options), method: 'HEAD' },
+  )
+  if (resp.body !== null) {
+    // Bind to a local so the type narrowing carries into the closure;
+    // bare `resp.body` in the lambda would re-broaden to `... | null`.
+    const body = resp.body
+    await bestEffort(() => body.cancel())
+  }
+  return { headers: extractDownloadHeaders(resp.headers) }
 }
 
 /**

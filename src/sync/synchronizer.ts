@@ -240,19 +240,27 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
         const result = await bucket.download(source.selectedVersion.fileName)
         const reader = result.body.getReader()
-        const chunks: Uint8Array[] = []
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          chunks.push(value)
-        }
-        let total = 0
-        for (const c of chunks) total += c.byteLength
-        const combined = new Uint8Array(total)
-        let offset = 0
-        for (const c of chunks) {
-          combined.set(c, offset)
-          offset += c.byteLength
+        let combined: Uint8Array
+        try {
+          const chunks: Uint8Array[] = []
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            chunks.push(value)
+          }
+          let total = 0
+          for (const c of chunks) total += c.byteLength
+          combined = new Uint8Array(total)
+          let offset = 0
+          for (const c of chunks) {
+            combined.set(c, offset)
+            offset += c.byteLength
+          }
+        } finally {
+          // Release the body stream's reader lock so a downstream
+          // writeFile failure doesn't strand the response stream half-
+          // open with the upstream HTTP connection still pumping.
+          reader.releaseLock()
         }
 
         const { mkdir, writeFile } = await import('node:fs/promises')

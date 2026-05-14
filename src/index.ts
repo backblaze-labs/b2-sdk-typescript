@@ -19,7 +19,7 @@ export {
   type DeleteManyResult,
   type DeleteTarget,
 } from './bucket.ts'
-export { B2Object, type DownloadCallOptions } from './object.ts'
+export { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 
 export type { UploadWriteHandle } from './upload/stream.ts'
 
@@ -68,7 +68,7 @@ export type {
 export { UrlGuard, deriveAllowedSuffixes } from './http/url-guard.ts'
 export type { RetryOptions } from './http/retry.ts'
 
-export type { DownloadResult } from './download/single.ts'
+export type { DownloadResult, HeadResult } from './download/single.ts'
 
 export { SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.ts'
 

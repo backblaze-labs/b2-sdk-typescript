@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`B2Object.createWriteStream(options?)`** returning `{ writable: WritableStream<Uint8Array>, done: Promise<FileVersion> }`. Pipe a `ReadableStream` directly into B2 with multipart-protocol buffering, parallel part uploads, and backpressure.
 - **`B2Client.hasCapabilities(needed)`** returns `{ ok, missing }` against `accountInfo.allowed.capabilities`. New `B2InsufficientCapabilityError` (the 13th error subclass) and `CapabilityCheckResult` interface.
-- **`bucket.getFileInfoByName(fileName)`** and **`bucket.unhide(fileName)`** convenience methods.
+- **`bucket.getFileInfoByName(fileName)`** and **`bucket.unhideFile(fileName)`** convenience methods.
 - **`FileAccountInfo`** — JSON-file-backed `AccountInfo` (Node-only) under new subpath `@backblaze/b2-sdk/auth/file`. Survives process restart; load() returns silently on missing/corrupt files.
 
 ### Added — base

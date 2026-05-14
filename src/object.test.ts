@@ -3,7 +3,7 @@
  * not exercised by client.test.ts. Each test uses the in-memory
  * B2Simulator so no network I/O is needed.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
 import { makeClient, readStream } from './test-utils/index.ts'
@@ -163,12 +163,12 @@ describe('B2Client high-level key management', () => {
     expect(found?.capabilities).toContain(Capability.ListBuckets)
   })
 
-  it('listKeys() respects maxKeyCount for pagination', async () => {
+  it('listKeys() respects pageSize for pagination', async () => {
     await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-a' })
     await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-b' })
     await client.createKey({ capabilities: [Capability.ReadFiles], keyName: 'pk-c' })
 
-    const page = await client.listKeys({ maxKeyCount: 2 })
+    const page = await client.listKeys({ pageSize: 2 })
     expect(page.keys).toHaveLength(2)
     expect(page.nextApplicationKeyId).toBeTruthy()
   })
@@ -279,12 +279,12 @@ describe('Bucket coverage', () => {
       })
     }
 
-    const page1 = await bucket.listFileVersions({ maxFileCount: 2 })
+    const page1 = await bucket.listFileVersions({ pageSize: 2 })
     expect(page1.files).toHaveLength(2)
     expect(page1.nextFileName).toBeTruthy()
 
     const page2 = await bucket.listFileVersions({
-      maxFileCount: 2,
+      pageSize: 2,
       ...(page1.nextFileName !== null ? { startFileName: page1.nextFileName } : {}),
     })
     expect(page2.files).toHaveLength(2)
@@ -543,20 +543,28 @@ describe('B2Object download and stream coverage', () => {
   })
 
   it('upload() routes to large file path when source exceeds recommended part size', async () => {
-    const bucket = await client.createBucket({
+    // Use a dedicated client backed by a simulator with a tiny
+    // `recommendedPartSize` so the small-vs-large dispatch in
+    // `B2Object.upload` naturally picks the multipart path. Previous
+    // version of this test mocked `client.accountInfo.getRecommendedPartSize`
+    // via `vi.spyOn` — that mock-coupled to an internal API surface.
+    // The simulator's `B2SimulatorOptions.recommendedPartSize` is the
+    // documented test seam for exactly this case.
+    const { client: largeRouteClient } = makeClient({
+      minimumPartSize: 10,
+      recommendedPartSize: 10,
+    })
+    await largeRouteClient.authorize()
+    const bucket = await largeRouteClient.createBucket({
       bucketName: 'obj-large-route',
       bucketType: BucketType.AllPrivate,
     })
 
-    vi.spyOn(client.accountInfo, 'getRecommendedPartSize').mockReturnValue(10)
-
-    const content = new TextEncoder().encode('this exceeds the mocked part size')
+    const content = new TextEncoder().encode('this exceeds the simulator part size')
     const obj = bucket.file('large-route.bin')
     const result = await obj.upload({ source: new BufferSource(content) })
 
     expect(result.fileName).toBe('large-route.bin')
     expect(result.contentLength).toBe(content.byteLength)
-
-    vi.restoreAllMocks()
   })
 })

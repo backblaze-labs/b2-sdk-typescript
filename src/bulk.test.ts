@@ -64,6 +64,25 @@ describe('Bucket.deleteMany', () => {
     expect(result.deleted).toBe(0)
     expect(result.errors).toEqual([])
   })
+
+  it('honours an abort signal between deletes', async () => {
+    // Regression: previously, an aborted signal had no effect — every
+    // queued delete would still dispatch since the loop checked only
+    // `await sem.acquire()` and never the signal. Now, tasks that start
+    // after the signal fires short-circuit to an error entry instead.
+    const targets = await uploadN(bucket, 10)
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled by test'))
+    const result = await bucket.deleteMany(targets, {
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    // Pre-aborted signal: every task should land in the errors array;
+    // none should report as deleted.
+    expect(result.deleted).toBe(0)
+    expect(result.errors).toHaveLength(targets.length)
+    expect(result.errors[0]?.error.message).toMatch(/cancelled by test/)
+  })
 })
 
 describe('Bucket.deleteAll', () => {

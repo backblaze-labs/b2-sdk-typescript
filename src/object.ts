@@ -2,7 +2,7 @@ import type { Bucket } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { createParallelDownloadStream } from './download/parallel.ts'
 import { type DownloadResult, downloadByName } from './download/single.ts'
-import { downloadById } from './download/single.ts'
+import { type HeadResult, downloadById, headById, headByName } from './download/single.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -16,7 +16,13 @@ import { type UploadWriteHandle, createWriteStream } from './upload/stream.ts'
 
 /** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
 export interface DownloadCallOptions {
-  /** HTTP method. Defaults to `'GET'`. Use `'HEAD'` to fetch only headers (no body). */
+  /**
+   * HTTP method. Defaults to `'GET'`. Use `'HEAD'` to fetch only
+   * response headers. Prefer the dedicated {@link B2Object.head} /
+   * {@link Bucket.head} method over this option — those return a
+   * body-less result so callers never have to remember to drain the
+   * empty body of a HEAD response.
+   */
   readonly method?: 'GET' | 'HEAD'
   /** HTTP Range header value (e.g., `"bytes=0-999"`). */
   readonly range?: string
@@ -47,6 +53,13 @@ export interface DownloadCallOptions {
    */
   readonly onProgress?: ProgressListener
 }
+
+/**
+ * Options accepted by {@link B2Object.head} / {@link Bucket.head}.
+ * Same shape as {@link DownloadCallOptions} minus `method` (always
+ * HEAD) and `onProgress` (no body to track).
+ */
+export type HeadCallOptions = Omit<DownloadCallOptions, 'method' | 'onProgress'>
 
 /**
  * Handle to a specific file (by name) within a B2 bucket.
@@ -157,6 +170,25 @@ export class B2Object {
   }
 
   /**
+   * Fetches response headers for this file via HTTP HEAD. Returns a
+   * body-less result so callers never have to drain the (logically
+   * empty) HEAD body themselves.
+   *
+   * @param options - Optional range, SSE-C decryption, response-header
+   *   overrides, and abort signal. Same shape as {@link B2Object.download}'s
+   *   options minus `method` (always HEAD) and `onProgress` (no body).
+   *
+   * @returns Parsed download headers (content type, SHA-1, file info, etc.).
+   */
+  async head(options?: HeadCallOptions): Promise<HeadResult> {
+    return headByName(this.client.raw, this.client.accountInfo, {
+      bucketName: this.bucket.name,
+      fileName: this.fileName,
+      ...options,
+    })
+  }
+
+  /**
    * Downloads a specific version of this file by ID. Pass `method: 'HEAD'`
    * to fetch only the response headers (file metadata) without streaming the body.
    * @param fileId - The file version ID to download.
@@ -166,6 +198,24 @@ export class B2Object {
    */
   async downloadById(fileId: FileId, options?: DownloadCallOptions): Promise<DownloadResult> {
     return downloadById(this.client.raw, this.client.accountInfo, {
+      fileId,
+      ...options,
+    })
+  }
+
+  /**
+   * Fetches response headers for a specific version of this file by ID
+   * via HTTP HEAD. Returns a body-less result so callers never have to
+   * drain the (logically empty) HEAD body themselves.
+   *
+   * @param fileId - The file version ID to inspect.
+   * @param options - Optional range, SSE-C decryption, response-header
+   *   overrides, and abort signal.
+   *
+   * @returns Parsed download headers.
+   */
+  async headById(fileId: FileId, options?: HeadCallOptions): Promise<HeadResult> {
+    return headById(this.client.raw, this.client.accountInfo, {
       fileId,
       ...options,
     })

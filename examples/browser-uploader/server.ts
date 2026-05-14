@@ -70,7 +70,7 @@ const server = createServer(async (req, res) => {
         res.end(JSON.stringify({ error: 'Bucket not found' }))
         return
       }
-      const listing = await bucket.listFileNames({ maxFileCount: 100 })
+      const listing = await bucket.listFileNames({ pageSize: 100 })
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(
         JSON.stringify(

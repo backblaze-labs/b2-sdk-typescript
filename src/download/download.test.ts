@@ -963,4 +963,63 @@ describe('downloadById HEAD method and response-header overrides', () => {
     const body = await readStream(result.body)
     expect(body.byteLength).toBe(0)
   })
+
+  it('Bucket.head() returns headers-only — no body field to clean up', async () => {
+    // The action repo asked us to encode HEAD-vs-GET in types so consumers
+    // never have to remember to `body.cancel()` after a metadata fetch.
+    // Verify the new `head()` method:
+    //   1. returns just `{ headers }` (no body in the result shape)
+    //   2. populates the same headers as `download({ method: 'HEAD' })`
+    //   3. doesn't expose the body lifecycle to the caller
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-head-typed',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('typed HEAD payload')
+    await bucket.upload({
+      fileName: 'metadata-only.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await bucket.head('metadata-only.bin')
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    expect(result.headers.fileName).toBe('metadata-only.bin')
+    // Crucial: the result has NO `body` field. The action's v8-ignored
+    // try/catch around `result.body.cancel()` is now unreachable code
+    // (TypeScript would reject `result.body` at compile time).
+    expect('body' in (result as object)).toBe(false)
+  })
+
+  it('B2Object.head() returns headers-only', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'object-head-typed',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('object HEAD payload')
+    await bucket.upload({
+      fileName: 'obj-meta.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await bucket.file('obj-meta.bin').head()
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    expect('body' in (result as object)).toBe(false)
+  })
+
+  it('B2Object.headById() returns headers-only for a specific version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'object-headById-typed',
+      bucketType: 'allPrivate',
+    })
+    const content = new TextEncoder().encode('versioned HEAD payload')
+    const uploaded = await bucket.upload({
+      fileName: 'obj-versioned-meta.bin',
+      source: new BufferSource(content),
+    })
+
+    const result = await bucket.file('obj-versioned-meta.bin').headById(uploaded.fileId)
+    expect(result.headers.contentLength).toBe(content.byteLength)
+    expect(result.headers.fileId).toBe(uploaded.fileId)
+    expect('body' in (result as object)).toBe(false)
+  })
 })

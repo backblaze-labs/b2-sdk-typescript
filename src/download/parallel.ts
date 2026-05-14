@@ -78,6 +78,11 @@ export function createParallelDownloadStream(
   function scheduleNext(): void {
     while (
       firstError === null &&
+      // Honour abort here so a completed range that triggers a top-up
+      // doesn't queue one final fetch after the caller aborted. Without
+      // this gate, one extra range request fires post-abort before the
+      // `pull()` loop notices.
+      abort?.aborted !== true &&
       nextToSchedule < ranges.length &&
       inflight.size + buffer.size < windowSize
     ) {
@@ -229,19 +234,26 @@ async function fetchRangeWithRetry(
  */
 async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
   const reader = stream.getReader()
-  const parts: Uint8Array[] = []
-  let total = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    parts.push(value)
-    total += value.byteLength
+  try {
+    const parts: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      parts.push(value)
+      total += value.byteLength
+    }
+    const result = new Uint8Array(total)
+    let offset = 0
+    for (const part of parts) {
+      result.set(part, offset)
+      offset += part.byteLength
+    }
+    return result
+  } finally {
+    // Release the lock so the underlying stream can propagate close /
+    // error to upstream producers — even on the error path where a
+    // partial read threw mid-loop.
+    reader.releaseLock()
   }
-  const result = new Uint8Array(total)
-  let offset = 0
-  for (const part of parts) {
-    result.set(part, offset)
-    offset += part.byteLength
-  }
-  return result
 }

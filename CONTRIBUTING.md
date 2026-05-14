@@ -121,7 +121,7 @@ src/
   types/         Pure type definitions (no runtime code) + EncryptionKey class
   errors/        Error hierarchy: B2Error base + 13 subclasses + classifyError() + B2InsufficientCapabilityError
   http/          Transport layer: HttpTransport, FetchTransport, RetryTransport (with injectable sleepImpl)
-  raw/           RawClient: 1:1 bindings for all 37 B2 native API endpoints
+  raw/           RawClient: 1:1 bindings for the 31 B2 native API endpoints the SDK uses
   auth/          AccountInfo (in-memory + JSON-file backends), upload URL pool, realm URLs
   streams/       SHA1 hashing, ContentSource adapters, progress tracking
   upload/        Single + large-file (multipart) upload, resume.ts, stream.ts (WritableStream sink)
@@ -131,7 +131,7 @@ src/
   s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl)
   simulator/     In-memory B2 server for testing
   client.ts      B2Client: high-level facade over RawClient + hasCapabilities
-  bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhide)
+  bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhideFile)
   object.ts      B2Object: operations scoped to a file name (including createReadStream/createWriteStream)
 ```
 

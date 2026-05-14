@@ -172,7 +172,7 @@ export class B2Storage {
     const bucket = await this.getBucket()
     const resp = await bucket.listFileNames({
       prefix: this.resolveKey(prefix),
-      maxFileCount: limit,
+      pageSize: limit,
     })
     return resp.files.map((f) => f.fileName)
   }

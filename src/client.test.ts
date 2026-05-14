@@ -589,7 +589,7 @@ describe('list file versions', () => {
     expect(actions).toContain('hide')
   })
 
-  it('respects maxFileCount in versions listing', async () => {
+  it('respects pageSize in versions listing', async () => {
     const bucket = await client.createBucket({
       bucketName: 'ver-page',
       bucketType: BucketType.AllPrivate,
@@ -601,7 +601,7 @@ describe('list file versions', () => {
       })
     }
 
-    const page = await bucket.listFileVersions({ maxFileCount: 2 })
+    const page = await bucket.listFileVersions({ pageSize: 2 })
     expect(page.files.length).toBe(2)
     expect(page.nextFileName).toBeTruthy()
   })
@@ -883,7 +883,7 @@ describe('listing with prefix and pagination', () => {
     expect(docs.files).toHaveLength(1)
   })
 
-  it('paginates file listing with maxFileCount', async () => {
+  it('paginates file listing with pageSize', async () => {
     const bucket = await client.createBucket({
       bucketName: 'page-test',
       bucketType: BucketType.AllPrivate,
@@ -895,12 +895,12 @@ describe('listing with prefix and pagination', () => {
       })
     }
 
-    const page1 = await bucket.listFileNames({ maxFileCount: 2 })
+    const page1 = await bucket.listFileNames({ pageSize: 2 })
     expect(page1.files).toHaveLength(2)
     expect(page1.nextFileName).toBe('file-02.txt')
 
     const page2 = await bucket.listFileNames({
-      maxFileCount: 2,
+      pageSize: 2,
       ...(page1.nextFileName !== null ? { startFileName: page1.nextFileName } : {}),
     })
     expect(page2.files).toHaveLength(2)

@@ -1,7 +1,12 @@
 import type { B2Client } from './client.ts'
 import { copyLargeFile } from './copy/large.ts'
-import { type DownloadResult, downloadByName } from './download/single.ts'
-import { B2Object, type DownloadCallOptions } from './object.ts'
+import {
+  type DownloadResult,
+  type HeadResult,
+  downloadByName,
+  headByName,
+} from './download/single.ts'
+import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
 import type {
@@ -221,6 +226,36 @@ export class Bucket {
   }
 
   /**
+   * Fetches the response headers (file metadata) for a file via HTTP
+   * HEAD. Returns a body-less result so callers never have to drain
+   * the (logically empty) HEAD body themselves.
+   *
+   * Use this for metadata-only checks like "does this file exist", "what
+   * is its current SHA-1", "what is its Content-Length". For full file
+   * retrieval use {@link Bucket.download}.
+   *
+   * @param fileName - The file name (path) to inspect.
+   * @param options - Optional range, SSE-C decryption, response-header
+   *   overrides, and abort signal. Same shape as {@link Bucket.download}'s
+   *   options minus `method` (always HEAD) and `onProgress` (no body).
+   *
+   * @returns Parsed download headers (content type, SHA-1, file info, etc.).
+   *
+   * @example
+   * ```ts
+   * const { headers } = await bucket.head('photos/2026/sunset.jpg')
+   * console.log(headers.contentLength, headers.contentSha1)
+   * ```
+   */
+  async head(fileName: string, options?: HeadCallOptions): Promise<HeadResult> {
+    return headByName(this.client.raw, this.client.accountInfo, {
+      bucketName: this.name,
+      fileName,
+      ...options,
+    })
+  }
+
+  /**
    * Lists file names in this bucket (most recent versions only).
    * @param options - Optional filtering and pagination settings.
    *
@@ -229,8 +264,11 @@ export class Bucket {
   async listFileNames(options?: {
     /** Start listing after this file name (for pagination). */
     startFileName?: string
-    /** Maximum number of files to return (1-10000). */
-    maxFileCount?: number
+    /**
+     * Maximum number of files to return per request (1-10000).
+     * Forwarded to the raw API's `maxFileCount` parameter.
+     */
+    pageSize?: number
     /** Only list files with names starting with this prefix. */
     prefix?: string
     /** Delimiter for virtual directory grouping (typically `"/"`). */
@@ -242,7 +280,7 @@ export class Bucket {
       {
         bucketId: this.id,
         ...(options?.startFileName !== undefined ? { startFileName: options.startFileName } : {}),
-        ...(options?.maxFileCount !== undefined ? { maxFileCount: options.maxFileCount } : {}),
+        ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
         ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
         ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
       },
@@ -260,8 +298,11 @@ export class Bucket {
     startFileName?: string
     /** Start listing after this file ID (for pagination within a file name). */
     startFileId?: FileId
-    /** Maximum number of file versions to return (1-10000). */
-    maxFileCount?: number
+    /**
+     * Maximum number of file versions to return per request (1-10000).
+     * Forwarded to the raw API's `maxFileCount` parameter.
+     */
+    pageSize?: number
     /** Only list files with names starting with this prefix. */
     prefix?: string
     /** Delimiter for virtual directory grouping. */
@@ -270,7 +311,14 @@ export class Bucket {
     return this.client.raw.listFileVersions(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
-      { bucketId: this.id, ...options },
+      {
+        bucketId: this.id,
+        ...(options?.startFileName !== undefined ? { startFileName: options.startFileName } : {}),
+        ...(options?.startFileId !== undefined ? { startFileId: options.startFileId } : {}),
+        ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
+        ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
+        ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+      },
     )
   }
 
@@ -306,7 +354,7 @@ export class Bucket {
     return paginateItems(
       async (cursor: string | undefined) => {
         const resp = await this.listFileNames({
-          maxFileCount: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? 1000,
           ...(cursor !== undefined ? { startFileName: cursor } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
           ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
@@ -320,38 +368,6 @@ export class Bucket {
       (page) => page.files.filter((f) => f.action !== 'hide'),
       options?.signal,
     )
-  }
-
-  /**
-   * Async iterator that yields every visible file in the bucket. Thin
-   * alias for {@link paginateFileNames} — the shorter name reads more
-   * naturally at call sites that don't care about the underlying
-   * pagination contract.
-   *
-   * Like `paginateFileNames`, hide markers are filtered out; only the
-   * latest visible version of each file name is yielded.
-   *
-   * @param options - Filter + pagination + abort options. Forwarded
-   *   verbatim to {@link paginateFileNames}.
-   *
-   * @returns An async iterable of {@link FileVersion} entries.
-   *
-   * @example
-   * ```ts
-   * for await (const file of bucket.listAllFiles({ prefix: 'logs/' })) {
-   *   console.log(file.fileName, file.contentLength)
-   * }
-   * ```
-   */
-  listAllFiles(
-    options?: {
-      /** Only yield files whose names start with this prefix. */
-      prefix?: string
-      /** Delimiter for virtual directory grouping (typically `'/'`). */
-      delimiter?: string
-    } & PaginatorOptions,
-  ): AsyncIterableIterator<FileVersion> {
-    return this.paginateFileNames(options)
   }
 
   /**
@@ -378,7 +394,7 @@ export class Bucket {
     return paginateItems(
       async (cursor: Cursor | undefined) => {
         const resp = await this.listFileVersions({
-          maxFileCount: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? 1000,
           ...(cursor !== undefined ? { startFileName: cursor.fileName } : {}),
           ...(cursor?.fileId !== undefined ? { startFileId: cursor.fileId } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
@@ -417,7 +433,7 @@ export class Bucket {
     return paginateItems(
       async (cursor: LargeFileId | undefined) => {
         const resp = await this.listUnfinishedLargeFiles({
-          maxFileCount: options?.pageSize ?? 100,
+          pageSize: options?.pageSize ?? 100,
           ...(cursor !== undefined ? { startFileId: cursor } : {}),
           ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
         })
@@ -473,7 +489,7 @@ export class Bucket {
     // which may be a hide marker (real B2: `action: 'hide'`,
     // `contentLength: 0`). This helper's contract is "latest LIVE
     // version", so we treat a hide-action match as "not found".
-    const resp = await this.listFileNames({ prefix: fileName, maxFileCount: 1 })
+    const resp = await this.listFileNames({ prefix: fileName, pageSize: 1 })
     const match = resp.files.find((f) => f.fileName === fileName)
     if (!match || match.action === 'hide') return null
     return match
@@ -490,7 +506,7 @@ export class Bucket {
   async unhideFile(fileName: string): Promise<FileVersion | null> {
     // The latest version of a hidden file appears in listFileVersions but not
     // in listFileNames. Walk versions until we find the hide marker on top.
-    const resp = await this.listFileVersions({ prefix: fileName, maxFileCount: 100 })
+    const resp = await this.listFileVersions({ prefix: fileName, pageSize: 100 })
     const versions = resp.files.filter((f) => f.fileName === fileName)
     if (versions.length === 0) return null
     // listFileVersions sorts by name asc then upload timestamp desc, so the
@@ -574,8 +590,11 @@ export class Bucket {
     namePrefix?: string
     /** Start listing after this file ID (for pagination). */
     startFileId?: LargeFileId
-    /** Maximum number of files to return (1-100). */
-    maxFileCount?: number
+    /**
+     * Maximum number of files to return per request (1-100). Forwarded
+     * to the raw API's `maxFileCount` parameter.
+     */
+    pageSize?: number
   }) {
     return this.client.raw.listUnfinishedLargeFiles(
       this.client.accountInfo.getApiUrl(),
@@ -584,7 +603,7 @@ export class Bucket {
         bucketId: this.id,
         ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
         ...(options?.startFileId !== undefined ? { startFileId: options.startFileId } : {}),
-        ...(options?.maxFileCount !== undefined ? { maxFileCount: options.maxFileCount } : {}),
+        ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
       },
     )
   }
@@ -593,20 +612,26 @@ export class Bucket {
    * Deletes many file versions with bounded concurrency. Errors from individual
    * deletes are collected and returned rather than thrown, so partial success
    * does not abort the run.
+   *
+   * When `options.signal` is supplied and aborted, in-flight deletes
+   * complete (they're already on the wire), but no new deletes start
+   * after the abort fires. Subsequent targets are short-circuited to an
+   * error entry so the result tally reflects what actually happened.
    * @param targets - File versions to delete.
-   * @param options - Optional concurrency override. Defaults to the
-   *   SDK-wide bulk-metadata concurrency setting (currently 10, higher
-   *   than the transfer-concurrency default because each task is a
-   *   single tiny API round-trip).
+   * @param options - Optional concurrency override and abort signal.
+   *   Concurrency defaults to the SDK-wide bulk-metadata setting
+   *   (currently 10, higher than transfer concurrency because each
+   *   task is a single tiny API round-trip).
    *
    * @returns A summary of successes and per-target errors.
    */
   async deleteMany(
     targets: readonly DeleteTarget[],
-    options?: { concurrency?: number },
+    options?: { concurrency?: number; signal?: AbortSignal },
   ): Promise<DeleteManyResult> {
     const concurrency = options?.concurrency ?? DEFAULT_BULK_CONCURRENCY
     const sem = new Semaphore(concurrency)
+    const signal = options?.signal
     let deleted = 0
     const errors: DeleteError[] = []
 
@@ -614,6 +639,21 @@ export class Bucket {
       targets.map(async (target) => {
         await sem.acquire()
         try {
+          // Honour abort BETWEEN acquisitions: in-flight deletes
+          // complete (they're already on the wire), but new tasks don't
+          // start once the signal fires. Without this gate, aborting a
+          // 1000-item deleteMany would still let the next `concurrency`
+          // tasks dispatch before the caller's await returned.
+          if (signal?.aborted) {
+            errors.push({
+              target,
+              error:
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error(String(signal.reason ?? 'aborted')),
+            })
+            return
+          }
           await this.deleteFileVersion(target.fileName, target.fileId)
           deleted++
         } catch (err) {
@@ -654,7 +694,7 @@ export class Bucket {
     let startFileId: FileId | undefined
     while (true) {
       const page = await this.listFileVersions({
-        maxFileCount: pageSize,
+        pageSize,
         ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
         ...(startFileName !== undefined ? { startFileName } : {}),
         ...(startFileId !== undefined ? { startFileId } : {}),

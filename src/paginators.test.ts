@@ -93,26 +93,6 @@ describe('Bucket.paginateFileNames', () => {
   })
 })
 
-describe('Bucket.listAllFiles', () => {
-  it('is a thin alias for paginateFileNames — yields the same file set', async () => {
-    // Regression: README and external consumers reach for `listAllFiles`
-    // by name. The alias must delegate to paginateFileNames with the
-    // same options shape and yield the same results.
-    const { bucket } = await setup()
-    for (const name of ['x.txt', 'y.txt', 'z.txt']) {
-      await bucket.upload({
-        fileName: name,
-        source: new BufferSource(new TextEncoder().encode(name)),
-      })
-    }
-    const viaAlias: string[] = []
-    for await (const file of bucket.listAllFiles({ pageSize: 2 })) {
-      viaAlias.push(file.fileName)
-    }
-    expect(viaAlias).toEqual(['x.txt', 'y.txt', 'z.txt'])
-  })
-})
-
 describe('Bucket.paginateFileVersions', () => {
   it('yields every version of every file across pages', async () => {
     const { bucket } = await setup()

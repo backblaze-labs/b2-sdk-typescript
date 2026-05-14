@@ -41,7 +41,7 @@ describe.skipIf(skip)('B2 integration', () => {
     for (const b of existing) {
       if (!b.name.startsWith('sdk-test-')) continue
       try {
-        for await (const file of b.listAllFiles()) {
+        for await (const file of b.paginateFileNames()) {
           await b.deleteFileVersion(file.fileName, file.fileId)
         }
         const versions = await b.listFileVersions()
@@ -65,7 +65,7 @@ describe.skipIf(skip)('B2 integration', () => {
   afterAll(async () => {
     if (!bucket) return
 
-    for await (const file of bucket.listAllFiles()) {
+    for await (const file of bucket.paginateFileNames()) {
       await bucket.deleteFileVersion(file.fileName, file.fileId)
     }
 
@@ -181,7 +181,7 @@ describe.skipIf(skip)('B2 integration', () => {
     }
 
     const collected: string[] = []
-    for await (const file of bucket.listAllFiles({ prefix })) {
+    for await (const file of bucket.paginateFileNames({ prefix })) {
       collected.push(file.fileName)
     }
     expect(collected.length).toBe(5)
