@@ -64,7 +64,10 @@ describe('B2Object coverage', () => {
     expect(info.action).toBe('upload')
   })
 
-  it('hide() creates a hide marker and removes the file from name listing', async () => {
+  it('hide() creates a hide marker and surfaces it as the latest row in name listing', async () => {
+    // Real B2 surfaces the hide marker as the row for that name in
+    // `listFileNames` (not absence). See `client.test.ts` for the full
+    // contract; this test focuses on the per-file `B2Object.hide()` path.
     const bucket = await client.createBucket({
       bucketName: 'obj-hide-cov',
       bucketType: BucketType.AllPrivate,
@@ -80,7 +83,9 @@ describe('B2Object coverage', () => {
     expect(marker.fileName).toBe('will-hide.txt')
 
     const listing = await bucket.listFileNames()
-    expect(listing.files.map((f) => f.fileName)).not.toContain('will-hide.txt')
+    const row = listing.files.find((f) => f.fileName === 'will-hide.txt')
+    expect(row?.action).toBe('hide')
+    expect(row?.contentLength).toBe(0)
   })
 
   it('deleteVersion() removes a specific file version', async () => {
@@ -286,7 +291,11 @@ describe('Bucket coverage', () => {
     expect(page2.files[0]?.fileName).toBe('f-02.txt')
   })
 
-  it('hideFile() makes the file invisible in listFileNames but visible in listFileVersions', async () => {
+  it('hideFile() surfaces a hide marker in listFileNames and the full chain in listFileVersions', async () => {
+    // Real B2: `b2_list_file_names` returns one row per file name with the
+    // most recent version. For a hidden file, that row IS the hide marker
+    // (`action: 'hide'`, `contentLength: 0`). `b2_list_file_versions`
+    // returns BOTH the marker and the underlying upload(s).
     const bucket = await client.createBucket({
       bucketName: 'hide-vis-cov',
       bucketType: BucketType.AllPrivate,
@@ -299,14 +308,16 @@ describe('Bucket coverage', () => {
     const hidden = await bucket.hideFile('peek.txt')
     expect(hidden.action).toBe('hide')
 
-    // Not visible in names
+    // Hide marker is the row in listFileNames.
     const names = await bucket.listFileNames()
-    expect(names.files.map((f) => f.fileName)).not.toContain('peek.txt')
+    const row = names.files.find((f) => f.fileName === 'peek.txt')
+    expect(row?.action).toBe('hide')
+    expect(row?.contentLength).toBe(0)
 
-    // Still visible in versions
+    // Full history (upload + hide) lives in listFileVersions.
     const versions = await bucket.listFileVersions()
     const peekVersions = versions.files.filter((f) => f.fileName === 'peek.txt')
-    expect(peekVersions.length).toBeGreaterThanOrEqual(2) // upload + hide
+    expect(peekVersions.length).toBeGreaterThanOrEqual(2)
   })
 
   it('deleteFileVersion() removes only the targeted version', async () => {

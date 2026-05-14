@@ -2,7 +2,7 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
-import type { BucketId, FileId } from '../types/ids.ts'
+import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { bestEffort } from '../util/best-effort.ts'
 
@@ -75,8 +75,9 @@ export async function copyLargeFile(
     })
   }
 
-  // Resolve destination bucket (defaults to source's bucket).
-  const destBucketId = (options.destinationBucketId ?? sourceInfo.bucketId) as BucketId
+  // Resolve destination bucket (defaults to source's bucket). Both operands
+  // are already typed `BucketId`, so no cast is needed.
+  const destBucketId = options.destinationBucketId ?? sourceInfo.bucketId
 
   // Start the multipart file.
   const startResp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
@@ -111,7 +112,9 @@ export async function copyLargeFile(
         try {
           const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
             sourceFileId: options.sourceFileId,
-            largeFileId: largeFileId as unknown as FileId,
+            // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
+            // same value typed as `FileId`. Re-brand via the factory.
+            largeFileId: fileIdOf(largeFileId),
             partNumber: range.partNumber,
             range: `bytes=${range.start}-${range.end}`,
             ...(options.sourceServerSideEncryption !== undefined

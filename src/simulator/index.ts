@@ -23,6 +23,7 @@ import {
 } from '../types/ids.ts'
 import type { RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -836,10 +837,17 @@ export class B2Simulator {
 
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
+    // Real B2: `b2_list_file_names` returns the most recent version per
+    // file name. If that most-recent version is a hide marker (created via
+    // `b2_hide_file`), it IS the row that gets returned, with
+    // `action: 'hide'` and `contentLength: 0`. Filtering hide markers out
+    // of the listing would diverge from production behaviour and hide a
+    // real test seam: the action / SDK consumer must skip hide-action
+    // entries when iterating over "live" files.
     let allFiles = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .map(([_, versions]) => versions[versions.length - 1])
-      .filter((v): v is StoredFile => v !== undefined && v.fileVersion.action !== FileAction.Hide)
+      .filter((v): v is StoredFile => v !== undefined)
       .map((v) => v.fileVersion)
       .sort((a, b) => a.fileName.localeCompare(b.fileName))
 
@@ -1516,13 +1524,13 @@ function buildFaultResponse(fault: FaultSpec): HttpResponse {
     headers,
     body: new ReadableStream({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode(body))
+        controller.enqueue(utf8Encoder.encode(body))
         controller.close()
       },
     }),
     json: <T>() => Promise.resolve(JSON.parse(body) as T),
     text: () => Promise.resolve(body),
-    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
+    arrayBuffer: () => Promise.resolve(utf8Encoder.encode(body).buffer as ArrayBuffer),
   }
 }
 
@@ -1580,7 +1588,7 @@ class SimulatorTransport implements HttpTransport {
         headers: responseHeaders,
         body,
         json: () => Promise.reject(new Error('Download response is not JSON')),
-        text: () => Promise.resolve(new TextDecoder().decode(data)),
+        text: () => Promise.resolve(utf8Decoder.decode(data)),
         arrayBuffer: () =>
           Promise.resolve(
             data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
@@ -1622,14 +1630,13 @@ class SimulatorTransport implements HttpTransport {
       headers: new Headers({ 'Content-Type': 'application/json' }),
       body: new ReadableStream({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode(responseBody))
+          controller.enqueue(utf8Encoder.encode(responseBody))
           controller.close()
         },
       }),
       json: <T>() => Promise.resolve(result.body as T),
       text: () => Promise.resolve(responseBody),
-      arrayBuffer: () =>
-        Promise.resolve(new TextEncoder().encode(responseBody).buffer as ArrayBuffer),
+      arrayBuffer: () => Promise.resolve(utf8Encoder.encode(responseBody).buffer as ArrayBuffer),
     }
   }
 }

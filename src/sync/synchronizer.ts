@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import { BufferSource } from '../streams/source.ts'
-import type { FileId } from '../types/ids.ts'
+import { fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import type { SyncAction } from './actions/index.ts'
 import {
@@ -256,7 +256,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         path.relativePath,
         path.selectedVersion.fileId as string,
         async (fileId, fileName) => {
-          await bucket.deleteFileVersion(fileName, fileId as unknown as FileId)
+          await bucket.deleteFileVersion(fileName, fileIdOf(fileId))
         },
       )
     },

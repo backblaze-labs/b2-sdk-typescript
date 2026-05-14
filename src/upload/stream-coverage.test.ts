@@ -3,7 +3,7 @@ import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
-import { makeClient } from '../test-utils/index.ts'
+import { deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 
 /**
@@ -43,8 +43,7 @@ describe('createWriteStream branch coverage', () => {
   it('falls back to recommendedPartSize when partSize is omitted (line 73)', async () => {
     // No `partSize` in the call: the engine picks the simulator's advertised
     // recommendedPartSize (200_000 here) and runs the upload through that.
-    const data = new Uint8Array(400_000) // 2 parts at 200_000 each
-    for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
+    const data = deterministicBytes(400_000) // 2 parts at 200_000 each
 
     const { writable, done } = bucket.file('no-part-size.bin').createWriteStream({
       concurrency: 1,

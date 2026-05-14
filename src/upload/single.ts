@@ -1,7 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
-import type { ProgressListener } from '../streams/progress.ts'
+import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
 import type { ContentSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
@@ -69,6 +69,14 @@ export async function uploadSmallFile(
   await sha1.update(data)
   const sha1Hex = await sha1.digest()
 
+  // Single-request uploads send the whole payload in one shot, so the
+  // tracker reports a single "part" worth of progress: one byte burst at
+  // completion and a parts-completed transition from 0 → 1. The tracker
+  // is created (rather than calling the listener directly) so consumers
+  // see the same {bytesTransferred, totalBytes, partsCompleted,
+  // totalParts, elapsedMs} shape they get from `uploadLargeFile`.
+  const tracker = new ProgressTracker(options.onProgress, data.byteLength, 1)
+
   try {
     const result = await raw.uploadFile(
       uploadEntry.uploadUrl,
@@ -92,6 +100,8 @@ export async function uploadSmallFile(
       options.signal,
     )
 
+    tracker.addBytes(data.byteLength)
+    tracker.completePart()
     accountInfo.returnUploadUrl(options.bucketId, uploadEntry)
     return result
   } catch (err) {

@@ -354,7 +354,12 @@ describe('file operations', () => {
     expect(info.fileId).toBe(uploaded.fileId)
   })
 
-  it('hides a file and excludes it from listing', async () => {
+  it('hides a file and surfaces it in listing as a hide marker', async () => {
+    // Real B2 behaviour: `b2_list_file_names` returns one entry per file
+    // name, taking the most recent version. For a hidden file, the most
+    // recent version IS the hide marker, so it appears in the listing
+    // with `action: 'hide'` and `contentLength: 0`. Consumers must skip
+    // hide-action rows when iterating over "live" files.
     const bucket = await client.createBucket({
       bucketName: 'hide-test',
       bucketType: BucketType.AllPrivate,
@@ -373,9 +378,12 @@ describe('file operations', () => {
     expect(hidden.fileName).toBe('hidden.txt')
 
     const listing = await bucket.listFileNames()
-    const names = listing.files.map((f) => f.fileName)
-    expect(names).toContain('visible.txt')
-    expect(names).not.toContain('hidden.txt')
+    const byName = new Map(listing.files.map((f) => [f.fileName, f]))
+    expect(byName.get('visible.txt')?.action).toBe('upload')
+    const hiddenEntry = byName.get('hidden.txt')
+    expect(hiddenEntry).toBeDefined()
+    expect(hiddenEntry?.action).toBe('hide')
+    expect(hiddenEntry?.contentLength).toBe(0)
   })
 
   it('hides a file via B2Object.hide()', async () => {
@@ -392,8 +400,50 @@ describe('file operations', () => {
     const result = await obj.hide()
     expect(result.action).toBe('hide')
 
+    // Hide markers are surfaced in listings (see the previous test for
+    // rationale). The row exists with `action: 'hide'`.
     const listing = await bucket.listFileNames()
-    expect(listing.files).toHaveLength(0)
+    expect(listing.files).toHaveLength(1)
+    expect(listing.files[0]?.action).toBe('hide')
+    expect(listing.files[0]?.fileName).toBe('to-hide.txt')
+  })
+
+  it('paginateFileNames skips hide markers but listFileNames includes them', async () => {
+    // Real B2: `b2_list_file_names` returns one row per file name; for a
+    // hidden file that row is the hide marker. The SDK's
+    // `Bucket.paginateFileNames` iterator advertises "latest VISIBLE
+    // version" semantics and therefore filters hide-action rows. This
+    // test pins both contracts simultaneously so a future simulator
+    // tweak can't silently drift the SDK's iterator behaviour.
+    const bucket = await client.createBucket({
+      bucketName: 'hide-vs-paginate',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'live-1.txt',
+      source: new BufferSource(new TextEncoder().encode('a')),
+    })
+    await bucket.upload({
+      fileName: 'will-hide.txt',
+      source: new BufferSource(new TextEncoder().encode('b')),
+    })
+    await bucket.upload({
+      fileName: 'live-2.txt',
+      source: new BufferSource(new TextEncoder().encode('c')),
+    })
+    await bucket.hideFile('will-hide.txt')
+
+    // Raw API surfaces all three rows; the hidden one carries action: 'hide'.
+    const raw = await bucket.listFileNames()
+    expect(raw.files).toHaveLength(3)
+    const hideRow = raw.files.find((f) => f.fileName === 'will-hide.txt')
+    expect(hideRow?.action).toBe('hide')
+    expect(hideRow?.contentLength).toBe(0)
+
+    // Async iterator drops the hide-action row.
+    const viaIterator: string[] = []
+    for await (const f of bucket.paginateFileNames()) viaIterator.push(f.fileName)
+    expect(viaIterator.sort()).toEqual(['live-1.txt', 'live-2.txt'])
   })
 
   it('deletes a file version', async () => {

@@ -1,3 +1,5 @@
+import { utf8Encoder } from '../util/text-codec.ts'
+
 /**
  * Characters that B2 treats as safe (not percent-encoded) in file names.
  *
@@ -25,7 +27,7 @@ export function encodeFileName(name: string): string {
     if (SAFE_CHARS.has(char)) {
       encoded.push(char)
     } else {
-      const bytes = new TextEncoder().encode(char)
+      const bytes = utf8Encoder.encode(char)
       for (const byte of bytes) {
         encoded.push(`%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
       }

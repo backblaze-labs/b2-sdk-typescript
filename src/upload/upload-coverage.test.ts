@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient } from '../test-utils/index.ts'
+import { deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -57,8 +57,7 @@ describe('uploadLargeFile cleanup paths', () => {
 
     const partSize = 100_000
     // Two full parts so we definitely hit `b2_upload_part` twice.
-    const data = new Uint8Array(partSize * 2)
-    for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
+    const data = deterministicBytes(partSize * 2)
 
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
@@ -227,5 +226,47 @@ describe('uploadSmallFile cleanup path', () => {
         source: new BufferSource(new Uint8Array([1, 2, 3])),
       }),
     ).rejects.toThrow(/simulated upload_file failure/)
+  })
+
+  it('emits a ProgressEvent on small-file upload completion', async () => {
+    // Regression: `uploadSmallFile` previously accepted `onProgress` on
+    // its options but never wired it to a `ProgressTracker`, so callers
+    // got silence for single-request uploads (while multipart uploads
+    // emitted events correctly). After the wiring, the small-file path
+    // should fire at least one event with the documented shape: a single
+    // "part" worth of bytes, partsCompleted: 1, totalParts: 1.
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-progress',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const payload = new Uint8Array([1, 2, 3, 4, 5])
+    const events: Array<{
+      bytesTransferred: number
+      totalBytes: number | null
+      partsCompleted: number
+      totalParts: number | null
+    }> = []
+    await bucket.upload({
+      fileName: 'tiny.bin',
+      source: new BufferSource(payload),
+      onProgress: (event) => {
+        events.push({
+          bytesTransferred: event.bytesTransferred,
+          totalBytes: event.totalBytes,
+          partsCompleted: event.partsCompleted,
+          totalParts: event.totalParts,
+        })
+      },
+    })
+
+    expect(events.length).toBeGreaterThan(0)
+    const last = events[events.length - 1]
+    expect(last?.bytesTransferred).toBe(payload.byteLength)
+    expect(last?.totalBytes).toBe(payload.byteLength)
+    expect(last?.partsCompleted).toBe(1)
+    expect(last?.totalParts).toBe(1)
   })
 })

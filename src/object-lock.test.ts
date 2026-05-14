@@ -3,6 +3,7 @@ import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
+import { daysFromNow } from './test-utils/index.ts'
 import { BucketType } from './types/bucket.ts'
 import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
@@ -43,7 +44,7 @@ describe('B2Object.setRetention', () => {
       source: new BufferSource(data),
     })
 
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000 // 30 days from now
+    const expiresAt = daysFromNow(30) // 30 days from now
     const result = await bucket.file('locked.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Compliance,
       retainUntilTimestamp: expiresAt,
@@ -57,7 +58,7 @@ describe('B2Object.setRetention', () => {
       fileName: 'gov.bin',
       source: new BufferSource(new Uint8Array([42])),
     })
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
+    const expiresAt = daysFromNow(7)
 
     await bucket.file('gov.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Governance,
@@ -67,7 +68,7 @@ describe('B2Object.setRetention', () => {
     // Shorten the period: requires bypassGovernance: true with a key that has
     // the matching capability. Simulator accepts the flag without enforcing
     // capability so we test the option-forwarding path.
-    const earlier = Date.now() + 1 * 24 * 60 * 60 * 1000
+    const earlier = daysFromNow(1)
     const shortened = await bucket
       .file('gov.bin')
       .setRetention(
@@ -85,7 +86,7 @@ describe('B2Object.setRetention', () => {
     })
     await bucket.file('clear.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Governance,
-      retainUntilTimestamp: Date.now() + 86_400_000,
+      retainUntilTimestamp: daysFromNow(1),
     })
 
     const cleared = await bucket
@@ -159,7 +160,7 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
       fileName: 'compliance.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000
+    const expiresAt = daysFromNow(30)
     await bucket.file('compliance.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Compliance,
       retainUntilTimestamp: expiresAt,
@@ -180,7 +181,7 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
       fileName: 'gov.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
+    const expiresAt = daysFromNow(7)
     await bucket.file('gov.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Governance,
       retainUntilTimestamp: expiresAt,
@@ -193,7 +194,7 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
       fileName: 'gov-bypass.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000
+    const expiresAt = daysFromNow(7)
     await bucket.file('gov-bypass.bin').setRetention(uploaded.fileId, {
       mode: RetentionMode.Governance,
       retainUntilTimestamp: expiresAt,

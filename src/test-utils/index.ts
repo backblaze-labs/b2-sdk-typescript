@@ -16,6 +16,7 @@
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
+import { utf8Encoder } from '../util/text-codec.ts'
 
 /**
  * Builds an un-authorized {@link B2Client} backed by a fresh in-memory
@@ -90,6 +91,22 @@ export function deterministicBytes(size: number): Uint8Array {
 }
 
 /**
+ * Returns a Unix-millisecond timestamp `n` days from now. Negative `n`
+ * yields a timestamp in the past, useful for testing already-expired
+ * object-lock retention windows.
+ *
+ * Replaces the `Date.now() + N * 24 * 60 * 60 * 1000` arithmetic that
+ * recurs throughout object-lock and lifecycle tests.
+ *
+ * @param n - Number of days from now. May be fractional or negative.
+ *
+ * @returns A millisecond timestamp suitable for `retainUntilTimestamp`.
+ */
+export function daysFromNow(n: number): number {
+  return Date.now() + n * 24 * 60 * 60 * 1000
+}
+
+/**
  * Builds an `HttpResponse` representing a B2-style JSON error body. Use
  * inside a custom transport to make a specific endpoint reject with a
  * given status + code + message.
@@ -107,13 +124,13 @@ export function jsonErrorResponse(status: number, code: string, message: string)
     headers: new Headers({ 'Content-Type': 'application/json' }),
     body: new ReadableStream({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode(body))
+        controller.enqueue(utf8Encoder.encode(body))
         controller.close()
       },
     }),
     json: <T>() => Promise.resolve(JSON.parse(body) as T),
     text: () => Promise.resolve(body),
-    arrayBuffer: () => Promise.resolve(new TextEncoder().encode(body).buffer as ArrayBuffer),
+    arrayBuffer: () => Promise.resolve(utf8Encoder.encode(body).buffer as ArrayBuffer),
   }
 }
 

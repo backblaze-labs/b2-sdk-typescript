@@ -3,7 +3,7 @@ import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
-import { makeClient } from './test-utils/index.ts'
+import { deterministicBytes, makeClient } from './test-utils/index.ts'
 import { BucketType } from './types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from './types/encryption.ts'
 
@@ -47,8 +47,7 @@ describe('Bucket.copyLargeFile branch coverage', () => {
   })
 
   async function uploadSource(name: string): Promise<{ fileId: import('./types/ids.ts').FileId }> {
-    const data = new Uint8Array(200_000) // 2 parts at 100KB each
-    for (let i = 0; i < data.byteLength; i++) data[i] = i & 0xff
+    const data = deterministicBytes(200_000) // 2 parts at 100KB each
     const result = await sourceBucket.upload({
       fileName: name,
       source: new BufferSource(data),

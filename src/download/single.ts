@@ -2,7 +2,7 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { parseFileInfoHeaders } from '../raw/encoding.ts'
 import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.ts'
 import type { DownloadHeaders } from '../types/download.ts'
-import type { FileId } from '../types/ids.ts'
+import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
 
 /** Result of a single-request file download. */
 export interface DownloadResult {
@@ -174,7 +174,7 @@ function extractDownloadHeaders(headers: Headers): DownloadHeaders {
     contentType: headers.get('Content-Type') ?? 'application/octet-stream',
     contentLength: Number.parseInt(headers.get('Content-Length') ?? '0', 10),
     contentSha1: headers.get('X-Bz-Content-Sha1'),
-    fileId: (headers.get('X-Bz-File-Id') ?? '') as FileId,
+    fileId: fileIdOf(headers.get('X-Bz-File-Id') ?? ''),
     fileName: decodeURIComponent(headers.get('X-Bz-File-Name') ?? ''),
     fileInfo,
     uploadTimestamp: Number.parseInt(headers.get('X-Bz-Upload-Timestamp') ?? '0', 10),

@@ -1,4 +1,5 @@
 import type { EventType } from '../types/notifications.ts'
+import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 
 /**
  * The HTTP header B2 attaches to every event-notification webhook delivery.
@@ -178,7 +179,7 @@ function pickSignature(raw: VerifyWebhookOptions['signature']): string | null {
  * @returns The UTF-8 encoded bytes.
  */
 function bytes(s: string): Uint8Array {
-  return new TextEncoder().encode(s)
+  return utf8Encoder.encode(s)
 }
 
 /**
@@ -321,7 +322,7 @@ export async function verifyWebhookSignature(
     return { valid: false, payload: null, reason: 'signature mismatch' }
   }
 
-  const decoded = typeof opts.body === 'string' ? opts.body : new TextDecoder().decode(raw)
+  const decoded = typeof opts.body === 'string' ? opts.body : utf8Decoder.decode(raw)
   const parsed = tryParse(decoded)
   if (!looksLikePayload(parsed)) {
     return { valid: false, payload: null, reason: 'invalid payload shape' }

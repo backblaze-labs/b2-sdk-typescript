@@ -294,7 +294,11 @@ export class Bucket {
         })
         return { page: resp, nextCursor: resp.nextFileName ?? undefined }
       },
-      (page) => page.files,
+      // Real B2 surfaces hide markers as rows in `b2_list_file_names`. This
+      // iterator's documented contract is "latest VISIBLE version", so we
+      // drop hide-action rows here. Callers who need full history should
+      // use `paginateFileVersions`.
+      (page) => page.files.filter((f) => f.action !== 'hide'),
       options?.signal,
     )
   }
@@ -414,9 +418,14 @@ export class Bucket {
    * @returns The latest {@link FileVersion}, or `null` if not found.
    */
   async getFileInfoByName(fileName: string): Promise<FileVersion | null> {
+    // `listFileNames` returns the most recent version per file name,
+    // which may be a hide marker (real B2: `action: 'hide'`,
+    // `contentLength: 0`). This helper's contract is "latest LIVE
+    // version", so we treat a hide-action match as "not found".
     const resp = await this.listFileNames({ prefix: fileName, maxFileCount: 1 })
     const match = resp.files.find((f) => f.fileName === fileName)
-    return match ?? null
+    if (!match || match.action === 'hide') return null
+    return match
   }
 
   /**
