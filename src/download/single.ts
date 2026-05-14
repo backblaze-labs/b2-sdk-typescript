@@ -4,6 +4,7 @@ import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/ind
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
 import type { DownloadHeaders } from '../types/download.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
+import { normalizeSha1 } from '../util/normalize.ts'
 
 /** Result of a single-request file download. */
 export interface DownloadResult {
@@ -222,7 +223,9 @@ function extractDownloadHeaders(headers: Headers): DownloadHeaders {
   return {
     contentType: headers.get('Content-Type') ?? 'application/octet-stream',
     contentLength: Number.parseInt(headers.get('Content-Length') ?? '0', 10),
-    contentSha1: headers.get('X-Bz-Content-Sha1'),
+    // B2 sends the literal `'none'` for multipart-finished files; collapse
+    // to `null` so the typed `string | null` actually means "no SHA-1".
+    contentSha1: normalizeSha1(headers.get('X-Bz-Content-Sha1')),
     fileId: fileIdOf(headers.get('X-Bz-File-Id') ?? ''),
     fileName: decodeURIComponent(headers.get('X-Bz-File-Name') ?? ''),
     fileInfo,

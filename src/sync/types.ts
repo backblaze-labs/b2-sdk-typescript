@@ -49,17 +49,76 @@ export type SyncEventType =
   | 'error'
   | 'compare'
 
-/** An event emitted by the sync engine to report progress or errors. */
-export interface SyncEvent {
-  /** The kind of event. */
-  readonly type: SyncEventType
+/**
+ * Action event types: per-file outcomes (transfer / metadata change /
+ * skip) that always carry a `path` and a `size`. These never carry a
+ * `message` because the type tag already says what happened.
+ */
+export type SyncActionEventType =
+  | 'upload-start'
+  | 'upload-done'
+  | 'download-start'
+  | 'download-done'
+  | 'copy-start'
+  | 'copy-done'
+  | 'hide'
+  | 'delete-remote'
+  | 'delete-local'
+  | 'compare'
+
+/**
+ * Per-action progress event (transfer, metadata change, comparison). All
+ * action-event variants share the same shape; the `type` tag distinguishes
+ * them.
+ */
+export interface SyncActionEvent {
+  /** Discriminant tag identifying which action this event reports. */
+  readonly type: SyncActionEventType
   /** Relative path of the file this event concerns. */
   readonly path: string
   /** Size in bytes of the file involved, or 0 for metadata-only events. */
   readonly size: number
-  /** Optional human-readable detail (e.g. error message or skip reason). */
-  readonly message?: string
 }
+
+/**
+ * `skip` event — a destination-only file that policy decided to keep, or
+ * a same-on-both file that didn't need transfer. Always carries a
+ * non-empty `message` explaining why.
+ */
+export interface SyncSkipEvent {
+  /** Discriminant tag (always the literal string `'skip'`). */
+  readonly type: 'skip'
+  /** Relative path of the skipped file. */
+  readonly path: string
+  /** Size in bytes of the file involved, always 0 for skip events. */
+  readonly size: number
+  /** Human-readable reason for skipping this file. */
+  readonly message: string
+}
+
+/**
+ * `error` event — an action threw or the engine encountered a fatal
+ * condition. Always carries a non-empty `message` describing the failure
+ * so consumers don't need a `message ?? 'unknown'` fallback.
+ */
+export interface SyncErrorEvent {
+  /** Discriminant tag (always the literal string `'error'`). */
+  readonly type: 'error'
+  /** Relative path of the file the failed action targeted, or `''` for engine-level errors. */
+  readonly path: string
+  /** Size in bytes; always 0 for error events. */
+  readonly size: number
+  /** Human-readable error message; never empty. */
+  readonly message: string
+}
+
+/**
+ * An event emitted by the sync engine to report progress, skip
+ * decisions, or errors. Discriminated by `type`: consumers can
+ * `case 'error':` (or `'skip':`) to narrow into a variant with `message`
+ * guaranteed non-optional.
+ */
+export type SyncEvent = SyncActionEvent | SyncSkipEvent | SyncErrorEvent
 
 /** Configuration options for a sync operation. */
 export interface SyncOptions {

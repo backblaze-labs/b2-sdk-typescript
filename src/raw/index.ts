@@ -61,6 +61,7 @@ import type {
   UpdateFileRetentionResponse,
 } from '../types/index.ts'
 import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.ts'
+import { normalizeFileVersionListSha1, normalizeFileVersionSha1 } from '../util/normalize.ts'
 import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
 
 /** Configuration for constructing a {@link RawClient}. */
@@ -254,7 +255,7 @@ export class RawClient {
       body,
       ...(signal !== undefined ? { signal } : {}),
     })
-    return response.json<FileVersion>()
+    return normalizeFileVersionSha1(await response.json<FileVersion>())
   }
 
   /**
@@ -270,7 +271,9 @@ export class RawClient {
     authToken: string,
     request: ListFileNamesRequest,
   ): Promise<ListFileNamesResponse> {
-    return this.postJson<ListFileNamesResponse>(apiUrl, authToken, 'b2_list_file_names', request)
+    return normalizeFileVersionListSha1(
+      await this.postJson<ListFileNamesResponse>(apiUrl, authToken, 'b2_list_file_names', request),
+    )
   }
 
   /**
@@ -286,11 +289,13 @@ export class RawClient {
     authToken: string,
     request: ListFileVersionsRequest,
   ): Promise<ListFileVersionsResponse> {
-    return this.postJson<ListFileVersionsResponse>(
-      apiUrl,
-      authToken,
-      'b2_list_file_versions',
-      request,
+    return normalizeFileVersionListSha1(
+      await this.postJson<ListFileVersionsResponse>(
+        apiUrl,
+        authToken,
+        'b2_list_file_versions',
+        request,
+      ),
     )
   }
 
@@ -307,7 +312,9 @@ export class RawClient {
     authToken: string,
     request: GetFileInfoRequest,
   ): Promise<FileVersion> {
-    return this.postJson<FileVersion>(apiUrl, authToken, 'b2_get_file_info', request)
+    return normalizeFileVersionSha1(
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_get_file_info', request),
+    )
   }
 
   /**
@@ -323,7 +330,9 @@ export class RawClient {
     authToken: string,
     request: HideFileRequest,
   ): Promise<FileVersion> {
-    return this.postJson<FileVersion>(apiUrl, authToken, 'b2_hide_file', request)
+    return normalizeFileVersionSha1(
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_hide_file', request),
+    )
   }
 
   /**
@@ -360,7 +369,9 @@ export class RawClient {
     authToken: string,
     request: CopyFileRequest,
   ): Promise<FileVersion> {
-    return this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request)
+    return normalizeFileVersionSha1(
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request),
+    )
   }
 
   /**
@@ -468,7 +479,9 @@ export class RawClient {
     authToken: string,
     request: FinishLargeFileRequest,
   ): Promise<FileVersion> {
-    return this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request)
+    return normalizeFileVersionSha1(
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request),
+    )
   }
 
   /**

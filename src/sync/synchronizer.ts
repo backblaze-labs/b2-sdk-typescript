@@ -186,6 +186,16 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
 
 /**
  * Creates a configured sync engine wired to the bucket and paths in the given config.
+ *
+ * For sync operations that may need to remove destination-only files (the
+ * `keepMode: 'delete'` policy), the factory reads the destination
+ * bucket's cached `fileLockConfiguration` once so `removeOrphan` can
+ * dispatch to either `hide` (locked buckets) or `deleteFileVersion`
+ * (vanilla buckets) without a per-file branch. The cache is whatever
+ * `client.listBuckets()` or `client.createBucket()` returned — callers
+ * who flipped lock state mid-sync (rare) should refresh before
+ * synchronize().
+ *
  * @param config - The synchronizer configuration containing source, destination, and options.
  *
  * @returns An action factory bound to the provided configuration.
@@ -194,7 +204,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
 
-  return {
+  const destBucket = upConfig.bucket ?? downConfig.bucket
+  // Defensive optional chain on `info`: synchronizer tests use Bucket
+  // mocks that don't populate this field. Real `Bucket` instances always
+  // do (constructor parameter).
+  const bucketIsLocked = destBucket?.info?.fileLockConfiguration?.value?.isFileLockEnabled ?? false
+
+  const factory: ActionFactory = {
     upload(source: LocalSyncPath): SyncAction {
       const bucket = upConfig.bucket
       const prefix = upConfig.prefix ?? ''
@@ -288,5 +304,15 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         await unlink(absPath)
       })
     },
+
+    removeOrphan(dest: B2SyncPath): SyncAction {
+      // Locked buckets: `b2_delete_file_version` is blocked or stacks
+      // hide markers under retention; a hide is the safe choice.
+      // Vanilla buckets: plain delete is the right move — hide markers
+      // would just litter the version history.
+      return bucketIsLocked ? factory.hide(dest.relativePath) : factory.deleteRemote(dest)
+    },
   }
+
+  return factory
 }

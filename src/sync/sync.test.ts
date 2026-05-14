@@ -61,6 +61,10 @@ function makeNoopFactory(): ActionFactory {
     hide: (path: string) => new SkipAction(path, 'noop-hide'),
     deleteRemote: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-delete-remote'),
     deleteLocal: (s: LocalSyncPath) => new SkipAction(s.relativePath, 'noop-delete-local'),
+    // For the noop test factory, treat orphans as the equivalent of
+    // `deleteRemote` regardless of bucket state — the production
+    // synchronizer factory is the one that branches on lock state.
+    removeOrphan: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-remove-orphan'),
   }
 }
 
@@ -191,14 +195,20 @@ describe('generateActions', () => {
     expect(actions[0]?.type).toBe('skip')
   })
 
-  it('generates hide+delete for dest-only file with delete mode', () => {
+  it('generates one orphan-removal action for dest-only file with delete mode', () => {
+    // Policy now yields a single `removeOrphan` action per dest-only
+    // file in delete mode (previously it yielded both hide AND
+    // deleteRemote unconditionally, which stacked hide markers on
+    // vanilla buckets even though the delete that followed made them
+    // redundant). The factory picks hide-vs-delete based on the bucket's
+    // file-lock state — irrelevant in this generator-policy test, which
+    // uses a noop factory.
     const dest = makeB2SyncPath('gone.txt', now, 50)
     const actions = [
       ...generateActions([null, dest], 'local-to-b2', 'modtime', 'delete', 0, now, factory, 0),
     ]
-    expect(actions).toHaveLength(2)
+    expect(actions).toHaveLength(1)
     expect(actions[0]?.type).toBe('skip')
-    expect(actions[1]?.type).toBe('skip')
   })
 
   it('generates skip when files are the same', () => {

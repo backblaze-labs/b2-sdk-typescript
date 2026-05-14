@@ -7,6 +7,18 @@ export interface ContentSource {
   readonly size: number
   /** Pre-computed SHA-1 hex digest, if available. */
   readonly sha1?: string
+  /**
+   * Whether {@link slice} is safe to call on this source.
+   *
+   * `true` for in-memory / random-access sources (`BufferSource`,
+   * `BlobSource`) — the multipart upload engine can dispatch part reads
+   * in parallel by slicing the source into disjoint ranges. `false`
+   * for forward-only sources (`StreamSource`) — the engine must read
+   * sequentially, one `partSize` chunk at a time. Callers that branch
+   * on this flag are expected to fall back to the sequential path
+   * rather than call `slice()` and catch the throw.
+   */
+  readonly canSlice: boolean
   /** Return a sub-range of this source as a new ContentSource. */
   slice(start: number, end: number): ContentSource
   /** Open the content as a ReadableStream. */
@@ -19,6 +31,8 @@ export interface ContentSource {
 export class BlobSource implements ContentSource {
   /** {@inheritDoc} */
   readonly size: number
+  /** Random-access: `Blob.slice()` is cheap and returns a new Blob view. */
+  readonly canSlice = true
 
   /**
    * Create a BlobSource wrapping the given Blob.
@@ -60,6 +74,8 @@ export class BlobSource implements ContentSource {
 export class BufferSource implements ContentSource {
   /** {@inheritDoc} */
   readonly size: number
+  /** Random-access: the entire payload lives in memory. */
+  readonly canSlice = true
 
   /**
    * Create a BufferSource wrapping the given Uint8Array.
@@ -112,6 +128,12 @@ export class BufferSource implements ContentSource {
 export class StreamSource implements ContentSource {
   /** {@inheritDoc} */
   readonly size: number
+  /**
+   * Forward-only: ReadableStreams cannot be repositioned, so multipart
+   * uploads must take the sequential path. See the interface comment on
+   * `canSlice` for what the engine does with this flag.
+   */
+  readonly canSlice = false
   /** Whether the stream has already been read. */
   private consumed = false
 

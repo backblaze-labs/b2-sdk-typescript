@@ -244,13 +244,15 @@ describe('synchronize', () => {
       }
 
       const events = await collectEvents(config)
-      // With delete mode, dest-only files get hide + deleteRemote actions.
-      // In dry-run, the bucket methods should not be called.
+      // With delete mode, dest-only files get a single removeOrphan
+      // action (which picks hide vs deleteRemote based on the bucket's
+      // file-lock state — vanilla here, so deleteRemote). In dry-run,
+      // the bucket methods should not actually fire.
       expect(mockBucket.hideFile).not.toHaveBeenCalled()
       expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
-      // But we should still see the events produced
+      // Per file we now expect exactly one non-compare event.
       const nonCompare = events.filter((e) => e.type !== 'compare')
-      expect(nonCompare.length).toBeGreaterThanOrEqual(2)
+      expect(nonCompare.length).toBeGreaterThanOrEqual(1)
     })
   })
 
@@ -288,10 +290,11 @@ describe('synchronize', () => {
       }
 
       const events = await collectEvents(config)
-      // For local-to-b2 delete mode, policy yields hide + deleteRemote
+      // For a vanilla bucket (no file-lock), `removeOrphan` routes to
+      // `deleteRemote` only — no spurious hide marker.
       const hideEvents = events.filter((e) => e.type === 'hide')
       const deleteEvents = events.filter((e) => e.type === 'delete-remote')
-      expect(hideEvents).toHaveLength(1)
+      expect(hideEvents).toHaveLength(0)
       expect(deleteEvents).toHaveLength(1)
     })
 
@@ -599,12 +602,14 @@ describe('synchronize', () => {
       }
 
       const events = await collectEvents(config)
-      // Files older than keepDays fall through to delete branch (hide + delete-remote).
+      // Files older than keepDays fall through to the delete branch.
+      // On a vanilla bucket (no file-lock), removeOrphan picks
+      // `deleteRemote` only — no hide marker.
       const hides = events.filter((e) => e.type === 'hide')
       const deletes = events.filter((e) => e.type === 'delete-remote')
-      expect(hides).toHaveLength(1)
+      expect(hides).toHaveLength(0)
       expect(deletes).toHaveLength(1)
-      expect(mockBucket.hideFile).toHaveBeenCalledTimes(1)
+      expect(mockBucket.hideFile).not.toHaveBeenCalled()
       expect(mockBucket.deleteFileVersion).toHaveBeenCalledTimes(1)
     })
   })
@@ -909,7 +914,7 @@ describe('synchronize', () => {
       await expect(collectEvents(config)).rejects.toThrow('Bucket required for delete actions')
     })
 
-    it('throws when hiding in upload direction without a bucket', async () => {
+    it('throws when removing an orphan in upload direction without a bucket', async () => {
       const destFile = makeB2SyncPath('h2.txt', 1000, 10)
       const source = makeMemoryFolder([], 'local')
       const dest = makeMemoryFolder([destFile], 'b2')
@@ -921,9 +926,10 @@ describe('synchronize', () => {
         prefix: '',
       } as unknown as SynchronizerUpConfig
 
-      // Upload direction with keepMode 'delete' on dest-only -> first emits hide, which
-      // requires a bucket. Verify the hide factory's bucket-check throws.
-      await expect(collectEvents(config)).rejects.toThrow('Bucket required for hide actions')
+      // No bucket means `bucket?.info` is undefined → bucketIsLocked is
+      // false → removeOrphan falls into `deleteRemote`, which then
+      // throws via the assertBucket guard.
+      await expect(collectEvents(config)).rejects.toThrow('Bucket required for delete actions')
     })
   })
 
@@ -969,8 +975,13 @@ describe('synchronize', () => {
     })
   })
 
-  describe('upload prefix', () => {
-    it('prepends the configured prefix when hiding orphans', async () => {
+  describe('upload prefix + orphan removal', () => {
+    it('routes orphan removal through deleteFileVersion on a vanilla bucket', async () => {
+      // Vanilla bucket (no file-lock): the new policy yields a single
+      // `removeOrphan` action that routes to `deleteFileVersion`, not
+      // hide-then-delete. `deleteFileVersion` takes a fully-qualified
+      // fileName from the dest's selected version, so prefix prepending
+      // is unnecessary at this layer.
       const mockBucket = makeMockBucket()
       const destFile = makeB2SyncPath('orphan.txt', 1000, 5)
       const source = makeMemoryFolder([], 'local')
@@ -986,8 +997,43 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const hides = events.filter((e) => e.type === 'hide')
+      const deletes = events.filter((e) => e.type === 'delete-remote')
+      expect(hides).toHaveLength(0)
+      expect(deletes).toHaveLength(1)
+      expect(mockBucket.hideFile).not.toHaveBeenCalled()
+      expect(mockBucket.deleteFileVersion).toHaveBeenCalledTimes(1)
+    })
+
+    it('routes orphan removal through hideFile (with prefix) on a file-lock-enabled bucket', async () => {
+      // Locked bucket: `removeOrphan` picks `hide`, and the `HideAction`
+      // closure prepends the configured prefix to the file name before
+      // calling `bucket.hideFile`. This preserves the old prefix
+      // behaviour for the cases where it actually matters.
+      const mockBucket = makeMockBucket()
+      const lockedBucket: typeof mockBucket & { info: object } = Object.assign(mockBucket, {
+        info: {
+          fileLockConfiguration: { value: { isFileLockEnabled: true } },
+        },
+      })
+      const destFile = makeB2SyncPath('orphan.txt', 1000, 5)
+      const source = makeMemoryFolder([], 'local')
+      const dest = makeMemoryFolder([destFile], 'b2')
+
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'delete' },
+        bucket: lockedBucket as unknown as Bucket,
+        prefix: 'backup/',
+      }
+
+      const events = await collectEvents(config)
+      const hides = events.filter((e) => e.type === 'hide')
+      const deletes = events.filter((e) => e.type === 'delete-remote')
       expect(hides).toHaveLength(1)
+      expect(deletes).toHaveLength(0)
       expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt')
+      expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
     })
   })
 })

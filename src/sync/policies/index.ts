@@ -25,6 +25,15 @@ export interface ActionFactory {
   deleteRemote(path: B2SyncPath): SyncAction
   /** Creates an action to delete a local file. */
   deleteLocal(path: LocalSyncPath): SyncAction
+  /**
+   * Creates the right "remove this orphan from B2" action for the bucket's
+   * configuration: a hide on a file-lock-enabled bucket (where direct
+   * delete may be blocked or stack hide markers), a plain
+   * delete-file-version on a vanilla bucket. Used by `actionsForDestOnly`
+   * to avoid yielding both a hide AND a delete when only one of them is
+   * the correct semantic for the destination bucket.
+   */
+  removeOrphan(dest: B2SyncPath): SyncAction
 }
 
 /**
@@ -106,14 +115,17 @@ function* actionsForDestOnly(
 
   switch (direction) {
     case 'local-to-b2':
-      yield factory.hide(dest.relativePath)
-      yield factory.deleteRemote(dest as B2SyncPath)
+      // Single action — `removeOrphan` picks hide vs delete based on
+      // the destination bucket's `fileLockEnabled` state. The previous
+      // "yield both" behaviour stacked hide markers on vanilla buckets
+      // even though the delete that followed made them redundant.
+      yield factory.removeOrphan(dest as B2SyncPath)
       break
     case 'b2-to-local':
       yield factory.deleteLocal(dest as LocalSyncPath)
       break
     case 'b2-to-b2':
-      yield factory.deleteRemote(dest as B2SyncPath)
+      yield factory.removeOrphan(dest as B2SyncPath)
       break
   }
 }

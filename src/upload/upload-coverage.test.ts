@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
-import { BufferSource } from '../streams/source.ts'
+import { BufferSource, StreamSource } from '../streams/source.ts'
 import { deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
@@ -268,5 +268,220 @@ describe('uploadSmallFile cleanup path', () => {
     expect(last?.totalBytes).toBe(payload.byteLength)
     expect(last?.partsCompleted).toBe(1)
     expect(last?.totalParts).toBe(1)
+  })
+
+  it("normalizes the wire 'none' contentSha1 sentinel to null on multipart uploads", async () => {
+    // Real B2 stores per-part SHA-1s for multipart-finished files but
+    // never a whole-file SHA-1; the wire returns the literal string
+    // `'none'`. The SDK's `FileVersion.contentSha1` is typed `string |
+    // null`, so the raw-client boundary collapses 'none' → null. Without
+    // normalization, callers would have to write `=== 'none'` guards.
+    // Both `minimumPartSize` AND `recommendedPartSize` need to be small
+    // so `bucket.upload`'s small-vs-large dispatch picks the multipart
+    // path for a 200 KB payload. Otherwise the file fits in the small
+    // path and gets a real per-file SHA-1.
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'sha1-normalize',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const result = await bucket.upload({
+      fileName: 'multipart.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+    })
+    expect(result.contentSha1).toBeNull()
+
+    // `getFileInfoByName` (which routes through listFileNames) sees the
+    // same normalization at the list-response boundary.
+    const info = await bucket.getFileInfoByName('multipart.bin')
+    expect(info?.contentSha1).toBeNull()
+
+    // Download response headers should normalize too. (B2 sends
+    // `X-Bz-Content-Sha1: none`.)
+    const dl = await bucket.download('multipart.bin')
+    expect(dl.headers.contentSha1).toBeNull()
+    await dl.body.cancel()
+  })
+
+  it('uploads a StreamSource through bucket.upload via the sequential multipart path', async () => {
+    // Regression for the canSlice = false path: bucket.upload should
+    // accept a StreamSource and stream multipart parts sequentially
+    // (one partSize buffer in flight at a time), without requiring the
+    // caller to pre-buffer the whole file. Without this fix,
+    // `source.slice()` would throw inside uploadLargeFile.
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-multipart',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const totalSize = partSize * 2 + 1234
+    const payload = deterministicBytes(totalSize)
+
+    // Hand-roll a ReadableStream that emits the payload in small chunks
+    // so the part-buffer assembly loop has to coalesce across reads.
+    const chunkSize = 7919 // prime, doesn't divide partSize evenly
+    let cursor = 0
+    const readable = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (cursor >= payload.byteLength) {
+          controller.close()
+          return
+        }
+        const end = Math.min(cursor + chunkSize, payload.byteLength)
+        controller.enqueue(payload.subarray(cursor, end))
+        cursor = end
+      },
+    })
+
+    const result = await bucket.upload({
+      fileName: 'streamed.bin',
+      source: new StreamSource(readable, totalSize),
+      partSize,
+    })
+    expect(result.fileName).toBe('streamed.bin')
+    expect(result.contentLength).toBe(totalSize)
+    // Multipart-finished files have no whole-file SHA-1: normalization
+    // collapses 'none' to null (see the P2 normalization regression
+    // above).
+    expect(result.contentSha1).toBeNull()
+  })
+
+  it('forwards serverSideEncryption on each part of a streaming-source upload', async () => {
+    // Covers the SSE conditional spread inside the streaming part loop.
+    // The simulator accepts SSE-B2 without enforcing key material, so we
+    // can verify it threads through without setting up real keys.
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-sse',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    const result = await bucket.upload({
+      fileName: 'sse-stream.bin',
+      source: new StreamSource(readable, payload.byteLength),
+      partSize,
+      serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
+    })
+    expect(result.fileName).toBe('sse-stream.bin')
+  })
+
+  it('evicts the part-upload URL and rethrows when b2_upload_part fails on the streaming path', async () => {
+    // Mirrors the parallel-path eviction test: when the underlying
+    // b2_upload_part request fails, the sequential path must evict the
+    // URL from the pool and rethrow so the outer cleanup can fire the
+    // best-effort cancelLargeFile.
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated streaming upload_part failure',
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-boom.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+      }),
+    ).rejects.toThrow(/simulated streaming upload_part failure/)
+
+    // Cleanup ran: no orphan unfinished file.
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
+  })
+
+  it('rejects a streaming-source upload when resume is requested', async () => {
+    // StreamSource has no random access, so resume can't replay parts.
+    // The engine bails early with a clear message and cancels the
+    // started large file rather than silently buffering the whole
+    // payload. The `resume` option lives on `uploadLargeFile` rather
+    // than the high-level `bucket.upload`, so we call it directly.
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-resume',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-stream.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+        concurrency: 1,
+        resume: true,
+      }),
+    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+  })
+
+  it('preserves a real contentSha1 hex digest for small-file uploads', async () => {
+    // The normalization helper must NOT touch real SHA-1 hex digests:
+    // small-file uploads have a real whole-file SHA-1.
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'sha1-preserve',
+      bucketType: BucketType.AllPrivate,
+    })
+    const result = await bucket.upload({
+      fileName: 'small.bin',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+    expect(result.contentSha1).not.toBeNull()
+    expect(result.contentSha1).toMatch(/^[0-9a-f]{40}$/)
   })
 })

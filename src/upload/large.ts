@@ -19,7 +19,15 @@ export interface UploadLargeFileOptions {
   readonly bucketId: BucketId
   /** Full B2 file name including any path prefix. */
   readonly fileName: string
-  /** Content to upload. Must support {@link ContentSource.slice} for part extraction. */
+  /**
+   * Content to upload. Sliceable sources ({@link BufferSource},
+   * {@link BlobSource}) use the parallel-parts path. Non-sliceable
+   * sources ({@link StreamSource}) fall back to a sequential read path
+   * — one part at a time, concurrency forced to 1 — so callers can
+   * stream a multi-GB file without buffering the whole payload in
+   * memory. The `resume` / `resumeFileId` options require a sliceable
+   * source; they throw on a `StreamSource`.
+   */
   readonly source: ContentSource
   /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
   readonly contentType?: string
@@ -148,6 +156,49 @@ export async function uploadLargeFile(
   const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
   const sem = new Semaphore(concurrency)
 
+  // Non-sliceable sources (e.g. `StreamSource` wrapping a Node
+  // `Readable.toWeb`) can't be read in parallel — there's only one
+  // forward-only cursor. Resume is also impossible (no seek). Bail to a
+  // sequential read loop instead. Each part is buffered, hashed,
+  // shipped, then dropped before the next read starts, so the peak
+  // memory footprint is ~partSize bytes regardless of total file size.
+  if (!options.source.canSlice) {
+    if (options.resume === true || options.resumeFileId !== undefined) {
+      // Cancel the unfinished large file before throwing so the caller
+      // doesn't have to clean it up themselves.
+      await bestEffort(() =>
+        raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+          fileId: largeFileId,
+        }),
+      )
+      throw new Error(
+        'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
+      )
+    }
+    try {
+      await uploadPartsSequentially(
+        raw,
+        accountInfo,
+        options,
+        largeFileId,
+        parts,
+        partSha1s,
+        tracker,
+      )
+      return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+        fileId: largeFileId,
+        partSha1Array: partSha1s,
+      })
+    } catch (err) {
+      await bestEffort(() =>
+        raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+          fileId: largeFileId,
+        }),
+      )
+      throw err
+    }
+  }
+
   try {
     const tasks = parts.map(async (part) => {
       await sem.acquire()
@@ -245,4 +296,129 @@ function planParts(totalSize: number, partSize: number): PartPlan[] {
     partNumber++
   }
   return parts
+}
+
+/**
+ * Sequential upload path for non-sliceable sources (`StreamSource`).
+ *
+ * Reads the source's `stream()` once and accumulates exactly `partSize`
+ * bytes into an in-memory buffer per iteration. Each filled buffer is
+ * hashed, dispatched to `b2_upload_part`, then released before the next
+ * part starts — so peak memory is ~partSize regardless of file size.
+ *
+ * Concurrency is forced to 1 here because the stream is a single
+ * forward-only cursor; the engine can't read part N+1 until part N is
+ * fully consumed.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param options - The original `uploadLargeFile` options.
+ * @param largeFileId - ID of the in-progress large file (already started).
+ * @param parts - Pre-planned part layout (used for part numbers + count).
+ * @param partSha1s - Output array, written in-place at index `partNumber - 1`.
+ * @param tracker - Progress tracker; bytes added per chunk, part completed
+ *   each time a part finishes.
+ */
+async function uploadPartsSequentially(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: UploadLargeFileOptions,
+  largeFileId: LargeFileId,
+  parts: readonly PartPlan[],
+  partSha1s: string[],
+  tracker: ProgressTracker,
+): Promise<void> {
+  const reader = options.source.stream().getReader()
+  let partNumber = 1
+  // Carry-over bytes from a previous read when the read returned more
+  // than we needed to fill one part. Kept as an array to avoid an
+  // allocation per loop iteration on a typical multi-part upload.
+  let carry: Uint8Array | null = null
+
+  try {
+    for (const planned of parts) {
+      options.signal?.throwIfAborted()
+
+      const buf = new Uint8Array(planned.length)
+      let filled = 0
+
+      if (carry !== null) {
+        const take = Math.min(carry.byteLength, buf.byteLength - filled)
+        buf.set(carry.subarray(0, take), filled)
+        filled += take
+        carry = take < carry.byteLength ? carry.subarray(take) : null
+      }
+
+      while (filled < buf.byteLength) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const take = Math.min(value.byteLength, buf.byteLength - filled)
+        buf.set(value.subarray(0, take), filled)
+        filled += take
+        if (take < value.byteLength) {
+          carry = value.subarray(take)
+        }
+      }
+
+      // For the LAST part the stream may run dry mid-buffer, leaving a
+      // shorter chunk. B2 accepts a final part smaller than `partSize`.
+      const data = filled === buf.byteLength ? buf : buf.subarray(0, filled)
+      /* v8 ignore start -- defensive: only fires when the source's advertised
+         size over-reports the actual emitted byte count, which a well-behaved
+         ContentSource implementation cannot do. Kept so callers feeding the
+         engine a buggy custom stream get an actionable error rather than a
+         B2 wire-level failure. */
+      if (data.byteLength === 0) {
+        throw new Error(
+          `uploadLargeFile: source stream ended before part ${partNumber}; advertised size does not match emitted bytes.`,
+        )
+      }
+      /* v8 ignore stop */
+
+      const partSha1 = new IncrementalSha1()
+      await partSha1.update(data)
+      const sha1Hex = await partSha1.digest()
+
+      let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId as string)
+      if (!uploadEntry) {
+        const resp = await raw.getUploadPartUrl(
+          accountInfo.getApiUrl(),
+          accountInfo.getAuthToken(),
+          { fileId: largeFileId },
+        )
+        uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
+      }
+
+      try {
+        const result = await raw.uploadPart(
+          uploadEntry.uploadUrl,
+          {
+            authorization: uploadEntry.authorizationToken,
+            partNumber: planned.partNumber,
+            contentLength: data.byteLength,
+            contentSha1: sha1Hex,
+            ...(options.serverSideEncryption !== undefined
+              ? { serverSideEncryption: options.serverSideEncryption }
+              : {}),
+          },
+          data,
+          options.signal,
+        )
+
+        accountInfo.returnPartUploadUrl(largeFileId as string, uploadEntry)
+        partSha1s[planned.partNumber - 1] = result.contentSha1
+        tracker.addBytes(data.byteLength)
+        tracker.completePart()
+      } catch (err) {
+        accountInfo.evictPartUploadUrl(largeFileId as string, uploadEntry)
+        throw err
+      }
+
+      partNumber++
+    }
+  } finally {
+    // Releasing the lock lets the underlying stream propagate close /
+    // error events to any upstream producer (e.g. a Node `Readable`).
+    reader.releaseLock()
+  }
 }
