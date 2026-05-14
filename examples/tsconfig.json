@@ -24,6 +24,12 @@
       "@backblaze/b2-sdk/s3": ["../src/s3/index.ts"]
     }
   },
+  // `browser-uploader/`, `cloudflare-bandwidth-alliance/`, and
+  // `react-native-presigned/` are intentionally excluded. Each depends on a
+  // runtime-specific framework (Vite, Cloudflare Workers, React Native)
+  // that the SDK doesn't ship as a devDependency. Their typecheck happens
+  // via their own host tooling (vite, wrangler) at install time, not from
+  // this tsconfig.
   "include": [
     "node-list-buckets.ts",
     "node-upload.ts",
@@ -31,7 +37,8 @@
     "node-sync-cli.ts",
     "node-with-progress.ts",
     "node-backup-cli/**/*.ts",
-    "node-plugin-template/**/*.ts"
+    "node-plugin-template/**/*.ts",
+    "node-presigned-with-auth/**/*.ts"
   ],
   "exclude": ["../node_modules", "../dist"]
 }

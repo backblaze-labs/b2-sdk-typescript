@@ -231,12 +231,20 @@ export function validateBucketInfo(info: Record<string, string>): ValidationErro
 // maxFileCount caps per endpoint
 // ---------------------------------------------------------------------------
 
-/** Per-endpoint upper bound on the `maxFileCount` (or equivalent) request field. */
+/**
+ * Per-endpoint upper bound on the `maxFileCount` (or `maxKeyCount` /
+ * `maxPartCount`) request field. Sourced from the B2 endpoint docs.
+ */
 export const LIST_ENDPOINT_CAPS = {
+  /** `b2_list_file_names.maxFileCount` cap. */
   b2_list_file_names: 10_000,
+  /** `b2_list_file_versions.maxFileCount` cap. */
   b2_list_file_versions: 10_000,
+  /** `b2_list_unfinished_large_files.maxFileCount` cap. */
   b2_list_unfinished_large_files: 100,
+  /** `b2_list_keys.maxKeyCount` cap. */
   b2_list_keys: 10_000,
+  /** `b2_list_parts.maxPartCount` cap. */
   b2_list_parts: 10_000,
 } as const
 

@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
-import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
+import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
+import { makeClient } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 
@@ -19,14 +19,9 @@ async function setup(options?: {
    *  instead of the 5 MB production default. Keeps the fast tier fast. */
   minimumPartSize?: number
 }): Promise<{ client: B2Client; bucket: Bucket }> {
-  const sim = new B2Simulator(
+  const { client } = makeClient(
     options?.minimumPartSize !== undefined ? { minimumPartSize: options.minimumPartSize } : {},
   )
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'paginate-bucket',

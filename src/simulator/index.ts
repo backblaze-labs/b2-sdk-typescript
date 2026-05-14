@@ -124,6 +124,20 @@ import {
   validateMaxCount,
 } from './validation.ts'
 
+// Re-export the documented B2 spec limit constants so callers of
+// `@backblaze/b2-sdk/simulator` can parameterise tests against the
+// real caps without reaching into the validation submodule.
+export {
+  BUCKET_INFO_MAX_KEYS,
+  BUCKET_INFO_VALUE_MAX,
+  BUCKET_NAME_MAX,
+  BUCKET_NAME_MIN,
+  FILE_INFO_TOTAL_MAX,
+  FILE_INFO_VALUE_MAX,
+  FILE_NAME_MAX_BYTES,
+  LIST_ENDPOINT_CAPS,
+} from './validation.ts'
+
 interface StoredFile {
   readonly fileVersion: FileVersion
   readonly data: Uint8Array

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
-import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
+import type { B2Client } from './client.ts'
+import { makeClient } from './test-utils/index.ts'
 import { BucketRetentionMode, BucketType, type LifecycleRule } from './types/bucket.ts'
 import { applicationKeyId, bucketId as bucketIdOf } from './types/ids.ts'
 import type { ReplicationRule } from './types/replication.ts'
@@ -15,12 +15,7 @@ import type { ReplicationRule } from './types/replication.ts'
  */
 
 async function makeBucket(): Promise<{ bucket: Bucket; client: B2Client }> {
-  const sim = new B2Simulator()
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
+  const { client } = makeClient()
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'cfg-bucket',

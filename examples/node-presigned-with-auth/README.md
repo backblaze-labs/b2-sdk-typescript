@@ -19,14 +19,13 @@ This example shows the safe shape using `@backblaze/b2-sdk` — the application 
 
 ## Files
 
-- `server.ts`: Hono backend with a fake `authorize(userId, fileKey)` permission check, the B2 download-authorization mint, and a `/files/:key` route that 302-redirects to the signed URL.
+- `server.ts`: tiny `node:http` server that runs the `x-user`-header check, mints the B2 download authorization, and 307-redirects to the signed URL. The example uses `node:http` so it has no external runtime dependencies; drop the per-route logic into Hono / Express / Fastify / Koa as-is.
 - `mint.ts`: pure function that, given a (logged-in user, file key, bucket), produces a download URL with a short expiry. Exported so it's easy to unit-test independently of the HTTP layer.
 - `policy.ts`: placeholder permission table mapping user → allowed prefixes. Replace with your real ACL store (Postgres, Redis, whatever).
 
 ## Running
 
 ```bash
-npm install hono @hono/node-server
 B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy B2_BUCKET=my-bucket \
   npx tsx examples/node-presigned-with-auth/server.ts
 ```
