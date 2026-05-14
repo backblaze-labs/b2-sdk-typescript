@@ -332,10 +332,34 @@ await bucket.setNotificationRules([
     targetConfiguration: {
       targetType: 'webhook',
       url: 'https://my-app.com/webhooks/b2',
+      hmacSha256SigningSecret: process.env.B2_WEBHOOK_SECRET,
     },
   },
 ])
 ```
+
+On the receiving side, verify the `X-Bz-Event-Notification-Signature` header before trusting the payload. The `@backblaze/b2-sdk/notifications` subpath ships HMAC-SHA256 helpers so you don't have to implement constant-time signature checking yourself:
+
+```ts
+import {
+  B2_WEBHOOK_SIGNATURE_HEADER,
+  requireValidWebhook,
+} from '@backblaze/b2-sdk/notifications'
+
+// Inside your HTTP handler. `body` must be the raw request bytes — any
+// JSON re-serialisation will invalidate the HMAC.
+const body = new Uint8Array(await request.arrayBuffer())
+const payload = await requireValidWebhook({
+  body,
+  signature: request.headers.get(B2_WEBHOOK_SIGNATURE_HEADER),
+  secret: process.env.B2_WEBHOOK_SECRET,
+})
+for (const event of payload.events) {
+  console.log(event.eventType, event.objectName)
+}
+```
+
+`requireValidWebhook` throws on missing/invalid signature and returns the parsed payload on success. If you'd rather branch on a boolean (e.g. to log the failure reason without throwing), use the lower-level `verifyWebhookSignature` which returns `{ valid, reason, payload }`.
 
 ### Download authorization
 

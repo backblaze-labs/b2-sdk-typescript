@@ -61,10 +61,12 @@ export interface S3ClientConfig {
  *
  * @example
  * ```ts
+ * const { B2_APPLICATION_KEY_ID, B2_APPLICATION_KEY } = process.env
+ * if (!B2_APPLICATION_KEY_ID || !B2_APPLICATION_KEY) throw new Error('Missing B2 credentials')
  * const s3 = new S3Client(createS3ClientConfig({
  *   accountInfo: client.accountInfo,
- *   applicationKeyId: process.env.B2_APPLICATION_KEY_ID!,
- *   applicationKey: process.env.B2_APPLICATION_KEY!,
+ *   applicationKeyId: B2_APPLICATION_KEY_ID,
+ *   applicationKey: B2_APPLICATION_KEY,
  * }))
  * ```
  */

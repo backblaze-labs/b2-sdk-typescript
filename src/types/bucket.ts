@@ -11,7 +11,7 @@ import type { ReplicationConfiguration } from './replication.ts'
  *
  * @example
  * ```ts
- * await client.createBucket({ bucketName: 'logs', bucketType: BucketType.AllPrivate })
+ * await client.createBucket({ bucketName: 'my-app-logs', bucketType: BucketType.AllPrivate })
  * ```
  */
 export const BucketType = {
