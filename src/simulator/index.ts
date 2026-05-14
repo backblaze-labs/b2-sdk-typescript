@@ -27,36 +27,51 @@ import type { EventNotificationRule } from '../types/notifications.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 
 /**
+ * Result of {@link parseRangeHeader}. `'ok'` is satisfiable,
+ * `'unsatisfiable'` is well-formed but cannot be served (e.g. range
+ * against an empty file, or a start offset at or past EOF), and
+ * `'malformed'` means the header could not be parsed at all and is
+ * ignored (RFC 7233 §3.1 allows servers to treat malformed headers as
+ * absent). Real B2 returns `416 Range Not Satisfiable` for the
+ * `'unsatisfiable'` case.
+ */
+type RangeParseResult =
+  | { kind: 'ok'; start: number; end: number }
+  | { kind: 'unsatisfiable' }
+  | { kind: 'malformed' }
+
+/**
  * Parse an RFC 7233 `Range` header value into inclusive start/end byte
  * offsets clamped to the file size. Supports closed (`bytes=0-999`),
- * open-ended (`bytes=1000-`), and suffix (`bytes=-500`) forms; returns
- * `null` for multi-range, zero-length suffix, or malformed input.
+ * open-ended (`bytes=1000-`), and suffix (`bytes=-500`) forms.
  *
  * @param header - The raw header value (e.g. `'bytes=0-999'`).
  * @param totalSize - The full file size in bytes (for clamping + suffix).
  *
- * @returns `{ start, end }` (both inclusive) or `null` on unsupported syntax.
+ * @returns A {@link RangeParseResult} tagged with how the simulator
+ *   should respond: serve the range, send 416, or ignore the header.
  *
  * @see https://www.rfc-editor.org/rfc/rfc7233#section-2.1
  */
-function parseRangeHeader(
-  header: string,
-  totalSize: number,
-): { start: number; end: number } | null {
-  if (totalSize === 0) return null
+function parseRangeHeader(header: string, totalSize: number): RangeParseResult {
   const m = header.match(/^bytes=(\d*)-(\d*)$/)
-  if (!m) return null
+  if (!m) return { kind: 'malformed' }
   const [, startStr, endStr] = m
   const hasStart = startStr !== ''
   const hasEnd = endStr !== ''
-  if (!hasStart && !hasEnd) return null
+  if (!hasStart && !hasEnd) return { kind: 'malformed' }
+
+  // Empty file with any well-formed range request is unsatisfiable —
+  // real B2 returns 416. Previously the simulator returned 200 + the
+  // empty body, which masked range-aware caller bugs.
+  if (totalSize === 0) return { kind: 'unsatisfiable' }
 
   let start: number
   let end: number
   if (!hasStart) {
     // `bytes=-N` form: the last N bytes.
     const suffixLen = Number.parseInt(endStr ?? '0', 10)
-    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return null
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return { kind: 'malformed' }
     start = Math.max(0, totalSize - suffixLen)
     end = totalSize - 1
   } else if (!hasEnd) {
@@ -67,11 +82,15 @@ function parseRangeHeader(
     start = Number.parseInt(startStr ?? '0', 10)
     end = Number.parseInt(endStr ?? '0', 10)
   }
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) return null
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) {
+    return { kind: 'malformed' }
+  }
+  // Start past EOF is unsatisfiable per RFC 7233 §4.4.
+  if (start >= totalSize) return { kind: 'unsatisfiable' }
   // Clamp end to the actual file size — RFC 7233 says the server SHOULD
   // satisfy a partially-valid range rather than rejecting.
   end = Math.min(end, totalSize - 1)
-  return { start, end }
+  return { kind: 'ok', start, end }
 }
 
 /**
@@ -121,39 +140,6 @@ interface LargeFileInProgress {
   readonly contentType: string
   readonly fileInfo: Record<string, string>
   readonly parts: Map<number, { data: Uint8Array; sha1: string }>
-}
-
-let nextId = 1
-/**
- * Generate a deterministic-but-realistic-looking B2 identifier of the
- * shape `<prefix><24-hex-counter>`, which approximates the visual width
- * of real B2 wire IDs (`bucketId`, `fileId`). The counter is monotonic
- * so test fixtures are deterministic across runs of the same simulator
- * instance.
- *
- * @param prefix - B2-style prefix (`'b2_bucket'`, `'4_z'`, etc.).
- *
- * @returns A simulator-issued identifier that looks like a B2 wire ID.
- */
-function genId(prefix: string): string {
-  // 24 hex chars matches real-B2 ID widths much more closely than the
-  // previous 12-decimal padding. Real B2 IDs include a checksum / shard
-  // tag; we don't reproduce that, but the visual shape is now correct
-  // (tests that pattern-match on the wire shape no longer false-positive
-  // on the artificially short simulator IDs).
-  const n = nextId++
-  return `${prefix}_${n.toString(16).padStart(24, '0')}`
-}
-
-let lastTimestamp = 0
-function monotonicTimestamp(): number {
-  const now = Date.now()
-  if (now <= lastTimestamp) {
-    lastTimestamp += 1
-  } else {
-    lastTimestamp = now
-  }
-  return lastTimestamp
 }
 
 interface StoredKey {
@@ -300,6 +286,18 @@ export interface B2SimulatorOptions {
     destinationBucketId: string
   }) => Promise<void> | void
   /**
+   * Diagnostic hook: invoked with any error thrown or rejected by
+   * `onWebhookDeliver` / `onReplicate`. Without this, errors thrown by
+   * user-supplied hooks are silently swallowed (intentional: a buggy
+   * hook must not corrupt an otherwise-successful upload), which makes
+   * test debugging hard when a hook quietly stops firing. Register
+   * `onHookError` to surface what would otherwise be invisible.
+   */
+  onHookError?: (event: {
+    kind: 'webhook' | 'replication'
+    error: Error
+  }) => void
+  /**
    * When `true`, the simulator enforces application-key capability
    * checks, bucket scoping, prefix scoping, and auth-token expiry on
    * every request. The default `false` keeps the simulator permissive
@@ -353,6 +351,7 @@ export class B2Simulator {
   private nextFaultId = 1
   private readonly onWebhookDeliver?: B2SimulatorOptions['onWebhookDeliver']
   private readonly onReplicate?: B2SimulatorOptions['onReplicate']
+  private readonly onHookError?: B2SimulatorOptions['onHookError']
   private readonly strictAuth: boolean
   private readonly authTokenTtlMs: number
   /**
@@ -368,6 +367,14 @@ export class B2Simulator {
       bucketId: string | null
       namePrefix: string | null
       expiresAt: number
+      /**
+       * The application-key ID this token was minted for, or `null`
+       * for tokens minted from the implicit master credential. Set so
+       * {@link deleteKey} can evict every outstanding token whose
+       * underlying key was just revoked — without this back-pointer
+       * deleted keys keep working until the token TTL expires.
+       */
+      applicationKeyId: string | null
     }
   >()
   /**
@@ -376,6 +383,32 @@ export class B2Simulator {
    * past auth-token expiry without sleeping.
    */
   private clockOffsetMs = 0
+  /**
+   * Per-instance monotonic counter used to mint realistic-looking
+   * IDs (`b2_bucket_<24-hex>`, `4_z<24-hex>`, etc.) and auth tokens.
+   * Module-global previously, which leaked state across `B2Simulator`
+   * instances in the same Vitest worker — concurrent tests could see
+   * colliding tokens. Per-instance ensures determinism within a single
+   * simulator's lifetime.
+   */
+  private nextId = 1
+  /**
+   * Last-issued upload timestamp. The simulator enforces strict
+   * monotonicity so version ordering is deterministic for tests; if
+   * two writes hit the same `Date.now()` millisecond, the second
+   * receives `lastTimestamp + 1`.
+   */
+  private lastTimestamp = 0
+  /**
+   * Outstanding fire-and-forget hook invocations. Tracked so tests
+   * (and future {@link flushHooks} callers) can wait for every
+   * dispatched `onWebhookDeliver` / `onReplicate` callback to settle
+   * before asserting against observable side effects. The microtask
+   * dance in fidelity tests was previously brittle: positive cases
+   * flushed twice, negative cases flushed once, and any addition to
+   * the hook dispatch chain quietly broke the negative path.
+   */
+  private readonly pendingHooks = new Set<Promise<void>>()
 
   /**
    * Constructs a new in-memory B2 simulator.
@@ -386,6 +419,7 @@ export class B2Simulator {
     this.recommendedPartSize = options.recommendedPartSize ?? 100_000_000
     if (options.onWebhookDeliver !== undefined) this.onWebhookDeliver = options.onWebhookDeliver
     if (options.onReplicate !== undefined) this.onReplicate = options.onReplicate
+    if (options.onHookError !== undefined) this.onHookError = options.onHookError
     this.strictAuth = options.strictAuth ?? false
     // Real B2 tokens last 24h. Default matches production; tests that
     // want to exercise the reauth path can lower this knob.
@@ -410,6 +444,59 @@ export class B2Simulator {
    */
   private now(): number {
     return Date.now() + this.clockOffsetMs
+  }
+
+  /**
+   * Generate a deterministic-but-realistic-looking B2 identifier of the
+   * shape `<prefix>_<24-hex-counter>`, which approximates the visual
+   * width of real B2 wire IDs. The counter is monotonic per instance
+   * so test fixtures are deterministic across runs of the same
+   * simulator.
+   *
+   * @param prefix - B2-style prefix (`'b2_bucket'`, `'4_z'`, etc.).
+   *
+   * @returns A simulator-issued identifier that looks like a B2 wire ID.
+   */
+  private genId(prefix: string): string {
+    const n = this.nextId++
+    return `${prefix}_${n.toString(16).padStart(24, '0')}`
+  }
+
+  /**
+   * Return a strictly-increasing upload timestamp, even when multiple
+   * writes land in the same `Date.now()` millisecond. Tests rely on
+   * `uploadTimestamp` ordering to discriminate file versions; ties from
+   * coarse system-clock resolution would otherwise make version
+   * selection nondeterministic.
+   *
+   * @returns Unix milliseconds.
+   */
+  private monotonicTimestamp(): number {
+    const now = Date.now()
+    if (now <= this.lastTimestamp) {
+      this.lastTimestamp += 1
+    } else {
+      this.lastTimestamp = now
+    }
+    return this.lastTimestamp
+  }
+
+  /**
+   * Wait for every fire-and-forget hook (`onWebhookDeliver`,
+   * `onReplicate`) currently in flight to settle. Use in tests after
+   * an upload/copy/finish-large-file call to deterministically observe
+   * hook side effects without microtask-flush guesswork.
+   *
+   * @returns A promise that resolves once every pending hook callback
+   *   has either resolved or rejected.
+   */
+  async flushHooks(): Promise<void> {
+    while (this.pendingHooks.size > 0) {
+      // Snapshot to avoid mutating the set while iterating; new hooks
+      // can be enqueued by the very promises we're awaiting.
+      const snapshot = [...this.pendingHooks]
+      await Promise.allSettled(snapshot)
+    }
   }
 
   /**
@@ -491,8 +578,11 @@ export class B2Simulator {
     capabilities: readonly Capability[]
     bucketId: string | null
     namePrefix: string | null
+    applicationKeyId: string
   } | null {
     if (!authzHeader || !authzHeader.startsWith('Basic ')) return null
+    // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
+    // Wrapped in a try because malformed base64 throws.
     const decoded = (() => {
       try {
         return atob(authzHeader.slice(6))
@@ -511,6 +601,7 @@ export class B2Simulator {
       capabilities: stored.capabilities as readonly Capability[],
       bucketId: stored.bucketId,
       namePrefix: stored.namePrefix,
+      applicationKeyId,
     }
   }
 
@@ -787,7 +878,19 @@ export class B2Simulator {
     headers: Record<string, string>,
     data: Uint8Array,
   ): SimulatorJsonResponse {
-    if (url.includes('b2_upload_part')) {
+    // Strict-mode auth gate also covers upload endpoints. Without
+    // this, an expired or unknown auth token still successfully wrote
+    // bytes because `handleUpload` bypassed `handleRequest`'s dispatch
+    // gate. The endpoint name is sniffed from the URL since uploads
+    // use opaque per-upload URLs rather than the canonical
+    // `/b2api/v3/<endpoint>` shape.
+    const isPart = url.includes('b2_upload_part')
+    if (this.strictAuth) {
+      const endpoint = isPart ? 'b2_upload_part' : 'b2_upload_file'
+      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      if (authError !== null) return authError
+    }
+    if (isPart) {
       return this.handleUploadPart(url, headers, data)
     }
     return this.handleUploadFile(url, headers, data)
@@ -808,6 +911,14 @@ export class B2Simulator {
     method: 'GET' | 'HEAD' = 'GET',
   ): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {
+      // Strict-mode auth gate for download-by-id. Mirrors the gate in
+      // `handleRequest`. Returns a synthetic JSON error body in the
+      // download response shape so the transport renders the right
+      // status code.
+      if (this.strictAuth) {
+        const authError = this.authorizeRequest(headers['authorization'], 'b2_download_file_by_id')
+        if (authError !== null) return this.errorAsDownload(authError)
+      }
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
       return this.finalizeDownload(this.downloadById(fileId, headers['range']), url, method)
@@ -817,6 +928,15 @@ export class B2Simulator {
     if (fileMatch) {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
+      if (this.strictAuth) {
+        const authError = this.authorizeRequest(
+          headers['authorization'],
+          'b2_download_file_by_name',
+          undefined,
+          fileName,
+        )
+        if (authError !== null) return this.errorAsDownload(authError)
+      }
       const url = new URL(`http://localhost${path}`)
       return this.finalizeDownload(
         this.downloadByName(bucketName, fileName, headers['range']),
@@ -826,6 +946,23 @@ export class B2Simulator {
     }
 
     return { status: 404, headers: {}, data: null }
+  }
+
+  /**
+   * Convert a synthetic JSON error body into a `SimulatorDownloadResponse`
+   * shape so the strict-auth gate on download paths can surface 401/403s
+   * through the same transport plumbing as a regular failed download.
+   *
+   * @param json - The JSON error from {@link authorizeRequest}.
+   *
+   * @returns A download-shaped response with the error body bytes inline.
+   */
+  private errorAsDownload(json: SimulatorJsonResponse): SimulatorDownloadResponse {
+    return {
+      status: json.status,
+      headers: { 'Content-Type': 'application/json' },
+      data: utf8Encoder.encode(JSON.stringify(json.body)),
+    }
   }
 
   /**
@@ -970,11 +1107,23 @@ export class B2Simulator {
 
     if (range) {
       const parsed = parseRangeHeader(range, fullData.byteLength)
-      if (parsed !== null) {
+      if (parsed.kind === 'ok') {
         data = fullData.subarray(parsed.start, parsed.end + 1)
         status = 206
         contentRange = `bytes ${parsed.start}-${parsed.end}/${fullData.byteLength}`
+      } else if (parsed.kind === 'unsatisfiable') {
+        // RFC 7233 §4.4: 416 with a `Content-Range: bytes */<total>`
+        // hint telling the client the legitimate size.
+        return {
+          status: 416,
+          headers: {
+            'Content-Type': stored.fileVersion.contentType,
+            'Content-Range': `bytes */${fullData.byteLength}`,
+          },
+          data: new Uint8Array(0),
+        }
       }
+      // `kind === 'malformed'`: treat as absent and serve the full body.
     }
 
     const fv = stored.fileVersion
@@ -1037,12 +1186,13 @@ export class B2Simulator {
     // seam, see `authorizeAsKey` below), the auth header identifies
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
-    const tokenStr = `sim_auth_token_${nextId++}`
+    const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       capabilities: keyForAuth?.capabilities ?? capabilities,
       bucketId: keyForAuth?.bucketId ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
+      applicationKeyId: keyForAuth?.applicationKeyId ?? null,
     })
     return {
       status: 200,
@@ -1105,7 +1255,7 @@ export class B2Simulator {
         return this.error(400, 'duplicate_bucket_name', 'Bucket name already in use')
       }
     }
-    const bid = bucketIdOf(genId('b2_bucket'))
+    const bid = bucketIdOf(this.genId('b2_bucket'))
     // Honor optional fields supplied in the create request so callers
     // that construct a bucket with e.g. `fileLockEnabled: true` see the
     // flag reflected back in the returned `BucketInfo` (and in every
@@ -1457,7 +1607,7 @@ export class B2Simulator {
       if (infoError) return this.error(400, infoError.code, infoError.message)
     }
 
-    const fid = genId('4_z')
+    const fid = this.genId('4_z')
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
@@ -1514,6 +1664,29 @@ export class B2Simulator {
         400,
         'bad_request',
         `multipart upload has ${sortedParts.length} parts; B2 caps at 10000`,
+      )
+    }
+    // B2 spec-compliance: every part number must be in [1, 10000].
+    // Real B2 rejects a part upload with an out-of-range partNumber
+    // server-side; we enforce here at finish time as a backstop in case
+    // a caller bypassed the upload-side validation (the simulator's
+    // own `handleUploadPart` stores whatever number the client sends).
+    for (const [partNumber] of sortedParts) {
+      if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
+        return this.error(
+          400,
+          'bad_request',
+          `partNumber ${partNumber} is outside the [1, 10000] range B2 accepts`,
+        )
+      }
+    }
+    // partSha1Array length must match the parts uploaded — real B2
+    // rejects mismatches with `bad_request`.
+    if (req.partSha1Array.length !== sortedParts.length) {
+      return this.error(
+        400,
+        'bad_request',
+        `partSha1Array has ${req.partSha1Array.length} entries but ${sortedParts.length} parts were uploaded`,
       )
     }
     // B2 spec-compliance: every non-last part must be at least
@@ -1698,7 +1871,7 @@ export class B2Simulator {
       body: {
         bucketId: req.bucketId,
         fileNamePrefix: req.fileNamePrefix,
-        authorizationToken: `sim_dl_auth_${genId('tok')}`,
+        authorizationToken: `sim_dl_auth_${this.genId('tok')}`,
       },
     }
   }
@@ -1713,8 +1886,8 @@ export class B2Simulator {
     bucketId?: string
     namePrefix?: string
   }): SimulatorJsonResponse {
-    const kid = genId('sim_key')
-    const appKey = genId('sim_secret')
+    const kid = this.genId('sim_key')
+    const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
         ? Date.now() + req.validDurationInSeconds * 1000
@@ -1784,6 +1957,15 @@ export class B2Simulator {
     const key = this.keys.get(req.applicationKeyId)
     if (!key) return this.error(400, 'bad_request', 'Key not found')
     this.keys.delete(req.applicationKeyId)
+    // Evict every issued auth token whose backing application key was
+    // just revoked. Real B2 invalidates the token immediately on
+    // `b2_delete_key`; before this fix, tokens minted from a deleted
+    // key kept passing strict-auth until their TTL expired.
+    for (const [token, scope] of this.issuedTokens.entries()) {
+      if (scope.applicationKeyId === req.applicationKeyId) {
+        this.issuedTokens.delete(token)
+      }
+    }
     return {
       status: 200,
       body: {
@@ -1889,7 +2071,7 @@ export class B2Simulator {
    * that need to splice the version out can do so without re-scanning.
    *
    * Real B2 fileIds embed the bucketId, so production lookups are O(1);
-   * the simulator's flat ID generator (`genId('4_z')`) doesn't, so this
+   * the simulator's flat ID generator (`this.genId('4_z')`) doesn't, so this
    * is O(buckets × files × versions). Acceptable for tests.
    *
    * @param fileId - The file version ID to locate.
@@ -1932,14 +2114,14 @@ export class B2Simulator {
       contentMd5: null,
       contentSha1: params.contentSha1,
       contentType: params.contentType,
-      fileId: fileIdOf(genId('4_z')),
+      fileId: fileIdOf(this.genId('4_z')),
       fileInfo: {},
       fileName: params.fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
       replicationStatus: null,
       serverSideEncryption: { mode: EncryptionMode.None },
-      uploadTimestamp: monotonicTimestamp(),
+      uploadTimestamp: this.monotonicTimestamp(),
     }
   }
 
@@ -1973,11 +2155,7 @@ export class B2Simulator {
         const matches = rule.eventTypes.some((pattern) => eventTypeMatches(pattern, eventType))
         if (!matches) continue
         const hook = this.onWebhookDeliver
-        // Fire-and-forget; swallow rejections so a buggy hook can't
-        // fail an otherwise-successful upload.
-        Promise.resolve()
-          .then(() => hook({ rule, fileVersion, bucketId }))
-          .catch(() => {})
+        this.dispatchHook('webhook', () => hook({ rule, fileVersion, bucketId }))
       }
     }
     if (this.onReplicate !== undefined) {
@@ -1987,19 +2165,48 @@ export class B2Simulator {
         if (!rule.isEnabled) continue
         if (rule.fileNamePrefix && !fileVersion.fileName.startsWith(rule.fileNamePrefix)) continue
         const hook = this.onReplicate
-        Promise.resolve()
-          .then(() =>
-            hook({
-              sourceFileVersion: fileVersion,
-              sourceBucketId: bucketId,
-              destinationBucketId: rule.destinationBucketId,
-            }),
-          )
-          .catch(() => {})
+        this.dispatchHook('replication', () =>
+          hook({
+            sourceFileVersion: fileVersion,
+            sourceBucketId: bucketId,
+            destinationBucketId: rule.destinationBucketId,
+          }),
+        )
       }
     }
   }
+
+  /**
+   * Schedule a user-supplied hook callback. Errors are routed to
+   * `onHookError` if configured, swallowed otherwise. The returned
+   * promise is tracked in {@link pendingHooks} so `flushHooks()` can
+   * wait for every dispatched hook to settle.
+   *
+   * @param kind - Which hook this is (`'webhook'` or `'replication'`).
+   * @param fn - Thunk that performs the hook invocation.
+   */
+  private dispatchHook(kind: 'webhook' | 'replication', fn: () => Promise<void> | void): void {
+    const task = Promise.resolve()
+      .then(() => fn())
+      .catch((err) => {
+        if (this.onHookError !== undefined) {
+          this.onHookError({ kind, error: err instanceof Error ? err : new Error(String(err)) })
+        }
+      })
+      .finally(() => {
+        this.pendingHooks.delete(task)
+      })
+    this.pendingHooks.add(task)
+  }
 }
+
+/**
+ * Module-local cache of compiled glob regexes. Avoids recompiling the
+ * same `eventTypes` pattern on every upload's hook dispatch — patterns
+ * are stable for the lifetime of a `setBucketNotificationRules` call
+ * and typically reused across thousands of uploads.
+ */
+const eventTypeRegexCache = new Map<string, RegExp>()
 
 /**
  * Wildcard match for B2 event-type globs. Supports the prefix-glob form
@@ -2014,9 +2221,14 @@ export class B2Simulator {
  */
 function eventTypeMatches(pattern: string, eventType: string): boolean {
   if (!pattern.includes('*')) return pattern === eventType
-  // Escape regex metacharacters, then replace literal `*` with `.*`.
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
-  return new RegExp(`^${escaped}$`).test(eventType)
+  let compiled = eventTypeRegexCache.get(pattern)
+  if (compiled === undefined) {
+    // Escape regex metacharacters, then replace literal `*` with `.*`.
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+    compiled = new RegExp(`^${escaped}$`)
+    eventTypeRegexCache.set(pattern, compiled)
+  }
+  return compiled.test(eventType)
 }
 
 /**

@@ -1,3 +1,5 @@
+import { collectStream } from './collect.ts'
+
 /**
  * Uniform adapter for upload content. Wraps File, Blob, Buffer, or ReadableStream
  * behind a common interface so upload logic does not depend on the input type.
@@ -175,30 +177,8 @@ export class StreamSource implements ContentSource {
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
-    const reader = this.stream().getReader()
-    try {
-      const chunks: Uint8Array[] = []
-      let totalLen = 0
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        chunks.push(value)
-        totalLen += value.byteLength
-      }
-      const result = new Uint8Array(totalLen)
-      let offset = 0
-      for (const chunk of chunks) {
-        result.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-      return result.buffer
-    } finally {
-      // Always release the lock so the underlying stream can propagate
-      // close / error events to any upstream producer. Without this, a
-      // mid-read throw (e.g. an aborted fetch) leaves the stream locked
-      // and the upstream pump dangling.
-      reader.releaseLock()
-    }
+    const bytes = await collectStream(this.stream())
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
   }
 }
 

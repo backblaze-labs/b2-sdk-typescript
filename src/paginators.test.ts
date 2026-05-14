@@ -14,8 +14,14 @@ import { BucketType } from './types/bucket.ts'
  * endpoint, against real-shaped responses.
  */
 
-async function setup(): Promise<{ client: B2Client; bucket: Bucket }> {
-  const sim = new B2Simulator()
+async function setup(options?: {
+  /** Override `absoluteMinimumPartSize` so a test can use 100 KB parts
+   *  instead of the 5 MB production default. Keeps the fast tier fast. */
+  minimumPartSize?: number
+}): Promise<{ client: B2Client; bucket: Bucket }> {
+  const sim = new B2Simulator(
+    options?.minimumPartSize !== undefined ? { minimumPartSize: options.minimumPartSize } : {},
+  )
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
@@ -199,13 +205,17 @@ describe('Bucket.paginateUnfinishedLargeFiles', () => {
 
 describe('Bucket.paginateParts', () => {
   it('yields every uploaded part of a specific large file', async () => {
-    const { client, bucket } = await setup()
+    // 100 KB minimum-part-size so this fits in the fast tier. A 5 MB
+    // simulator default × 5 parts × per-part SHA-1 round-trip pushes
+    // this test past the fast budget (and trips coverage runs on slow
+    // CI). The pagination control flow exercised here is independent
+    // of part size, so shrinking is safe.
+    const { client, bucket } = await setup({ minimumPartSize: 100_000 })
     const start = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
       { bucketId: bucket.id, fileName: 'parts.bin', contentType: 'application/octet-stream' },
     )
-    // Upload 5 parts of 5_000_000 bytes each (the simulator's minimum).
     const partUrl = await client.raw.getUploadPartUrl(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -213,7 +223,7 @@ describe('Bucket.paginateParts', () => {
     )
     const { sha1Hex } = await import('./streams/hash.ts')
     for (let partNumber = 1; partNumber <= 5; partNumber++) {
-      const data = new Uint8Array(5_000_000)
+      const data = new Uint8Array(100_000)
       // Fill so each part has distinct content (SHA-1 differs per part).
       data.fill(partNumber)
       const hash = await sha1Hex(data)

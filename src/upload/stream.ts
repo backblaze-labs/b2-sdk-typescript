@@ -6,8 +6,9 @@ import { ProgressTracker } from '../streams/progress.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
-import { bestEffort } from '../util/best-effort.ts'
-import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { toError } from '../util/to-error.ts'
+import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 
 /** Options for creating a streaming multipart upload sink. */
@@ -104,7 +105,7 @@ export function createWriteStream(
       const resp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
         bucketId: options.bucketId,
         fileName: options.fileName,
-        contentType: options.contentType ?? 'b2/x-auto',
+        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
         fileInfo: options.fileInfo ?? {},
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }
@@ -123,7 +124,7 @@ export function createWriteStream(
     await sha1.update(data)
     const sha1Hex = await sha1.digest()
 
-    let uploadEntry = accountInfo.checkoutPartUploadUrl(fileId as string)
+    let uploadEntry = accountInfo.checkoutPartUploadUrl(fileId)
     if (!uploadEntry) {
       const resp = await raw.getUploadPartUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
         fileId,
@@ -146,12 +147,12 @@ export function createWriteStream(
         data as BodyInit,
         options.signal,
       )
-      accountInfo.returnPartUploadUrl(fileId as string, uploadEntry)
+      accountInfo.returnPartUploadUrl(fileId, uploadEntry)
       partSha1s[partNumber - 1] = result.contentSha1
       tracker.addBytes(data.byteLength)
       tracker.completePart()
     } catch (err) {
-      accountInfo.evictPartUploadUrl(fileId as string, uploadEntry)
+      accountInfo.evictPartUploadUrl(fileId, uploadEntry)
       throw err
     }
   }
@@ -180,7 +181,7 @@ export function createWriteStream(
       try {
         await shipPart(data, partNumber)
       } catch (err) {
-        errored = err instanceof Error ? err : new Error(String(err))
+        errored = toError(err)
         throw err
       } finally {
         sem.release()
@@ -208,7 +209,7 @@ export function createWriteStream(
           try {
             await shipPart(carved, partNumber)
           } catch (err) {
-            errored = err instanceof Error ? err : new Error(String(err))
+            errored = toError(err)
             throw err
           } finally {
             sem.release()
@@ -248,16 +249,12 @@ export function createWriteStream(
         )
         resolveDone(result)
       } catch (err) {
-        // Capture into a const so the bestEffort closure sees a non-null
+        // Capture into a const so the cancel closure sees a non-null
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
         if (fileIdToCancel !== null) {
-          await bestEffort(() =>
-            raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-              fileId: fileIdToCancel,
-            }),
-          )
+          await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
         }
         rejectDone(err)
         throw err
@@ -267,13 +264,9 @@ export function createWriteStream(
     async abort(reason: unknown): Promise<void> {
       const fileIdToCancel = largeFileId
       if (fileIdToCancel !== null) {
-        await bestEffort(() =>
-          raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-            fileId: fileIdToCancel,
-          }),
-        )
+        await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
       }
-      rejectDone(reason instanceof Error ? reason : new Error(String(reason)))
+      rejectDone(toError(reason))
     },
   })
 

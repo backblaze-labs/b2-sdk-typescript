@@ -3,9 +3,10 @@ import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
+import { cancelLargeFileBestEffort } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
-import { bestEffort } from '../util/best-effort.ts'
-import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 
 /** Options for a server-side multipart copy. */
 export interface CopyLargeFileOptions {
@@ -97,7 +98,7 @@ export async function copyLargeFile(
   const startResp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
     bucketId: destBucketId,
     fileName: options.fileName,
-    contentType: options.contentType ?? sourceInfo.contentType ?? 'b2/x-auto',
+    contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
     fileInfo: options.fileInfo ?? {},
     ...(options.destinationServerSideEncryption !== undefined
       ? { serverSideEncryption: options.destinationServerSideEncryption }
@@ -105,17 +106,7 @@ export async function copyLargeFile(
   })
   const largeFileId = startResp.fileId
 
-  // Plan part ranges.
-  const ranges: { partNumber: number; start: number; end: number }[] = []
-  let offset = 0
-  let partNumber = 1
-  while (offset < totalSize) {
-    const end = Math.min(offset + partSize - 1, totalSize - 1)
-    ranges.push({ partNumber, start: offset, end })
-    offset = end + 1
-    partNumber++
-  }
-
+  const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
 
@@ -134,7 +125,7 @@ export async function copyLargeFile(
             // same value typed as `FileId`. Re-brand via the factory.
             largeFileId: fileIdOf(largeFileId),
             partNumber: range.partNumber,
-            range: `bytes=${range.start}-${range.end}`,
+            range: byteRangeHeader(range.start, range.end),
             ...(options.sourceServerSideEncryption !== undefined
               ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
               : {}),
@@ -155,11 +146,7 @@ export async function copyLargeFile(
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    await bestEffort(() =>
-      raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        fileId: largeFileId,
-      }),
-    )
+    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
     throw err
   }
 }

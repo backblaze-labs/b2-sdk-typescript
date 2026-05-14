@@ -26,9 +26,10 @@ export interface ValidationError {
 // Bucket name (`b2_create_bucket`, `b2_update_bucket`)
 // ---------------------------------------------------------------------------
 
-/** Length range for B2 bucket names per https://www.backblaze.com/apidocs/b2-create-bucket. */
-const BUCKET_NAME_MIN = 6
-const BUCKET_NAME_MAX = 63
+/** Minimum B2 bucket-name length per https://www.backblaze.com/apidocs/b2-create-bucket. */
+export const BUCKET_NAME_MIN = 6
+/** Maximum B2 bucket-name length per https://www.backblaze.com/apidocs/b2-create-bucket. */
+export const BUCKET_NAME_MAX = 63
 /** Bucket-name char set: letters, digits, hyphens. Anchored, leading/trailing hyphens are illegal. */
 const BUCKET_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$/
 /** Reserved prefix — B2 forbids consumer-created buckets starting with `b2-`. */
@@ -71,7 +72,7 @@ export function validateBucketName(name: string): ValidationError | null {
 // ---------------------------------------------------------------------------
 
 /** Max file-name length is 1024 BYTES (UTF-8 encoded), not chars. */
-const FILE_NAME_MAX_BYTES = 1024
+export const FILE_NAME_MAX_BYTES = 1024
 /** Control-character range B2 rejects: U+0000-U+001F (32 codepoints) plus DEL (U+007F). */
 const FILE_NAME_DEL = 0x7f
 
@@ -131,9 +132,9 @@ export function validateFileName(name: string): ValidationError | null {
 // ---------------------------------------------------------------------------
 
 /** Per-file fileInfo total size cap (sum of key+value bytes). */
-const FILE_INFO_TOTAL_MAX = 2048
-/** Per-key fileInfo key/value cap. */
-const FILE_INFO_VALUE_MAX = 2048
+export const FILE_INFO_TOTAL_MAX = 2048
+/** Per-key fileInfo value byte cap. */
+export const FILE_INFO_VALUE_MAX = 2048
 /** Allowed key character set (case-insensitive). */
 const FILE_INFO_KEY_REGEX = /^[a-zA-Z0-9_-]+$/
 
@@ -179,9 +180,9 @@ export function validateFileInfo(info: Record<string, string>): ValidationError 
 }
 
 /** Per-bucket bucketInfo total max keys. */
-const BUCKET_INFO_MAX_KEYS = 10
+export const BUCKET_INFO_MAX_KEYS = 10
 /** Per-key bucketInfo value byte cap. */
-const BUCKET_INFO_VALUE_MAX = 2048
+export const BUCKET_INFO_VALUE_MAX = 2048
 /** Allowed key character set for bucketInfo. */
 const BUCKET_INFO_KEY_REGEX = /^[a-zA-Z0-9_-]+$/
 

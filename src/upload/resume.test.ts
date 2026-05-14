@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
-import type { LargeFileId } from '../types/ids.ts'
+import { type LargeFileId, bucketId } from '../types/ids.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
 
 /**
@@ -133,7 +133,12 @@ describe('findResumeCandidate', () => {
       },
     } as unknown as RawClient
 
-    const result = await findResumeCandidate(raw, makeAccountInfo(), 'bucket1', 'target.bin')
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+    )
     expect(result).toBeNull()
   })
 
@@ -144,7 +149,12 @@ describe('findResumeCandidate', () => {
       },
     } as unknown as RawClient
 
-    const result = await findResumeCandidate(raw, makeAccountInfo(), 'bucket1', 'anything.bin')
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'anything.bin',
+    )
     expect(result).toBeNull()
   })
 
@@ -172,7 +182,12 @@ describe('findResumeCandidate', () => {
       },
     } as unknown as RawClient
 
-    const result = await findResumeCandidate(raw, makeAccountInfo(), 'bucket1', 'wanted.bin')
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'wanted.bin',
+    )
     expect(result).not.toBeNull()
     expect(result?.fileId).toBe('lf-match' as LargeFileId)
     expect(result?.uploadedPartSha1s.get(1)).toBe('p1')

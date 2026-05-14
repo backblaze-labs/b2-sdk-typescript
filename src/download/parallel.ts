@@ -1,8 +1,10 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
+import { collectStream } from '../streams/collect.ts'
 import type { FileId } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -50,18 +52,16 @@ export function createParallelDownloadStream(
   const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
-  const retryOptions = { ...DEFAULT_RETRY_OPTIONS, maxRetries: options.maxRetries ?? 5 }
+  // `maxRetries` is part of `DEFAULT_RETRY_OPTIONS`; only override when
+  // the caller supplied an explicit value so the shared default stays
+  // the single source of truth.
+  const retryOptions = {
+    ...DEFAULT_RETRY_OPTIONS,
+    ...(options.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+  }
   const abort = options.signal
 
-  const ranges: { start: number; end: number; index: number }[] = []
-  let offset = 0
-  let index = 0
-  while (offset < totalSize) {
-    const end = Math.min(offset + rangeSize - 1, totalSize - 1)
-    ranges.push({ start: offset, end, index })
-    offset = end + 1
-    index++
-  }
+  const ranges = planRanges(totalSize, rangeSize)
 
   // `inflight` holds currently-fetching range promises; `buffer` holds
   // completed ranges waiting for their slot in the emit order. Total
@@ -208,14 +208,14 @@ async function fetchRangeWithRetry(
       const resp = await raw.downloadFileById(
         accountInfo.getDownloadUrl(),
         accountInfo.getAuthToken(),
-        fileId as string,
+        fileId,
         {
-          range: `bytes=${start}-${end}`,
+          range: byteRangeHeader(start, end),
           ...(signal !== undefined ? { signal } : {}),
         },
       )
       if (!resp.body) throw new Error('Download chunk has no body')
-      return new Uint8Array(await readAll(resp.body))
+      return await collectStream(resp.body)
     } catch (err) {
       lastError = err
       // Honour AbortSignal cancellation: don't retry past an abort.
@@ -224,36 +224,4 @@ async function fetchRangeWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
-}
-
-/**
- * Reads an entire readable stream into a single Uint8Array.
- * @param stream - The readable stream to consume.
- *
- * @returns The concatenated bytes from the stream.
- */
-async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  const reader = stream.getReader()
-  try {
-    const parts: Uint8Array[] = []
-    let total = 0
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      parts.push(value)
-      total += value.byteLength
-    }
-    const result = new Uint8Array(total)
-    let offset = 0
-    for (const part of parts) {
-      result.set(part, offset)
-      offset += part.byteLength
-    }
-    return result
-  } finally {
-    // Release the lock so the underlying stream can propagate close /
-    // error to upstream producers — even on the error path where a
-    // partial read threw mid-loop.
-    reader.releaseLock()
-  }
 }

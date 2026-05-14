@@ -7,6 +7,7 @@ import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
+import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {
@@ -83,7 +84,7 @@ export async function uploadSmallFile(
       {
         authorization: uploadEntry.authorizationToken,
         fileName: options.fileName,
-        contentType: options.contentType ?? 'b2/x-auto',
+        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
         contentLength: data.byteLength,
         contentSha1: sha1Hex,
         ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),

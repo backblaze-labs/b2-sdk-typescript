@@ -36,8 +36,9 @@ import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './t
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import { uploadSmallFile } from './upload/single.ts'
-import { DEFAULT_BULK_CONCURRENCY } from './util/defaults.ts'
+import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
+import { toError } from './util/to-error.ts'
 
 /** A target for bulk deletion: a file name and its specific version ID. */
 export interface DeleteTarget {
@@ -354,7 +355,7 @@ export class Bucket {
     return paginateItems(
       async (cursor: string | undefined) => {
         const resp = await this.listFileNames({
-          pageSize: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? DEFAULT_PAGE_SIZE,
           ...(cursor !== undefined ? { startFileName: cursor } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
           ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
@@ -394,7 +395,7 @@ export class Bucket {
     return paginateItems(
       async (cursor: Cursor | undefined) => {
         const resp = await this.listFileVersions({
-          pageSize: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? DEFAULT_PAGE_SIZE,
           ...(cursor !== undefined ? { startFileName: cursor.fileName } : {}),
           ...(cursor?.fileId !== undefined ? { startFileId: cursor.fileId } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
@@ -465,7 +466,7 @@ export class Bucket {
           this.client.accountInfo.getAuthToken(),
           {
             fileId: largeFileId,
-            maxPartCount: options?.pageSize ?? 1000,
+            maxPartCount: options?.pageSize ?? DEFAULT_PAGE_SIZE,
             ...(cursor !== undefined ? { startPartNumber: cursor } : {}),
           },
         )
@@ -647,10 +648,7 @@ export class Bucket {
           if (signal?.aborted) {
             errors.push({
               target,
-              error:
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error(String(signal.reason ?? 'aborted')),
+              error: toError(signal.reason ?? 'aborted'),
             })
             return
           }
@@ -659,7 +657,7 @@ export class Bucket {
         } catch (err) {
           errors.push({
             target,
-            error: err instanceof Error ? err : new Error(String(err)),
+            error: toError(err),
           })
         } finally {
           sem.release()
@@ -688,7 +686,7 @@ export class Bucket {
     dryRun?: boolean
   }): AsyncGenerator<DeleteAllEvent> {
     const dryRun = options?.dryRun ?? false
-    const pageSize = options?.pageSize ?? 1000
+    const pageSize = options?.pageSize ?? DEFAULT_PAGE_SIZE
 
     let startFileName: string | undefined
     let startFileId: FileId | undefined

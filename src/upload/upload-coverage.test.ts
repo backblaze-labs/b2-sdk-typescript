@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -172,7 +172,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       resume: true,
       fileRetention: {
         mode: RetentionMode.Governance,
-        retainUntilTimestamp: Date.now() + 86_400_000,
+        retainUntilTimestamp: daysFromNow(1),
       },
     })
     expect(result.fileName).toBe('resume-retention.bin')

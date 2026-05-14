@@ -194,7 +194,12 @@ describe('B2Simulator.injectFailure', () => {
     // contains `b2_upload_part` as a substring. To target ONLY the part
     // upload (and not its URL-fetch precursor), match on the `?fileId=`
     // query-string that the simulator appends to part-upload URLs.
-    smallSim.injectFailure({ on: 'b2_upload_part?fileId=', status: 503, count: 1 })
+    smallSim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 503,
+      message: 'part-upload-failed',
+      count: 1,
+    })
     await expect(
       b.upload({
         fileName: 'fault.bin',
@@ -202,7 +207,7 @@ describe('B2Simulator.injectFailure', () => {
         partSize: 100_000,
         concurrency: 1,
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/part-upload-failed/)
   })
 
   it('matches on download requests too (b2_download_file_by_id)', async () => {
@@ -214,7 +219,13 @@ describe('B2Simulator.injectFailure', () => {
       fileName: 'd.txt',
       source: new BufferSource(new TextEncoder().encode('hello')),
     })
-    sim.injectFailure({ on: 'b2_download_file_by_id', status: 503 })
-    await expect(bucket.file('d.txt').downloadById(uploaded.fileId)).rejects.toThrow()
+    sim.injectFailure({
+      on: 'b2_download_file_by_id',
+      status: 503,
+      message: 'download-failed',
+    })
+    await expect(bucket.file('d.txt').downloadById(uploaded.fileId)).rejects.toThrow(
+      /download-failed/,
+    )
   })
 })

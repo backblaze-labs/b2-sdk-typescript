@@ -3,6 +3,7 @@ import { BufferSource } from '../streams/source.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { toError } from '../util/to-error.ts'
 import type { SyncAction } from './actions/index.ts'
 import {
   CopyAction,
@@ -136,12 +137,13 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       const event = await action.execute(dryRun)
       results.push(event)
     } catch (err) {
-      errors.push(err instanceof Error ? err : new Error(String(err)))
+      const errorValue = toError(err)
+      errors.push(errorValue)
       results.push({
         type: 'error',
         path: action.relativePath,
         size: 0,
-        message: err instanceof Error ? err.message : String(err),
+        message: errorValue.message,
       })
     } finally {
       sem.release()

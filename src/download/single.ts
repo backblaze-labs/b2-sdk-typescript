@@ -118,7 +118,7 @@ export async function downloadById(
   const resp = await raw.downloadFileById(
     accountInfo.getDownloadUrl(),
     accountInfo.getAuthToken(),
-    options.fileId as string,
+    options.fileId,
     toRawDownloadOptions(options),
   )
 
@@ -188,7 +188,7 @@ export async function headById(
   const resp = await raw.downloadFileById(
     accountInfo.getDownloadUrl(),
     accountInfo.getAuthToken(),
-    options.fileId as string,
+    options.fileId,
     { ...toRawDownloadOptions(options), method: 'HEAD' },
   )
   // Body for HEAD is normally `null` per the fetch spec. Some transports

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
-import { makeClient, readStream } from './test-utils/index.ts'
+import { daysFromNow, makeClient, readStream } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
@@ -1185,7 +1185,7 @@ describe('file retention and legal hold', () => {
       source: new BufferSource(data),
     })
 
-    const retention = { mode: 'compliance' as const, retainUntilTimestamp: Date.now() + 86400000 }
+    const retention = { mode: 'compliance' as const, retainUntilTimestamp: daysFromNow(1) }
     const result = await bucket.updateFileRetention('locked.txt', uploaded.fileId, retention)
 
     expect(result.fileName).toBe('locked.txt')
@@ -1240,7 +1240,7 @@ describe('file retention and legal hold', () => {
       source: new BufferSource(data),
     })
 
-    const retention = { mode: 'governance' as const, retainUntilTimestamp: Date.now() + 3600000 }
+    const retention = { mode: 'governance' as const, retainUntilTimestamp: daysFromNow(1 / 24) }
     await bucket.updateFileRetention('check.txt', uploaded.fileId, retention)
 
     const obj = bucket.file('check.txt')
@@ -1277,7 +1277,7 @@ describe('file retention and legal hold', () => {
       source: new BufferSource(data),
     })
 
-    const retention = { mode: 'governance' as const, retainUntilTimestamp: Date.now() + 3600000 }
+    const retention = { mode: 'governance' as const, retainUntilTimestamp: daysFromNow(1 / 24) }
     const result = await bucket.updateFileRetention('bypass.txt', uploaded.fileId, retention, {
       bypassGovernance: true,
     })

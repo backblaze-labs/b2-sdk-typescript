@@ -173,15 +173,17 @@ describe('B2Simulator input validation: maxFileCount caps', () => {
 // ---------------------------------------------------------------------------
 
 describe('B2Simulator wire-level: Content-Range + Range header forms', () => {
+  let sim: B2Simulator
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
   const fileBytes = new Uint8Array(100).map((_, i) => i)
 
   beforeEach(async () => {
+    sim = new B2Simulator()
     client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
+      transport: sim.transport(),
     })
     await client.authorize()
     bucket = await client.createBucket({
@@ -194,15 +196,21 @@ describe('B2Simulator wire-level: Content-Range + Range header forms', () => {
     })
   })
 
-  it('returns 206 + Content-Range on a closed range', async () => {
+  it('returns 206 + Content-Range header on a closed range', async () => {
     const result = await bucket.download('numbers.bin', { range: 'bytes=10-19' })
     expect(result.headers.contentLength).toBe(10)
-    // The download facade returns headers via the underlying transport;
-    // Content-Range surfaces in the raw HttpResponse.headers. The
-    // DownloadHeaders shape doesn't expose it explicitly, but the
-    // contentLength being 10 is the wire-level confirmation.
     const drained = new Uint8Array(await new Response(result.body).arrayBuffer())
     expect(drained).toEqual(fileBytes.slice(10, 20))
+    // The high-level facade strips Content-Range; route through the
+    // raw transport so we can directly assert the header.
+    const transport = sim.transport()
+    const resp = await transport.send({
+      method: 'GET',
+      url: 'http://localhost:0/file/range-edges/numbers.bin',
+      headers: { Range: 'bytes=10-19' },
+    })
+    expect(resp.status).toBe(206)
+    expect(resp.headers.get('Content-Range')).toBe(`bytes 10-19/${fileBytes.byteLength}`)
   })
 
   it('handles bytes=N- (open-ended forward range)', async () => {
@@ -217,6 +225,17 @@ describe('B2Simulator wire-level: Content-Range + Range header forms', () => {
     const drained = new Uint8Array(await new Response(result.body).arrayBuffer())
     expect(drained).toEqual(fileBytes.slice(75))
     expect(drained.byteLength).toBe(25)
+  })
+
+  it('returns 416 with bytes */<total> when a range starts past EOF', async () => {
+    const transport = sim.transport()
+    const resp = await transport.send({
+      method: 'GET',
+      url: 'http://localhost:0/file/range-edges/numbers.bin',
+      headers: { Range: 'bytes=500-600' },
+    })
+    expect(resp.status).toBe(416)
+    expect(resp.headers.get('Content-Range')).toBe(`bytes */${fileBytes.byteLength}`)
   })
 })
 
@@ -261,10 +280,10 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
       fileName: 'fired.bin',
       source: new BufferSource(new Uint8Array([1, 2, 3])),
     })
-    // Hooks fire asynchronously (Promise.resolve().then(...)) so flush
-    // microtasks before assertion.
-    await Promise.resolve()
-    await Promise.resolve()
+    // Deterministic flush: wait for every pending hook to settle.
+    // Replaces the previous microtask-counting dance, which was
+    // brittle (positive case awaited 2 microtasks, negative case 1).
+    await sim.flushHooks()
     expect(events).toEqual([{ ruleName: 'all-uploads', fileName: 'fired.bin' }])
   })
 
@@ -304,8 +323,53 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
       fileName: 'not-fired.bin',
       source: new BufferSource(new Uint8Array([1])),
     })
-    await Promise.resolve()
+    await sim.flushHooks()
     expect(events).toEqual([])
+  })
+
+  it('surfaces hook errors via onHookError instead of swallowing them', async () => {
+    const errors: Array<{ kind: string; message: string }> = []
+    const sim = new B2Simulator({
+      onWebhookDeliver: () => {
+        throw new Error('boom')
+      },
+      onHookError: ({ kind, error }) => {
+        errors.push({ kind, message: error.message })
+      },
+    })
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'hook-error',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.setNotificationRules([
+      {
+        name: 'will-throw',
+        eventTypes: ['b2:ObjectCreated:*'],
+        isEnabled: true,
+        isSuspended: false,
+        objectNamePrefix: '',
+        suspensionReason: '',
+        targetConfiguration: {
+          targetType: 'webhook',
+          url: 'https://example.com/hook',
+          hmacSha256SigningSecret: 'secret',
+        },
+      },
+    ])
+    const result = await bucket.upload({
+      fileName: 'still-stored.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    // Upload itself succeeded — buggy hook must not corrupt the write.
+    expect(result.fileName).toBe('still-stored.bin')
+    await sim.flushHooks()
+    expect(errors).toEqual([{ kind: 'webhook', message: 'boom' }])
   })
 })
 

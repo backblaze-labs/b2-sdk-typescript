@@ -8,8 +8,9 @@ import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
-import { bestEffort } from '../util/best-effort.ts'
-import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { type RangePlan, planRanges } from '../util/plan-ranges.ts'
+import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
 
@@ -59,13 +60,6 @@ export interface UploadLargeFileOptions {
   readonly resumeFileId?: LargeFileId
 }
 
-/** Describes a single part to be uploaded: its 1-based number, byte offset, and length. */
-interface PartPlan {
-  readonly partNumber: number
-  readonly offset: number
-  readonly length: number
-}
-
 /**
  * Uploads a file using the B2 multipart (large file) protocol.
  *
@@ -93,8 +87,23 @@ export async function uploadLargeFile(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.source.size
 
-  const parts = planParts(totalSize, partSize)
+  const parts = planRanges(totalSize, partSize)
   const fileInfo: Record<string, string> = { ...options.fileInfo }
+
+  // Construct the `b2_start_large_file` request body once so the two
+  // non-resume branches below (no `resume`, resume-but-no-candidate)
+  // can dispatch without re-spelling the conditional spreads.
+  const startLargeFileRequest = {
+    bucketId: options.bucketId,
+    fileName: options.fileName,
+    contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+    fileInfo,
+    ...(options.serverSideEncryption !== undefined
+      ? { serverSideEncryption: options.serverSideEncryption }
+      : {}),
+    ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+    ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+  }
 
   // --- Resume discovery (M11.1) ---
   let largeFileId: LargeFileId
@@ -107,7 +116,7 @@ export async function uploadLargeFile(
     const candidate = await findResumeCandidate(
       raw,
       accountInfo,
-      options.bucketId as string,
+      options.bucketId,
       options.fileName,
     )
     if (candidate) {
@@ -117,17 +126,7 @@ export async function uploadLargeFile(
       const startResp = await raw.startLargeFile(
         accountInfo.getApiUrl(),
         accountInfo.getAuthToken(),
-        {
-          bucketId: options.bucketId,
-          fileName: options.fileName,
-          contentType: options.contentType ?? 'b2/x-auto',
-          fileInfo,
-          ...(options.serverSideEncryption !== undefined
-            ? { serverSideEncryption: options.serverSideEncryption }
-            : {}),
-          ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-          ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
-        },
+        startLargeFileRequest,
       )
       largeFileId = startResp.fileId
       preUploaded = new Map<number, string>()
@@ -136,17 +135,7 @@ export async function uploadLargeFile(
     const startResp = await raw.startLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
-      {
-        bucketId: options.bucketId,
-        fileName: options.fileName,
-        contentType: options.contentType ?? 'b2/x-auto',
-        fileInfo,
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-        ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-        ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
-      },
+      startLargeFileRequest,
     )
     largeFileId = startResp.fileId
     preUploaded = new Map<number, string>()
@@ -166,11 +155,7 @@ export async function uploadLargeFile(
     if (options.resume === true || options.resumeFileId !== undefined) {
       // Cancel the unfinished large file before throwing so the caller
       // doesn't have to clean it up themselves.
-      await bestEffort(() =>
-        raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-          fileId: largeFileId,
-        }),
-      )
+      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
       throw new Error(
         'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
       )
@@ -190,11 +175,7 @@ export async function uploadLargeFile(
         partSha1Array: partSha1s,
       })
     } catch (err) {
-      await bestEffort(() =>
-        raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-          fileId: largeFileId,
-        }),
-      )
+      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
       throw err
     }
   }
@@ -221,7 +202,7 @@ export async function uploadLargeFile(
           return
         }
 
-        let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId as string)
+        let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId)
         if (!uploadEntry) {
           const resp = await raw.getUploadPartUrl(
             accountInfo.getApiUrl(),
@@ -247,12 +228,12 @@ export async function uploadLargeFile(
             options.signal,
           )
 
-          accountInfo.returnPartUploadUrl(largeFileId as string, uploadEntry)
+          accountInfo.returnPartUploadUrl(largeFileId, uploadEntry)
           partSha1s[part.partNumber - 1] = result.contentSha1
           tracker.addBytes(data.byteLength)
           tracker.completePart()
         } catch (err) {
-          accountInfo.evictPartUploadUrl(largeFileId as string, uploadEntry)
+          accountInfo.evictPartUploadUrl(largeFileId, uploadEntry)
           throw err
         }
       } finally {
@@ -269,33 +250,9 @@ export async function uploadLargeFile(
 
     return result
   } catch (err) {
-    await bestEffort(() =>
-      raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        fileId: largeFileId,
-      }),
-    )
+    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
     throw err
   }
-}
-
-/**
- * Splits a total byte range into sequential, non-overlapping parts.
- * @param totalSize - The total file size in bytes.
- * @param partSize - The size of each part in bytes.
- *
- * @returns An array of byte offset ranges for each part.
- */
-function planParts(totalSize: number, partSize: number): PartPlan[] {
-  const parts: PartPlan[] = []
-  let offset = 0
-  let partNumber = 1
-  while (offset < totalSize) {
-    const length = Math.min(partSize, totalSize - offset)
-    parts.push({ partNumber, offset, length })
-    offset += length
-    partNumber++
-  }
-  return parts
 }
 
 /**
@@ -324,7 +281,7 @@ async function uploadPartsSequentially(
   accountInfo: AccountInfo,
   options: UploadLargeFileOptions,
   largeFileId: LargeFileId,
-  parts: readonly PartPlan[],
+  parts: readonly RangePlan[],
   partSha1s: string[],
   tracker: ProgressTracker,
 ): Promise<void> {
@@ -379,7 +336,7 @@ async function uploadPartsSequentially(
       await partSha1.update(data)
       const sha1Hex = await partSha1.digest()
 
-      let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId as string)
+      let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId)
       if (!uploadEntry) {
         const resp = await raw.getUploadPartUrl(
           accountInfo.getApiUrl(),
@@ -405,12 +362,12 @@ async function uploadPartsSequentially(
           options.signal,
         )
 
-        accountInfo.returnPartUploadUrl(largeFileId as string, uploadEntry)
+        accountInfo.returnPartUploadUrl(largeFileId, uploadEntry)
         partSha1s[planned.partNumber - 1] = result.contentSha1
         tracker.addBytes(data.byteLength)
         tracker.completePart()
       } catch (err) {
-        accountInfo.evictPartUploadUrl(largeFileId as string, uploadEntry)
+        accountInfo.evictPartUploadUrl(largeFileId, uploadEntry)
         throw err
       }
 

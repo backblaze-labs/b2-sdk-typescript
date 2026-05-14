@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
+import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
@@ -593,8 +594,7 @@ describe('synchronize', () => {
   describe('keep-days age-based deletion', () => {
     it('deletes orphans older than keepDays in upload direction', async () => {
       const mockBucket = makeMockBucket()
-      const now = Date.now()
-      const oldTime = now - 30 * 24 * 60 * 60 * 1000 // 30 days ago
+      const oldTime = daysFromNow(-30) // 30 days ago
       const destFile = makeB2SyncPath('stale.txt', oldTime, 50)
       const source = makeMemoryFolder([], 'local')
       const dest = makeMemoryFolder([destFile], 'b2')

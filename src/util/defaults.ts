@@ -44,3 +44,14 @@ export const DEFAULT_BULK_CONCURRENCY = 10
  * not affected by this constant.
  */
 export const DEFAULT_PAGE_SIZE = 1000
+
+/**
+ * Default MIME type for uploads when the caller omits `contentType`.
+ * B2 documents `b2/x-auto` as the magic value that asks the service to
+ * sniff the file's content and pick a sensible `Content-Type` itself.
+ * Centralising the literal here keeps the upload, copy, and create-write
+ * paths in sync.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-upload-file
+ */
+export const DEFAULT_CONTENT_TYPE = 'b2/x-auto'

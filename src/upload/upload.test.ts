@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
-import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
+import { daysFromNow, deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -260,7 +260,7 @@ describe('uploadSmallFile edge cases', () => {
       source: new BufferSource(data),
       fileRetention: {
         mode: RetentionMode.Compliance,
-        retainUntilTimestamp: Date.now() + 86400000,
+        retainUntilTimestamp: daysFromNow(1),
       },
       legalHold: LegalHoldValue.On,
     })

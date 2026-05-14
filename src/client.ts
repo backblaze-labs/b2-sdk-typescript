@@ -21,6 +21,7 @@ import type { ApplicationKeyId, BucketId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
 import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.ts'
 import type { ReplicationConfiguration } from './types/replication.ts'
+import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
 /** Result of {@link B2Client.hasCapabilities}. */
@@ -316,7 +317,7 @@ export class B2Client {
     return paginateItems(
       async (cursor: ApplicationKeyId | undefined) => {
         const resp = await this.listKeys({
-          pageSize: options?.pageSize ?? 1000,
+          pageSize: options?.pageSize ?? DEFAULT_PAGE_SIZE,
           ...(cursor !== undefined ? { startApplicationKeyId: cursor } : {}),
         })
         return { page: resp, nextCursor: resp.nextApplicationKeyId ?? undefined }
