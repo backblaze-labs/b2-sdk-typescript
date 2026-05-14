@@ -117,6 +117,25 @@ describe('Bucket.copyLargeFile branch coverage', () => {
     })
     expect(result.fileName).toBe('everything.bin')
   })
+
+  it('aborts the multipart copy when the signal fires before dispatch', async () => {
+    // Pre-aborted signal: `throwIfAborted()` runs before the part loop
+    // and the engine rolls back the unfinished large file via the outer
+    // catch + best-effort cancelLargeFile.
+    const src = await uploadSource('src-abort.bin')
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled before parts'))
+    await expect(
+      sourceBucket.copyLargeFile({
+        sourceFileId: src.fileId,
+        fileName: 'aborted.bin',
+        destinationBucketId: destBucket.id,
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow()
+  })
 })
 
 describe('Bucket.deleteAll error-yield path', () => {

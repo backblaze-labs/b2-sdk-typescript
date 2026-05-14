@@ -9,6 +9,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { bestEffort } from '../util/best-effort.ts'
+import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { Semaphore } from './concurrency.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
 
@@ -81,7 +82,7 @@ export async function uploadLargeFile(
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
-  const concurrency = options.concurrency ?? 4
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.source.size
 
   const parts = planParts(totalSize, partSize)

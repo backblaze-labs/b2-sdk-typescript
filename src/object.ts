@@ -36,6 +36,16 @@ export interface DownloadCallOptions {
   readonly b2Expires?: string
   /** Abort signal for cancelling the download. */
   readonly signal?: AbortSignal
+  /**
+   * Callback invoked as the response body is consumed.
+   *
+   * Progress is byte-driven, not request-driven: the callback fires per
+   * chunk as the caller reads the returned `body` stream, and the final
+   * `partsCompleted: 1` event only fires once the stream is read to
+   * completion. Downloads that are dropped or aborted partway through
+   * will NOT emit a `completePart()` event.
+   */
+  readonly onProgress?: ProgressListener
 }
 
 /**

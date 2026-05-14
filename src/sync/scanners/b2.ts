@@ -28,7 +28,7 @@ export class B2Folder implements SyncFolder {
     let startFileName: string | undefined
     let startFileId: string | undefined
 
-    for (;;) {
+    while (true) {
       const listing = await this.bucket.listFileVersions({
         ...(this.prefix !== '' ? { prefix: this.prefix } : {}),
         ...(startFileName !== undefined ? { startFileName } : {}),

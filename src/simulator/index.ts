@@ -564,14 +564,14 @@ export class B2Simulator {
     const contentType = headers['content-type'] ?? 'application/octet-stream'
     const sha1 = headers['x-bz-content-sha1'] ?? 'none'
 
-    const fileVersion = this.makeFileVersion(
+    const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
       contentType,
-      data.byteLength,
-      sha1,
-      FileAction.Upload,
-    )
+      contentLength: data.byteLength,
+      contentSha1: sha1,
+      action: FileAction.Upload,
+    })
     const stored: StoredFile = { fileVersion, data }
     const existing = bucket.files.get(fileName)
     if (existing) {
@@ -930,14 +930,14 @@ export class B2Simulator {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
-    const fileVersion = this.makeFileVersion(
-      req.bucketId,
-      req.fileName,
-      'application/octet-stream',
-      0,
-      'none',
-      FileAction.Hide,
-    )
+    const fileVersion = this.makeFileVersion({
+      bucketId: req.bucketId,
+      fileName: req.fileName,
+      contentType: 'application/octet-stream',
+      contentLength: 0,
+      contentSha1: 'none',
+      action: FileAction.Hide,
+    })
     const existing = bucket.files.get(req.fileName)
     const stored: StoredFile = { fileVersion, data: new Uint8Array(0) }
     if (existing) {
@@ -1017,14 +1017,14 @@ export class B2Simulator {
     const destBucket = this.buckets.get(destBucketId)
     if (!destBucket) return this.error(400, 'bad_bucket_id', 'Destination bucket not found')
 
-    const fileVersion = this.makeFileVersion(
-      destBucketId,
-      req.fileName,
-      sourceStored.fileVersion.contentType,
-      sourceStored.data.byteLength,
-      sourceStored.fileVersion.contentSha1 ?? 'none',
-      FileAction.Copy,
-    )
+    const fileVersion = this.makeFileVersion({
+      bucketId: destBucketId,
+      fileName: req.fileName,
+      contentType: sourceStored.fileVersion.contentType,
+      contentLength: sourceStored.data.byteLength,
+      contentSha1: sourceStored.fileVersion.contentSha1 ?? 'none',
+      action: FileAction.Copy,
+    })
     const copied: StoredFile = { fileVersion, data: new Uint8Array(sourceStored.data) }
     const existing = destBucket.files.get(req.fileName)
     if (existing) {
@@ -1101,14 +1101,14 @@ export class B2Simulator {
       offset += part.data.byteLength
     }
 
-    const fileVersion = this.makeFileVersion(
-      large.bucketId,
-      large.fileName,
-      large.contentType,
-      totalSize,
-      'none',
-      FileAction.Upload,
-    )
+    const fileVersion = this.makeFileVersion({
+      bucketId: large.bucketId,
+      fileName: large.fileName,
+      contentType: large.contentType,
+      contentLength: totalSize,
+      contentSha1: 'none',
+      action: FileAction.Upload,
+    })
     const stored: StoredFile = { fileVersion, data: combined }
     const existing = bucket.files.get(large.fileName)
     if (existing) {
@@ -1469,25 +1469,25 @@ export class B2Simulator {
     return null
   }
 
-  private makeFileVersion(
-    bucketId: string,
-    fileName: string,
-    contentType: string,
-    contentLength: number,
-    contentSha1: string,
-    action: FileAction,
-  ): FileVersion {
+  private makeFileVersion(params: {
+    readonly bucketId: string
+    readonly fileName: string
+    readonly contentType: string
+    readonly contentLength: number
+    readonly contentSha1: string
+    readonly action: FileAction
+  }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
-      action,
-      bucketId: bucketIdOf(bucketId),
-      contentLength,
+      action: params.action,
+      bucketId: bucketIdOf(params.bucketId),
+      contentLength: params.contentLength,
       contentMd5: null,
-      contentSha1,
-      contentType,
+      contentSha1: params.contentSha1,
+      contentType: params.contentType,
       fileId: fileIdOf(genId('4_z')),
       fileInfo: {},
-      fileName,
+      fileName: params.fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
       replicationStatus: null,

@@ -92,3 +92,20 @@ export function keyId(raw: string): KeyId {
 export function applicationKeyId(raw: string): ApplicationKeyId {
   return raw as ApplicationKeyId
 }
+
+/**
+ * Creates a branded {@link LargeFileId} from a raw string.
+ *
+ * `LargeFileId` is the same wire-level shape as `FileId` but is a
+ * distinct brand so that "ID of an in-progress multipart upload" and
+ * "ID of a committed file version" don't get mixed up by accident.
+ * `b2_start_large_file` returns one; `b2_finish_large_file` consumes it
+ * and produces a regular `FileId`.
+ *
+ * @param raw - The raw large-file ID string from the B2 API.
+ *
+ * @returns A branded LargeFileId value.
+ */
+export function largeFileId(raw: string): LargeFileId {
+  return raw as LargeFileId
+}

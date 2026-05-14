@@ -2,6 +2,7 @@ import type { Bucket } from '../bucket.ts'
 import { BufferSource } from '../streams/source.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
+import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import type { SyncAction } from './actions/index.ts'
 import {
   CopyAction,
@@ -96,7 +97,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const { source, dest, options } = config
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
-  const concurrency = options.concurrency ?? 4
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
@@ -164,6 +165,26 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 }
 
 /**
+ * Narrowing assertion that a `Bucket` is present for an action that requires
+ * it. Throws with a consistent, context-tagged message when the configured
+ * direction did not supply one (e.g. `b2-to-local` direction asking for an
+ * upload action).
+ *
+ * Uses TypeScript's `asserts` signature so call-site flow narrows
+ * `bucket` from `Bucket | undefined` to `Bucket` after the check, without
+ * requiring a separate `if (!bucket) throw ...` line per action factory.
+ *
+ * @param bucket - The (possibly missing) bucket reference.
+ * @param context - Short verb describing the action being constructed
+ *   (e.g. `'upload'`, `'download'`). Surfaced in the error message.
+ *
+ * @throws `Error` when `bucket` is `undefined` or `null`.
+ */
+function assertBucket(bucket: Bucket | undefined, context: string): asserts bucket is Bucket {
+  if (!bucket) throw new Error(`Bucket required for ${context} actions`)
+}
+
+/**
  * Creates a configured sync engine wired to the bucket and paths in the given config.
  * @param config - The synchronizer configuration containing source, destination, and options.
  *
@@ -177,7 +198,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     upload(source: LocalSyncPath): SyncAction {
       const bucket = upConfig.bucket
       const prefix = upConfig.prefix ?? ''
-      if (!bucket) throw new Error('Bucket required for upload actions')
+      assertBucket(bucket, 'upload')
 
       return new UploadAction(
         source.relativePath,
@@ -198,13 +219,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       const bucket = downConfig.bucket
       const root =
         downConfig.dest?.type === 'local' ? (downConfig.dest as { root: string }).root : ''
-      if (!bucket) throw new Error('Bucket required for download actions')
+      assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
         const result = await bucket.download(source.selectedVersion.fileName)
         const reader = result.body.getReader()
         const chunks: Uint8Array[] = []
-        for (;;) {
+        while (true) {
           const { done, value } = await reader.read()
           if (done) break
           chunks.push(value)
@@ -228,7 +249,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
     copy(source: B2SyncPath, destPath: string): SyncAction {
       const bucket = upConfig.bucket
-      if (!bucket) throw new Error('Bucket required for copy actions')
+      assertBucket(bucket, 'copy')
 
       return new CopyAction(source.relativePath, source.size, async () => {
         await bucket.copyFile({
@@ -240,7 +261,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
     hide(path: string): SyncAction {
       const bucket = upConfig.bucket ?? downConfig.bucket
-      if (!bucket) throw new Error('Bucket required for hide actions')
+      assertBucket(bucket, 'hide')
 
       return new HideAction(path, async (relPath) => {
         const prefix = upConfig.prefix ?? ''
@@ -250,7 +271,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
     deleteRemote(path: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket ?? downConfig.bucket
-      if (!bucket) throw new Error('Bucket required for delete actions')
+      assertBucket(bucket, 'delete')
 
       return new DeleteRemoteAction(
         path.relativePath,

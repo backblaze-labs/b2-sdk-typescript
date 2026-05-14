@@ -7,6 +7,7 @@ import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
+import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { Semaphore } from './concurrency.ts'
 
 /** Options for creating a streaming multipart upload sink. */
@@ -72,7 +73,7 @@ export function createWriteStream(
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
-  const concurrency = options.concurrency ?? 4
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const tracker = new ProgressTracker(options.onProgress, null, null)
   const sem = new Semaphore(concurrency)
 
@@ -85,12 +86,16 @@ export function createWriteStream(
   const inflight: Promise<void>[] = []
   let errored: Error | null = null
 
-  let resolveDone!: (fv: FileVersion) => void
-  let rejectDone!: (err: unknown) => void
-  const done = new Promise<FileVersion>((resolve, reject) => {
-    resolveDone = resolve
-    rejectDone = reject
-  })
+  // ES2024 `Promise.withResolvers()` exposes the resolve/reject pair as
+  // properties of the returned object, avoiding the `let resolve!:` /
+  // `let reject!:` non-null-assertion pattern needed before this API
+  // existed. Available in Node 22 (our minimum), Bun, Deno, modern
+  // browsers, and Cloudflare Workers.
+  const {
+    promise: done,
+    resolve: resolveDone,
+    reject: rejectDone,
+  } = Promise.withResolvers<FileVersion>()
 
   function ensureStarted(): Promise<LargeFileId> {
     if (largeFileId !== null) return Promise.resolve(largeFileId)

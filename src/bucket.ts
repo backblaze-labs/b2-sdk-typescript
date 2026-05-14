@@ -31,6 +31,7 @@ import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './t
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import { uploadSmallFile } from './upload/single.ts'
+import { DEFAULT_BULK_CONCURRENCY } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
 /** A target for bulk deletion: a file name and its specific version ID. */
@@ -436,7 +437,7 @@ export class Bucket {
    *
    * @returns The deleted hide marker version, or `null` if nothing was hidden.
    */
-  async unhide(fileName: string): Promise<FileVersion | null> {
+  async unhideFile(fileName: string): Promise<FileVersion | null> {
     // The latest version of a hidden file appears in listFileVersions but not
     // in listFileNames. Walk versions until we find the hide marker on top.
     const resp = await this.listFileVersions({ prefix: fileName, maxFileCount: 100 })
@@ -543,7 +544,10 @@ export class Bucket {
    * deletes are collected and returned rather than thrown, so partial success
    * does not abort the run.
    * @param targets - File versions to delete.
-   * @param options - Optional concurrency override (default 10).
+   * @param options - Optional concurrency override. Defaults to the
+   *   SDK-wide bulk-metadata concurrency setting (currently 10, higher
+   *   than the transfer-concurrency default because each task is a
+   *   single tiny API round-trip).
    *
    * @returns A summary of successes and per-target errors.
    */
@@ -551,7 +555,7 @@ export class Bucket {
     targets: readonly DeleteTarget[],
     options?: { concurrency?: number },
   ): Promise<DeleteManyResult> {
-    const concurrency = options?.concurrency ?? 10
+    const concurrency = options?.concurrency ?? DEFAULT_BULK_CONCURRENCY
     const sem = new Semaphore(concurrency)
     let deleted = 0
     const errors: DeleteError[] = []
@@ -598,7 +602,7 @@ export class Bucket {
 
     let startFileName: string | undefined
     let startFileId: FileId | undefined
-    for (;;) {
+    while (true) {
       const page = await this.listFileVersions({
         maxFileCount: pageSize,
         ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
@@ -684,8 +688,16 @@ export class Bucket {
     sourceServerSideEncryption?: EncryptionSetting
     /** Part size in bytes. Defaults to the account's recommended part size. */
     partSize?: number
-    /** Maximum number of parts copied in parallel. Defaults to 4. */
+    /**
+     * Maximum number of parts copied in parallel. Defaults to the
+     * SDK-wide transfer concurrency.
+     */
     concurrency?: number
+    /**
+     * Optional abort signal. Aborting cancels any remaining parts and
+     * triggers a best-effort `cancelLargeFile` on the unfinished upload.
+     */
+    signal?: AbortSignal
   }): Promise<FileVersion> {
     return copyLargeFile(this.client.raw, this.client.accountInfo, {
       sourceFileId: options.sourceFileId,
@@ -703,6 +715,7 @@ export class Bucket {
         : {}),
       ...(options.partSize !== undefined ? { partSize: options.partSize } : {}),
       ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })
   }
 

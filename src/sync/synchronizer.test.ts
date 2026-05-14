@@ -781,7 +781,7 @@ describe('synchronize', () => {
       expect(first.done).toBe(false)
       controller.abort()
       const rest: SyncEvent[] = []
-      for (;;) {
+      while (true) {
         const next = await gen.next()
         if (next.done) break
         rest.push(next.value)

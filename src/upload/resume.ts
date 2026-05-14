@@ -1,6 +1,6 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
-import type { LargeFileId } from '../types/ids.ts'
+import { type LargeFileId, largeFileId as largeFileIdOf } from '../types/ids.ts'
 import type { PartInfo } from '../types/upload.ts'
 
 /** Information about an unfinished large file eligible for resume. */
@@ -37,7 +37,7 @@ export async function findResumeCandidate(
   const match = unfinished.files.find((f) => f.fileName === fileName)
   if (!match) return null
 
-  const fileId = match.fileId as LargeFileId
+  const fileId = largeFileIdOf(match.fileId)
   const uploadedPartSha1s = await collectPartSha1s(raw, accountInfo, fileId)
 
   return { fileId, uploadedPartSha1s }
@@ -60,7 +60,7 @@ export async function collectPartSha1s(
   const sha1s = new Map<number, string>()
   let startPartNumber: number | undefined
 
-  for (;;) {
+  while (true) {
     const page = await raw.listParts(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
       fileId,
       ...(startPartNumber !== undefined ? { startPartNumber } : {}),

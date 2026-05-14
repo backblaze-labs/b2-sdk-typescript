@@ -100,7 +100,7 @@ export async function* paginatePages<Page, Cursor>(
   signal: AbortSignal | undefined,
 ): AsyncIterableIterator<Page> {
   let cursor: Cursor | undefined
-  for (;;) {
+  while (true) {
     signal?.throwIfAborted()
     const { page, nextCursor } = await fetcher(cursor)
     yield page

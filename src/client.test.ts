@@ -1345,7 +1345,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
     expect(info).toBeNull()
   })
 
-  it('unhide removes the hide marker and restores visibility', async () => {
+  it('unhideFile removes the hide marker and restores visibility', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-test',
       bucketType: BucketType.AllPrivate,
@@ -1357,14 +1357,14 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
     await bucket.hideFile('restore.txt')
     expect(await bucket.getFileInfoByName('restore.txt')).toBeNull()
 
-    const marker = await bucket.unhide('restore.txt')
+    const marker = await bucket.unhideFile('restore.txt')
     expect(marker?.action).toBe('hide')
 
     const restored = await bucket.getFileInfoByName('restore.txt')
     expect(restored?.fileName).toBe('restore.txt')
   })
 
-  it('unhide returns null when there is no hide marker on top', async () => {
+  it('unhideFile returns null when there is no hide marker on top', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-noop',
       bucketType: BucketType.AllPrivate,
@@ -1374,16 +1374,16 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
       source: new BufferSource(new TextEncoder().encode('plain')),
     })
 
-    const result = await bucket.unhide('plain.txt')
+    const result = await bucket.unhideFile('plain.txt')
     expect(result).toBeNull()
   })
 
-  it('unhide returns null when the file does not exist', async () => {
+  it('unhideFile returns null when the file does not exist', async () => {
     const bucket = await client.createBucket({
       bucketName: 'unhide-missing',
       bucketType: BucketType.AllPrivate,
     })
-    const result = await bucket.unhide('ghost.txt')
+    const result = await bucket.unhideFile('ghost.txt')
     expect(result).toBeNull()
   })
 })

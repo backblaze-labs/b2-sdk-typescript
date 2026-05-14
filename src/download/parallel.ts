@@ -3,6 +3,7 @@ import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileId } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
+import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -40,7 +41,7 @@ export function createParallelDownloadStream(
   options: ParallelDownloadOptions,
 ): ReadableStream<Uint8Array> {
   const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
-  const concurrency = options.concurrency ?? 4
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
   const retryOptions = { ...DEFAULT_RETRY_OPTIONS, maxRetries: options.maxRetries ?? 5 }
 
@@ -175,7 +176,7 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
   const reader = stream.getReader()
   const parts: Uint8Array[] = []
   let total = 0
-  for (;;) {
+  while (true) {
     const { done, value } = await reader.read()
     if (done) break
     parts.push(value)

@@ -1,6 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { parseFileInfoHeaders } from '../raw/encoding.ts'
 import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.ts'
+import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
 import type { DownloadHeaders } from '../types/download.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
 
@@ -34,6 +35,19 @@ interface DownloadCommonOptions {
   readonly b2Expires?: string
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
+  /**
+   * Callback invoked as bytes flow through the returned `body` stream.
+   *
+   * Wraps the response body in a `TransformStream` that increments a
+   * `ProgressTracker` per chunk and emits a `partsCompleted: 1` event when
+   * the stream finishes. `totalBytes` is the response's `Content-Length`
+   * header (or `null` if the server didn't send one — rare for B2).
+   *
+   * If the caller does not read the returned body to completion, the
+   * tracker's `completePart()` event will not fire. That is intentional:
+   * progress is byte-driven, not request-driven.
+   */
+  readonly onProgress?: ProgressListener
 }
 
 /** Options for downloading a file by its unique ID. */
@@ -75,11 +89,12 @@ export async function downloadById(
     toRawDownloadOptions(options),
   )
 
+  const headers = extractDownloadHeaders(resp.headers)
   return {
-    headers: extractDownloadHeaders(resp.headers),
+    headers,
     // HEAD requests legitimately have no body; return an empty stream so the
     // result shape stays consistent.
-    body: resp.body ?? emptyStream(),
+    body: instrumentProgress(resp.body ?? emptyStream(), headers.contentLength, options.onProgress),
   }
 }
 
@@ -109,9 +124,10 @@ export async function downloadByName(
     toRawDownloadOptions(options),
   )
 
+  const headers = extractDownloadHeaders(resp.headers)
   return {
-    headers: extractDownloadHeaders(resp.headers),
-    body: resp.body ?? emptyStream(),
+    headers,
+    body: instrumentProgress(resp.body ?? emptyStream(), headers.contentLength, options.onProgress),
   }
 }
 
@@ -159,6 +175,39 @@ function emptyStream(): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+/**
+ * Wraps a body stream with a `TransformStream` that increments a
+ * {@link ProgressTracker} for each chunk and reports `partsCompleted: 1`
+ * when the stream finishes.
+ *
+ * When `listener` is undefined the function short-circuits and returns
+ * the original stream, so unobserved downloads pay no overhead.
+ *
+ * @param body - The download response body to wrap.
+ * @param totalBytes - Expected total bytes (response `Content-Length`).
+ * @param listener - Caller-supplied progress callback, or undefined.
+ *
+ * @returns A stream that emits the same bytes and reports progress.
+ */
+function instrumentProgress(
+  body: ReadableStream<Uint8Array>,
+  totalBytes: number,
+  listener: ProgressListener | undefined,
+): ReadableStream<Uint8Array> {
+  if (listener === undefined) return body
+  const tracker = new ProgressTracker(listener, totalBytes, 1)
+  const transform = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      tracker.addBytes(chunk.byteLength)
+      controller.enqueue(chunk)
+    },
+    flush() {
+      tracker.completePart()
+    },
+  })
+  return body.pipeThrough(transform)
 }
 
 /**

@@ -152,6 +152,51 @@ describe('downloadById', () => {
     expect(decode(body)).toBe('ABCD')
     expect(result.headers.contentLength).toBe(4)
   })
+
+  it('fires onProgress per chunk and a completePart event when the body is drained', async () => {
+    // Locks the contract: when `onProgress` is supplied, the body stream
+    // is wrapped in a TransformStream that counts bytes through and
+    // emits a `partsCompleted: 1` event on `flush`. The last reported
+    // bytesTransferred must equal the file size, totalParts must be 1
+    // (single-request download is treated as a single "part").
+    const bucket = await client.createBucket({
+      bucketName: 'dl-progress',
+      bucketType: 'allPrivate',
+    })
+    const payload = new TextEncoder().encode('progress-payload')
+    await bucket.upload({
+      fileName: 'p.bin',
+      source: new BufferSource(payload),
+    })
+
+    const events: Array<{
+      bytesTransferred: number
+      totalBytes: number | null
+      partsCompleted: number
+      totalParts: number | null
+    }> = []
+    const result = await downloadByName(client.raw, client.accountInfo, {
+      bucketName: 'dl-progress',
+      fileName: 'p.bin',
+      onProgress: (event) => {
+        events.push({
+          bytesTransferred: event.bytesTransferred,
+          totalBytes: event.totalBytes,
+          partsCompleted: event.partsCompleted,
+          totalParts: event.totalParts,
+        })
+      },
+    })
+    // Drain the body so the `flush()` branch of the TransformStream fires.
+    await readStream(result.body)
+
+    expect(events.length).toBeGreaterThan(0)
+    const last = events[events.length - 1]
+    expect(last?.bytesTransferred).toBe(payload.byteLength)
+    expect(last?.totalBytes).toBe(payload.byteLength)
+    expect(last?.partsCompleted).toBe(1)
+    expect(last?.totalParts).toBe(1)
+  })
 })
 
 // ---------------------------------------------------------------------------

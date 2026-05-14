@@ -156,7 +156,7 @@ export class StreamSource implements ContentSource {
     const reader = this.stream().getReader()
     const chunks: Uint8Array[] = []
     let totalLen = 0
-    for (;;) {
+    while (true) {
       const { done, value } = await reader.read()
       if (done) break
       chunks.push(value)

@@ -5,6 +5,7 @@ import type { FileVersion } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { bestEffort } from '../util/best-effort.ts'
+import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 
 /** Options for a server-side multipart copy. */
 export interface CopyLargeFileOptions {
@@ -16,7 +17,10 @@ export interface CopyLargeFileOptions {
   readonly destinationBucketId?: BucketId
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
   readonly partSize?: number
-  /** Maximum number of parts copied in parallel. Defaults to 4. */
+  /**
+   * Maximum number of parts copied in parallel. Defaults to
+   * {@link DEFAULT_TRANSFER_CONCURRENCY}.
+   */
   readonly concurrency?: number
   /** MIME type for the destination file. Defaults to `b2/x-auto`. */
   readonly contentType?: string
@@ -26,6 +30,16 @@ export interface CopyLargeFileOptions {
   readonly destinationServerSideEncryption?: EncryptionSetting
   /** SSE-C settings used to read the source if it was uploaded with SSE-C. */
   readonly sourceServerSideEncryption?: EncryptionSetting
+  /**
+   * Optional abort signal. Checked before dispatching each part and
+   * between parts; an aborted signal cancels remaining parts and rolls
+   * back the unfinished large file via best-effort `cancelLargeFile`.
+   *
+   * Aborting does NOT roll back parts already accepted by B2; those
+   * exist on the unfinished large file until the cancel call completes
+   * or B2's lifecycle expires the in-progress upload (24 hours).
+   */
+  readonly signal?: AbortSignal
 }
 
 /**
@@ -48,7 +62,7 @@ export async function copyLargeFile(
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
-  const concurrency = options.concurrency ?? 4
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
 
   // Discover the source size via getFileInfo.
   const sourceInfo = await raw.getFileInfo(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
@@ -106,10 +120,14 @@ export async function copyLargeFile(
   const sem = new Semaphore(concurrency)
 
   try {
+    options.signal?.throwIfAborted()
     await Promise.all(
       ranges.map(async (range) => {
         await sem.acquire()
         try {
+          // Re-check the abort flag after every queue handoff so the
+          // first cancelled task short-circuits the remaining parts.
+          options.signal?.throwIfAborted()
           const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
             sourceFileId: options.sourceFileId,
             // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
@@ -131,6 +149,7 @@ export async function copyLargeFile(
       }),
     )
 
+    options.signal?.throwIfAborted()
     return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
       fileId: largeFileId,
       partSha1Array: partSha1s,
