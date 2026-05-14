@@ -197,13 +197,13 @@ describe('B2Client listBuckets with filter options', () => {
   })
 
   it('listBuckets() with bucketName filter passes the option through', async () => {
-    await client.createBucket({ bucketName: 'alpha', bucketType: BucketType.AllPrivate })
-    await client.createBucket({ bucketName: 'beta', bucketType: BucketType.AllPublic })
+    await client.createBucket({ bucketName: 'alpha-bucket', bucketType: BucketType.AllPrivate })
+    await client.createBucket({ bucketName: 'beta-bucket', bucketType: BucketType.AllPublic })
 
     // The simulator does not filter server-side, but the high-level method
     // still exercises the code path that builds and sends the request with
     // the bucketName option. This ensures lines 180+ in client.ts are covered.
-    const buckets = await client.listBuckets({ bucketName: 'alpha' })
+    const buckets = await client.listBuckets({ bucketName: 'alpha-bucket' })
     // The simulator returns all buckets regardless, so we check that the
     // call succeeds and returns results.
     expect(buckets.length).toBeGreaterThanOrEqual(1)

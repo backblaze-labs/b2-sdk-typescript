@@ -82,6 +82,28 @@ describe('encodeFileName', () => {
   it('encodes backtick', () => {
     expect(encodeFileName('`code`')).toBe('%60code%60')
   })
+
+  it('preserves `..` segments verbatim (no path-traversal rewrite)', () => {
+    // B2 stores file names as opaque string keys. `..` segments have no
+    // filesystem meaning to B2 — they're just bytes in the key. The SDK
+    // must NOT collapse `../` or otherwise transform path-traversal
+    // sequences; callers who care about traversal semantics own that
+    // validation themselves. `/` is in the safe set, so encoding
+    // preserves both the dots and the slashes.
+    expect(encodeFileName('../etc/passwd')).toBe('../etc/passwd')
+    expect(encodeFileName('a/../b')).toBe('a/../b')
+    expect(encodeFileName('./relative')).toBe('./relative')
+  })
+
+  it('preserves already-percent-encoded sequences as literal characters', () => {
+    // If a caller passes a name that already contains `%20`, the SDK
+    // treats `%`, `2`, `0` as three independent characters (per B2's
+    // encoding rules `%` is NOT in the safe set, so it gets
+    // double-encoded). The resulting key on B2 is the literal
+    // 6-character string `%20`, not a space. Callers who pre-encoded
+    // by accident will see their `%20` round-trip as the literal text.
+    expect(encodeFileName('already%20encoded.txt')).toBe('already%2520encoded.txt')
+  })
 })
 
 describe('decodeFileName', () => {

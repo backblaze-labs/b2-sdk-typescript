@@ -22,6 +22,10 @@ export class FileAccountInfo implements AccountInfo {
   private writeQueue: Promise<void> = Promise.resolve()
 
   /**
+   * Constructs a `FileAccountInfo` bound to a JSON file on disk. The file is
+   * created on the first `setAuth` write; reading it back happens via
+   * {@link load}.
+   *
    * @param path - Absolute path to the JSON file that backs this account info.
    */
   constructor(public readonly path: string) {}

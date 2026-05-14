@@ -100,7 +100,7 @@ describe('B2Simulator.injectFailure', () => {
       method: 'POST',
       url: 'http://localhost:0/b2api/v3/b2_create_bucket',
       headers: { Authorization: 'sim_auth_token' },
-      body: JSON.stringify({ bucketName: 'rt', bucketType: 'allPrivate' }),
+      body: JSON.stringify({ bucketName: 'rt-test', bucketType: 'allPrivate' }),
     })
     expect(resp.status).toBe(429)
     expect(resp.headers.get('Retry-After')).toBe('7')
@@ -126,10 +126,10 @@ describe('B2Simulator.injectFailure', () => {
     sim.injectFailure({ on: 'b2_list_buckets' })
     sim.clearFaults()
     const bucket = await client.createBucket({
-      bucketName: 'fresh',
+      bucketName: 'fresh-bucket',
       bucketType: BucketType.AllPrivate,
     })
-    expect(bucket.name).toBe('fresh')
+    expect(bucket.name).toBe('fresh-bucket')
     const buckets = await client.listBuckets()
     expect(buckets.length).toBe(1)
   })
@@ -153,10 +153,10 @@ describe('B2Simulator.injectFailure', () => {
       message: 'second_fault',
     })
     await expect(
-      client.createBucket({ bucketName: 'a', bucketType: BucketType.AllPrivate }),
+      client.createBucket({ bucketName: 'fault-a', bucketType: BucketType.AllPrivate }),
     ).rejects.toThrow(/first_fault/i)
     await expect(
-      client.createBucket({ bucketName: 'b', bucketType: BucketType.AllPrivate }),
+      client.createBucket({ bucketName: 'fault-b', bucketType: BucketType.AllPrivate }),
     ).rejects.toThrow(/second_fault/i)
   })
 

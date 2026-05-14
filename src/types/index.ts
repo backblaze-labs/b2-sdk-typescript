@@ -17,7 +17,7 @@ export type {
   UploadAuthToken,
   UploadUrl,
 } from './ids.ts'
-export { accountId, applicationKeyId, bucketId, fileId, keyId } from './ids.ts'
+export { accountId, applicationKeyId, bucketId, fileId, keyId, largeFileId } from './ids.ts'
 
 export type {
   AllowedInfo,
@@ -102,6 +102,7 @@ export type {
 // `EncryptionAlgorithm` and `EncryptionMode` are forwarded as both type and value.
 export {
   EncryptionAlgorithm,
+  EncryptionKey,
   EncryptionMode,
   SSE_B2,
   SSE_NONE,

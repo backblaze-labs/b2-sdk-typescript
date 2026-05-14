@@ -185,13 +185,16 @@ export class BadRequestError extends B2Error {
 /**
  * Thrown when an upload URL is no longer valid and must be refreshed.
  *
- * Forward-compat insurance: B2 does not currently surface a distinct error
- * code for this case, so `classifyError` never actually instantiates this
- * class today. It's exported so consumers can `instanceof`-test against it
- * in a future where B2 documents a `bad_upload_url` (or similar) error
- * code and the `classifyError` switch gets a matching case.
+ * Forward-compat insurance: B2 does not currently surface a distinct
+ * error code for this case, so {@link classifyError} never actually
+ * instantiates this class today. It's part of the public API so
+ * consumers can pre-write `instanceof` checks; when B2 documents a
+ * `bad_upload_url` (or similar) error code, the `classifyError`
+ * switch gets a matching case and existing consumer code starts
+ * catching the typed error without any changes on their side.
  *
- * @internal
+ * Until then, expect `BadRequestError` for upload-URL invalidation
+ * scenarios — that's what B2 currently returns.
  */
 export class BadUploadUrlError extends B2Error {
   /**
@@ -209,13 +212,15 @@ export class BadUploadUrlError extends B2Error {
  * Thrown when the uploaded file's SHA-1 checksum does not match the
  * expected value.
  *
- * Forward-compat insurance: the B2 API rejects mismatched uploads with a
- * generic `bad_request` rather than a dedicated code, so `classifyError`
- * never actually instantiates this class today. Kept exported for
- * `instanceof` checks and so a future B2 schema change is a one-line
- * addition to the `classifyError` switch.
+ * Forward-compat insurance: the B2 API currently rejects mismatched
+ * uploads with a generic `bad_request` code, so {@link classifyError}
+ * never actually instantiates this class today. It's part of the
+ * public API so consumers can pre-write `instanceof` checks; when B2
+ * documents a dedicated checksum-mismatch code, the `classifyError`
+ * switch gets a matching case and existing consumer code starts
+ * catching the typed error without any changes on their side.
  *
- * @internal
+ * Until then, expect `BadRequestError` for SHA-1 mismatch scenarios.
  */
 export class ChecksumMismatchError extends B2Error {
   /**

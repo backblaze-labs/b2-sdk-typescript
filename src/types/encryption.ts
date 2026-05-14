@@ -229,9 +229,13 @@ const KEY_REDACTED = '[redacted SSE-C key]'
  * to construct one from a raw 32-byte key; the MD5 digest is computed internally.
  */
 export class EncryptionKey {
+  /** Encryption mode discriminant. Always `'SSE-C'` for this class. */
   readonly mode = 'SSE-C' as const
+  /** Encryption algorithm. B2's S3-compatible API only supports AES-256. */
   readonly algorithm: EncryptionAlgorithm = 'AES256'
+  /** Base64-encoded 256-bit customer key. Logged as `[redacted SSE-C key]` via `toJSON` / `toString`. */
   readonly customerKey: string
+  /** Base64-encoded MD5 digest of the customer key. Required by B2 for integrity verification. */
   readonly customerKeyMd5: string
 
   /**
@@ -287,9 +291,13 @@ export class EncryptionKey {
    *   replaced with a placeholder string.
    */
   toJSON(): {
+    /** Encryption mode discriminant. */
     mode: 'SSE-C'
+    /** Encryption algorithm. */
     algorithm: EncryptionAlgorithm
+    /** Always the literal redaction placeholder; the real key never leaves the instance. */
     customerKey: string
+    /** Always the literal redaction placeholder; the real MD5 never leaves the instance. */
     customerKeyMd5: string
   } {
     return {

@@ -5,6 +5,8 @@
     "src/raw/index.ts",
     "src/errors/index.ts",
     "src/auth/index.ts",
+    "src/auth/file.ts",
+    "src/notifications/index.ts",
     "src/streams/index.ts",
     "src/sync/index.ts",
     "src/simulator/index.ts",

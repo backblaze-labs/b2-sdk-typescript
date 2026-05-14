@@ -91,6 +91,21 @@ describe('Bucket.paginateFileNames', () => {
     for await (const file of empty.paginateFileNames()) names.push(file.fileName)
     expect(names).toEqual([])
   })
+
+  it('handles the minimum pageSize: 1 without dropping or duplicating entries', async () => {
+    // Boundary test: at pageSize 1, every yield is also a page boundary,
+    // so the cursor handoff between pages runs N-1 times for N files.
+    // This is the most cursor-stress scenario possible — a bug in the
+    // boundary logic (off-by-one cursor, dropped item on page-end,
+    // replayed item on page-start) shows up here far more reliably than
+    // at the default pageSize 1000. The existing test for 7 files at
+    // pageSize 3 exercises 2-3 page transitions; this exercises 7.
+    const names: string[] = []
+    for await (const file of bucket.paginateFileNames({ pageSize: 1 })) {
+      names.push(file.fileName)
+    }
+    expect(names).toEqual(['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt', 'g.txt'])
+  })
 })
 
 describe('Bucket.paginateFileVersions', () => {

@@ -17,6 +17,7 @@ import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
+  type BucketId,
   accountId as accountIdOf,
   bucketId as bucketIdOf,
   fileId as fileIdOf,
@@ -24,6 +25,84 @@ import {
 import type { RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
+
+/**
+ * Parse an RFC 7233 `Range` header value into inclusive start/end byte
+ * offsets clamped to the file size. Supports closed (`bytes=0-999`),
+ * open-ended (`bytes=1000-`), and suffix (`bytes=-500`) forms; returns
+ * `null` for multi-range, zero-length suffix, or malformed input.
+ *
+ * @param header - The raw header value (e.g. `'bytes=0-999'`).
+ * @param totalSize - The full file size in bytes (for clamping + suffix).
+ *
+ * @returns `{ start, end }` (both inclusive) or `null` on unsupported syntax.
+ *
+ * @see https://www.rfc-editor.org/rfc/rfc7233#section-2.1
+ */
+function parseRangeHeader(
+  header: string,
+  totalSize: number,
+): { start: number; end: number } | null {
+  if (totalSize === 0) return null
+  const m = header.match(/^bytes=(\d*)-(\d*)$/)
+  if (!m) return null
+  const [, startStr, endStr] = m
+  const hasStart = startStr !== ''
+  const hasEnd = endStr !== ''
+  if (!hasStart && !hasEnd) return null
+
+  let start: number
+  let end: number
+  if (!hasStart) {
+    // `bytes=-N` form: the last N bytes.
+    const suffixLen = Number.parseInt(endStr ?? '0', 10)
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return null
+    start = Math.max(0, totalSize - suffixLen)
+    end = totalSize - 1
+  } else if (!hasEnd) {
+    // `bytes=N-` form: from offset N to end of file.
+    start = Number.parseInt(startStr ?? '0', 10)
+    end = totalSize - 1
+  } else {
+    start = Number.parseInt(startStr ?? '0', 10)
+    end = Number.parseInt(endStr ?? '0', 10)
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start > end) return null
+  // Clamp end to the actual file size — RFC 7233 says the server SHOULD
+  // satisfy a partially-valid range rather than rejecting.
+  end = Math.min(end, totalSize - 1)
+  return { start, end }
+}
+
+/**
+ * Parse `X-Bz-Info-*` headers (lowercased Map keys) into a plain
+ * fileInfo record. Mirrors the SDK's `parseFileInfoHeaders` in
+ * `raw/encoding.ts` but operates on a `Record<string, string>` rather
+ * than a `Headers` object so the simulator can reuse the same
+ * extraction logic without converting back to `Headers`.
+ *
+ * @param headers - Lowercased header map.
+ *
+ * @returns Plain `Record<string, string>` of `fileInfo` keys/values.
+ */
+function parseFileInfoHeaders(headers: Record<string, string>): Record<string, string> {
+  const info: Record<string, string> = {}
+  const prefix = 'x-bz-info-'
+  for (const [key, value] of Object.entries(headers)) {
+    if (!key.startsWith(prefix)) continue
+    const fileInfoKey = decodeURIComponent(key.slice(prefix.length))
+    info[fileInfoKey] = decodeURIComponent(value)
+  }
+  return info
+}
+import { missingCapabilitiesFor } from './capabilities.ts'
+import {
+  validateBucketInfo,
+  validateBucketName,
+  validateFileInfo,
+  validateFileName,
+  validateMaxCount,
+} from './validation.ts'
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -45,8 +124,25 @@ interface LargeFileInProgress {
 }
 
 let nextId = 1
+/**
+ * Generate a deterministic-but-realistic-looking B2 identifier of the
+ * shape `<prefix><24-hex-counter>`, which approximates the visual width
+ * of real B2 wire IDs (`bucketId`, `fileId`). The counter is monotonic
+ * so test fixtures are deterministic across runs of the same simulator
+ * instance.
+ *
+ * @param prefix - B2-style prefix (`'b2_bucket'`, `'4_z'`, etc.).
+ *
+ * @returns A simulator-issued identifier that looks like a B2 wire ID.
+ */
 function genId(prefix: string): string {
-  return `${prefix}_${String(nextId++).padStart(12, '0')}`
+  // 24 hex chars matches real-B2 ID widths much more closely than the
+  // previous 12-decimal padding. Real B2 IDs include a checksum / shard
+  // tag; we don't reproduce that, but the visual shape is now correct
+  // (tests that pattern-match on the wire shape no longer false-positive
+  // on the artificially short simulator IDs).
+  const n = nextId++
+  return `${prefix}_${n.toString(16).padStart(24, '0')}`
 }
 
 let lastTimestamp = 0
@@ -174,6 +270,59 @@ export interface B2SimulatorOptions {
    * omits `partSize`" default-branch without uploading 100 MB of bytes.
    */
   recommendedPartSize?: number
+  /**
+   * Pluggable hook: invoked after every successful upload, copy, or
+   * `finishLargeFile` on a bucket with a matching event-notification
+   * rule. Tests can register a hook to assert the SDK's webhook
+   * publishing path without spinning up a real HTTP listener.
+   *
+   * Receives the freshly-stored `FileVersion`, the bucket the upload
+   * landed in, and the rule that matched. Returns a promise so async
+   * hook implementations are allowed; the simulator never blocks on it
+   * (errors thrown from the hook are surfaced via `bestEffort` to
+   * avoid masking the underlying API call's success).
+   */
+  onWebhookDeliver?: (event: {
+    rule: EventNotificationRule
+    fileVersion: FileVersion
+    bucketId: string
+  }) => Promise<void> | void
+  /**
+   * Pluggable hook: invoked after every successful upload on a bucket
+   * configured as a replication source. Receives the source `FileVersion`
+   * and the destination bucket ID. Tests can register a hook to
+   * verify replication intent without actually copying bytes inside
+   * the simulator.
+   */
+  onReplicate?: (event: {
+    sourceFileVersion: FileVersion
+    sourceBucketId: string
+    destinationBucketId: string
+  }) => Promise<void> | void
+  /**
+   * When `true`, the simulator enforces application-key capability
+   * checks, bucket scoping, prefix scoping, and auth-token expiry on
+   * every request. The default `false` keeps the simulator permissive
+   * (matching its long-standing behaviour) so the existing test suite
+   * doesn't have to set up keys with the right capabilities.
+   *
+   * In strict mode:
+   *
+   * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
+   * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
+   * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
+   * - Calls outside the key's bucketId / namePrefix scope return HTTP 403 `unauthorized`.
+   *
+   * Each test can opt in: `new B2Simulator({ strictAuth: true })`.
+   */
+  strictAuth?: boolean
+  /**
+   * How long auth tokens issued via `b2_authorize_account` are valid
+   * for, in milliseconds. Defaults to 24 hours (real B2). Tests that
+   * want to exercise the 401/reauth retry path can lower this so a
+   * single call to {@link B2Simulator.advanceTime} expires the token.
+   */
+  authTokenTtlMs?: number
 }
 
 /**
@@ -202,6 +351,31 @@ export class B2Simulator {
   private readonly recommendedPartSize: number
   private readonly faults: ActiveFault[] = []
   private nextFaultId = 1
+  private readonly onWebhookDeliver?: B2SimulatorOptions['onWebhookDeliver']
+  private readonly onReplicate?: B2SimulatorOptions['onReplicate']
+  private readonly strictAuth: boolean
+  private readonly authTokenTtlMs: number
+  /**
+   * Issued auth tokens with their associated grant scope + expiry. In
+   * permissive mode (`strictAuth: false`) this is still populated by
+   * `authorize` but never consulted on subsequent requests. In strict
+   * mode each request looks up its `Authorization` header here.
+   */
+  private readonly issuedTokens = new Map<
+    string,
+    {
+      capabilities: readonly Capability[]
+      bucketId: string | null
+      namePrefix: string | null
+      expiresAt: number
+    }
+  >()
+  /**
+   * Virtual-clock offset applied to `Date.now()` for expiry checks.
+   * Defaults to 0. Tests advance via {@link advanceTime} to fast-forward
+   * past auth-token expiry without sleeping.
+   */
+  private clockOffsetMs = 0
 
   /**
    * Constructs a new in-memory B2 simulator.
@@ -210,6 +384,134 @@ export class B2Simulator {
   constructor(options: B2SimulatorOptions = {}) {
     this.minimumPartSize = options.minimumPartSize ?? 5_000_000
     this.recommendedPartSize = options.recommendedPartSize ?? 100_000_000
+    if (options.onWebhookDeliver !== undefined) this.onWebhookDeliver = options.onWebhookDeliver
+    if (options.onReplicate !== undefined) this.onReplicate = options.onReplicate
+    this.strictAuth = options.strictAuth ?? false
+    // Real B2 tokens last 24h. Default matches production; tests that
+    // want to exercise the reauth path can lower this knob.
+    this.authTokenTtlMs = options.authTokenTtlMs ?? 24 * 60 * 60 * 1000
+  }
+
+  /**
+   * Advance the simulator's virtual clock by `ms` milliseconds. Used in
+   * conjunction with `strictAuth: true` + a finite `authTokenTtlMs` to
+   * force token expiry without `setTimeout`-based delays.
+   *
+   * @param ms - Milliseconds to advance. Negative values rewind (rarely useful).
+   */
+  advanceTime(ms: number): void {
+    this.clockOffsetMs += ms
+  }
+
+  /**
+   * Current simulator time. Equal to `Date.now() + clockOffsetMs`.
+   *
+   * @returns Unix milliseconds.
+   */
+  private now(): number {
+    return Date.now() + this.clockOffsetMs
+  }
+
+  /**
+   * Authorize a request against the strict-auth bookkeeping. Returns
+   * a `SimulatorJsonResponse` error on failure or `null` on success.
+   * Only consulted when `strictAuth: true`.
+   *
+   * @param authToken - The `Authorization` header value from the request.
+   * @param endpoint - B2 endpoint name being invoked.
+   * @param bucketId - Optional bucket ID the request operates on, for scope check.
+   * @param fileName - Optional file name the request operates on, for prefix check.
+   *
+   * @returns `null` when the request is authorized, otherwise a 401/403 response.
+   */
+  private authorizeRequest(
+    authToken: string | undefined,
+    endpoint: string,
+    bucketId?: string,
+    fileName?: string,
+  ): SimulatorJsonResponse | null {
+    // Endpoints that don't require auth (just b2_authorize_account today).
+    const required = missingCapabilitiesFor(endpoint, [])
+    const noCheckNeeded = required.length === 0 && endpoint === 'b2_authorize_account'
+    if (noCheckNeeded) return null
+
+    if (authToken === undefined || authToken === '') {
+      return this.error(401, 'bad_auth_token', 'missing Authorization header')
+    }
+    const token = this.issuedTokens.get(authToken)
+    if (!token) {
+      return this.error(401, 'bad_auth_token', 'unknown auth token')
+    }
+    if (this.now() > token.expiresAt) {
+      return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
+    }
+    const missing = missingCapabilitiesFor(endpoint, token.capabilities)
+    if (missing.length > 0) {
+      return this.error(
+        403,
+        'unauthorized',
+        `application key lacks required capabilities: ${missing.join(', ')}`,
+      )
+    }
+    if (token.bucketId !== null && bucketId !== undefined && bucketId !== token.bucketId) {
+      return this.error(
+        403,
+        'unauthorized',
+        `application key is scoped to bucket ${token.bucketId}; cannot access ${bucketId}`,
+      )
+    }
+    if (
+      token.namePrefix !== null &&
+      fileName !== undefined &&
+      !fileName.startsWith(token.namePrefix)
+    ) {
+      return this.error(
+        403,
+        'unauthorized',
+        `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
+      )
+    }
+    return null
+  }
+
+  /**
+   * Look up the application key matching the `Authorization` header on
+   * an `authorize_account` request. The header is in the form
+   * `Basic base64(applicationKeyId:applicationKey)`.
+   *
+   * Returns `null` for the implicit master credential (anything that
+   * does not match a key minted via `b2_create_key`); in that case
+   * `authorize` grants the full master capability set.
+   *
+   * @param authzHeader - Raw HTTP `Authorization` header value.
+   *
+   * @returns The matching key's grant scope, or `null` for the master.
+   */
+  private findKeyForAuthHeader(authzHeader: string | undefined): {
+    capabilities: readonly Capability[]
+    bucketId: string | null
+    namePrefix: string | null
+  } | null {
+    if (!authzHeader || !authzHeader.startsWith('Basic ')) return null
+    const decoded = (() => {
+      try {
+        return atob(authzHeader.slice(6))
+      } catch {
+        return null
+      }
+    })()
+    if (decoded === null) return null
+    const idx = decoded.indexOf(':')
+    if (idx === -1) return null
+    const applicationKeyId = decoded.slice(0, idx)
+    const applicationKey = decoded.slice(idx + 1)
+    const stored = this.keys.get(applicationKeyId)
+    if (!stored || stored.applicationKey !== applicationKey) return null
+    return {
+      capabilities: stored.capabilities as readonly Capability[],
+      bucketId: stored.bucketId,
+      namePrefix: stored.namePrefix,
+    }
   }
 
   /**
@@ -314,7 +616,8 @@ export class B2Simulator {
    * Dispatches a JSON API request to the appropriate handler.
    * @param _method - The HTTP method (unused).
    * @param path - The request URL path containing the B2 endpoint name.
-   * @param _headers - The HTTP request headers (unused).
+   * @param headers - The HTTP request headers; consulted by the
+   *   strict-auth gate to look up the issued auth token.
    * @param body - The parsed JSON request body.
    *
    * @returns An object with HTTP status and JSON response body.
@@ -322,14 +625,24 @@ export class B2Simulator {
   async handleRequest(
     _method: string,
     path: string,
-    _headers: Record<string, string>,
+    headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
     const endpoint = path.split('/').pop() ?? ''
 
+    // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
+    // that don't otherwise consult headers (e.g. b2_list_buckets) get
+    // the capability check. Bucket / file-name scope checks happen
+    // inside the per-endpoint handlers where the relevant fields are
+    // actually accessible.
+    if (this.strictAuth) {
+      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      if (authError !== null) return authError
+    }
+
     switch (endpoint) {
       case 'b2_authorize_account':
-        return this.authorize()
+        return this.authorize(headers['authorization'])
       case 'b2_create_bucket':
         return this.createBucket(
           body as { bucketName: string; bucketType: BucketType; accountId: string },
@@ -564,6 +877,15 @@ export class B2Simulator {
     const contentType = headers['content-type'] ?? 'application/octet-stream'
     const sha1 = headers['x-bz-content-sha1'] ?? 'none'
 
+    // B2 spec-compliance: validate file name and optional X-Bz-Info-*
+    // headers before storing. Real B2 rejects with `400 invalid_file_name`
+    // or `400 invalid_file_info`; the simulator used to store anything.
+    const fileNameError = validateFileName(fileName)
+    if (fileNameError) return this.error(400, fileNameError.code, fileNameError.message)
+    const fileInfo = parseFileInfoHeaders(headers)
+    const fileInfoError = validateFileInfo(fileInfo)
+    if (fileInfoError) return this.error(400, fileInfoError.code, fileInfoError.message)
+
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -580,6 +902,7 @@ export class B2Simulator {
       bucket.files.set(fileName, [stored])
     }
 
+    this.firePostUploadHooks(fileVersion, bucketId, 'b2:ObjectCreated:Upload')
     return { status: 200, body: fileVersion }
   }
 
@@ -640,38 +963,87 @@ export class B2Simulator {
     stored: StoredFile,
     range?: string,
   ): { status: number; headers: Record<string, string>; data: Uint8Array } {
-    let data = stored.data
+    const fullData = stored.data
+    let data = fullData
     let status = 200
+    let contentRange: string | null = null
 
     if (range) {
-      const match = range.match(/bytes=(\d+)-(\d+)?/)
-      if (match) {
-        const start = Number.parseInt(match[1] ?? '0', 10)
-        const end = match[2] !== undefined ? Number.parseInt(match[2], 10) : data.byteLength - 1
-        data = data.slice(start, end + 1)
+      const parsed = parseRangeHeader(range, fullData.byteLength)
+      if (parsed !== null) {
+        data = fullData.subarray(parsed.start, parsed.end + 1)
         status = 206
+        contentRange = `bytes ${parsed.start}-${parsed.end}/${fullData.byteLength}`
       }
     }
 
     const fv = stored.fileVersion
-    return {
-      status,
-      headers: {
-        'Content-Type': fv.contentType,
-        'Content-Length': String(data.byteLength),
-        'X-Bz-File-Id': fv.fileId as string,
-        'X-Bz-File-Name': encodeURIComponent(fv.fileName),
-        'X-Bz-Content-Sha1': fv.contentSha1 ?? 'none',
-        'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
-        'X-Bz-Info-src_last_modified_millis': String(fv.uploadTimestamp),
-      },
-      data,
+    const headers: Record<string, string> = {
+      'Content-Type': fv.contentType,
+      'Content-Length': String(data.byteLength),
+      'X-Bz-File-Id': fv.fileId as string,
+      'X-Bz-File-Name': encodeURIComponent(fv.fileName),
+      'X-Bz-Content-Sha1': fv.contentSha1 ?? 'none',
+      'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
+      'X-Bz-Info-src_last_modified_millis': String(fv.uploadTimestamp),
     }
+    if (contentRange !== null) {
+      // B2 spec-compliance: 206 Partial Content responses MUST carry a
+      // `Content-Range: bytes <start>-<end>/<total>` header per RFC
+      // 7233 §4.2. The simulator used to return 206 with the partial
+      // body but no Content-Range, leaving range-aware callers with no
+      // way to verify they got the bytes they asked for.
+      headers['Content-Range'] = contentRange
+    }
+    return { status, headers, data }
   }
 
   // --- API handlers ---
 
-  private authorize(): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(authzHeader?: string): { status: number; body: AuthorizeAccountResponse } {
+    // Master capabilities granted to the implicit "test" credential.
+    // Real B2 derives the capability list from the application key the
+    // caller authorized with; in permissive mode every auth call gets
+    // the full set so existing tests don't have to construct keys
+    // first. Strict-mode tests that need a restricted scope authorize
+    // with a specific app-key first via b2_create_key, then call
+    // authorize-with-that-key (today's simulator returns this full
+    // set regardless — strict-mode test seam is in `authorizeRequest`
+    // which consults the issued-token map, not the response body).
+    // Note: object-lock-related capabilities (BypassGovernance,
+    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
+    // omitted from the master grant. Real B2 doesn't auto-grant these
+    // either — they're opt-in scopes set via b2_create_key. Tests that
+    // need them explicit-issue a key via the simulator's createKey
+    // handler and reauth with that key.
+    const capabilities: readonly Capability[] = [
+      Capability.ListBuckets,
+      Capability.ReadBuckets,
+      Capability.WriteBuckets,
+      Capability.DeleteBuckets,
+      Capability.ListFiles,
+      Capability.ReadFiles,
+      Capability.WriteFiles,
+      Capability.DeleteFiles,
+      Capability.ListKeys,
+      Capability.WriteKeys,
+      Capability.DeleteKeys,
+      Capability.ShareFiles,
+      Capability.ReadBucketNotifications,
+      Capability.WriteBucketNotifications,
+    ]
+    // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
+    // If a key was previously authorized via `authorizeAsKey` (test
+    // seam, see `authorizeAsKey` below), the auth header identifies
+    // it and the issued token inherits that key's scope.
+    const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    const tokenStr = `sim_auth_token_${nextId++}`
+    this.issuedTokens.set(tokenStr, {
+      capabilities: keyForAuth?.capabilities ?? capabilities,
+      bucketId: keyForAuth?.bucketId ?? null,
+      namePrefix: keyForAuth?.namePrefix ?? null,
+      expiresAt: this.now() + this.authTokenTtlMs,
+    })
     return {
       status: 200,
       body: {
@@ -679,38 +1051,23 @@ export class B2Simulator {
         // `AuthToken` has no public factory by design — auth tokens are
         // minted by B2, not constructed by user code. The simulator is
         // the only legitimate place that needs to forge one.
-        authorizationToken: 'sim_auth_token' as unknown as AuthToken,
+        authorizationToken: tokenStr as unknown as AuthToken,
         apiInfo: {
           storageApi: {
             absoluteMinimumPartSize: this.minimumPartSize,
             apiUrl: 'http://localhost:0',
-            bucketId: null,
+            bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
             bucketName: null,
             downloadUrl: 'http://localhost:0',
             infoType: 'storageApi',
-            namePrefix: null,
+            namePrefix: keyForAuth?.namePrefix ?? null,
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: 'http://localhost:0',
             allowed: {
-              capabilities: [
-                Capability.ListBuckets,
-                Capability.ReadBuckets,
-                Capability.WriteBuckets,
-                Capability.DeleteBuckets,
-                Capability.ListFiles,
-                Capability.ReadFiles,
-                Capability.WriteFiles,
-                Capability.DeleteFiles,
-                Capability.ListKeys,
-                Capability.WriteKeys,
-                Capability.DeleteKeys,
-                Capability.ShareFiles,
-                Capability.ReadBucketNotifications,
-                Capability.WriteBucketNotifications,
-              ],
-              bucketId: null,
+              capabilities: keyForAuth?.capabilities ?? capabilities,
+              bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
               bucketName: null,
-              namePrefix: null,
+              namePrefix: keyForAuth?.namePrefix ?? null,
             },
           },
         },
@@ -734,6 +1091,15 @@ export class B2Simulator {
     status: number
     body: unknown
   } {
+    // B2 spec-compliance: validate bucket name regex + length, plus the
+    // optional bucketInfo byte budget. Real B2 rejects bad names with
+    // `400 invalid_bucket_name`; the simulator used to accept anything.
+    const nameError = validateBucketName(req.bucketName)
+    if (nameError) return this.error(400, nameError.code, nameError.message)
+    if (req.bucketInfo !== undefined) {
+      const infoError = validateBucketInfo(req.bucketInfo)
+      if (infoError) return this.error(400, infoError.code, infoError.message)
+    }
     for (const b of this.buckets.values()) {
       if (b.info.bucketName === req.bucketName) {
         return this.error(400, 'duplicate_bucket_name', 'Bucket name already in use')
@@ -793,6 +1159,12 @@ export class B2Simulator {
   private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {
     const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    // Validate bucketInfo budget on update too — real B2 rejects
+    // oversized info maps on the update path, not just on create.
+    if (req['bucketInfo'] !== undefined) {
+      const infoError = validateBucketInfo(req['bucketInfo'] as Record<string, string>)
+      if (infoError) return this.error(400, infoError.code, infoError.message)
+    }
     const updated: BucketInfo = {
       ...bucket.info,
       ...(req['bucketType'] !== undefined ? { bucketType: req['bucketType'] as BucketType } : {}),
@@ -859,6 +1231,8 @@ export class B2Simulator {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
+    const countError = validateMaxCount(req.maxFileCount, 'b2_list_file_names')
+    if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
     // Real B2: `b2_list_file_names` returns the most recent version per
@@ -896,6 +1270,8 @@ export class B2Simulator {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
+    const countError = validateMaxCount(req.maxFileCount, 'b2_list_file_versions')
+    if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
     const allVersions = [...bucket.files.entries()]
@@ -953,6 +1329,9 @@ export class B2Simulator {
   private hideFile(req: { bucketId: string; fileName: string }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+
+    const nameError = validateFileName(req.fileName)
+    if (nameError) return this.error(400, nameError.code, nameError.message)
 
     const fileVersion = this.makeFileVersion({
       bucketId: req.bucketId,
@@ -1034,6 +1413,8 @@ export class B2Simulator {
     status: number
     body: unknown
   } {
+    const nameError = validateFileName(req.fileName)
+    if (nameError) return this.error(400, nameError.code, nameError.message)
     const found = this.findFile(req.sourceFileId)
     if (found === null) return this.error(404, 'file_not_present', 'Source file not found')
     const sourceStored = found.stored
@@ -1057,6 +1438,7 @@ export class B2Simulator {
       destBucket.files.set(req.fileName, [copied])
     }
 
+    this.firePostUploadHooks(fileVersion, destBucketId, 'b2:ObjectCreated:Copy')
     return { status: 200, body: fileVersion }
   }
 
@@ -1067,6 +1449,13 @@ export class B2Simulator {
     fileInfo?: Record<string, string>
   }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+
+    const nameError = validateFileName(req.fileName)
+    if (nameError) return this.error(400, nameError.code, nameError.message)
+    if (req.fileInfo !== undefined) {
+      const infoError = validateFileInfo(req.fileInfo)
+      if (infoError) return this.error(400, infoError.code, infoError.message)
+    }
 
     const fid = genId('4_z')
     const large: LargeFileInProgress = {
@@ -1116,6 +1505,33 @@ export class B2Simulator {
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
     const sortedParts = [...large.parts.entries()].sort((a, b) => a[0] - b[0])
+
+    // B2 spec-compliance: hard cap of 10000 parts per multipart upload.
+    // Real B2 rejects with `400 bad_request`; the simulator used to
+    // accept any number of parts.
+    if (sortedParts.length > 10_000) {
+      return this.error(
+        400,
+        'bad_request',
+        `multipart upload has ${sortedParts.length} parts; B2 caps at 10000`,
+      )
+    }
+    // B2 spec-compliance: every non-last part must be at least
+    // `absoluteMinimumPartSize`. The last part (highest part number)
+    // may be smaller. We enforce here rather than at b2_upload_part
+    // time because the simulator can't otherwise know which part is
+    // the last until finish_large_file is called.
+    for (let i = 0; i < sortedParts.length - 1; i++) {
+      const [partNumber, part] = sortedParts[i] as [number, { data: Uint8Array; sha1: string }]
+      if (part.data.byteLength < this.minimumPartSize) {
+        return this.error(
+          400,
+          'bad_request',
+          `part ${partNumber} (${part.data.byteLength} bytes) is smaller than the minimum part size of ${this.minimumPartSize}`,
+        )
+      }
+    }
+
     let totalSize = 0
     for (const [_, part] of sortedParts) totalSize += part.data.byteLength
     const combined = new Uint8Array(totalSize)
@@ -1142,6 +1558,7 @@ export class B2Simulator {
     }
 
     this.largeFiles.delete(req.fileId)
+    this.firePostUploadHooks(fileVersion, large.bucketId, 'b2:ObjectCreated:Upload')
     return { status: 200, body: fileVersion }
   }
 
@@ -1166,6 +1583,8 @@ export class B2Simulator {
     startFileId?: string
     maxFileCount?: number
   }): SimulatorJsonResponse {
+    const countError = validateMaxCount(req.maxFileCount, 'b2_list_unfinished_large_files')
+    if (countError) return this.error(400, countError.code, countError.message)
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
@@ -1206,6 +1625,8 @@ export class B2Simulator {
     const large = this.largeFiles.get(req.fileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
+    const countError = validateMaxCount(req.maxPartCount, 'b2_list_parts')
+    if (countError) return this.error(400, countError.code, countError.message)
     const start = req.startPartNumber ?? 1
     const max = req.maxPartCount ?? 1000
 
@@ -1331,6 +1752,8 @@ export class B2Simulator {
     maxKeyCount?: number
     startApplicationKeyId?: string
   }): SimulatorJsonResponse {
+    const countError = validateMaxCount(req.maxKeyCount, 'b2_list_keys')
+    if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxKeyCount ?? 1000
     let allKeys = [...this.keys.values()].sort((a, b) =>
       a.applicationKeyId.localeCompare(b.applicationKeyId),
@@ -1523,6 +1946,77 @@ export class B2Simulator {
   private error(status: number, code: string, message: string): SimulatorJsonResponse {
     return { status, body: { status, code, message } }
   }
+
+  /**
+   * Fire the pluggable post-upload hooks for a file that just landed in
+   * a bucket: matching event-notification rules → `onWebhookDeliver`,
+   * configured replication source rules → `onReplicate`. Errors thrown
+   * from user-supplied hooks are swallowed so a buggy listener never
+   * masks an otherwise-successful API response.
+   *
+   * Fired-and-forgotten (no await) by the handler so the synthetic
+   * response is returned to the caller as fast as production B2 would
+   * acknowledge the write.
+   *
+   * @param fileVersion - The freshly-stored file metadata.
+   * @param bucketId - The bucket the upload landed in.
+   * @param eventType - The B2 event-type tag (e.g. `'b2:ObjectCreated:Upload'`)
+   *   used to match against `EventNotificationRule.eventTypes` globs.
+   */
+  private firePostUploadHooks(fileVersion: FileVersion, bucketId: string, eventType: string): void {
+    const bucket = this.buckets.get(bucketId)
+    if (!bucket) return
+    if (this.onWebhookDeliver !== undefined) {
+      const rules = this.notificationRules.get(bucketId) ?? []
+      for (const rule of rules) {
+        if (!rule.isEnabled) continue
+        const matches = rule.eventTypes.some((pattern) => eventTypeMatches(pattern, eventType))
+        if (!matches) continue
+        const hook = this.onWebhookDeliver
+        // Fire-and-forget; swallow rejections so a buggy hook can't
+        // fail an otherwise-successful upload.
+        Promise.resolve()
+          .then(() => hook({ rule, fileVersion, bucketId }))
+          .catch(() => {})
+      }
+    }
+    if (this.onReplicate !== undefined) {
+      const replConfig = bucket.info.replicationConfiguration
+      const sourceRules = replConfig.asReplicationSource?.replicationRules ?? []
+      for (const rule of sourceRules) {
+        if (!rule.isEnabled) continue
+        if (rule.fileNamePrefix && !fileVersion.fileName.startsWith(rule.fileNamePrefix)) continue
+        const hook = this.onReplicate
+        Promise.resolve()
+          .then(() =>
+            hook({
+              sourceFileVersion: fileVersion,
+              sourceBucketId: bucketId,
+              destinationBucketId: rule.destinationBucketId,
+            }),
+          )
+          .catch(() => {})
+      }
+    }
+  }
+}
+
+/**
+ * Wildcard match for B2 event-type globs. Supports the prefix-glob form
+ * the B2 docs document: `b2:ObjectCreated:*` matches
+ * `b2:ObjectCreated:Upload`, `b2:ObjectCreated:Copy`, etc. Exact
+ * matches without `*` match literally.
+ *
+ * @param pattern - Glob from an `EventNotificationRule.eventTypes` entry.
+ * @param eventType - Concrete event type produced by the simulator.
+ *
+ * @returns `true` when the pattern matches the event type.
+ */
+function eventTypeMatches(pattern: string, eventType: string): boolean {
+  if (!pattern.includes('*')) return pattern === eventType
+  // Escape regex metacharacters, then replace literal `*` with `.*`.
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+  return new RegExp(`^${escaped}$`).test(eventType)
 }
 
 /**

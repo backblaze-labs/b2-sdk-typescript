@@ -38,7 +38,7 @@ export interface WebhookEvent {
   readonly eventType: EventType
   /** Schema version of the event payload. Currently `1`. */
   readonly eventVersion: number
-  /** Name of the {@link EventNotificationRule} on the bucket that matched. */
+  /** Name of the `EventNotificationRule` on the bucket that matched. */
   readonly matchedRuleName: string
   /** B2 file name of the affected object. */
   readonly objectName: string
@@ -82,7 +82,7 @@ export interface VerifyWebhookOptions {
    */
   readonly signature: string | readonly string[] | undefined
   /**
-   * The signing secret from {@link EventNotificationRule.targetConfiguration.hmacSha256SigningSecret}.
+   * The signing secret from `EventNotificationRule.targetConfiguration.hmacSha256SigningSecret`.
    *
    * This is the exact string B2 returned in the `b2_set_bucket_notification_rules`
    * response. Do NOT base64-decode or otherwise transform it.

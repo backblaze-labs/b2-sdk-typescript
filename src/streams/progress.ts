@@ -15,7 +15,16 @@ export interface ProgressEvent {
 /** Callback invoked each time transfer progress changes. */
 export type ProgressListener = (event: ProgressEvent) => void
 
-/** Accumulates byte and part counts and emits {@link ProgressEvent}s to a listener. */
+/**
+ * Accumulates byte and part counts and emits {@link ProgressEvent}s to a listener.
+ *
+ * Internal building block. The SDK wires one of these inside every
+ * transfer that accepts an `onProgress` option; users supply the
+ * listener callback, not the tracker. Exported only so SDK source
+ * modules can import it; not re-exported through any subpath.
+ *
+ * @internal
+ */
 export class ProgressTracker {
   /** Running total of bytes transferred. */
   private bytesTransferred = 0

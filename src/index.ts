@@ -70,7 +70,7 @@ export type { RetryOptions } from './http/retry.ts'
 
 export type { DownloadResult, HeadResult } from './download/single.ts'
 
-export { SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.ts'
+export { EncryptionKey, SSE_B2, SSE_NONE, sseCustomer } from './types/encryption.ts'
 
 // Generic pagination helpers. Most callers want the `paginateX()` method
 // on `Bucket` / `B2Client`; these are the underlying building blocks for
@@ -91,5 +91,20 @@ export { FileAction, MetadataDirective } from './types/file.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
 export type * from './types/index.ts'
+
+// Branded-ID factory functions. The `export type *` line above re-exports
+// the type aliases (BucketId, FileId, etc.) but value-level factory
+// functions are NOT included by `export type *` (it's type-only).
+// Without this explicit line, callers can't construct a typed
+// `BucketId` / `FileId` / etc. from a raw string at the package
+// boundary even though the type IS visible.
+export {
+  accountId,
+  applicationKeyId,
+  bucketId,
+  fileId,
+  keyId,
+  largeFileId,
+} from './types/ids.ts'
 
 export { VERSION } from './version.ts'

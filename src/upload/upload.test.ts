@@ -332,4 +332,36 @@ describe('Bucket.upload() routing', () => {
 
     vi.restoreAllMocks()
   })
+
+  it('routes EXACT-size match (size === recommendedPartSize) through the small-file path', async () => {
+    // Boundary: `Bucket.upload`'s dispatch is `isLarge = size >
+    // recommendedPartSize` (strict greater-than). At exact equality
+    // the small-file path is chosen — a single `b2_upload_file` call,
+    // not a multipart upload. Validate by inspecting the resulting
+    // file's `contentSha1`: small-file uploads have a real per-file
+    // SHA-1; multipart-finished files have the wire sentinel `'none'`
+    // (which the raw-client normalisation collapses to `null`).
+    // A null contentSha1 here would mean we accidentally took the
+    // multipart path at the boundary.
+    const { client: boundaryClient } = makeClient({
+      minimumPartSize: 100,
+      recommendedPartSize: 100,
+    })
+    await boundaryClient.authorize()
+    const boundaryBucket = await boundaryClient.createBucket({
+      bucketName: 'partsize-boundary',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const data = deterministicBytes(100) // exactly recommendedPartSize
+    const result = await boundaryBucket.upload({
+      fileName: 'exactly-part-size.bin',
+      source: new BufferSource(data),
+    })
+
+    expect(result.contentLength).toBe(100)
+    // Small-file path: real SHA-1, not the multipart null sentinel.
+    expect(result.contentSha1).not.toBeNull()
+    expect(result.contentSha1).toMatch(/^[0-9a-f]{40}$/)
+  })
 })

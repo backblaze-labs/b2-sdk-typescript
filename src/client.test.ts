@@ -304,7 +304,7 @@ describe('downloads', () => {
 
   it('downloads a file by id via B2Object', async () => {
     const bucket = await client.createBucket({
-      bucketName: 'dl-id',
+      bucketName: 'dl-by-id',
       bucketType: BucketType.AllPrivate,
     })
     const content = new TextEncoder().encode('by-id content')
@@ -648,7 +648,11 @@ describe('large file operations', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    // Lower minimumPartSize so the test's tiny 1024-byte parts pass
+    // the simulator's spec-compliant part-size enforcement
+    // (`b2_finish_large_file` rejects non-last parts below
+    // `absoluteMinimumPartSize`). Production simulator default is 5MB.
+    ;({ client } = makeClient({ minimumPartSize: 1024 }))
     await client.authorize()
   })
 
@@ -1329,7 +1333,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
 
   it('getFileInfoByName returns the latest visible file version', async () => {
     const bucket = await client.createBucket({
-      bucketName: 'gfibn',
+      bucketName: 'gfibn-test',
       bucketType: BucketType.AllPrivate,
     })
     const uploaded = await bucket.upload({
