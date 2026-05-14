@@ -289,11 +289,20 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       const bucket = upConfig.bucket ?? downConfig.bucket
       assertBucket(bucket, 'delete')
 
+      // Bug fix: `DeleteRemoteAction` invokes the closure with
+      // `relativePath` (the scanner-stripped name relative to the sync
+      // prefix), but B2 stores files under the FULL name including the
+      // prefix. Use the FileVersion's authoritative `fileName` — the
+      // actual B2 key — rather than reconstructing it via prefix
+      // concat. Without this, syncs with a non-empty destination
+      // prefix (e.g. `'site/'`) failed orphan deletion with
+      // `file_not_present`.
+      const b2FileName = path.selectedVersion.fileName
       return new DeleteRemoteAction(
         path.relativePath,
         path.selectedVersion.fileId as string,
-        async (fileId, fileName) => {
-          await bucket.deleteFileVersion(fileName, fileIdOf(fileId))
+        async (fileId) => {
+          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
         },
       )
     },

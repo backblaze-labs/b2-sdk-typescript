@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { Semaphore, mapConcurrent } from './concurrency.ts'
 
 describe('Semaphore', () => {
+  it('throws RangeError on a zero limit instead of deadlocking', () => {
+    expect(() => new Semaphore(0)).toThrow(RangeError)
+    expect(() => new Semaphore(0)).toThrow(/positive integer/)
+  })
+
+  it('throws RangeError on a negative limit', () => {
+    expect(() => new Semaphore(-1)).toThrow(RangeError)
+  })
+
+  it('throws RangeError on a non-integer limit', () => {
+    expect(() => new Semaphore(1.5)).toThrow(RangeError)
+    expect(() => new Semaphore(Number.NaN)).toThrow(RangeError)
+  })
+
   it('acquire resolves immediately when below limit', async () => {
     const sem = new Semaphore(2)
     // Both should resolve without blocking

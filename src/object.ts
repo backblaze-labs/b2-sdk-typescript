@@ -8,7 +8,7 @@ import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
-import type { FileId } from './types/ids.ts'
+import type { FileId, LargeFileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import { uploadSmallFile } from './upload/single.ts'
@@ -109,19 +109,36 @@ export class B2Object {
     onProgress?: ProgressListener
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
+    /**
+     * Resume an unfinished multipart upload for this file name when one
+     * exists. Only meaningful on the large-file path. Ignored on the
+     * small-file path.
+     */
+    resume?: boolean
+    /**
+     * Resume into a specific large-file ID, bypassing discovery.
+     * Overrides the `resume` discovery path.
+     */
+    resumeFileId?: LargeFileId
   }): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
 
-    const baseOpts = {
-      bucketId: this.bucket.id,
-      fileName: this.fileName,
-      ...options,
+    if (isLarge) {
+      return uploadLargeFile(this.client.raw, this.client.accountInfo, {
+        bucketId: this.bucket.id,
+        fileName: this.fileName,
+        ...options,
+      })
     }
 
-    return isLarge
-      ? uploadLargeFile(this.client.raw, this.client.accountInfo, baseOpts)
-      : uploadSmallFile(this.client.raw, this.client.accountInfo, baseOpts)
+    // Small-file path doesn't accept resume options.
+    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
+    return uploadSmallFile(this.client.raw, this.client.accountInfo, {
+      bucketId: this.bucket.id,
+      fileName: this.fileName,
+      ...smallOptions,
+    })
   }
 
   /**

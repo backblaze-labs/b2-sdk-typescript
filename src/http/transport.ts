@@ -104,8 +104,15 @@ export interface RetryTransportOptions {
   readonly transport: HttpTransport
   /** Override default retry settings (max retries, delays). */
   readonly retry?: Partial<RetryOptions>
-  /** Callback invoked on expired auth token errors to refresh credentials before retrying. */
-  readonly onReauth?: () => Promise<void>
+  /**
+   * Callback invoked on expired auth token errors. Must refresh
+   * credentials AND return the fresh auth token. The transport
+   * substitutes the new token into `request.headers.Authorization`
+   * before retrying — without this, the retried request would still
+   * carry the expired token captured by the original caller and the
+   * loop would never make progress.
+   */
+  readonly onReauth?: () => Promise<string>
   /**
    * Sleep implementation used between retry attempts. Defaults to the real
    * `sleep` from `./retry.js`. Test code can inject a no-op to avoid real
@@ -126,8 +133,8 @@ export class RetryTransport implements HttpTransport {
   private readonly inner: HttpTransport
   /** Resolved retry options (defaults merged with user overrides). */
   private readonly options: RetryOptions
-  /** Optional callback to refresh auth credentials on 401. */
-  private readonly onReauth?: () => Promise<void>
+  /** Optional callback to refresh auth credentials on 401 — returns the fresh token. */
+  private readonly onReauth?: () => Promise<string>
   /** Sleep implementation used between retries; injectable for tests. */
   private readonly sleepImpl: (ms: number, signal?: AbortSignal) => Promise<void>
 
@@ -145,11 +152,17 @@ export class RetryTransport implements HttpTransport {
   /**
    * Sends the request with automatic retry on transient failures.
    * On expired auth tokens, calls {@link RetryTransportOptions.onReauth} and retries.
-   * @param request - The HTTP request to execute.
+   * @param originalRequest - The HTTP request to execute. The caller's
+   *   reference is not mutated; on reauth, a copy with a refreshed
+   *   Authorization header is sent.
    *
    * @returns The HTTP response.
    */
-  async send(request: HttpRequest): Promise<HttpResponse> {
+  async send(originalRequest: HttpRequest): Promise<HttpResponse> {
+    // `request` is reassigned (not mutated) when reauth produces a
+    // fresh Authorization header, so the caller's `originalRequest`
+    // stays untouched.
+    let request: HttpRequest = originalRequest
     let lastError: B2Error | NetworkError | undefined
 
     for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
@@ -187,7 +200,18 @@ export class RetryTransport implements HttpTransport {
         })
 
         if (error instanceof ExpiredAuthTokenError && this.onReauth) {
-          await this.onReauth()
+          // Reauth returns the FRESH token; build a new request with a
+          // shallow-copied headers object so the Authorization swap
+          // doesn't mutate the caller's original request (which they
+          // may hold for retry / introspection). Without this swap the
+          // retry would carry the expired token captured at
+          // request-build time and bounce off the server again,
+          // exhausting the retry budget.
+          const freshToken = await this.onReauth()
+          request = {
+            ...request,
+            headers: { ...(request.headers ?? {}), Authorization: freshToken },
+          }
           continue
         }
 

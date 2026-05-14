@@ -148,9 +148,17 @@ export class B2Client {
     return auth
   }
 
-  private async reauthorize(): Promise<void> {
+  /**
+   * Refresh credentials after a 401. Returns the fresh auth token so
+   * {@link RetryTransport} can rewrite the in-flight request's
+   * Authorization header before retrying.
+   *
+   * @returns The fresh authorization token.
+   */
+  private async reauthorize(): Promise<string> {
     this.accountInfo.clear()
-    await this.authorize()
+    const auth = await this.authorize()
+    return auth.authorizationToken
   }
 
   /**

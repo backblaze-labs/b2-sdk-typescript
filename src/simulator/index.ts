@@ -719,7 +719,18 @@ export class B2Simulator {
     }
   }
 
-  private createBucket(req: { bucketName: string; bucketType: BucketType; accountId: string }): {
+  private createBucket(req: {
+    bucketName: string
+    bucketType: BucketType
+    accountId: string
+    bucketInfo?: Record<string, string>
+    corsRules?: BucketInfo['corsRules']
+    defaultServerSideEncryption?: BucketInfo['defaultServerSideEncryption']
+    defaultRetention?: BucketInfo['defaultRetention']
+    fileLockEnabled?: boolean
+    lifecycleRules?: BucketInfo['lifecycleRules']
+    replicationConfiguration?: BucketInfo['replicationConfiguration']
+  }): {
     status: number
     body: unknown
   } {
@@ -729,26 +740,39 @@ export class B2Simulator {
       }
     }
     const bid = bucketIdOf(genId('b2_bucket'))
+    // Honor optional fields supplied in the create request so callers
+    // that construct a bucket with e.g. `fileLockEnabled: true` see the
+    // flag reflected back in the returned `BucketInfo` (and in every
+    // subsequent `listBuckets` response). Previously these were
+    // hardcoded to defaults, forcing tests to mutate `bucket.info`
+    // post-create to simulate a non-vanilla bucket.
+    const defaultRetention = req.defaultRetention ?? {
+      mode: BucketRetentionMode.None,
+      period: null,
+    }
     const info: BucketInfo = {
       accountId: accountIdOf(req.accountId),
       bucketId: bid,
       bucketName: req.bucketName,
       bucketType: req.bucketType,
-      bucketInfo: {},
-      corsRules: [],
-      defaultServerSideEncryption: { mode: EncryptionMode.None },
+      bucketInfo: req.bucketInfo ?? {},
+      corsRules: req.corsRules ?? [],
+      defaultServerSideEncryption: req.defaultServerSideEncryption ?? { mode: EncryptionMode.None },
       fileLockConfiguration: {
         isClientAuthorizedToRead: true,
         value: {
-          isFileLockEnabled: false,
-          defaultRetention: { mode: BucketRetentionMode.None, period: null },
+          isFileLockEnabled: req.fileLockEnabled ?? false,
+          defaultRetention,
         },
       },
-      lifecycleRules: [],
+      lifecycleRules: req.lifecycleRules ?? [],
       options: [],
       revision: 1,
-      defaultRetention: { mode: BucketRetentionMode.None, period: null },
-      replicationConfiguration: { asReplicationSource: null, asReplicationDestination: null },
+      defaultRetention,
+      replicationConfiguration: req.replicationConfiguration ?? {
+        asReplicationSource: null,
+        asReplicationDestination: null,
+      },
     }
     this.buckets.set(bid as string, { info, files: new Map() })
     return { status: 200, body: info }

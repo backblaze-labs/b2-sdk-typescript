@@ -23,7 +23,13 @@ function makeLocalSyncPath(
   return { relativePath, modTimeMillis, size, absolutePath: `/tmp/${relativePath}` }
 }
 
-function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: number): B2SyncPath {
+function makeB2SyncPath(
+  relativePath: string,
+  modTimeMillis: number,
+  size: number,
+  /** Full B2 key (with prefix). Defaults to `relativePath` for the no-prefix case. */
+  b2FileName?: string,
+): B2SyncPath {
   const fv: FileVersion = {
     accountId: 'acc' as unknown as AccountId,
     action: FileAction.Upload,
@@ -34,7 +40,7 @@ function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: numbe
     contentType: 'application/octet-stream',
     fileId: `fid_${relativePath}` as unknown as FileId,
     fileInfo: {},
-    fileName: relativePath,
+    fileName: b2FileName ?? relativePath,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
     replicationStatus: null,
@@ -976,14 +982,19 @@ describe('synchronize', () => {
   })
 
   describe('upload prefix + orphan removal', () => {
-    it('routes orphan removal through deleteFileVersion on a vanilla bucket', async () => {
+    it('routes orphan removal through deleteFileVersion with the FULL B2 key on a vanilla bucket', async () => {
       // Vanilla bucket (no file-lock): the new policy yields a single
-      // `removeOrphan` action that routes to `deleteFileVersion`, not
-      // hide-then-delete. `deleteFileVersion` takes a fully-qualified
-      // fileName from the dest's selected version, so prefix prepending
-      // is unnecessary at this layer.
+      // `removeOrphan` action that routes to `deleteFileVersion`. The
+      // closure must call `deleteFileVersion` with the FULL B2 key
+      // (prefix + relativePath), not the scanner-stripped relativePath.
+      // Regression for an earlier bug where deleteRemote used
+      // relativePath and silently failed with `file_not_present` on any
+      // sync with a non-empty destination prefix.
       const mockBucket = makeMockBucket()
-      const destFile = makeB2SyncPath('orphan.txt', 1000, 5)
+      // The scanner reports `relativePath: 'orphan.txt'` (prefix
+      // stripped) but the FileVersion's `fileName` is the actual B2
+      // key, `'backup/orphan.txt'`.
+      const destFile = makeB2SyncPath('orphan.txt', 1000, 5, 'backup/orphan.txt')
       const source = makeMemoryFolder([], 'local')
       const dest = makeMemoryFolder([destFile], 'b2')
 
@@ -1002,6 +1013,12 @@ describe('synchronize', () => {
       expect(deletes).toHaveLength(1)
       expect(mockBucket.hideFile).not.toHaveBeenCalled()
       expect(mockBucket.deleteFileVersion).toHaveBeenCalledTimes(1)
+      // Crucial assertion: the actual B2 key is passed, NOT the
+      // relativePath that the scanner reports.
+      expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith(
+        'backup/orphan.txt',
+        'fid_orphan.txt',
+      )
     })
 
     it('routes orphan removal through hideFile (with prefix) on a file-lock-enabled bucket', async () => {

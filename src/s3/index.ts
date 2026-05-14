@@ -10,10 +10,26 @@
 
 import type { AccountInfo } from '../auth/account-info.ts'
 
-/** Configuration for deriving S3-compatible client settings from B2 auth state. */
+/**
+ * Configuration for deriving S3-compatible client settings from B2 auth state.
+ *
+ * Per B2's S3-compatible API contract, the S3 `accessKeyId` is the
+ * `applicationKeyId` and the S3 `secretAccessKey` is the
+ * `applicationKey`. These are NOT the native `accountId` /
+ * `authorizationToken` returned by `b2_authorize_account` — those won't
+ * authenticate against the S3 endpoint. Both must be supplied here
+ * because `AccountInfo` doesn't retain the application key after
+ * authorization for security reasons.
+ *
+ * @see https://www.backblaze.com/apidocs/s3-compatible-api
+ */
 export interface B2S3Config {
-  /** The authorized AccountInfo containing S3 endpoint and credentials. */
+  /** The authorized AccountInfo containing the S3 endpoint URL. */
   readonly accountInfo: AccountInfo
+  /** B2 application key ID. Used as the S3 `accessKeyId`. */
+  readonly applicationKeyId: string
+  /** B2 application key (secret). Used as the S3 `secretAccessKey`. */
+  readonly applicationKey: string
   /** Override the S3 region. If omitted, extracted from the S3 API URL. */
   readonly region?: string
 }
@@ -24,11 +40,11 @@ export interface S3ClientConfig {
   readonly endpoint: string
   /** The S3 region identifier (e.g., `us-west-004`). */
   readonly region: string
-  /** AWS-style credentials derived from the B2 account ID and auth token. */
+  /** AWS-style credentials — the B2 application key pair. */
   readonly credentials: {
-    /** The B2 account ID, used as the S3 access key ID. */
+    /** The B2 application key ID, used as the S3 access key ID. */
     readonly accessKeyId: string
-    /** The B2 auth token, used as the S3 secret access key. */
+    /** The B2 application key (secret), used as the S3 secret access key. */
     readonly secretAccessKey: string
   }
   /** Always `true` for B2, which requires path-style bucket addressing. */
@@ -39,9 +55,18 @@ export interface S3ClientConfig {
  * Derives an S3-compatible client configuration from B2 authorization state.
  * Pass the result to `new S3Client(config)` from `@aws-sdk/client-s3`.
  *
- * @param config - B2 auth state and optional region override.
+ * @param config - B2 auth state, application key credentials, and optional region override.
  *
  * @returns Configuration ready for the AWS S3 SDK.
+ *
+ * @example
+ * ```ts
+ * const s3 = new S3Client(createS3ClientConfig({
+ *   accountInfo: client.accountInfo,
+ *   applicationKeyId: process.env.B2_APPLICATION_KEY_ID!,
+ *   applicationKey: process.env.B2_APPLICATION_KEY!,
+ * }))
+ * ```
  */
 export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
   const s3Url = config.accountInfo.getS3ApiUrl()
@@ -52,8 +77,8 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
     endpoint: s3Url,
     region,
     credentials: {
-      accessKeyId: config.accountInfo.getAccountId(),
-      secretAccessKey: config.accountInfo.getAuthToken(),
+      accessKeyId: config.applicationKeyId,
+      secretAccessKey: config.applicationKey,
     },
     forcePathStyle: true,
   }

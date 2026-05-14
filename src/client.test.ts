@@ -36,6 +36,27 @@ describe('B2Client with simulator', () => {
     expect(buckets[0]?.name).toBe('test-bucket')
   })
 
+  it('propagates fileLockEnabled into the returned bucket info', async () => {
+    // Regression: simulator previously hardcoded
+    // `isFileLockEnabled: false` regardless of the create request,
+    // forcing test code to mutate `bucket.info` post-hoc to simulate a
+    // locked bucket. The flag must round-trip end-to-end so the sync
+    // engine's `removeOrphan` policy branch picks `hide` for locked
+    // buckets without a manual mutation step.
+    const locked = await client.createBucket({
+      bucketName: 'with-lock',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    expect(locked.info.fileLockConfiguration.value?.isFileLockEnabled).toBe(true)
+
+    const unlocked = await client.createBucket({
+      bucketName: 'without-lock',
+      bucketType: BucketType.AllPrivate,
+    })
+    expect(unlocked.info.fileLockConfiguration.value?.isFileLockEnabled).toBe(false)
+  })
+
   it('prevents duplicate bucket names', async () => {
     await client.createBucket({ bucketName: 'my-bucket', bucketType: BucketType.AllPrivate })
 

@@ -2,7 +2,6 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileId } from '../types/ids.ts'
-import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
@@ -24,10 +23,18 @@ export interface ParallelDownloadOptions {
 /**
  * Creates a readable stream that downloads a file using parallel byte-range requests.
  *
- * The file is split into fixed-size ranges fetched concurrently, then chunks
- * are emitted in order. This approach saturates bandwidth more effectively than
- * a single sequential download for large files. For small files, a single
- * request via {@link downloadById} or {@link downloadByName} is simpler.
+ * The file is split into fixed-size ranges fetched in a **sliding
+ * window** keyed off the consumer's read pace. The window size is
+ * `concurrency * 2`: up to `concurrency` ranges are in flight at once,
+ * plus up to `concurrency` completed-but-not-yet-emitted ranges buffered
+ * ahead of the read head. New fetches kick off only when the consumer
+ * reads a chunk, so a slow downstream pipe (e.g. a saturated network
+ * sink or a `pipeTo` consumer that drains slowly) backpressures into
+ * the SDK and bounds peak memory to `(concurrency * 2) * rangeSize`.
+ *
+ * The previous eager implementation scheduled every range into
+ * `Promise.all` up front; a slow head-of-line range could hold the
+ * entire file in memory while later ranges finished and waited.
  *
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
@@ -44,6 +51,7 @@ export function createParallelDownloadStream(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
   const retryOptions = { ...DEFAULT_RETRY_OPTIONS, maxRetries: options.maxRetries ?? 5 }
+  const abort = options.signal
 
   const ranges: { start: number; end: number; index: number }[] = []
   let offset = 0
@@ -55,63 +63,110 @@ export function createParallelDownloadStream(
     index++
   }
 
-  const chunks: (Uint8Array | null)[] = new Array(ranges.length).fill(null)
+  // `inflight` holds currently-fetching range promises; `buffer` holds
+  // completed ranges waiting for their slot in the emit order. Total
+  // scheduled-but-not-emitted = inflight.size + buffer.size is capped
+  // at `windowSize`, so peak memory is bounded regardless of any
+  // single range's latency.
+  const windowSize = concurrency * 2
+  const inflight = new Map<number, Promise<void>>()
+  const buffer = new Map<number, Uint8Array>()
+  let nextToSchedule = 0
   let nextToEmit = 0
-  let fetchStarted = false
+  let firstError: unknown = null
+
+  function scheduleNext(): void {
+    while (
+      firstError === null &&
+      nextToSchedule < ranges.length &&
+      inflight.size + buffer.size < windowSize
+    ) {
+      const range = ranges[nextToSchedule]
+      if (range === undefined) break
+      const idx = nextToSchedule
+      nextToSchedule++
+      const task = (async () => {
+        try {
+          const data = await fetchRangeWithRetry(
+            raw,
+            accountInfo,
+            options.fileId,
+            range.start,
+            range.end,
+            retryOptions,
+            abort,
+          )
+          buffer.set(idx, data)
+        } catch (err) {
+          if (firstError === null) firstError = err
+        } finally {
+          inflight.delete(idx)
+        }
+      })()
+      inflight.set(idx, task)
+    }
+  }
 
   return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      if (fetchStarted) return
-      fetchStarted = true
-
-      const sem = new Semaphore(concurrency)
-      const abort = options.signal
-
+    start(controller) {
+      // Pre-warm: kick off the initial window so the first `pull` has
+      // something to await. An already-aborted signal surfaces as a
+      // stream error rather than a synchronous throw, matching the
+      // contract callers had with the previous eager implementation.
       try {
-        const tasks = ranges.map(async (range) => {
-          await sem.acquire()
-          try {
-            abort?.throwIfAborted()
-
-            const data = await fetchRangeWithRetry(
-              raw,
-              accountInfo,
-              options.fileId,
-              range.start,
-              range.end,
-              retryOptions,
-              abort,
-            )
-            chunks[range.index] = data
-
-            for (
-              let chunk = chunks[nextToEmit];
-              nextToEmit < chunks.length && chunk != null;
-              chunk = chunks[++nextToEmit]
-            ) {
-              controller.enqueue(chunk)
-              chunks[nextToEmit] = null
-            }
-          } finally {
-            sem.release()
-          }
-        })
-
-        await Promise.all(tasks)
-
-        for (
-          let chunk = chunks[nextToEmit];
-          nextToEmit < chunks.length && chunk != null;
-          chunk = chunks[++nextToEmit]
-        ) {
-          controller.enqueue(chunk)
-          chunks[nextToEmit] = null
-        }
-
-        controller.close()
+        abort?.throwIfAborted()
+        scheduleNext()
       } catch (err) {
         controller.error(err)
       }
+    },
+    async pull(controller) {
+      try {
+        // Wait until the next in-order chunk is available.
+        while (!buffer.has(nextToEmit)) {
+          abort?.throwIfAborted()
+          if (firstError !== null) throw firstError
+          /* v8 ignore start -- defensive close: every code path that
+             populates `nextToEmit < ranges.length` also schedules into
+             `inflight`. The pre-warm in `start()` plus `scheduleNext()`
+             after each enqueue guarantee that whenever there are
+             pending ranges, at least one is in flight. This guard
+             exists only so a future refactor can't accidentally stall
+             the stream by leaving both maps empty mid-stream. */
+          if (inflight.size === 0) {
+            controller.close()
+            return
+          }
+          /* v8 ignore stop */
+          await Promise.race(inflight.values())
+        }
+
+        const data = buffer.get(nextToEmit)
+        if (data !== undefined) {
+          buffer.delete(nextToEmit)
+          nextToEmit++
+          controller.enqueue(data)
+        }
+
+        // Top up the window now that we freed a slot by emitting.
+        scheduleNext()
+
+        if (
+          nextToEmit >= ranges.length &&
+          buffer.size === 0 &&
+          inflight.size === 0 &&
+          firstError === null
+        ) {
+          controller.close()
+        }
+      } catch (err) {
+        controller.error(err)
+      }
+    },
+    cancel() {
+      // Abort propagation handles in-flight requests; just drop buffered
+      // data so it can be GC'd promptly.
+      buffer.clear()
     },
   })
 }

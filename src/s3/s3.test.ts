@@ -45,7 +45,11 @@ describe('createS3ClientConfig', () => {
       s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
     })
 
-    const config = createS3ClientConfig({ accountInfo })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+    })
 
     expect(config.region).toBe('us-west-004')
   })
@@ -55,7 +59,12 @@ describe('createS3ClientConfig', () => {
       s3ApiUrl: 'https://s3.eu-central-003.backblazeb2.com',
     })
 
-    const config = createS3ClientConfig({ accountInfo, region: 'custom-region' })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      region: 'custom-region',
+    })
 
     expect(config.region).toBe('custom-region')
   })
@@ -65,7 +74,11 @@ describe('createS3ClientConfig', () => {
       s3ApiUrl: 'https://some-other-endpoint.example.com',
     })
 
-    const config = createS3ClientConfig({ accountInfo })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+    })
 
     expect(config.region).toBe('us-west-004')
   })
@@ -73,21 +86,35 @@ describe('createS3ClientConfig', () => {
   it('sets forcePathStyle to true', () => {
     const accountInfo = createMockAccountInfo()
 
-    const config = createS3ClientConfig({ accountInfo })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+    })
 
     expect(config.forcePathStyle).toBe(true)
   })
 
-  it('uses accountId as accessKeyId and authToken as secretAccessKey', () => {
+  it('uses applicationKeyId as accessKeyId and applicationKey as secretAccessKey', () => {
+    // Regression: previous implementation passed accountId + auth token
+    // here, which produced credentials that B2's S3-compatible API
+    // rejects. Per https://www.backblaze.com/apidocs/s3-compatible-api,
+    // the access key ID maps to the application key ID and the secret
+    // access key maps to the application key (secret), NOT the native
+    // accountId or authorization token.
     const accountInfo = createMockAccountInfo({
-      accountId: 'my-account-id',
-      authToken: 'my-auth-token',
+      accountId: 'should-not-leak-into-credentials',
+      authToken: 'should-not-leak-into-credentials',
     })
 
-    const config = createS3ClientConfig({ accountInfo })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'my-app-key-id',
+      applicationKey: 'my-app-key-secret',
+    })
 
-    expect(config.credentials.accessKeyId).toBe('my-account-id')
-    expect(config.credentials.secretAccessKey).toBe('my-auth-token')
+    expect(config.credentials.accessKeyId).toBe('my-app-key-id')
+    expect(config.credentials.secretAccessKey).toBe('my-app-key-secret')
   })
 
   it('sets endpoint to the S3 API URL', () => {
@@ -95,7 +122,11 @@ describe('createS3ClientConfig', () => {
       s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
     })
 
-    const config = createS3ClientConfig({ accountInfo })
+    const config = createS3ClientConfig({
+      accountInfo,
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+    })
 
     expect(config.endpoint).toBe('https://s3.us-west-004.backblazeb2.com')
   })

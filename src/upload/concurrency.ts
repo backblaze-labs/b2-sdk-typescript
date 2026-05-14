@@ -10,8 +10,21 @@ export class Semaphore {
   private current = 0
   private readonly queue: (() => void)[] = []
 
-  /** @param limit - Maximum number of concurrent acquisitions. */
-  constructor(private readonly limit: number) {}
+  /**
+   * @param limit - Maximum number of concurrent acquisitions. Must be a
+   *   positive integer; values `<= 0` would create a semaphore that
+   *   never lets anything through (all `acquire()` calls would queue
+   *   forever), so the constructor throws fast instead.
+   *
+   * @throws `RangeError` when `limit` is not a positive integer.
+   */
+  constructor(private readonly limit: number) {
+    if (!Number.isInteger(limit) || limit <= 0) {
+      throw new RangeError(
+        `Semaphore limit must be a positive integer; received ${limit}. A non-positive limit produces a deadlocked semaphore — fail fast at construction instead.`,
+      )
+    }
+  }
 
   /**
    * Acquires a slot, waiting if the limit has been reached.

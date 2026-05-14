@@ -168,6 +168,20 @@ export class Bucket {
     onProgress?: ProgressListener
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
+    /**
+     * Resume an unfinished multipart upload for this file name when one
+     * exists. Only consulted on the large-file path (source size
+     * greater than `recommendedPartSize`). On the small-file path this
+     * option is silently ignored. Sliceable sources only — `StreamSource`
+     * rejects resume because it can't replay parts.
+     */
+    resume?: boolean
+    /**
+     * Resume into a specific large-file ID. Overrides the `resume`
+     * discovery path. The local `partSize` must match the server-side
+     * plan.
+     */
+    resumeFileId?: LargeFileId
   }): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
@@ -179,9 +193,13 @@ export class Bucket {
       })
     }
 
+    // Strip resume / resumeFileId from the small-file path: the
+    // signature there doesn't accept them, and they're meaningless for
+    // single-request uploads.
+    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       bucketId: this.id,
-      ...options,
+      ...smallOptions,
     })
   }
 
@@ -302,6 +320,38 @@ export class Bucket {
       (page) => page.files.filter((f) => f.action !== 'hide'),
       options?.signal,
     )
+  }
+
+  /**
+   * Async iterator that yields every visible file in the bucket. Thin
+   * alias for {@link paginateFileNames} — the shorter name reads more
+   * naturally at call sites that don't care about the underlying
+   * pagination contract.
+   *
+   * Like `paginateFileNames`, hide markers are filtered out; only the
+   * latest visible version of each file name is yielded.
+   *
+   * @param options - Filter + pagination + abort options. Forwarded
+   *   verbatim to {@link paginateFileNames}.
+   *
+   * @returns An async iterable of {@link FileVersion} entries.
+   *
+   * @example
+   * ```ts
+   * for await (const file of bucket.listAllFiles({ prefix: 'logs/' })) {
+   *   console.log(file.fileName, file.contentLength)
+   * }
+   * ```
+   */
+  listAllFiles(
+    options?: {
+      /** Only yield files whose names start with this prefix. */
+      prefix?: string
+      /** Delimiter for virtual directory grouping (typically `'/'`). */
+      delimiter?: string
+    } & PaginatorOptions,
+  ): AsyncIterableIterator<FileVersion> {
+    return this.paginateFileNames(options)
   }
 
   /**

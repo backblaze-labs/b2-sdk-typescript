@@ -333,7 +333,7 @@ describe('RetryTransport', () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
       const okResponse = mockResponse(200, { ok: true })
-      const onReauth = vi.fn().mockResolvedValue(undefined)
+      const onReauth = vi.fn().mockResolvedValue('refreshed-token')
 
       innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
 
@@ -347,6 +347,46 @@ describe('RetryTransport', () => {
       expect(result).toBe(okResponse)
       expect(onReauth).toHaveBeenCalledTimes(1)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('rewrites the request Authorization header with the fresh token before retrying', async () => {
+      // Regression: previously, the retry path called `continue` and
+      // re-sent the SAME HttpRequest object — which still had the
+      // expired token baked into its Authorization header. The 401
+      // would just bounce again and exhaust the retry budget without
+      // the refreshed token ever reaching the wire.
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+      const onReauth = vi.fn().mockResolvedValue('fresh-token-xyz')
+
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      const requestWithStaleToken = {
+        ...baseRequest,
+        headers: { Authorization: 'expired-token', 'Content-Type': 'application/json' },
+      }
+      await transport.send(requestWithStaleToken)
+
+      // Two calls into the inner transport: first carries the expired
+      // token, second carries the freshly-rewritten one.
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+      const firstCall = innerTransport.send.mock.calls[0]?.[0] as {
+        headers: Record<string, string>
+      }
+      const secondCall = innerTransport.send.mock.calls[1]?.[0] as {
+        headers: Record<string, string>
+      }
+      expect(firstCall?.headers?.['Authorization']).toBe('expired-token')
+      expect(secondCall?.headers?.['Authorization']).toBe('fresh-token-xyz')
+      // Other headers untouched.
+      expect(secondCall?.headers?.['Content-Type']).toBe('application/json')
     })
 
     it('throws expired auth token error when no onReauth callback is provided', async () => {
@@ -762,7 +802,7 @@ describe('RetryTransport', () => {
       const error503 = mockResponse(503, serviceError)
       const okResponse = mockResponse(200, { ok: true })
 
-      const onReauth = vi.fn().mockResolvedValue(undefined)
+      const onReauth = vi.fn().mockResolvedValue('refreshed-token')
 
       // First call: 401 (triggers reauth + continue, does not increment attempt)
       // Second call: 503 (retryable, attempt 0 still)
