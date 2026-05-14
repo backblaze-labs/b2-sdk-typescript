@@ -25,6 +25,7 @@ import {
 import type { RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
+import { toError } from '../util/to-error.ts'
 
 /**
  * Result of {@link parseRangeHeader}. `'ok'` is satisfiable,
@@ -1130,7 +1131,7 @@ export class B2Simulator {
     const headers: Record<string, string> = {
       'Content-Type': fv.contentType,
       'Content-Length': String(data.byteLength),
-      'X-Bz-File-Id': fv.fileId as string,
+      'X-Bz-File-Id': fv.fileId,
       'X-Bz-File-Name': encodeURIComponent(fv.fileName),
       'X-Bz-Content-Sha1': fv.contentSha1 ?? 'none',
       'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
@@ -1290,7 +1291,7 @@ export class B2Simulator {
         asReplicationDestination: null,
       },
     }
-    this.buckets.set(bid as string, { info, files: new Map() })
+    this.buckets.set(bid, { info, files: new Map() })
     return { status: 200, body: info }
   }
 
@@ -1453,9 +1454,7 @@ export class B2Simulator {
       if (nameIdx === -1) {
         startIdx = allVersions.length
       } else if (startId !== undefined) {
-        const exactIdx = allVersions.findIndex(
-          (f, i) => i >= nameIdx && (f.fileId as string) === startId,
-        )
+        const exactIdx = allVersions.findIndex((f, i) => i >= nameIdx && f.fileId === startId)
         startIdx = exactIdx !== -1 ? exactIdx : nameIdx
       } else {
         startIdx = nameIdx
@@ -1465,7 +1464,7 @@ export class B2Simulator {
     const sliced = allVersions.slice(startIdx, startIdx + max)
     const hasMore = startIdx + max < allVersions.length
     const nextFileName = hasMore ? (allVersions[startIdx + max]?.fileName ?? null) : null
-    const nextFileId = hasMore ? ((allVersions[startIdx + max]?.fileId as string) ?? null) : null
+    const nextFileId = hasMore ? (allVersions[startIdx + max]?.fileId ?? null) : null
 
     return { status: 200, body: { files: sliced, nextFileName, nextFileId } }
   }
@@ -2087,7 +2086,7 @@ export class B2Simulator {
   } | null {
     for (const [bid, bucket] of this.buckets.entries()) {
       for (const versions of bucket.files.values()) {
-        const idx = versions.findIndex((v) => (v.fileVersion.fileId as string) === fileId)
+        const idx = versions.findIndex((v) => v.fileVersion.fileId === fileId)
         if (idx !== -1) {
           // Non-null asserted via the findIndex guard above.
           const stored = versions[idx] as StoredFile
@@ -2190,7 +2189,7 @@ export class B2Simulator {
       .then(() => fn())
       .catch((err) => {
         if (this.onHookError !== undefined) {
-          this.onHookError({ kind, error: err instanceof Error ? err : new Error(String(err)) })
+          this.onHookError({ kind, error: toError(err) })
         }
       })
       .finally(() => {

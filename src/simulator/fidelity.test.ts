@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { B2Client } from '../client.ts'
+import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
+import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
-import { B2Simulator } from './index.ts'
+import type { B2Simulator } from './index.ts'
 
 /**
  * Spec-compliance tests for {@link B2Simulator}. These pin behaviour
@@ -25,11 +26,7 @@ import { B2Simulator } from './index.ts'
 describe('B2Simulator input validation: bucket name', () => {
   let client: B2Client
   beforeEach(async () => {
-    client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
-    })
+    ;({ client } = makeClient())
     await client.authorize()
   })
 
@@ -71,11 +68,7 @@ describe('B2Simulator input validation: file name', () => {
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
   beforeEach(async () => {
-    client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
-    })
+    ;({ client } = makeClient())
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'filename-validation',
@@ -142,11 +135,7 @@ describe('B2Simulator input validation: maxFileCount caps', () => {
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
   beforeEach(async () => {
-    client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
-    })
+    ;({ client } = makeClient())
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'maxcount-caps',
@@ -179,12 +168,7 @@ describe('B2Simulator wire-level: Content-Range + Range header forms', () => {
   const fileBytes = new Uint8Array(100).map((_, i) => i)
 
   beforeEach(async () => {
-    sim = new B2Simulator()
-    client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
-    })
+    ;({ client, sim } = makeClient())
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'range-edges',
@@ -246,15 +230,12 @@ describe('B2Simulator wire-level: Content-Range + Range header forms', () => {
 describe('B2Simulator hooks: onWebhookDeliver', () => {
   it('fires for matching event-notification rules', async () => {
     const events: Array<{ ruleName: string; fileName: string }> = []
-    const sim = new B2Simulator({
-      onWebhookDeliver: ({ rule, fileVersion }) => {
-        events.push({ ruleName: rule.name, fileName: fileVersion.fileName })
+    const { client, sim } = makeClient({
+      sim: {
+        onWebhookDeliver: ({ rule, fileVersion }) => {
+          events.push({ ruleName: rule.name, fileName: fileVersion.fileName })
+        },
       },
-    })
-    const client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
     })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -289,15 +270,12 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 
   it('does not fire for rules with isEnabled: false', async () => {
     const events: unknown[] = []
-    const sim = new B2Simulator({
-      onWebhookDeliver: (e) => {
-        events.push(e)
+    const { client, sim } = makeClient({
+      sim: {
+        onWebhookDeliver: (e) => {
+          events.push(e)
+        },
       },
-    })
-    const client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
     })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -329,18 +307,15 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 
   it('surfaces hook errors via onHookError instead of swallowing them', async () => {
     const errors: Array<{ kind: string; message: string }> = []
-    const sim = new B2Simulator({
-      onWebhookDeliver: () => {
-        throw new Error('boom')
+    const { client, sim } = makeClient({
+      sim: {
+        onWebhookDeliver: () => {
+          throw new Error('boom')
+        },
+        onHookError: ({ kind, error }) => {
+          errors.push({ kind, message: error.message })
+        },
       },
-      onHookError: ({ kind, error }) => {
-        errors.push({ kind, message: error.message })
-      },
-    })
-    const client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
     })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -379,12 +354,7 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 
 describe('B2Simulator strictAuth: capability enforcement', () => {
   it('grants the master credential the documented capability set by default', async () => {
-    const sim = new B2Simulator({ strictAuth: true })
-    const client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
-    })
+    const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
     // Master credential has all the common file/bucket caps.
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
@@ -396,7 +366,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
-    const sim = new B2Simulator({ strictAuth: true })
+    const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
     const resp = await transport.send({
       method: 'POST',
@@ -413,7 +383,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     // Send via the raw transport (bypassing RetryTransport's reauth
     // loop) so we observe the simulator's wire response, not the
     // SDK's post-reauth retry behaviour.
-    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const { sim } = makeClient({ sim: { strictAuth: true, authTokenTtlMs: 1000 } })
     const transport = sim.transport()
     const authResp = await transport.send({
       method: 'GET',

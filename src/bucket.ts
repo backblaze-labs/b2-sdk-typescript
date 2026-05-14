@@ -711,7 +711,7 @@ export class Bucket {
             type: 'error',
             fileName: version.fileName,
             fileId: version.fileId,
-            message: err instanceof Error ? err.message : String(err),
+            message: toError(err).message,
           }
         }
       }

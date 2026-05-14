@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { B2Client } from '../client.ts'
+import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
+import { makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
-import { B2Simulator } from './index.ts'
+import type { B2Simulator } from './index.ts'
 
 /**
  * Behavioural contract for `B2Simulator.injectFailure` /
@@ -17,13 +18,10 @@ describe('B2Simulator.injectFailure', () => {
   let client: B2Client
 
   beforeEach(async () => {
-    sim = new B2Simulator()
-    client = new B2Client({
-      applicationKeyId: 'test-key-id',
-      applicationKey: 'test-key',
-      transport: sim.transport(),
-      retry: { maxRetries: 0 },
-    })
+    // `retry: { maxRetries: 0 }` so a fault-injected 503 surfaces as
+    // the test's rejection rather than being absorbed by the
+    // RetryTransport's exponential-backoff loop.
+    ;({ client, sim } = makeClient({ client: { retry: { maxRetries: 0 } } }))
     await client.authorize()
   })
 
@@ -175,15 +173,9 @@ describe('B2Simulator.injectFailure', () => {
     // fits in the fast tier. `recommendedPartSize` must also be low so
     // `Bucket.upload()`'s small-vs-large dispatch picks the multipart
     // path for a small payload.
-    const smallSim = new B2Simulator({
-      minimumPartSize: 100_000,
-      recommendedPartSize: 100_000,
-    })
-    const c = new B2Client({
-      applicationKeyId: 'k',
-      applicationKey: 'k',
-      transport: smallSim.transport(),
-      retry: { maxRetries: 0 },
+    const { client: c, sim: smallSim } = makeClient({
+      sim: { minimumPartSize: 100_000, recommendedPartSize: 100_000 },
+      client: { retry: { maxRetries: 0 } },
     })
     await c.authorize()
     const b = await c.createBucket({

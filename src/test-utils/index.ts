@@ -13,7 +13,7 @@
  * @packageDocumentation
  */
 
-import { B2Client } from '../client.ts'
+import { B2Client, type B2ClientOptions } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
@@ -28,21 +28,46 @@ import { utf8Encoder } from '../util/text-codec.ts'
  * occasionally want to exercise pre-authorize behaviour without paying
  * for the network round-trip on every helper invocation.
  *
- * @param options - Optional simulator overrides (e.g. `minimumPartSize`).
- *   See {@link B2SimulatorOptions}.
+ * @param options - Either an opaque {@link B2SimulatorOptions} bag (back-compat
+ *   for the historical `makeClient(simOpts)` call shape) or a structured
+ *   `{ sim, client }` pair when the test needs to override `B2Client` options
+ *   such as `retry: { maxRetries: 0 }`. The structured form is preferred for
+ *   new code because it keeps simulator vs client concerns visibly separate.
  *
  * @returns A `{ client, sim }` pair. Call `await client.authorize()` before
  *   making any authenticated request.
  */
-export function makeClient(options?: B2SimulatorOptions): {
+export function makeClient(
+  options?:
+    | B2SimulatorOptions
+    | {
+        sim?: B2SimulatorOptions
+        client?: Partial<Omit<B2ClientOptions, 'applicationKeyId' | 'applicationKey' | 'transport'>>
+      },
+): {
   client: B2Client
   sim: B2Simulator
 } {
-  const sim = new B2Simulator(options)
+  // Discriminate the structured form (`{ sim?, client? }`) from the
+  // legacy form (a bare `B2SimulatorOptions`) by checking whether every
+  // top-level key is one of the structured-form members. Legacy callers
+  // pass simulator fields directly (`minimumPartSize`, `strictAuth`,
+  // …), which fall through to the else branch.
+  const keys = options !== undefined ? Object.keys(options) : []
+  const isStructured = options !== undefined && keys.every((k) => k === 'sim' || k === 'client')
+  const simOptions = isStructured
+    ? (options as { sim?: B2SimulatorOptions }).sim
+    : (options as B2SimulatorOptions | undefined)
+  const clientOverrides = isStructured
+    ? (options as { client?: Partial<B2ClientOptions> }).client
+    : undefined
+
+  const sim = new B2Simulator(simOptions ?? {})
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
     transport: sim.transport(),
+    ...(clientOverrides ?? {}),
   })
   return { client, sim }
 }
