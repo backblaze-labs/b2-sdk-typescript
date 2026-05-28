@@ -125,7 +125,7 @@ import {
 } from './validation.ts'
 
 // Re-export the documented B2 spec limit constants so callers of
-// `@backblaze/b2-sdk/simulator` can parameterise tests against the
+// `@backblaze-labs/b2-sdk/simulator` can parameterise tests against the
 // real caps without reaching into the validation submodule.
 export {
   BUCKET_INFO_MAX_KEYS,

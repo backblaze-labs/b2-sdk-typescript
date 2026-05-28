@@ -13,7 +13,7 @@
     "src/s3/index.ts"
   ],
   "out": "docs",
-  "name": "@backblaze/b2-sdk",
+  "name": "@backblaze-labs/b2-sdk",
   "includeVersion": true,
   "readme": "README.md",
   "tsconfig": "tsconfig.json",
@@ -24,7 +24,7 @@
   "excludeExternals": true,
   "categorizeByGroup": true,
   "navigationLinks": {
-    "GitHub": "https://github.com/backblaze/b2-sdk-typescript",
+    "GitHub": "https://github.com/backblaze-labs/b2-typescript-sdk",
     "Backblaze B2": "https://www.backblaze.com/cloud-storage"
   },
   "treatWarningsAsErrors": true,

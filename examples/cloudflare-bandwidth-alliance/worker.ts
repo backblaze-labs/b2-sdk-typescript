@@ -9,7 +9,7 @@
  * The Worker uses the S3-compatible B2 endpoint and signs requests with the
  * application key id/secret as `Authorization: Basic ...`. For more advanced
  * scenarios (presigned URLs, range-aware caching, typed errors), import from
- * `@backblaze/b2-sdk/s3` instead: it works in Workers without changes.
+ * `@backblaze-labs/b2-sdk/s3` instead: it works in Workers without changes.
  */
 
 interface Env {

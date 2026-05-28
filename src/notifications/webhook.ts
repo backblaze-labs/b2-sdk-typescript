@@ -278,7 +278,7 @@ function looksLikePayload(value: unknown): value is WebhookPayload {
  *
  * @example
  * ```ts
- * import { verifyWebhookSignature, B2_WEBHOOK_SIGNATURE_HEADER } from '@backblaze/b2-sdk/notifications'
+ * import { verifyWebhookSignature, B2_WEBHOOK_SIGNATURE_HEADER } from '@backblaze-labs/b2-sdk/notifications'
  *
  * app.post('/webhook', async (req, res) => {
  *   const raw = await readRawBody(req) // raw bytes, NOT json

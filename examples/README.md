@@ -1,6 +1,6 @@
 # Examples
 
-Runnable examples demonstrating `@backblaze/b2-sdk` usage patterns.
+Runnable examples demonstrating `@backblaze-labs/b2-sdk` usage patterns.
 
 ## Contents
 

@@ -2,7 +2,7 @@
 
 For most React Native apps, you don't need a native module to upload to B2. You need a backend that mints presigned upload URLs and a client that PUTs to them. A pure-JS `fetch`-based upload is fine up to a few hundred MB and works in Expo, bare React Native, and React Native for Windows without any native code.
 
-This example pairs a tiny backend (built with `@backblaze/b2-sdk`) with a React Native client that uploads photos to B2 without ever touching the application key.
+This example pairs a tiny backend (built with `@backblaze-labs/b2-sdk`) with a React Native client that uploads photos to B2 without ever touching the application key.
 
 ## Architecture
 

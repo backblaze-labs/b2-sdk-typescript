@@ -1,8 +1,8 @@
-# Plugin template: wrapping `@backblaze/b2-sdk` for a host framework
+# Plugin template: wrapping `@backblaze-labs/b2-sdk` for a host framework
 
 This is a starting point for anyone writing a B2 integration plugin for a host framework (NestJS, Strapi, NodeBB, n8n, Node-RED, Payload, AdminJS, Directus, etc.). Build against the official SDK directly so your plugin gets retry, resume, typed errors, and B2-native primitives for free, and stays current as new B2 features land.
 
-This template shows what a thin, framework-agnostic adapter over `@backblaze/b2-sdk` looks like. Copy the directory, rename the class, and graft on whatever lifecycle hooks your host framework expects.
+This template shows what a thin, framework-agnostic adapter over `@backblaze-labs/b2-sdk` looks like. Copy the directory, rename the class, and graft on whatever lifecycle hooks your host framework expects.
 
 ## The shape
 
@@ -44,7 +44,7 @@ That's the entire integration. No re-implementing presigned URLs, no copy-pastin
 
 ## What this template explicitly does NOT include
 
-- **A framework dependency.** This is intentional. Plugins should depend on `@backblaze/b2-sdk` plus their host's plugin contract, nothing else. Adding a transitive React / Express / Hono dep here would force every consumer to accept it.
+- **A framework dependency.** This is intentional. Plugins should depend on `@backblaze-labs/b2-sdk` plus their host's plugin contract, nothing else. Adding a transitive React / Express / Hono dep here would force every consumer to accept it.
 - **A built-in cache.** Storage adapters that cache file contents in memory are almost always wrong: the host's HTTP layer should cache via `Cache-Control` headers, not the adapter. The SDK does cache *upload URLs* (the SDK's `UploadUrlPool` recycles them across requests) which is the part that actually pays off.
 - **Magic auto-detection.** Some plugins auto-detect Cloudflare vs Vercel vs Lambda environments and pick credential sources for you. This template makes the host pass credentials explicitly. Much easier to debug, much less surprise.
 

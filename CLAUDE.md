@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Instructions for AI assistants working on `@backblaze/b2-sdk`.
+Instructions for AI assistants working on `@backblaze-labs/b2-sdk`.
 
 ## Project overview
 
@@ -40,16 +40,16 @@ Single npm package with subpath exports:
 
 | Export | Entry | Purpose |
 |---|---|---|
-| `@backblaze/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
-| `@backblaze/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for the 31 B2 native API endpoints the SDK exposes |
-| `@backblaze/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 13 subclasses + classifyError() |
-| `@backblaze/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
-| `@backblaze/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
-| `@backblaze/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
-| `@backblaze/b2-sdk/sync` | `src/sync/index.ts` | Local/B2 sync engine: LocalFolder, B2Folder, synchronize() |
-| `@backblaze/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
-| `@backblaze/b2-sdk/notifications` | `src/notifications/index.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
-| `@backblaze/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignGetObjectUrl |
+| `@backblaze-labs/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
+| `@backblaze-labs/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for the 31 B2 native API endpoints the SDK exposes |
+| `@backblaze-labs/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 13 subclasses + classifyError() |
+| `@backblaze-labs/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
+| `@backblaze-labs/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
+| `@backblaze-labs/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
+| `@backblaze-labs/b2-sdk/sync` | `src/sync/index.ts` | Local/B2 sync engine: LocalFolder, B2Folder, synchronize() |
+| `@backblaze-labs/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
+| `@backblaze-labs/b2-sdk/notifications` | `src/notifications/index.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
+| `@backblaze-labs/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignGetObjectUrl |
 
 ## Source layout
 
@@ -93,7 +93,7 @@ src/
 - **Isomorphic simulator.** `B2Simulator.handleRequest` is `async` so the `b2_copy_part` handler can use the SDK's own `sha1Hex` (Node `node:crypto` lazy-loaded, WebCrypto fallback in browsers). This is why the entire test suite runs in browsers too.
 - **Sync engine fs imports are lazy.** `src/sync/synchronizer.ts` imports `node:fs/promises` and `node:path` via `await import(...)` *inside* the action closures, not at the module top level. Means the synchronizer loads in browsers (B2-to-B2 sync works in a browser); only the local-disk actions throw when invoked in a non-Node runtime.
 - **SSRF guard on the default transport.** `FetchTransport` calls `urlGuard.check(url)` before every `fetch`. `B2Client.authorize()` locks the guard to host suffixes derived from the realm's authorize response (plus `backblaze.com` for upload-pod hostnames). Custom transports (e.g. the simulator's) bypass the guard by design — the user owns hardening when they supply their own. Throws non-retryable `B2SsrfError`. See `src/http/url-guard.ts`.
-- **User-Agent contract.** Format: `b2-sdk-ts/<version> (typescript; @backblaze/b2-sdk; <runtime>; [os; ][arch])`. Both `b2-sdk-ts/` and `@backblaze/b2-sdk` are stable product tokens — do NOT rename without coordinating. See `src/http/user-agent.ts`. The version lives in `src/version.ts`, which is the only file that imports `package.json` via `import pkg from '../package.json' with { type: 'json' }` and re-exports it as the `VERSION` constant.
+- **User-Agent contract.** Format: `b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])`. Both `b2-sdk-typescript/` and `@backblaze-labs/b2-sdk` are stable product tokens — do NOT rename without coordinating. See `src/http/user-agent.ts`. The version lives in `src/version.ts`, which is the only file that imports `package.json` via `import pkg from '../package.json' with { type: 'json' }` and re-exports it as the `VERSION` constant.
 - **Lint gate is `--error-on-warnings`.** `pnpm lint` fails CI on any biome warning, not just errors. Prefer `as unknown as T` casts over `as any` in tests.
 - **`LARGE_TEST_TIMEOUT = 60_000`** for any test that round-trips multi-MB through the simulator + per-part SHA-1 hashing (`src/upload/upload.test.ts`, `src/copy/copy.test.ts`, `src/upload/stream.test.ts`). macOS GitHub runners are ~2-3× slower than local for this workload; 30 s is too tight.
 

@@ -1,0 +1,108 @@
+name: Release
+
+# Drives the changesets-based release loop, publishing to npm via OIDC
+# "trusted publishing" — no long-lived NPM_TOKEN secret required.
+#
+#   1. On every push to `main`, this workflow inspects `.changeset/` and opens
+#      (or updates) a "release: version packages" PR that applies the queued
+#      changesets, bumps `package.json` version, and rewrites CHANGELOG.md.
+#   2. When that PR is merged, the workflow re-runs, detects there are no
+#      pending changesets, builds, and publishes to npm. pnpm exchanges this
+#      job's GitHub OIDC token for a short-lived, single-use npm credential —
+#      nothing to leak, nothing to rotate.
+#
+# ONE-TIME SETUP (see RELEASE.md for the full walkthrough):
+#   - The package must already exist on npm before a trusted publisher can be
+#     configured, so 0.1.0 is published manually (npm login + pnpm publish).
+#   - After 0.1.0 is live: npmjs.com -> @backblaze-labs/b2-sdk -> Settings ->
+#     "Trusted publishing" -> add a GitHub Actions publisher with:
+#         Organization/user:  backblaze-labs
+#         Repository:         b2-typescript-sdk
+#         Workflow filename:  release.yml
+#         Environment:        (leave blank — none configured here)
+#   - Optionally then set the package to "Require two-factor authentication
+#     and disallow tokens" for maximum hardening; OIDC keeps working.
+#
+# No GitHub secrets are needed beyond the automatic GITHUB_TOKEN. The
+# id-token: write permission below is what lets pnpm mint the OIDC token.
+#
+# Requirements: Node >= 22.14.0 (node-version: 22 resolves above this) and
+# pnpm >= 11.0 for native OIDC publish (pinned via packageManager in
+# package.json — currently 11.1.0).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # changesets/action commits the version PR + tag
+  id-token: write # OIDC token for trusted publishing + provenance
+  pull-requests: write # open / update the "Version Packages" PR
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version + publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so changesets can read merge bases when generating the
+          # version PR's changelog diff.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          # Sets the registry pnpm publishes against. No NODE_AUTH_TOKEN is
+          # provided — pnpm's OIDC path (trusted publishing) supersedes any
+          # token-based .npmrc auth on pnpm >= 10.16.
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
+
+      # Pre-publish gate. The full CI suite already runs against every push in
+      # ci.yml; we repeat the cheap-but-critical checks here so a broken main
+      # never reaches npm even if ci.yml is bypassed for some reason.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm run verify:metadata
+      - run: pnpm run verify:exports
+
+      # Optional: catch broken `exports` map / type-resolution before users do.
+      # `attw` is `@arethetypeswrong/cli` — fast, network-free, no install side
+      # effects beyond the dep itself. `continue-on-error` because attw has a
+      # known incompatibility with some Node minor versions where it throws
+      # "Cannot read properties of undefined (reading 'filename')" even on
+      # valid packages; the result is informational, not blocking.
+      - name: Verify package types resolve cleanly (attw)
+        continue-on-error: true
+        run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
+
+      - name: Create release PR or publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          # changesets/action runs `version` when there are changesets queued
+          # (opens / updates the PR) and runs `publish` after that PR merges
+          # and `.changeset/` is empty again. `pnpm publish` honours
+          # publishConfig.access=public and publishConfig.provenance=true from
+          # package.json; under OIDC, provenance is attested automatically.
+          version: pnpm changeset version
+          publish: pnpm publish
+          commit: 'release: version packages'
+          title: 'release: version packages'
+          createGithubReleases: true
+        env:
+          # Only GITHUB_TOKEN — no NPM_TOKEN. npm auth comes from the OIDC
+          # token minted via the id-token: write permission above.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

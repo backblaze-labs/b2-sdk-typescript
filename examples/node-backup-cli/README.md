@@ -1,6 +1,6 @@
 # Encrypted backup CLI
 
-Production-shaped local-folder-to-B2 backup. Mirrors the pattern of `openclaw-b2-sync-backup` (the most polished backup tool in the npm B2 ecosystem audit) but written from scratch on `@backblaze/b2-sdk`.
+Production-shaped local-folder-to-B2 backup. Mirrors the pattern of `openclaw-b2-sync-backup` (the most polished backup tool in the npm B2 ecosystem audit) but written from scratch on `@backblaze-labs/b2-sdk`.
 
 ## What it does
 

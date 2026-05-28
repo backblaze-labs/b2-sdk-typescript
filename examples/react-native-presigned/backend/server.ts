@@ -6,7 +6,7 @@
  * file bytes directly to B2: the application key never reaches the device.
  */
 
-import { B2Client } from '@backblaze/b2-sdk'
+import { B2Client } from '@backblaze-labs/b2-sdk'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'

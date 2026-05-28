@@ -11,8 +11,8 @@
  */
 
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http'
-import { B2Client } from '@backblaze/b2-sdk'
-import { B2Error } from '@backblaze/b2-sdk/errors'
+import { B2Client } from '@backblaze-labs/b2-sdk'
+import { B2Error } from '@backblaze-labs/b2-sdk/errors'
 import { mintDownloadUrl } from './mint.ts'
 import { allowedPrefix } from './policy.ts'
 

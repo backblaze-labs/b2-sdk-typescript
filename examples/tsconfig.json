@@ -13,15 +13,15 @@
     // just this one rule for examples so they read like real user code.
     "noPropertyAccessFromIndexSignature": false,
     "paths": {
-      "@backblaze/b2-sdk": ["../src/index.ts"],
-      "@backblaze/b2-sdk/raw": ["../src/raw/index.ts"],
-      "@backblaze/b2-sdk/errors": ["../src/errors/index.ts"],
-      "@backblaze/b2-sdk/auth": ["../src/auth/index.ts"],
-      "@backblaze/b2-sdk/auth/file": ["../src/auth/file.ts"],
-      "@backblaze/b2-sdk/streams": ["../src/streams/index.ts"],
-      "@backblaze/b2-sdk/sync": ["../src/sync/index.ts"],
-      "@backblaze/b2-sdk/simulator": ["../src/simulator/index.ts"],
-      "@backblaze/b2-sdk/s3": ["../src/s3/index.ts"]
+      "@backblaze-labs/b2-sdk": ["../src/index.ts"],
+      "@backblaze-labs/b2-sdk/raw": ["../src/raw/index.ts"],
+      "@backblaze-labs/b2-sdk/errors": ["../src/errors/index.ts"],
+      "@backblaze-labs/b2-sdk/auth": ["../src/auth/index.ts"],
+      "@backblaze-labs/b2-sdk/auth/file": ["../src/auth/file.ts"],
+      "@backblaze-labs/b2-sdk/streams": ["../src/streams/index.ts"],
+      "@backblaze-labs/b2-sdk/sync": ["../src/sync/index.ts"],
+      "@backblaze-labs/b2-sdk/simulator": ["../src/simulator/index.ts"],
+      "@backblaze-labs/b2-sdk/s3": ["../src/s3/index.ts"]
     }
   },
   // `browser-uploader/`, `cloudflare-bandwidth-alliance/`, and

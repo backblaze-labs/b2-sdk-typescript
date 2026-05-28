@@ -1,4 +1,4 @@
-# cspell configuration for @backblaze/b2-sdk.
+# cspell configuration for @backblaze-labs/b2-sdk.
 #
 # Scope: comments, JSDoc, README / CHANGELOG / CONTRIBUTING / SECURITY,
 # and string literals across `src/`, `examples/`, and the top-level docs.

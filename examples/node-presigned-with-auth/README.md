@@ -15,7 +15,7 @@ Browser ─── GET /file/<id> ───►  Your backend
 Browser ◄─── 302 to B2 ────── B2 serves the file
 ```
 
-This example shows the safe shape using `@backblaze/b2-sdk` — the application key never leaves the backend, the signed URL is scoped to a single file-name prefix, and the token is short-lived enough that a leak's blast radius is bounded.
+This example shows the safe shape using `@backblaze-labs/b2-sdk` — the application key never leaves the backend, the signed URL is scoped to a single file-name prefix, and the token is short-lived enough that a leak's blast radius is bounded.
 
 ## Files
 

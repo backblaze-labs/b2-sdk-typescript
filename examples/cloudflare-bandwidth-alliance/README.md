@@ -13,7 +13,7 @@ For any read-heavy workload, the savings can be substantial — Cloudflare's edg
 - Honors `Range` requests for byte-range downloads.
 - Surfaces typed B2 errors with their `request_id` for support correlation.
 
-The Worker uses the **S3-compatible** B2 endpoint because S3 over HTTPS works seamlessly in the Workers runtime via `fetch`. The SDK's `@backblaze/b2-sdk/s3` subpath also works inside a Worker if you need richer control (presigning, custom retry, typed errors).
+The Worker uses the **S3-compatible** B2 endpoint because S3 over HTTPS works seamlessly in the Workers runtime via `fetch`. The SDK's `@backblaze-labs/b2-sdk/s3` subpath also works inside a Worker if you need richer control (presigning, custom retry, typed errors).
 
 ## Files
 

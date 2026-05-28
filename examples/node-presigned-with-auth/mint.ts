@@ -6,7 +6,7 @@
  * in-memory `B2Simulator` without spinning up a real server.
  */
 
-import type { B2Client, Bucket } from '@backblaze/b2-sdk'
+import type { B2Client, Bucket } from '@backblaze-labs/b2-sdk'
 
 /** Result of {@link mintDownloadUrl}: the signed URL and when it expires. */
 export interface MintedUrl {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-28
+
+First public release of `@backblaze-labs/b2-sdk`. Everything below is new in this version.
+
 ### Added — security
 
 - **SSRF / URL-substitution guard** in the default `FetchTransport`. After `B2Client.authorize()`, the transport rejects any URL whose host falls outside the realm's parent domain (`backblazeb2.com`, `backblaze.com`) plus user-supplied allow-list entries. Literal IPv4/IPv6 addresses, `localhost`, `metadata.google.internal`, `*.internal`, and `*.local` are rejected unconditionally. New `B2SsrfError` (non-retryable, attaches the offending URL). New public `UrlGuard` class and `deriveAllowedSuffixes()` helper exported from the main entry. See [SSRF guard](README.md#ssrf-guard).
@@ -19,16 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added — source-level isomorphism
 
 - **`.ts` extensions on every internal relative import.** `tsconfig.json` enables `allowImportingTsExtensions` + `rewriteRelativeImportExtensions`. One source tree now runs unmodified in Node 22+, Bun, Deno (no build step, no `node_modules`, no `npm:` shim), browsers, Cloudflare Workers, and Vercel Edge. Vite rewrites the extensions during build so consumers still see `./foo.js` in dist/.
-- **Deno typecheck workflow** verifies the property on every push: `deno check examples/...` resolves `@backblaze/b2-sdk` straight at `../src/*.ts` via `examples/deno.json`. If a `.js` extension ever sneaks back into an internal import, the workflow fails immediately.
+- **Deno typecheck workflow** verifies the property on every push: `deno check examples/...` resolves `@backblaze-labs/b2-sdk` straight at `../src/*.ts` via `examples/deno.json`. If a `.js` extension ever sneaks back into an internal import, the workflow fails immediately.
 - **JSON-imported version constant.** `src/version.ts` does `import pkg from '../package.json' with { type: 'json' }; export const VERSION = pkg.version`. Bumping the package version automatically propagates to the User-Agent header and the published artifact — no separate `src/version.ts` to maintain, no sync script. Rollup tree-shakes the JSON down to a 133-byte module containing only the version field; no devDependency or metadata leak to consumers.
 
 ### Added — telemetry & identity
 
-- **Stable, greppable User-Agent.** Format: `b2-sdk-ts/<version> (typescript; @backblaze/b2-sdk; <runtime>; [os; ][arch])`. Both `b2-sdk-ts/` (stable product token) and `@backblaze/b2-sdk` (npm package name) are part of the documented contract — log queries can match either. Runtime detection covers Node, Bun, Deno, and browser; OS + arch reported on non-browser runtimes. Custom `userAgent` from `B2ClientOptions` is prepended verbatim. New exported constants `SDK_PRODUCT` and `SDK_PACKAGE` from `@backblaze/b2-sdk`.
+- **Stable, greppable User-Agent.** Format: `b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])`. Both `b2-sdk-typescript/` (stable product token) and `@backblaze-labs/b2-sdk` (npm package name) are part of the documented contract — log queries can match either. Runtime detection covers Node, Bun, Deno, and browser; OS + arch reported on non-browser runtimes. Custom `userAgent` from `B2ClientOptions` is prepended verbatim. New exported constants `SDK_PRODUCT` and `SDK_PACKAGE` from `@backblaze-labs/b2-sdk`.
 
 ### Added — simulator fidelity & test seams
 
-- **B2 spec input validation in the simulator.** `validateBucketName`, `validateFileName`, `validateFileInfo`, `validateBucketInfo`, and `validateMaxCount` enforce the limits B2 documents (6-63 char bucket name with `b2-` reserved-prefix rule, 1024-byte UTF-8 file-name cap, 2048-byte fileInfo / bucketInfo budgets, per-endpoint `maxFileCount` ceilings). Wired into every state-touching handler. Limit constants (`BUCKET_NAME_MIN/MAX`, `FILE_NAME_MAX_BYTES`, `FILE_INFO_TOTAL_MAX`, `BUCKET_INFO_MAX_KEYS`, etc.) are re-exported from `@backblaze/b2-sdk/simulator` for tests that want to parameterise around the documented caps.
+- **B2 spec input validation in the simulator.** `validateBucketName`, `validateFileName`, `validateFileInfo`, `validateBucketInfo`, and `validateMaxCount` enforce the limits B2 documents (6-63 char bucket name with `b2-` reserved-prefix rule, 1024-byte UTF-8 file-name cap, 2048-byte fileInfo / bucketInfo budgets, per-endpoint `maxFileCount` ceilings). Wired into every state-touching handler. Limit constants (`BUCKET_NAME_MIN/MAX`, `FILE_NAME_MAX_BYTES`, `FILE_INFO_TOTAL_MAX`, `BUCKET_INFO_MAX_KEYS`, etc.) are re-exported from `@backblaze-labs/b2-sdk/simulator` for tests that want to parameterise around the documented caps.
 - **Opt-in strict-auth mode.** `new B2Simulator({ strictAuth: true })` enforces application-key capabilities, bucket scoping, prefix scoping, and auth-token expiry on every request (including upload + download paths). Unknown tokens return `401 bad_auth_token`; expired tokens return `401 expired_auth_token`; missing capabilities return `403 unauthorized`. Default remains permissive so existing tests are unaffected.
 - **Virtual clock for expiry tests.** `B2Simulator.advanceTime(ms)` fast-forwards the simulator's internal clock so `authTokenTtlMs` expiry paths can be exercised without `setTimeout`.
 - **Pluggable post-upload hooks.** `onWebhookDeliver` fires after every successful upload / copy / `finishLargeFile` against a bucket with matching event-notification rules; `onReplicate` fires when the bucket is a replication source. Errors thrown from user hooks are routed to the optional `onHookError` (otherwise swallowed — a buggy listener never masks API success). `B2Simulator.flushHooks()` is a deterministic test seam: awaits every pending hook to settle before assertions.
@@ -83,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`B2Object.createWriteStream(options?)`** returning `{ writable: WritableStream<Uint8Array>, done: Promise<FileVersion> }`. Pipe a `ReadableStream` directly into B2 with multipart-protocol buffering, parallel part uploads, and backpressure.
 - **`B2Client.hasCapabilities(needed)`** returns `{ ok, missing }` against `accountInfo.allowed.capabilities`. New `B2InsufficientCapabilityError` (the 13th error subclass) and `CapabilityCheckResult` interface.
 - **`bucket.getFileInfoByName(fileName)`** and **`bucket.unhideFile(fileName)`** convenience methods.
-- **`FileAccountInfo`** — JSON-file-backed `AccountInfo` (Node-only) under new subpath `@backblaze/b2-sdk/auth/file`. Survives process restart; load() returns silently on missing/corrupt files.
+- **`FileAccountInfo`** — JSON-file-backed `AccountInfo` (Node-only) under new subpath `@backblaze-labs/b2-sdk/auth/file`. Survives process restart; load() returns silently on missing/corrupt files.
 
 ### Added — base
 
@@ -112,3 +116,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Biome for linting and formatting; ESLint with strict JSDoc/TSDoc rules for doc completeness
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
+
+[Unreleased]: https://github.com/backblaze-labs/b2-typescript-sdk/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/backblaze-labs/b2-typescript-sdk/releases/tag/v0.1.0

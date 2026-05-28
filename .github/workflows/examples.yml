@@ -66,7 +66,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Examples import `@backblaze/b2-sdk` which resolves via package.json's
+      # Examples import `@backblaze-labs/b2-sdk` which resolves via package.json's
       # `exports` map to `./dist/index.js`. Build dist/ so tsx can resolve
       # those imports the same way an end user would after `npm install`.
       # (The typecheck jobs above don't need this because tsc honours
@@ -121,7 +121,7 @@ jobs:
         with:
           deno-version: v2.x
       # `deno check` uses Deno's own TS toolchain. The import map in
-      # examples/deno.json points the bare specifiers (@backblaze/b2-sdk, ...)
+      # examples/deno.json points the bare specifiers (@backblaze-labs/b2-sdk, ...)
       # straight at the SDK source under ../src/*.ts. No build, no
       # node_modules, no npm: specifier dance.
       - name: Typecheck examples with Deno (no build, source only)

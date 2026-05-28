@@ -10,9 +10,9 @@
  * config from the host's config schema.
  */
 
-import { B2Client } from '@backblaze/b2-sdk'
-import type { Bucket } from '@backblaze/b2-sdk'
-import { BufferSource } from '@backblaze/b2-sdk/streams'
+import { B2Client } from '@backblaze-labs/b2-sdk'
+import type { Bucket } from '@backblaze-labs/b2-sdk'
+import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
 
 /** Required configuration for {@link B2Storage}. */
 export interface B2StorageConfig {

@@ -313,6 +313,7 @@ copyable
 denylist
 deselected
 discoverable
+exfiltrated
 exfiltrating
 forwardability
 fungible

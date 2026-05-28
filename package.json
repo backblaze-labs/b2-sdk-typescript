@@ -1,6 +1,6 @@
 {
-  "name": "@backblaze/b2-sdk",
-  "version": "0.0.0",
+  "name": "@backblaze-labs/b2-sdk",
+  "version": "0.1.0",
   "description": "The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript",
   "license": "MIT",
   "type": "module",
@@ -116,7 +116,7 @@
   "types": "./dist/index.d.ts",
   "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && node scripts/build-cts-types.mjs",
     "test": "vitest run",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:all": "vitest run && vitest run --config vitest.slow.config.ts",
@@ -134,10 +134,16 @@
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
     "clean": "rm -rf dist docs",
-    "prepublishOnly": "pnpm run clean && pnpm run build"
+    "changeset": "changeset",
+    "release": "pnpm run clean && pnpm run build && pnpm run verify:metadata && pnpm run verify:exports && changeset publish",
+    "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run verify:metadata && pnpm run verify:exports",
+    "verify:metadata": "node scripts/verify-package-metadata.mjs",
+    "verify:exports": "node scripts/verify-package-exports.mjs",
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test && pnpm run build && pnpm run docs && pnpm run verify:metadata && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@changesets/cli": "^2.27.0",
     "@eslint/js": "^10.0.1",
     "@microsoft/tsdoc-config": "^0.18.1",
     "@types/node": "^25.6.2",
@@ -177,11 +183,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/backblaze/b2-sdk-typescript"
+    "url": "https://github.com/backblaze-labs/b2-typescript-sdk"
   },
   "author": "Backblaze, Inc.",
-  "homepage": "https://github.com/backblaze/b2-sdk-typescript#readme",
+  "homepage": "https://github.com/backblaze-labs/b2-typescript-sdk#readme",
   "bugs": {
-    "url": "https://github.com/backblaze/b2-sdk-typescript/issues"
+    "url": "https://github.com/backblaze-labs/b2-typescript-sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

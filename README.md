@@ -1,8 +1,8 @@
-# @backblaze/b2-sdk
+# @backblaze-labs/b2-sdk
 
 [![CI](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml)
 [![API Docs](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/docs.yml/badge.svg)](https://backblaze-labs.github.io/b2-typescript-sdk/)
-[![npm](https://img.shields.io/npm/v/@backblaze/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze/b2-sdk)
+[![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -21,17 +21,17 @@ The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript.
 ## Install
 
 ```bash
-npm install @backblaze/b2-sdk
+npm install @backblaze-labs/b2-sdk
 # or
-pnpm add @backblaze/b2-sdk
+pnpm add @backblaze-labs/b2-sdk
 # or
-yarn add @backblaze/b2-sdk
+yarn add @backblaze-labs/b2-sdk
 ```
 
 ## Quick start
 
 ```ts
-import { B2Client, BufferSource } from '@backblaze/b2-sdk'
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
 
 const client = new B2Client({
   applicationKeyId: process.env.B2_APPLICATION_KEY_ID,
@@ -58,6 +58,8 @@ console.log(`Uploaded: ${file.fileName} (${file.contentLength} bytes)`)
 ### Buckets
 
 ```ts
+import { BucketType } from '@backblaze-labs/b2-sdk'
+
 // List all buckets
 const buckets = await client.listBuckets()
 
@@ -66,7 +68,7 @@ const bucket = await client.getBucket('my-bucket')
 
 // Update bucket settings
 await bucket.update({
-  bucketType: 'allPublic',
+  bucketType: BucketType.AllPublic,
   lifecycleRules: [{ fileNamePrefix: 'logs/', daysFromUploadingToHiding: 30 }],
 })
 
@@ -74,12 +76,14 @@ await bucket.update({
 await bucket.delete()
 ```
 
+> The `BucketType`, `RetentionMode`, `LegalHoldValue`, `Capability`, `EventType`, and `EncryptionMode` `as const` objects exported from the main entry give you type-safe alternatives to the raw string literals — pick whichever style you prefer; both are accepted at the type level.
+
 ### Uploads
 
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.
 
 ```ts
-import { BufferSource, BlobSource } from '@backblaze/b2-sdk'
+import { BufferSource, BlobSource } from '@backblaze-labs/b2-sdk'
 
 // From a Uint8Array
 await bucket.upload({
@@ -240,8 +244,10 @@ for await (const event of bucket.deleteAll({ prefix: 'tmp/', dryRun: false })) {
 ### Application keys
 
 ```ts
+import { Capability } from '@backblaze-labs/b2-sdk'
+
 const key = await client.createKey({
-  capabilities: ['readFiles', 'writeFiles'],
+  capabilities: [Capability.ReadFiles, Capability.WriteFiles],
   keyName: 'my-app-key',
   bucketId: bucket.id,
   namePrefix: 'uploads/',
@@ -257,23 +263,21 @@ await client.deleteKey(key.applicationKeyId)
 Fail fast with a typed error instead of waiting for a server 401/403:
 
 ```ts
-import { B2InsufficientCapabilityError } from '@backblaze/b2-sdk/errors'
+import { Capability } from '@backblaze-labs/b2-sdk'
+import { B2InsufficientCapabilityError } from '@backblaze-labs/b2-sdk/errors'
 
-const { ok, missing } = client.hasCapabilities(['readFiles', 'writeFiles'])
+const required = [Capability.ReadFiles, Capability.WriteFiles]
+const { ok, missing } = client.hasCapabilities(required)
 if (!ok) {
-  throw new B2InsufficientCapabilityError(
-    ['readFiles', 'writeFiles'],
-    [...missing], // available capabilities is on accountInfo if needed
-    missing,
-  )
+  throw new B2InsufficientCapabilityError(required, [...missing], missing)
 }
 ```
 
 ### Server-side encryption
 
 ```ts
-import { SSE_B2, sseCustomer } from '@backblaze/b2-sdk'
-import { EncryptionKey } from '@backblaze/b2-sdk/streams'
+import { SSE_B2, sseCustomer } from '@backblaze-labs/b2-sdk'
+import { EncryptionKey } from '@backblaze-labs/b2-sdk/streams'
 
 // SSE-B2 (Backblaze-managed keys)
 await bucket.upload({
@@ -305,8 +309,10 @@ JSON.stringify(key)         // customer key and MD5 fields show "[redacted SSE-C
 ### Object lock and legal hold
 
 ```ts
+import { LegalHoldValue, RetentionMode } from '@backblaze-labs/b2-sdk'
+
 await bucket.updateFileRetention('important.pdf', fileId, {
-  mode: 'governance',
+  mode: RetentionMode.Governance,
   retainUntilTimestamp: Date.now() + 365 * 24 * 60 * 60 * 1000,
 })
 
@@ -314,20 +320,22 @@ await bucket.updateFileRetention('important.pdf', fileId, {
 await bucket.updateFileRetention(
   'important.pdf',
   fileId,
-  { mode: 'governance', retainUntilTimestamp: Date.now() + 24 * 60 * 60 * 1000 },
+  { mode: RetentionMode.Governance, retainUntilTimestamp: Date.now() + 24 * 60 * 60 * 1000 },
   { bypassGovernance: true },
 )
 
-await bucket.updateFileLegalHold('evidence.pdf', fileId, 'on')
+await bucket.updateFileLegalHold('evidence.pdf', fileId, LegalHoldValue.On)
 ```
 
 ### Event notifications
 
 ```ts
+import { EventType } from '@backblaze-labs/b2-sdk'
+
 await bucket.setNotificationRules([
   {
     name: 'upload-notify',
-    eventTypes: ['b2:ObjectCreated:*'],
+    eventTypes: [EventType.ObjectCreatedAll],
     isEnabled: true,
     targetConfiguration: {
       targetType: 'webhook',
@@ -338,13 +346,13 @@ await bucket.setNotificationRules([
 ])
 ```
 
-On the receiving side, verify the `X-Bz-Event-Notification-Signature` header before trusting the payload. The `@backblaze/b2-sdk/notifications` subpath ships HMAC-SHA256 helpers so you don't have to implement constant-time signature checking yourself:
+On the receiving side, verify the `X-Bz-Event-Notification-Signature` header before trusting the payload. The `@backblaze-labs/b2-sdk/notifications` subpath ships HMAC-SHA256 helpers so you don't have to implement constant-time signature checking yourself:
 
 ```ts
 import {
   B2_WEBHOOK_SIGNATURE_HEADER,
   requireValidWebhook,
-} from '@backblaze/b2-sdk/notifications'
+} from '@backblaze-labs/b2-sdk/notifications'
 
 // Inside your HTTP handler. `body` must be the raw request bytes — any
 // JSON re-serialisation will invalidate the HMAC.
@@ -373,8 +381,8 @@ const auth = await bucket.getDownloadAuthorization('photos/', 3600)
 `FileAccountInfo` persists the authorization response to a JSON file on disk so processes can restart without re-authorizing. It implements the `AccountInfo` interface and is a drop-in replacement for `InMemoryAccountInfo`. Upload URL pools remain in memory.
 
 ```ts
-import { B2Client } from '@backblaze/b2-sdk'
-import { FileAccountInfo } from '@backblaze/b2-sdk/auth/file'
+import { B2Client } from '@backblaze-labs/b2-sdk'
+import { FileAccountInfo } from '@backblaze-labs/b2-sdk/auth/file'
 
 const accountInfo = new FileAccountInfo('/var/cache/my-app/b2-auth.json')
 await accountInfo.load() // populate from disk if the file exists
@@ -398,10 +406,10 @@ The SDK is organized into subpath exports for tree-shaking:
 
 ```ts
 // High-level facade (most users need only this)
-import { B2Client, Bucket, B2Object } from '@backblaze/b2-sdk'
+import { B2Client, Bucket, B2Object } from '@backblaze-labs/b2-sdk'
 
 // Low-level 1:1 API bindings for the B2 native endpoints the SDK uses
-import { RawClient } from '@backblaze/b2-sdk/raw'
+import { RawClient } from '@backblaze-labs/b2-sdk/raw'
 
 // Error types for catch blocks
 import {
@@ -409,11 +417,11 @@ import {
   ExpiredAuthTokenError,
   CapExceededError,
   B2InsufficientCapabilityError,
-} from '@backblaze/b2-sdk/errors'
+} from '@backblaze-labs/b2-sdk/errors'
 
 // Auth backends (in-memory default, file-backed for Node persistence)
-import { InMemoryAccountInfo } from '@backblaze/b2-sdk/auth'
-import { FileAccountInfo } from '@backblaze/b2-sdk/auth/file'
+import { InMemoryAccountInfo } from '@backblaze-labs/b2-sdk/auth'
+import { FileAccountInfo } from '@backblaze-labs/b2-sdk/auth/file'
 
 // Streaming utilities + SSE-C key wrapper
 import {
@@ -421,16 +429,16 @@ import {
   BufferSource,
   BlobSource,
   EncryptionKey,
-} from '@backblaze/b2-sdk/streams'
+} from '@backblaze-labs/b2-sdk/streams'
 
 // Sync engine (local <-> B2)
-import { synchronize, LocalFolder, B2Folder } from '@backblaze/b2-sdk/sync'
+import { synchronize, LocalFolder, B2Folder } from '@backblaze-labs/b2-sdk/sync'
 
 // S3-compatible helpers (requires @aws-sdk/client-s3 peer dependency)
-import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze/b2-sdk/s3'
+import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze-labs/b2-sdk/s3'
 
 // In-memory B2 server for tests (no network required)
-import { B2Simulator } from '@backblaze/b2-sdk/simulator'
+import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
 
 ## Custom transport
@@ -438,7 +446,7 @@ import { B2Simulator } from '@backblaze/b2-sdk/simulator'
 The SDK uses a pluggable transport layer. The default `FetchTransport` uses the native `fetch` API. You can provide your own:
 
 ```ts
-import type { HttpTransport, HttpRequest, HttpResponse } from '@backblaze/b2-sdk'
+import type { HttpTransport, HttpRequest, HttpResponse } from '@backblaze-labs/b2-sdk'
 
 class MyTransport implements HttpTransport {
   async send(request: HttpRequest): Promise<HttpResponse> {
@@ -458,10 +466,10 @@ const client = new B2Client({
 Every request the SDK issues carries a User-Agent header that Backblaze can grep server logs by:
 
 ```
-b2-sdk-ts/0.1.0 (typescript; @backblaze/b2-sdk; node/24.14.1; linux; x64)
+b2-sdk-typescript/0.1.0 (typescript; @backblaze-labs/b2-sdk; node/24.14.1; linux; x64)
 ```
 
-Both `b2-sdk-ts/` (stable product token) and `@backblaze/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
+Both `b2-sdk-typescript/` (stable product token) and `@backblaze-labs/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
 
 The version is read straight from `package.json` via a JSON import attribute, so bumping the package version automatically propagates to the UA, the published artifact, and the runtime constant. There is no second source of truth to keep in sync.
 
@@ -473,7 +481,7 @@ const client = new B2Client({
   applicationKey,
   userAgent: 'my-app/1.0',
 })
-// → "my-app/1.0 b2-sdk-ts/0.1.0 (typescript; @backblaze/b2-sdk; node/24.14.1; linux; x64)"
+// → "my-app/1.0 b2-sdk-typescript/0.1.0 (typescript; @backblaze-labs/b2-sdk; node/24.14.1; linux; x64)"
 ```
 
 ## SSRF guard
@@ -532,9 +540,9 @@ The SDK ships an in-memory B2 simulator for unit testing without network access:
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest'
-import { B2Client } from '@backblaze/b2-sdk'
-import { B2Simulator } from '@backblaze/b2-sdk/simulator'
-import { BufferSource } from '@backblaze/b2-sdk/streams'
+import { B2Client, BucketType } from '@backblaze-labs/b2-sdk'
+import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
+import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
 
 describe('my app', () => {
   let client: B2Client
@@ -552,7 +560,7 @@ describe('my app', () => {
   it('uploads and retrieves a file', async () => {
     const bucket = await client.createBucket({
       bucketName: 'test-bucket',
-      bucketType: 'allPrivate',
+      bucketType: BucketType.AllPrivate,
     })
 
     await bucket.upload({
@@ -572,15 +580,16 @@ describe('my app', () => {
 All B2 API errors are thrown as typed `B2Error` subclasses (13 in total). Client-side capability checks throw `B2InsufficientCapabilityError`.
 
 ```ts
+import { BucketType } from '@backblaze-labs/b2-sdk'
 import {
   B2Error,
   CapExceededError,
   DuplicateBucketNameError,
   B2InsufficientCapabilityError,
-} from '@backblaze/b2-sdk/errors'
+} from '@backblaze-labs/b2-sdk/errors'
 
 try {
-  await client.createBucket({ bucketName: 'test', bucketType: 'allPrivate' })
+  await client.createBucket({ bucketName: 'test', bucketType: BucketType.AllPrivate })
 } catch (err) {
   if (err instanceof DuplicateBucketNameError) {
     console.log('Bucket already exists')
@@ -606,7 +615,7 @@ The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct acces
 - **Event notification rules** via `bucket.getNotificationRules()` and `bucket.setNotificationRules()`.
 - **Application key restrictions** (per-bucket, per-prefix, per-capability) via `client.createKey()`.
 
-When you want S3 compatibility instead — for tooling that already speaks S3, or for the Bandwidth Alliance proxy pattern — `@backblaze/b2-sdk/s3` exposes `createS3ClientConfig()` and `presignGetObjectUrl()` so the same SDK covers both surfaces.
+When you want S3 compatibility instead — for tooling that already speaks S3, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()` and `presignGetObjectUrl()` so the same SDK covers both surfaces.
 
 ## Source isomorphism
 

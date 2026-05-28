@@ -85,7 +85,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # The examples import `@backblaze/b2-sdk`, which resolves via the
+      # The examples import `@backblaze-labs/b2-sdk`, which resolves via the
       # package.json `exports` map to `./dist/index.js`. Build dist/ so tsx
       # can resolve the bare specifier the same way an `npm install`-ed
       # consumer would.

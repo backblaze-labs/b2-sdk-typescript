@@ -5,13 +5,13 @@ import { VERSION } from '../version.ts'
  * issued by this SDK regardless of how the User-Agent comment evolves.
  * Treat as part of the public contract: do NOT rename without coordinating.
  */
-export const SDK_PRODUCT = 'b2-sdk-ts'
+export const SDK_PRODUCT = 'b2-sdk-typescript'
 
 /**
  * The npm package name. Embedded in the User-Agent comment alongside
  * {@link SDK_PRODUCT} so log queries that grep on either token work.
  */
-export const SDK_PACKAGE = '@backblaze/b2-sdk'
+export const SDK_PACKAGE = '@backblaze-labs/b2-sdk'
 
 /** Detected runtime + OS information for the User-Agent comment. */
 interface Platform {

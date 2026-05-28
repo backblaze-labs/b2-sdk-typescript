@@ -13,9 +13,9 @@
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { B2Client } from '@backblaze/b2-sdk'
-import type { Bucket } from '@backblaze/b2-sdk'
-import { BufferSource } from '@backblaze/b2-sdk/streams'
+import { B2Client } from '@backblaze-labs/b2-sdk'
+import type { Bucket } from '@backblaze-labs/b2-sdk'
+import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
 import { smokeTransport } from '../_smoke/transport.ts'
 import { type WrappedKey, decryptFile, deriveKek, encryptFile, generateSalt } from './crypto.ts'
 import {

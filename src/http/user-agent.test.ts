@@ -26,7 +26,7 @@ describe('getUserAgent', () => {
 
   it('uses semicolon-separated tokens inside the comment', () => {
     const ua = getUserAgent()
-    // Format: b2-sdk-ts/<v> (typescript; @backblaze/b2-sdk; <runtime>; [os; ][arch])
+    // Format: b2-sdk-typescript/<v> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])
     const match = /^[^\s]+\s\(([^)]+)\)$/.exec(ua)
     expect(match).not.toBeNull()
     const inside = match?.[1]
@@ -54,7 +54,7 @@ describe('getUserAgent', () => {
     // includes x64, arm64. Just check both are present as non-empty tokens.
     const inside = /\(([^)]+)\)/.exec(ua)?.[1] ?? ''
     const tokens = inside.split('; ')
-    // Tokens: [typescript, @backblaze/b2-sdk, node/<v>, <os>, <arch>]
+    // Tokens: [typescript, @backblaze-labs/b2-sdk, node/<v>, <os>, <arch>]
     expect(tokens[3]).toMatch(/^\w+$/)
     expect(tokens[4]).toMatch(/^\w+$/)
   })

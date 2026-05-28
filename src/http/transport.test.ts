@@ -62,7 +62,7 @@ describe('FetchTransport', () => {
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const headers = new Headers(init.headers as HeadersInit)
     expect(headers.has('User-Agent')).toBe(true)
-    expect(headers.get('User-Agent')).toMatch(/^b2-sdk-ts\//)
+    expect(headers.get('User-Agent')).toMatch(/^b2-sdk-typescript\//)
   })
 
   it('uses a custom User-Agent prefix when provided', async () => {
@@ -73,7 +73,7 @@ describe('FetchTransport', () => {
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const headers = new Headers(init.headers as HeadersInit)
-    expect(headers.get('User-Agent')).toMatch(/^my-app\/1\.0 b2-sdk-ts\//)
+    expect(headers.get('User-Agent')).toMatch(/^my-app\/1\.0 b2-sdk-typescript\//)
   })
 
   it('routes the URL through the configured UrlGuard before fetch', async () => {

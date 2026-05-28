@@ -12,8 +12,8 @@
 
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { BufferSource } from '@backblaze/b2-sdk/streams'
-import type { ProgressListener } from '@backblaze/b2-sdk/streams'
+import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
+import type { ProgressListener } from '@backblaze-labs/b2-sdk/streams'
 import { setupClient } from './_smoke/cli.ts'
 
 /**

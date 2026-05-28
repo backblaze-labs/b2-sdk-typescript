@@ -11,9 +11,9 @@
  *   SYNC_DRY_RUN=true|false         (default: false)
  */
 
-import { B2Client } from '@backblaze/b2-sdk'
-import { B2Folder, LocalFolder, synchronize } from '@backblaze/b2-sdk/sync'
-import type { CompareMode, KeepMode, SynchronizerUpConfig } from '@backblaze/b2-sdk/sync'
+import { B2Client } from '@backblaze-labs/b2-sdk'
+import { B2Folder, LocalFolder, synchronize } from '@backblaze-labs/b2-sdk/sync'
+import type { CompareMode, KeepMode, SynchronizerUpConfig } from '@backblaze-labs/b2-sdk/sync'
 
 async function main() {
   const localDir = process.argv[2]
