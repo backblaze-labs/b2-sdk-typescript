@@ -124,9 +124,45 @@ export interface RetryTransportOptions {
 }
 
 /**
+ * Decide whether a classified error should be retried in place for `url`.
+ * Transient errors normally retry; the upload-endpoint 5xx carve-out is
+ * explained inline.
+ *
+ * @param error - The classified, retryability-tagged error.
+ * @param url - The request URL (used to detect upload endpoints).
+ * @param status - The HTTP status of the failed response.
+ *
+ * @returns Whether to retry the request in place.
+ */
+function shouldRetryInPlace(error: B2Error, url: string, status: number): boolean {
+  if (!error.retryable) return false
+  // Upload endpoints are URL-pinned: a 5xx may mean an unhealthy upload pod, so
+  // the correct recovery is a FRESH upload URL (the upload layer's job, tracked
+  // in #57) rather than re-POSTing the same URL. So NO transient 5xx is retried
+  // in place for uploads — those errors bubble to the upload layer. 408/429
+  // (timeout / throttle) are not pod-health signals and still retry in place.
+  //
+  // Match on the path segment so the `b2_get_upload_url` /
+  // `b2_get_upload_part_url` URL-fetch calls (ordinary API endpoints) are NOT
+  // treated as uploads.
+  const path = new URL(url).pathname
+  const isUploadEndpoint = path.includes('/b2_upload_file') || path.includes('/b2_upload_part')
+  if (isUploadEndpoint && status >= 500 && status < 600) return false
+  return true
+}
+
+/**
  * Transport wrapper that adds automatic retry with exponential backoff.
- * Handles transient B2 errors (408, 429, 503), expired auth tokens,
- * and network failures. Delegates to an inner {@link HttpTransport}.
+ * Handles transient errors (408, 429, and the transient 5xx set 500/502/503/504),
+ * expired auth tokens, and network failures. Delegates to an inner
+ * {@link HttpTransport}.
+ *
+ * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned: a 5xx
+ * may mean an unhealthy upload pod, so the correct recovery is a *fresh* upload
+ * URL (B2's documented flow), not a re-POST to the same one. So NO transient 5xx
+ * (500/502/503/504) is retried in place for upload endpoints — those errors
+ * bubble to the upload layer; 408/429 still retry in place. Proper fresh-URL
+ * upload retry is tracked separately.
  */
 export class RetryTransport implements HttpTransport {
   /** The wrapped transport that performs actual HTTP requests. */
@@ -215,7 +251,10 @@ export class RetryTransport implements HttpTransport {
           continue
         }
 
-        if (!error.retryable || attempt === this.options.maxRetries) {
+        if (
+          !shouldRetryInPlace(error, request.url, response.status) ||
+          attempt === this.options.maxRetries
+        ) {
           throw error
         }
 

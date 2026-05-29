@@ -310,6 +310,80 @@ describe('RetryTransport', () => {
       await expect(transport.send(baseRequest)).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
+
+    // No transient 5xx is retried in place for upload endpoints (URL-pinned;
+    // a 5xx may mean a bad pod, so it must bubble for fresh-URL retry, #57).
+    it.each([
+      ['b2_upload_file', 500],
+      ['b2_upload_file', 502],
+      ['b2_upload_file', 503],
+      ['b2_upload_file', 504],
+      ['b2_upload_part', 500],
+      ['b2_upload_part', 502],
+      ['b2_upload_part', 503],
+      ['b2_upload_part', 504],
+    ] as const)('does not retry %s on HTTP %i in place', async (endpoint, status) => {
+      const errorBody = { status, code: 'internal_error', message: `HTTP ${status}` }
+      // Second response would be 200 if it (wrongly) retried — assert it doesn't.
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(status, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const uploadRequest: HttpRequest = {
+        url: `https://pod-000.backblaze.com/b2api/v3/${endpoint}`,
+        method: 'POST',
+        headers: { Authorization: 'upload-token' },
+      }
+      await expect(transport.send(uploadRequest)).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not treat b2_get_upload_url / b2_get_upload_part_url as upload endpoints (still retries 500)', async () => {
+      // These are ordinary API calls (fetching an upload URL), not the
+      // URL-pinned upload POST, so the generic 5xx retry still applies.
+      const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(500, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_get_upload_part_url',
+        method: 'POST',
+        headers: { Authorization: 'token' },
+      })
+      expect(result.status).toBe(200)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('still retries 429 in place for upload endpoints (throttle, not pod health)', async () => {
+      // 408/429 are timeout/throttle signals, not pod-health 5xx, so they stay
+      // retryable in place for uploads.
+      const errorBody = { status: 429, code: 'too_many_requests', message: 'Slow down' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(429, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const uploadRequest: HttpRequest = {
+        url: 'https://pod-000.backblaze.com/b2api/v3/b2_upload_file',
+        method: 'POST',
+        headers: { Authorization: 'upload-token' },
+      }
+      const result = await transport.send(uploadRequest)
+      expect(result.status).toBe(200)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
   })
 
   // --------------------------------------------------------------------------
