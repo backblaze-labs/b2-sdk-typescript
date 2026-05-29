@@ -94,7 +94,7 @@ export class IncrementalSha1 {
       offset += chunk.byteLength
     }
 
-    const hashBuffer = await crypto.subtle.digest('SHA-1', combined.buffer as ArrayBuffer)
+    const hashBuffer = await crypto.subtle.digest('SHA-1', combined)
     return hexEncode(new Uint8Array(hashBuffer))
     /* v8 ignore stop */
   }
@@ -138,7 +138,10 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
     h.update(data)
     return h.digest('hex')
   }
+  // Pass the view directly (not `data.buffer`) so WebCrypto hashes exactly
+  // `data`'s bytes. A subarray shares its parent's buffer, so hashing
+  // `.buffer` would digest the whole backing buffer and produce a wrong hash.
   /* v8 ignore next 2 -- WebCrypto fallback, only reachable when node:crypto is unavailable */
-  const hashBuffer = await crypto.subtle.digest('SHA-1', data.buffer as ArrayBuffer)
+  const hashBuffer = await crypto.subtle.digest('SHA-1', data as Uint8Array<ArrayBuffer>)
   return hexEncode(new Uint8Array(hashBuffer))
 }
