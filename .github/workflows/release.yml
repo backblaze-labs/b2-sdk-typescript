@@ -1,44 +1,35 @@
 name: Release
 
-# Drives the changesets-based release loop, publishing to npm via OIDC
-# "trusted publishing" — no long-lived NPM_TOKEN secret required.
+# Tag-driven release. Publishing is triggered by pushing a `v*` tag, which you
+# create locally with `pnpm version <patch|minor|major>` (that bumps
+# package.json, cuts the CHANGELOG via the `version` lifecycle script, commits,
+# and tags). Push the tag and this workflow builds, publishes to npm via OIDC
+# trusted publishing, and creates the matching GitHub Release.
 #
-#   1. On every push to `main`, this workflow inspects `.changeset/` and opens
-#      (or updates) a "release: version packages" PR that applies the queued
-#      changesets, bumps `package.json` version, and rewrites CHANGELOG.md.
-#   2. When that PR is merged, the workflow re-runs, detects there are no
-#      pending changesets, builds, and publishes to npm. pnpm exchanges this
-#      job's GitHub OIDC token for a short-lived, single-use npm credential —
-#      nothing to leak, nothing to rotate.
+# Release a new version:
+#   pnpm version patch        # 0.1.0 -> 0.1.1, commits + tags v0.1.1
+#   git push --follow-tags    # pushes the commit and the tag
 #
-# ONE-TIME SETUP (see RELEASE.md for the full walkthrough):
-#   - The package must already exist on npm before a trusted publisher can be
-#     configured, so 0.1.0 is published manually (npm login + pnpm publish).
-#   - After 0.1.0 is live: npmjs.com -> @backblaze-labs/b2-sdk -> Settings ->
-#     "Trusted publishing" -> add a GitHub Actions publisher with:
-#         Organization/user:  backblaze-labs
-#         Repository:         b2-sdk-typescript
-#         Workflow filename:  release.yml
-#         Environment:        (leave blank — none configured here)
-#   - Optionally then set the package to "Require two-factor authentication
-#     and disallow tokens" for maximum hardening; OIDC keeps working.
+# The tag push is what fires this workflow. Pushes to main do NOT publish.
 #
-# No GitHub secrets are needed beyond the automatic GITHUB_TOKEN. The
-# id-token: write permission below is what lets pnpm mint the OIDC token.
-#
-# Requirements: Node >= 22.14.0 (node-version: 22 resolves above this) and
-# pnpm >= 11.0 for native OIDC publish (pinned via packageManager in
-# package.json — currently 11.1.0).
+# ONE-TIME SETUP (see RELEASE.md): the first publish of a brand-new package
+# can't use OIDC (a trusted publisher can't be configured for a package that
+# doesn't exist yet), so 0.1.0 is published manually. After it's live, add a
+# GitHub Actions trusted publisher on npmjs.com for this repo + this workflow
+# filename, and every tagged release after that publishes tokenlessly.
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)publish, e.g. v0.1.1'
+        required: true
 
 permissions:
-  contents: write # changesets/action commits the version PR + tag
-  id-token: write # OIDC token for trusted publishing + provenance
-  pull-requests: write # open / update the "Version Packages" PR
+  contents: write # create the GitHub Release
+  id-token: write # OIDC token for npm trusted publishing + provenance
 
 concurrency:
   group: release-${{ github.ref }}
@@ -46,14 +37,12 @@ concurrency:
 
 jobs:
   release:
-    name: Version + publish
+    name: Publish + GitHub Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history so changesets can read merge bases when generating the
-          # version PR's changelog diff.
-          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: pnpm/action-setup@v4
 
@@ -61,16 +50,27 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          # Sets the registry pnpm publishes against. No NODE_AUTH_TOKEN is
-          # provided — pnpm's OIDC path (trusted publishing) supersedes any
-          # token-based .npmrc auth on pnpm >= 10.16.
           registry-url: 'https://registry.npmjs.org'
 
       - run: pnpm install --frozen-lockfile
 
-      # Pre-publish gate. The full CI suite already runs against every push in
-      # ci.yml; we repeat the cheap-but-critical checks here so a broken main
-      # never reaches npm even if ci.yml is bypassed for some reason.
+      # The tag must match the version in package.json, or the published
+      # artifact and the tag would disagree. `pnpm version` keeps them in sync;
+      # this guards against a hand-pushed tag that drifted.
+      - name: Verify tag matches package.json version
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${REF#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag '$REF' (version $TAG) does not match package.json version $PKG."
+            exit 1
+          fi
+          echo "Tag matches package.json version: $PKG"
+
+      # Pre-publish gate. CI (ci.yml) already runs the full matrix on every
+      # push/PR; we repeat the cheap, critical checks here so a tag pushed from
+      # an unverified state can't publish a broken build.
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
@@ -78,31 +78,43 @@ jobs:
       - run: pnpm run verify:metadata
       - run: pnpm run verify:exports
 
-      # Optional: catch broken `exports` map / type-resolution before users do.
-      # `attw` is `@arethetypeswrong/cli` — fast, network-free, no install side
-      # effects beyond the dep itself. `continue-on-error` because attw has a
-      # known incompatibility with some Node minor versions where it throws
-      # "Cannot read properties of undefined (reading 'filename')" even on
-      # valid packages; the result is informational, not blocking.
       - name: Verify package types resolve cleanly (attw)
         continue-on-error: true
         run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
 
-      - name: Create release PR or publish
-        id: changesets
-        uses: changesets/action@v1
-        with:
-          # changesets/action runs `version` when there are changesets queued
-          # (opens / updates the PR) and runs `publish` after that PR merges
-          # and `.changeset/` is empty again. `pnpm publish` honours
-          # publishConfig.access=public and publishConfig.provenance=true from
-          # package.json; under OIDC, provenance is attested automatically.
-          version: pnpm changeset version
-          publish: pnpm publish
-          commit: 'release: version packages'
-          title: 'release: version packages'
-          createGithubReleases: true
+      # OIDC trusted publishing: pnpm exchanges this job's GitHub OIDC token for
+      # a short-lived npm credential. No NPM_TOKEN secret. publishConfig in
+      # package.json sets access=public + provenance=true. --no-git-checks
+      # because the tagged commit is checked out in detached-HEAD state.
+      #
+      # Idempotent: if this exact version is already on the registry (e.g. the
+      # 0.1.0 bootstrap was published manually, or this job is re-run), skip the
+      # publish instead of hard-failing on npm's duplicate-version rejection.
+      # A version containing a hyphen is a prerelease and goes to the `next`
+      # dist-tag so it never becomes `latest`.
+      - name: Publish to npm
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$NAME@$VERSION is already published; skipping publish."
+          elif [[ "$VERSION" == *-* ]]; then
+            pnpm publish --no-git-checks --tag next
+          else
+            pnpm publish --no-git-checks
+          fi
+
+      - name: Create GitHub Release
         env:
-          # Only GITHUB_TOKEN — no NPM_TOKEN. npm auth comes from the OIDC
-          # token minted via the id-token: write permission above.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${REF#v}"
+          node scripts/extract-changelog.mjs "$VERSION" > /tmp/release-notes.md
+          PRERELEASE=""
+          [[ "$VERSION" == *-* ]] && PRERELEASE="--prerelease"
+          if gh release view "$REF" >/dev/null 2>&1; then
+            gh release edit "$REF" --notes-file /tmp/release-notes.md $PRERELEASE
+          else
+            gh release create "$REF" --title "$REF" --notes-file /tmp/release-notes.md $PRERELEASE
+          fi
