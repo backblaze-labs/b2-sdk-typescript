@@ -55,6 +55,12 @@ describe('B2Error', () => {
     expect(new B2Error(makeResponse({ status: 503, code: 'service_unavailable' })).retryable).toBe(
       true,
     )
+    // Transient 5xx: 500 (internal_error), 502, 504 are retryable. The 502/504
+    // cases use the default non-transient `bad_request` code to prove the
+    // retry decision is status-based, not code-based.
+    expect(new B2Error(makeResponse({ status: 500, code: 'internal_error' })).retryable).toBe(true)
+    expect(new B2Error(makeResponse({ status: 502 })).retryable).toBe(true)
+    expect(new B2Error(makeResponse({ status: 504 })).retryable).toBe(true)
   })
 
   it('computes retryable as true for expired_auth_token regardless of status', () => {
@@ -68,6 +74,14 @@ describe('B2Error', () => {
     expect(new B2Error(makeResponse({ status: 404, code: 'file_not_present' })).retryable).toBe(
       false,
     )
+    // 501 Not Implemented is deterministic, not transient: never retried.
+    expect(new B2Error(makeResponse({ status: 501 })).retryable).toBe(false)
+    // Regression guard: RetryTransport synthesizes `code: 'internal_error'` for
+    // any error body that isn't parseable JSON (e.g. a bodyless 404 download
+    // miss). Transient
+    // retry must be decided by STATUS, so a 404 with that synthetic code is NOT
+    // retryable — otherwise missing-file downloads would retry until timeout.
+    expect(new B2Error(makeResponse({ status: 404, code: 'internal_error' })).retryable).toBe(false)
   })
 
   it('stores requestId when provided in options', () => {

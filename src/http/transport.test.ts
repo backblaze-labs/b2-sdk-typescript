@@ -271,6 +271,46 @@ describe('RetryTransport', () => {
   })
 
   // --------------------------------------------------------------------------
+  // Retry on 500 (internal_error) and other transient 5xx
+  // --------------------------------------------------------------------------
+
+  describe('retry on 500', () => {
+    it('retries on 500 internal_error and eventually succeeds', async () => {
+      const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
+      const error500 = mockResponse(500, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockResolvedValueOnce(error500)
+        .mockResolvedValueOnce(error500)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(3)
+    })
+
+    it('does not retry on 501 not_implemented (deterministic)', async () => {
+      const errorBody = { status: 501, code: 'bad_request', message: 'Not implemented' }
+      const error501 = mockResponse(501, errorBody)
+
+      innerTransport.send.mockResolvedValueOnce(error501)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      await expect(transport.send(baseRequest)).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // Retry on 408 (request_timeout)
   // --------------------------------------------------------------------------
 
