@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { B2Client } from '../client.ts'
+import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
@@ -405,5 +406,96 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredResp.status).toBe(401)
     const expiredBody = (await expiredResp.json()) as { code: string }
     expect(expiredBody.code).toBe('expired_auth_token')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Upload integrity: SHA-1 verification (spec: b2_upload_file rejects with
+// 400 "Sha1 did not match data received" when the header disagrees with the
+// bytes) and fileInfo round-trip.
+// ---------------------------------------------------------------------------
+
+describe('B2Simulator upload SHA-1 verification', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    // maxRetries: 0 so a deliberate 400 surfaces immediately, no backoff.
+    ;({ client } = makeClient({ client: { retry: { maxRetries: 0 } } }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'sha1-fidelity',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  /** Upload `data` straight through the raw client with an explicit sha1 header. */
+  async function rawUpload(fileName: string, data: Uint8Array, contentSha1: string) {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    return client.raw.uploadFile(
+      uploadUrl,
+      {
+        authorization: authorizationToken,
+        fileName,
+        contentType: 'text/plain',
+        contentLength: data.byteLength,
+        contentSha1,
+      },
+      data as BodyInit,
+    )
+  }
+
+  it('rejects an upload whose X-Bz-Content-Sha1 does not match the bytes', async () => {
+    const data = new TextEncoder().encode('hello world')
+    await expect(rawUpload('mismatch.txt', data, '0'.repeat(40))).rejects.toThrow(
+      /Sha1 did not match/i,
+    )
+  })
+
+  it('accepts an upload whose sha1 matches and stores it', async () => {
+    const data = new TextEncoder().encode('verified content')
+    const hash = await sha1Hex(data)
+    const fv = await rawUpload('match.txt', data, hash)
+    expect(fv.contentSha1).toBe(hash)
+  })
+
+  it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {
+    const data = new TextEncoder().encode('unchecked')
+    // The simulator stores 'none'; the raw client normalizes that sentinel to null.
+    const fv = await rawUpload('skip.txt', data, 'do_not_verify')
+    expect(fv.contentSha1).toBeNull()
+  })
+
+  it('stores the hash verbatim without verifying for the unverified: prefix', async () => {
+    const data = new TextEncoder().encode('claimed but unchecked')
+    // A wrong hash behind `unverified:` is accepted as-is (no verification).
+    const fv = await rawUpload('unverified.txt', data, `unverified:${'a'.repeat(40)}`)
+    expect(fv.contentSha1).toBe('a'.repeat(40))
+  })
+})
+
+describe('B2Simulator upload fileInfo round-trip', () => {
+  let client: B2Client
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('persists custom fileInfo and returns it from getFileInfoByName', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'fileinfo-rt',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'meta.txt',
+      source: new BufferSource(new TextEncoder().encode('hi')),
+      fileInfo: { color: 'blue', purpose: 'test' },
+    })
+    const info = await bucket.getFileInfoByName('meta.txt')
+    expect(info?.fileInfo).toMatchObject({ color: 'blue', purpose: 'test' })
   })
 })

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`B2Simulator` now verifies upload SHA-1 and persists `fileInfo`.** `b2_upload_file` recomputes the body's SHA-1 and rejects a mismatch with `400 bad_request` ("Sha1 did not match data received"), honoring the `none` / `do_not_verify` / `unverified:<hex>` / `hex_digits_at_end` sentinels; uploaded `fileInfo` is now stored and returned by `getFileInfo` / list / download instead of being dropped. Closes two gaps where the test backend accepted any hash and silently discarded metadata. `B2Simulator.handleUpload` is now `async`.
+
 ## [0.1.0] - 2026-05-28
 
 First public release of `@backblaze-labs/b2-sdk`. Everything below is new in this version.
