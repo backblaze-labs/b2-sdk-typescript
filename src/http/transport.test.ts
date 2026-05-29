@@ -295,7 +295,9 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(3)
     })
 
-    it('does not retry on 501 not_implemented (deterministic)', async () => {
+    it('does not retry on HTTP 501 (excluded from the transient 5xx set)', async () => {
+      // The decision is status-based; the code here is an incidental placeholder
+      // (B2 has no 501-specific code). Status 501 must not be retried.
       const errorBody = { status: 501, code: 'bad_request', message: 'Not implemented' }
       const error501 = mockResponse(501, errorBody)
 
