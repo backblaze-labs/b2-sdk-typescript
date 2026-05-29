@@ -10,6 +10,7 @@
  */
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
@@ -884,13 +885,13 @@ export class B2Simulator {
    * @param headers - The HTTP headers containing file metadata and authorization.
    * @param data - The raw file or part content as bytes.
    *
-   * @returns An object with HTTP status and JSON response body.
+   * @returns A promise resolving to an object with HTTP status and JSON response body.
    */
-  handleUpload(
+  async handleUpload(
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): SimulatorJsonResponse {
+  ): Promise<SimulatorJsonResponse> {
     // Strict-mode auth gate also covers upload endpoints. Without
     // this, an expired or unknown auth token still successfully wrote
     // bytes because `handleUpload` bypassed `handleRequest`'s dispatch
@@ -904,9 +905,9 @@ export class B2Simulator {
       if (authError !== null) return authError
     }
     if (isPart) {
-      return this.handleUploadPart(url, headers, data)
+      return await this.handleUploadPart(url, headers, data)
     }
-    return this.handleUploadFile(url, headers, data)
+    return await this.handleUploadFile(url, headers, data)
   }
 
   /**
@@ -1012,11 +1013,11 @@ export class B2Simulator {
     return { status: response.status, headers: newHeaders, data }
   }
 
-  private handleUploadFile(
+  private async handleUploadFile(
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): SimulatorJsonResponse {
+  ): Promise<SimulatorJsonResponse> {
     const bucketId = new URL(url).searchParams.get('bucketId')
     if (!bucketId) return this.error(400, 'bad_request', 'Missing bucketId')
 
@@ -1025,7 +1026,6 @@ export class B2Simulator {
 
     const fileName = decodeURIComponent(headers['x-bz-file-name'] ?? '')
     const contentType = headers['content-type'] ?? 'application/octet-stream'
-    const sha1 = headers['x-bz-content-sha1'] ?? 'none'
 
     // B2 spec-compliance: validate file name and optional X-Bz-Info-*
     // headers before storing. Real B2 rejects with `400 invalid_file_name`
@@ -1036,15 +1036,29 @@ export class B2Simulator {
     const fileInfoError = validateFileInfo(fileInfo)
     if (fileInfoError) return this.error(400, fileInfoError.code, fileInfoError.message)
 
+    // SHA-1 verification, matching real B2 semantics for X-Bz-Content-Sha1:
+    //   - 'none' / 'do_not_verify' (or missing) -> stored as 'none', no check
+    //   - 'unverified:<hex>'                     -> store <hex>, no check
+    //   - 'hex_digits_at_end'                    -> verify the trailing digest,
+    //                                               store body without trailer
+    //   - 40-char hex                            -> verify against the bytes,
+    //                                               400 bad_request on mismatch
+    // Without this, the simulator stored the client's claimed hash verbatim, so
+    // a wrong digest or corrupted bytes passed every test.
+    const resolved = await this.resolveUploadSha1(headers['x-bz-content-sha1'], data)
+    if ('status' in resolved) return resolved
+    const { sha1: contentSha1, data: storedData } = resolved
+
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
       contentType,
-      contentLength: data.byteLength,
-      contentSha1: sha1,
+      contentLength: storedData.byteLength,
+      contentSha1,
+      fileInfo,
       action: FileAction.Upload,
     })
-    const stored: StoredFile = { fileVersion, data }
+    const stored: StoredFile = { fileVersion, data: storedData }
     const existing = bucket.files.get(fileName)
     if (existing) {
       existing.push(stored)
@@ -1056,11 +1070,55 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private handleUploadPart(
+  /**
+   * Resolve the `X-Bz-Content-Sha1` header into the SHA-1 to store, verifying
+   * it against the uploaded bytes where B2 would. Returns the SHA-1 string to
+   * persist, or a `400 bad_request` response when a verifiable hash does not
+   * match the data received.
+   *
+   * @param header - The raw `X-Bz-Content-Sha1` header value, if any.
+   * @param data - The uploaded bytes.
+   *
+   * @returns The SHA-1 string to store, or an error response on mismatch.
+   */
+  private async resolveUploadSha1(
+    header: string | undefined,
+    data: Uint8Array,
+  ): Promise<{ sha1: string; data: Uint8Array } | SimulatorJsonResponse> {
+    const value = header ?? 'none'
+    if (value === 'none' || value === 'do_not_verify') return { sha1: 'none', data }
+    if (value.startsWith('unverified:')) {
+      return { sha1: value.slice('unverified:'.length).toLowerCase(), data }
+    }
+    if (value === 'hex_digits_at_end') {
+      // B2 trailing-SHA mode: the final 40 bytes of the body are the hex digest,
+      // not file content. Split them off, verify the rest, and store only the
+      // body so contentLength and downloaded bytes match real B2.
+      if (data.byteLength < 40) {
+        return this.error(400, 'bad_request', 'Sha1 did not match data received')
+      }
+      const body = data.subarray(0, data.byteLength - 40)
+      const trailer = utf8Decoder.decode(data.subarray(data.byteLength - 40)).toLowerCase()
+      const actual = await sha1Hex(body)
+      if (actual !== trailer) {
+        return this.error(400, 'bad_request', 'Sha1 did not match data received')
+      }
+      return { sha1: actual, data: body }
+    }
+    const expected = value.toLowerCase()
+    const actual = await sha1Hex(data)
+    if (actual !== expected) {
+      // Match real B2's error string exactly (no digests) for fidelity.
+      return this.error(400, 'bad_request', 'Sha1 did not match data received')
+    }
+    return { sha1: expected, data }
+  }
+
+  private async handleUploadPart(
     url: string,
     headers: Record<string, string>,
     data: Uint8Array,
-  ): SimulatorJsonResponse {
+  ): Promise<SimulatorJsonResponse> {
     const fileId = new URL(url).searchParams.get('fileId')
     if (!fileId) return this.error(400, 'bad_request', 'Missing fileId')
 
@@ -1068,16 +1126,21 @@ export class B2Simulator {
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
     const partNumber = Number.parseInt(headers['x-bz-part-number'] ?? '0', 10)
-    const sha1 = headers['x-bz-content-sha1'] ?? 'none'
 
-    large.parts.set(partNumber, { data, sha1 })
+    // Verify the part bytes against X-Bz-Content-Sha1, same as b2_upload_file.
+    // Parts are always sent with a real (or unverified:) sha1 by the SDK.
+    const resolved = await this.resolveUploadSha1(headers['x-bz-content-sha1'], data)
+    if ('status' in resolved) return resolved
+    const { sha1, data: partData } = resolved
+
+    large.parts.set(partNumber, { data: partData, sha1 })
 
     return {
       status: 200,
       body: {
         fileId: large.fileId,
         partNumber,
-        contentLength: data.byteLength,
+        contentLength: partData.byteLength,
         contentSha1: sha1,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: Date.now(),
@@ -1144,10 +1207,21 @@ export class B2Simulator {
       'Content-Type': fv.contentType,
       'Content-Length': String(data.byteLength),
       'X-Bz-File-Id': fv.fileId,
-      'X-Bz-File-Name': encodeURIComponent(fv.fileName),
+      'X-Bz-File-Name': encodeFileName(fv.fileName),
       'X-Bz-Content-Sha1': fv.contentSha1 ?? 'none',
       'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
-      'X-Bz-Info-src_last_modified_millis': String(fv.uploadTimestamp),
+    }
+    // Serialize stored fileInfo as X-Bz-Info-* response headers so custom
+    // metadata round-trips through download(), not just getFileInfo/list. Use
+    // the same B2 wire encoding (encodeFileName) the SDK's download parser
+    // decodes with (decodeFileName), rather than encodeURIComponent.
+    for (const [key, value] of Object.entries(fv.fileInfo)) {
+      headers[`X-Bz-Info-${encodeFileName(key)}`] = encodeFileName(value)
+    }
+    // Preserve the synthetic last-modified default only when the upload didn't
+    // set one explicitly.
+    if (!('src_last_modified_millis' in fv.fileInfo)) {
+      headers['X-Bz-Info-src_last_modified_millis'] = String(fv.uploadTimestamp)
     }
     if (contentRange !== null) {
       // B2 spec-compliance: 206 Partial Content responses MUST carry a
@@ -1700,6 +1774,20 @@ export class B2Simulator {
         `partSha1Array has ${req.partSha1Array.length} entries but ${sortedParts.length} parts were uploaded`,
       )
     }
+    // B2 spec-compliance: partSha1Array is the ordered checksum list that
+    // confirms the right parts were uploaded in the right order. Compare each
+    // entry against the stored part's SHA-1; real B2 rejects a mismatch with
+    // `bad_request`.
+    for (let i = 0; i < sortedParts.length; i++) {
+      const [partNumber, part] = sortedParts[i] as [number, { data: Uint8Array; sha1: string }]
+      if (req.partSha1Array[i]?.toLowerCase() !== part.sha1) {
+        return this.error(
+          400,
+          'bad_request',
+          `part ${partNumber} SHA-1 does not match the uploaded part`,
+        )
+      }
+    }
     // B2 spec-compliance: every non-last part must be at least
     // `absoluteMinimumPartSize`. The last part (highest part number)
     // may be smaller. We enforce here rather than at b2_upload_part
@@ -1731,6 +1819,7 @@ export class B2Simulator {
       contentType: large.contentType,
       contentLength: totalSize,
       contentSha1: 'none',
+      fileInfo: large.fileInfo,
       action: FileAction.Upload,
     })
     const stored: StoredFile = { fileVersion, data: combined }
@@ -2116,6 +2205,7 @@ export class B2Simulator {
     readonly contentLength: number
     readonly contentSha1: string
     readonly action: FileAction
+    readonly fileInfo?: Record<string, string>
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -2126,7 +2216,7 @@ export class B2Simulator {
       contentSha1: params.contentSha1,
       contentType: params.contentType,
       fileId: fileIdOf(this.genId('4_z')),
-      fileInfo: {},
+      fileInfo: params.fileInfo ?? {},
       fileName: params.fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
@@ -2350,7 +2440,7 @@ class SimulatorTransport implements HttpTransport {
               )
             : await new Response(request.body).arrayBuffer(),
       )
-      result = this.sim.handleUpload(url, headers, data)
+      result = await this.sim.handleUpload(url, headers, data)
     } else {
       let body: unknown = null
       if (request.body) {

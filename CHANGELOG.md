@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Correct browser SHA-1 for buffer-backed views.** `sha1Hex`'s WebCrypto path hashed `data.buffer` (the whole backing `ArrayBuffer`) instead of the `Uint8Array` view's `byteOffset`/`byteLength`, so a subarray (e.g. a carved multipart part) produced a wrong digest in browsers and other non-Node runtimes. It now hashes the view directly. (`IncrementalSha1`'s WebCrypto fallback was already correct, since it copies chunks into an exact-sized buffer before hashing; it now passes that buffer directly too, for consistency.) The Node `crypto` path was always correct.
+- **`B2Simulator` now verifies upload SHA-1 and persists `fileInfo` across all upload paths.** `b2_upload_file` and `b2_upload_part` recompute the body's SHA-1 and reject a mismatch with `400 bad_request` ("Sha1 did not match data received"), honoring the `none` / `do_not_verify` / `unverified:<hex>` sentinels and the `hex_digits_at_end` trailing-digest mode (the trailing 40 bytes are verified and stripped, not stored as content). `finishLargeFile` verifies each `partSha1Array` entry against the stored part's SHA-1 (rejecting a mismatch with `400 bad_request`). Uploaded `fileInfo` is now persisted for both single-file and multipart (`finishLargeFile`) uploads and returned by `getFileInfo`, list, and `download` (serialized as `X-Bz-Info-*` headers using the same B2 `encodeFileName` encoding the download parser decodes with). Closes gaps where the test backend accepted any hash and silently discarded metadata. `B2Simulator.handleUpload` is now `async`.
+
 ## [0.1.0] - 2026-05-28
 
 First public release of `@backblaze-labs/b2-sdk`. Everything below is new in this version.

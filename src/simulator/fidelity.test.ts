@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { B2Client } from '../client.ts'
+import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
 
 /**
@@ -405,5 +407,235 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredResp.status).toBe(401)
     const expiredBody = (await expiredResp.json()) as { code: string }
     expect(expiredBody.code).toBe('expired_auth_token')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Upload integrity: SHA-1 verification (spec: b2_upload_file rejects with
+// 400 "Sha1 did not match data received" when the header disagrees with the
+// bytes) and fileInfo round-trip.
+// ---------------------------------------------------------------------------
+
+describe('B2Simulator upload SHA-1 verification', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    // maxRetries: 0 so a deliberate 400 surfaces immediately, no backoff.
+    ;({ client } = makeClient({ client: { retry: { maxRetries: 0 } } }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'sha1-fidelity',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  /** Upload `data` straight through the raw client with an explicit sha1 header. */
+  async function rawUpload(fileName: string, data: Uint8Array, contentSha1: string) {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    return client.raw.uploadFile(
+      uploadUrl,
+      {
+        authorization: authorizationToken,
+        fileName,
+        contentType: 'text/plain',
+        contentLength: data.byteLength,
+        contentSha1,
+      },
+      data as BodyInit,
+    )
+  }
+
+  it('rejects an upload whose X-Bz-Content-Sha1 does not match the bytes', async () => {
+    const data = new TextEncoder().encode('hello world')
+    await expect(rawUpload('mismatch.txt', data, '0'.repeat(40))).rejects.toThrow(
+      /Sha1 did not match/i,
+    )
+  })
+
+  it('accepts an upload whose sha1 matches and stores it', async () => {
+    const data = new TextEncoder().encode('verified content')
+    const hash = await sha1Hex(data)
+    const fv = await rawUpload('match.txt', data, hash)
+    expect(fv.contentSha1).toBe(hash)
+  })
+
+  it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {
+    const data = new TextEncoder().encode('unchecked')
+    // The simulator stores 'none'; the raw client normalizes that sentinel to null.
+    const fv = await rawUpload('skip.txt', data, 'do_not_verify')
+    expect(fv.contentSha1).toBeNull()
+  })
+
+  it('stores the hash verbatim without verifying for the unverified: prefix', async () => {
+    const data = new TextEncoder().encode('claimed but unchecked')
+    // A wrong hash behind `unverified:` is accepted as-is (no verification).
+    const fv = await rawUpload('unverified.txt', data, `unverified:${'a'.repeat(40)}`)
+    expect(fv.contentSha1).toBe('a'.repeat(40))
+  })
+
+  it('verifies and strips the trailing digest for hex_digits_at_end', async () => {
+    // Trailing-SHA mode: the last 40 bytes are the hex digest, not file content.
+    const content = new TextEncoder().encode('trailing sha mode content')
+    const digest = await sha1Hex(content)
+    const body = new Uint8Array(content.byteLength + 40)
+    body.set(content, 0)
+    body.set(new TextEncoder().encode(digest), content.byteLength)
+    const fv = await rawUpload('trailer.txt', body, 'hex_digits_at_end')
+    // Stored length excludes the 40-byte trailer; stored sha1 is the digest.
+    expect(fv.contentLength).toBe(content.byteLength)
+    expect(fv.contentSha1).toBe(digest)
+  })
+
+  it('rejects hex_digits_at_end when the trailing digest does not match', async () => {
+    const content = new TextEncoder().encode('bad trailer content')
+    const body = new Uint8Array(content.byteLength + 40)
+    body.set(content, 0)
+    body.set(new TextEncoder().encode('0'.repeat(40)), content.byteLength)
+    await expect(rawUpload('bad-trailer.txt', body, 'hex_digits_at_end')).rejects.toThrow(
+      /Sha1 did not match/i,
+    )
+  })
+
+  it('rejects an uploaded part whose sha1 does not match the bytes', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'parts.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId as unknown as LargeFileId,
+    })
+    const part = new Uint8Array(1024).fill(7)
+    await expect(
+      client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: part.byteLength,
+          contentSha1: '0'.repeat(40),
+        },
+        part as BodyInit,
+      ),
+    ).rejects.toThrow(/Sha1 did not match/i)
+  })
+
+  it('rejects finishLargeFile when a partSha1Array entry does not match the uploaded part', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'finish-mismatch.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId as unknown as LargeFileId,
+    })
+    const part = new Uint8Array(1024).fill(9)
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part.byteLength,
+        contentSha1: await sha1Hex(part),
+      },
+      part as BodyInit,
+    )
+    // The part uploaded fine, but finish supplies the wrong checksum for it.
+    await expect(
+      client.raw.finishLargeFile(apiUrl, authToken, {
+        fileId: start.fileId as unknown as LargeFileId,
+        partSha1Array: ['0'.repeat(40)],
+      }),
+    ).rejects.toThrow(/does not match the uploaded part/i)
+  })
+})
+
+describe('B2Simulator upload fileInfo round-trip', () => {
+  let client: B2Client
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('persists custom fileInfo and returns it from getFileInfoByName', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'fileinfo-rt',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'meta.txt',
+      source: new BufferSource(new TextEncoder().encode('hi')),
+      fileInfo: { color: 'blue', purpose: 'test' },
+    })
+    const info = await bucket.getFileInfoByName('meta.txt')
+    expect(info?.fileInfo).toMatchObject({ color: 'blue', purpose: 'test' })
+  })
+
+  it('persists fileInfo through a multipart (large-file) upload', async () => {
+    // Small recommendedPartSize forces the multipart path (size > part size).
+    const { client: mpClient } = makeClient({
+      sim: { minimumPartSize: 1024, recommendedPartSize: 1024 },
+    })
+    await mpClient.authorize()
+    const bucket = await mpClient.createBucket({
+      bucketName: 'mp-fileinfo',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'big-meta.bin',
+      source: new BufferSource(new Uint8Array(3000).fill(1)),
+      fileInfo: { kind: 'multipart', owner: 'qa' },
+    })
+    const info = await bucket.getFileInfoByName('big-meta.bin')
+    expect(info?.fileInfo).toMatchObject({ kind: 'multipart', owner: 'qa' })
+  })
+
+  it('returns fileInfo via download(), not just getFileInfo', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'dl-fileinfo',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'dl-meta.txt',
+      source: new BufferSource(new TextEncoder().encode('hi')),
+      // Value with a space exercises the B2 wire encoding (encodeFileName)
+      // round-trip, not just plain alphanumerics.
+      fileInfo: { color: 'forest green' },
+    })
+    const result = await bucket.download('dl-meta.txt')
+    await new Response(result.body).arrayBuffer() // drain to release the stream
+    expect(result.headers.fileInfo).toMatchObject({ color: 'forest green' })
+  })
+})
+
+describe('B2Simulator download header encoding', () => {
+  it('encodes X-Bz-File-Name with B2 encodeFileName (preserves B2-safe chars)', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'name-encoding',
+      bucketType: BucketType.AllPrivate,
+    })
+    // '=' and '@' are B2-safe (encodeFileName preserves them); encodeURIComponent
+    // would percent-escape them. Assert the raw response header matches B2.
+    await bucket.upload({
+      fileName: 'release=v1@main.txt',
+      source: new BufferSource(new TextEncoder().encode('x')),
+    })
+    const resp = await sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/file/name-encoding/release=v1@main.txt',
+    })
+    expect(resp.status).toBe(200)
+    expect(resp.headers.get('X-Bz-File-Name')).toBe('release=v1@main.txt')
   })
 })
