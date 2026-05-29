@@ -314,7 +314,18 @@ export class NetworkError extends Error {
 }
 
 function isTransient(status: number, code: B2ErrorCode): boolean {
-  if (status === 408 || status === 429 || status === 503) return true
+  // Request timeout + rate limit.
+  if (status === 408 || status === 429) return true
+  // Transient server errors: internal error (500), bad gateway (502), service
+  // unavailable (503), gateway timeout (504). B2 documents 500 and 503 as
+  // retryable; 502/504 are transient infrastructure failures. 501 (Not
+  // Implemented) is deliberately excluded — it is deterministic, not transient.
+  //
+  // This is keyed on STATUS, not on the `internal_error` code: `RetryTransport`
+  // synthesizes `{ code: 'internal_error' }` for any error response whose body
+  // is not parseable JSON (see transport.ts), including bodyless 4xx like a 404
+  // download miss. Treating that code as transient would wrongly retry 4xx.
+  if (status === 500 || status === 502 || status === 503 || status === 504) return true
   if (code === 'expired_auth_token') return true
   if (code === 'service_unavailable' || code === 'request_timeout') return true
   return false
