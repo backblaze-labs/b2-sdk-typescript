@@ -363,6 +363,28 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
+    it('does not treat a download of a file NAMED b2_upload_file as an upload endpoint (still retries 500)', async () => {
+      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name
+      // is user-controlled; a file literally named `b2_upload_file` must still
+      // get the generic 5xx retry, not be misread as the upload POST endpoint.
+      const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(500, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send({
+        url: 'https://f000.backblazeb2.com/file/my-bucket/b2_upload_file',
+        method: 'GET',
+        headers: { Authorization: 'token' },
+      })
+      expect(result.status).toBe(200)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
     it('still retries 429 in place for upload endpoints (throttle, not pod health)', async () => {
       // 408/429 are timeout/throttle signals, not pod-health 5xx, so they stay
       // retryable in place for uploads.

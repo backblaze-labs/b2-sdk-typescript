@@ -142,11 +142,19 @@ function shouldRetryInPlace(error: B2Error, url: string, status: number): boolea
   // in place for uploads — those errors bubble to the upload layer. 408/429
   // (timeout / throttle) are not pod-health signals and still retry in place.
   //
-  // Match on the path segment so the `b2_get_upload_url` /
-  // `b2_get_upload_part_url` URL-fetch calls (ordinary API endpoints) are NOT
-  // treated as uploads.
+  // Match the upload POST endpoints, while avoiding two false positives:
+  //   - the `b2_get_upload_url` / `b2_get_upload_part_url` URL-fetch calls
+  //     (ordinary API endpoints — their paths don't contain `/b2_upload_*`); and
+  //   - download-by-name URLs `/file/<bucket>/<fileName>`, where the file name
+  //     is user-controlled and could literally be `b2_upload_file`.
+  // Real upload URLs live under `/b2api/.../b2_upload_file[/...]` and never
+  // start with `/file/`, so the prefix check cleanly excludes downloads while
+  // `includes` still matches upload URLs that carry path segments after the
+  // endpoint name (e.g. `/b2api/v2/b2_upload_file/<bucketId>/<token>`).
   const path = new URL(url).pathname
-  const isUploadEndpoint = path.includes('/b2_upload_file') || path.includes('/b2_upload_part')
+  const isUploadEndpoint =
+    !path.startsWith('/file/') &&
+    (path.includes('/b2_upload_file') || path.includes('/b2_upload_part'))
   if (isUploadEndpoint && status >= 500 && status < 600) return false
   return true
 }
