@@ -78,9 +78,9 @@ describe('B2Error', () => {
     expect(new B2Error(makeResponse({ status: 501 })).retryable).toBe(false)
     // Regression guard: RetryTransport synthesizes `code: 'internal_error'` for
     // any error body that isn't parseable JSON (e.g. a bodyless 404 download
-    // miss). Transient
-    // retry must be decided by STATUS, so a 404 with that synthetic code is NOT
-    // retryable — otherwise missing-file downloads would retry until timeout.
+    // miss). The retry decision must be status-based, so a 404 carrying that
+    // synthetic code is NOT retryable — otherwise missing-file downloads would
+    // retry until timeout.
     expect(new B2Error(makeResponse({ status: 404, code: 'internal_error' })).retryable).toBe(false)
   })
 
