@@ -8,7 +8,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 
-The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript.
+Backblaze-maintained TypeScript and JavaScript SDK for B2 Cloud Storage, currently incubating in Backblaze-Labs.
 
 **Isomorphic at the source level.** One source tree runs unmodified in Node.js 22+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
 
