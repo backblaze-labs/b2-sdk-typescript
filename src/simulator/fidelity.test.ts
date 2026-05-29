@@ -5,6 +5,7 @@ import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
 
 /**
@@ -476,6 +477,55 @@ describe('B2Simulator upload SHA-1 verification', () => {
     const fv = await rawUpload('unverified.txt', data, `unverified:${'a'.repeat(40)}`)
     expect(fv.contentSha1).toBe('a'.repeat(40))
   })
+
+  it('verifies and strips the trailing digest for hex_digits_at_end', async () => {
+    // Trailing-SHA mode: the last 40 bytes are the hex digest, not file content.
+    const content = new TextEncoder().encode('trailing sha mode content')
+    const digest = await sha1Hex(content)
+    const body = new Uint8Array(content.byteLength + 40)
+    body.set(content, 0)
+    body.set(new TextEncoder().encode(digest), content.byteLength)
+    const fv = await rawUpload('trailer.txt', body, 'hex_digits_at_end')
+    // Stored length excludes the 40-byte trailer; stored sha1 is the digest.
+    expect(fv.contentLength).toBe(content.byteLength)
+    expect(fv.contentSha1).toBe(digest)
+  })
+
+  it('rejects hex_digits_at_end when the trailing digest does not match', async () => {
+    const content = new TextEncoder().encode('bad trailer content')
+    const body = new Uint8Array(content.byteLength + 40)
+    body.set(content, 0)
+    body.set(new TextEncoder().encode('0'.repeat(40)), content.byteLength)
+    await expect(rawUpload('bad-trailer.txt', body, 'hex_digits_at_end')).rejects.toThrow(
+      /Sha1 did not match/i,
+    )
+  })
+
+  it('rejects an uploaded part whose sha1 does not match the bytes', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'parts.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId as unknown as LargeFileId,
+    })
+    const part = new Uint8Array(1024).fill(7)
+    await expect(
+      client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: part.byteLength,
+          contentSha1: '0'.repeat(40),
+        },
+        part as BodyInit,
+      ),
+    ).rejects.toThrow(/Sha1 did not match/i)
+  })
 })
 
 describe('B2Simulator upload fileInfo round-trip', () => {
@@ -497,5 +547,39 @@ describe('B2Simulator upload fileInfo round-trip', () => {
     })
     const info = await bucket.getFileInfoByName('meta.txt')
     expect(info?.fileInfo).toMatchObject({ color: 'blue', purpose: 'test' })
+  })
+
+  it('persists fileInfo through a multipart (large-file) upload', async () => {
+    // Small recommendedPartSize forces the multipart path (size > part size).
+    const { client: mpClient } = makeClient({
+      sim: { minimumPartSize: 1024, recommendedPartSize: 1024 },
+    })
+    await mpClient.authorize()
+    const bucket = await mpClient.createBucket({
+      bucketName: 'mp-fileinfo',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'big-meta.bin',
+      source: new BufferSource(new Uint8Array(3000).fill(1)),
+      fileInfo: { kind: 'multipart', owner: 'qa' },
+    })
+    const info = await bucket.getFileInfoByName('big-meta.bin')
+    expect(info?.fileInfo).toMatchObject({ kind: 'multipart', owner: 'qa' })
+  })
+
+  it('returns fileInfo via download(), not just getFileInfo', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'dl-fileinfo',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'dl-meta.txt',
+      source: new BufferSource(new TextEncoder().encode('hi')),
+      fileInfo: { color: 'green' },
+    })
+    const result = await bucket.download('dl-meta.txt')
+    await new Response(result.body).arrayBuffer() // drain to release the stream
+    expect(result.headers.fileInfo).toMatchObject({ color: 'green' })
   })
 })

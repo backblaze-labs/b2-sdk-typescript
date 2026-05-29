@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
+import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
 import { daysFromNow, makeClient, readStream } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
@@ -677,6 +678,8 @@ describe('large file operations', () => {
 
     const part1 = new Uint8Array(1024).fill(0xaa)
     const part2 = new Uint8Array(1024).fill(0xbb)
+    const sha1Part1 = await sha1Hex(part1)
+    const sha1Part2 = await sha1Hex(part2)
 
     const p1Resp = await client.raw.uploadPart(
       partUrl.uploadUrl,
@@ -684,7 +687,7 @@ describe('large file operations', () => {
         authorization: partUrl.authorizationToken,
         partNumber: 1,
         contentLength: part1.byteLength,
-        contentSha1: 'sha1-part1',
+        contentSha1: sha1Part1,
       },
       part1,
     )
@@ -696,7 +699,7 @@ describe('large file operations', () => {
         authorization: partUrl.authorizationToken,
         partNumber: 2,
         contentLength: part2.byteLength,
-        contentSha1: 'sha1-part2',
+        contentSha1: sha1Part2,
       },
       part2,
     )
@@ -707,7 +710,7 @@ describe('large file operations', () => {
       client.accountInfo.getAuthToken(),
       {
         fileId: startResp.fileId as unknown as LargeFileId,
-        partSha1Array: ['sha1-part1', 'sha1-part2'],
+        partSha1Array: [sha1Part1, sha1Part2],
       },
     )
     expect(finished.fileName).toBe('big.bin')

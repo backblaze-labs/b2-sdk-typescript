@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`B2Simulator` now verifies upload SHA-1 and persists `fileInfo`.** `b2_upload_file` recomputes the body's SHA-1 and rejects a mismatch with `400 bad_request` ("Sha1 did not match data received"), honoring the `none` / `do_not_verify` / `unverified:<hex>` / `hex_digits_at_end` sentinels; uploaded `fileInfo` is now stored and returned by `getFileInfo` / list / download instead of being dropped. Closes two gaps where the test backend accepted any hash and silently discarded metadata. `B2Simulator.handleUpload` is now `async`.
+- **`B2Simulator` now verifies upload SHA-1 and persists `fileInfo` across all upload paths.** `b2_upload_file` and `b2_upload_part` recompute the body's SHA-1 and reject a mismatch with `400 bad_request` ("Sha1 did not match data received"), honoring the `none` / `do_not_verify` / `unverified:<hex>` sentinels and the `hex_digits_at_end` trailing-digest mode (the trailing 40 bytes are verified and stripped, not stored as content). Uploaded `fileInfo` is now persisted for both single-file and multipart (`finishLargeFile`) uploads and returned by `getFileInfo`, list, and `download` (serialized as `X-Bz-Info-*` response headers). Closes gaps where the test backend accepted any hash and silently discarded metadata. `B2Simulator.handleUpload` is now `async`.
 
 ## [0.1.0] - 2026-05-28
 
