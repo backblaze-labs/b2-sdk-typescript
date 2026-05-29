@@ -72,17 +72,19 @@ describe('Bucket.paginateFileNames', () => {
   it('aborts mid-iteration', async () => {
     const controller = new AbortController()
     const names: string[] = []
-    await expect(async () => {
-      for await (const file of bucket.paginateFileNames({
-        pageSize: 2,
-        signal: controller.signal,
-      })) {
-        names.push(file.fileName)
-        // Abort after seeing the second item; the iterator should NOT
-        // fetch the next page.
-        if (names.length === 2) controller.abort()
-      }
-    }).rejects.toThrow()
+    await expect(
+      (async () => {
+        for await (const file of bucket.paginateFileNames({
+          pageSize: 2,
+          signal: controller.signal,
+        })) {
+          names.push(file.fileName)
+          // Abort after seeing the second item; the iterator should NOT
+          // fetch the next page.
+          if (names.length === 2) controller.abort()
+        }
+      })(),
+    ).rejects.toThrow()
     expect(names).toEqual(['a.txt', 'b.txt'])
   })
 
@@ -270,12 +272,14 @@ describe('B2Client.paginateKeys', () => {
     }
     const controller = new AbortController()
     const seen: string[] = []
-    await expect(async () => {
-      for await (const key of client.paginateKeys({ pageSize: 2, signal: controller.signal })) {
-        seen.push(key.keyName)
-        if (seen.length === 2) controller.abort()
-      }
-    }).rejects.toThrow()
+    await expect(
+      (async () => {
+        for await (const key of client.paginateKeys({ pageSize: 2, signal: controller.signal })) {
+          seen.push(key.keyName)
+          if (seen.length === 2) controller.abort()
+        }
+      })(),
+    ).rejects.toThrow()
     expect(seen.length).toBe(2)
   })
 })

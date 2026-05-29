@@ -183,12 +183,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/backblaze-labs/b2-typescript-sdk"
+    "url": "https://github.com/backblaze-labs/b2-sdk-typescript"
   },
   "author": "Backblaze, Inc.",
-  "homepage": "https://github.com/backblaze-labs/b2-typescript-sdk#readme",
+  "homepage": "https://github.com/backblaze-labs/b2-sdk-typescript#readme",
   "bugs": {
-    "url": "https://github.com/backblaze-labs/b2-typescript-sdk/issues"
+    "url": "https://github.com/backblaze-labs/b2-sdk-typescript/issues"
   },
   "publishConfig": {
     "access": "public",

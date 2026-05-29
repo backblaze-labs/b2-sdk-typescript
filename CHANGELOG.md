@@ -117,5 +117,5 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
 
-[Unreleased]: https://github.com/backblaze-labs/b2-typescript-sdk/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/backblaze-labs/b2-typescript-sdk/releases/tag/v0.1.0
+[Unreleased]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/backblaze-labs/b2-sdk-typescript/releases/tag/v0.1.0

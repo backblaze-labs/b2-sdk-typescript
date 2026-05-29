@@ -63,7 +63,7 @@ Once `@backblaze-labs/b2-sdk` exists on npm, wire up OIDC so every future releas
 1. Go to **npmjs.com → `@backblaze-labs/b2-sdk` → Settings → Trusted publishing**.
 2. Add a **GitHub Actions** publisher:
    - **Organization or user**: `backblaze-labs`
-   - **Repository**: `b2-typescript-sdk`
+   - **Repository**: `b2-sdk-typescript`
    - **Workflow filename**: `release.yml`
    - **Environment**: leave blank (the workflow declares none)
    - **Allowed actions**: `npm publish`
@@ -79,7 +79,7 @@ That's it. There is **no `NPM_TOKEN` secret to create or rotate.** The `id-token
 If trusted publishing isn't an option (self-hosted runner, a CI provider npm doesn't support yet), fall back to an automation token:
 
 1. <https://www.npmjs.com/settings/~/tokens> → **Generate New Token → Granular Access Token**, scoped to `@backblaze-labs/*` (Read and write) + org `@backblaze-labs` (Read).
-2. `gh secret set NPM_TOKEN --repo backblaze-labs/b2-typescript-sdk --body '<token>'`
+2. `gh secret set NPM_TOKEN --repo backblaze-labs/b2-sdk-typescript --body '<token>'`
 3. In `release.yml`, add `NPM_TOKEN: ${{ secrets.NPM_TOKEN }}` back to the `env:` of the changesets step and add `--provenance` to the publish command.
 
 This is strictly less secure than OIDC (a long-lived token that can be exfiltrated), so prefer trusted publishing wherever it's supported.
@@ -241,7 +241,7 @@ What that does:
 - Pulls the matching `CHANGELOG.md` section into the release body.
 - Attaches the npm tarball as a downloadable artifact for users who don't want to install from npm.
 
-Alternative: open `https://github.com/backblaze-labs/b2-typescript-sdk/releases/new`, pick the tag, click *Generate release notes* (uses commit history), and upload the tarball manually.
+Alternative: open `https://github.com/backblaze-labs/b2-sdk-typescript/releases/new`, pick the tag, click *Generate release notes* (uses commit history), and upload the tarball manually.
 
 ### 7. Smoke test the published package
 
@@ -276,7 +276,7 @@ The workflow is already wired up at [`.github/workflows/release.yml`](.github/wo
 
 The workflow publishes via **OIDC trusted publishing** — there is no `NPM_TOKEN` secret to create or rotate. Setup is two clicks, done once, after 0.1.0 exists on npm:
 
-1. Configure the trusted publisher on npmjs.com (see [step 3 of First-time setup](#3-configure-trusted-publishing-after-010-is-live) for the exact field values: org `backblaze-labs`, repo `b2-typescript-sdk`, workflow `release.yml`).
+1. Configure the trusted publisher on npmjs.com (see [step 3 of First-time setup](#3-configure-trusted-publishing-after-010-is-live) for the exact field values: org `backblaze-labs`, repo `b2-sdk-typescript`, workflow `release.yml`).
 2. Confirm the repo Settings → Actions → General → "Workflow permissions" allows **read and write** so `changesets/action` can open the version PR.
 
 How OIDC publishing works: when the workflow runs `pnpm publish`, pnpm sees it's inside GitHub Actions with the `id-token: write` permission, requests a GitHub OIDC token, and exchanges it with npm for a short-lived, single-use credential scoped to this exact workflow. The credential can't be exfiltrated (it never exists as a stored secret) and can't be replayed (it expires in minutes). Provenance is attested automatically — no `--provenance` flag needed.

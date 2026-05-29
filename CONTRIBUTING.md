@@ -10,8 +10,8 @@ We welcome contributions. This document covers setup, conventions, and the PR wo
 ## Development setup
 
 ```bash
-git clone https://github.com/backblaze-labs/b2-typescript-sdk.git
-cd b2-typescript-sdk
+git clone https://github.com/backblaze-labs/b2-sdk-typescript.git
+cd b2-sdk-typescript
 pnpm install
 pnpm build
 pnpm test
@@ -169,7 +169,7 @@ Use concise commit messages. Focus on the "why" not the "what". Examples:
 
 ## Reporting issues
 
-Open an issue at https://github.com/backblaze-labs/b2-typescript-sdk/issues with:
+Open an issue at https://github.com/backblaze-labs/b2-sdk-typescript/issues with:
 
 - What you expected
 - What happened instead

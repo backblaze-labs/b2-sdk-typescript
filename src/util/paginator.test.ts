@@ -82,11 +82,13 @@ describe('paginatePages', () => {
     const { fetcher, callCount } = arrayFetcher([[1, 2, 3]])
     const controller = new AbortController()
     controller.abort()
-    await expect(async () => {
-      for await (const _page of paginatePages(fetcher, controller.signal)) {
-        // unreachable
-      }
-    }).rejects.toThrow()
+    await expect(
+      (async () => {
+        for await (const _page of paginatePages(fetcher, controller.signal)) {
+          // unreachable
+        }
+      })(),
+    ).rejects.toThrow()
     // Fetcher must NOT have been called at all.
     expect(callCount()).toBe(0)
   })
@@ -99,15 +101,17 @@ describe('paginatePages', () => {
     ])
     const controller = new AbortController()
     const pages: number[][] = []
-    await expect(async () => {
-      for await (const page of paginatePages(fetcher, controller.signal)) {
-        pages.push([...page.items])
-        // Flip the abort signal after the first page is delivered. The next
-        // pre-fetch `throwIfAborted` check must trip and terminate the loop
-        // before the second fetch runs.
-        if (pages.length === 1) controller.abort()
-      }
-    }).rejects.toThrow()
+    await expect(
+      (async () => {
+        for await (const page of paginatePages(fetcher, controller.signal)) {
+          pages.push([...page.items])
+          // Flip the abort signal after the first page is delivered. The next
+          // pre-fetch `throwIfAborted` check must trip and terminate the loop
+          // before the second fetch runs.
+          if (pages.length === 1) controller.abort()
+        }
+      })(),
+    ).rejects.toThrow()
     expect(pages).toEqual([[1, 2]])
     expect(callCount()).toBe(1)
   })
@@ -120,9 +124,11 @@ describe('paginatePages', () => {
       return { page: calls, nextCursor: calls }
     }
     const pages: number[] = []
-    await expect(async () => {
-      for await (const page of paginatePages(fetcher, undefined)) pages.push(page)
-    }).rejects.toThrow(/boom on page 2/)
+    await expect(
+      (async () => {
+        for await (const page of paginatePages(fetcher, undefined)) pages.push(page)
+      })(),
+    ).rejects.toThrow(/boom on page 2/)
     expect(pages).toEqual([1])
   })
 
@@ -189,12 +195,14 @@ describe('paginateItems', () => {
     ])
     const controller = new AbortController()
     const items: number[] = []
-    await expect(async () => {
-      for await (const item of paginateItems(fetcher, (p) => p.items, controller.signal)) {
-        items.push(item)
-        if (item === 2) controller.abort()
-      }
-    }).rejects.toThrow()
+    await expect(
+      (async () => {
+        for await (const item of paginateItems(fetcher, (p) => p.items, controller.signal)) {
+          items.push(item)
+          if (item === 2) controller.abort()
+        }
+      })(),
+    ).rejects.toThrow()
     expect(items).toEqual([1, 2])
     expect(callCount()).toBe(1)
   })
@@ -207,11 +215,13 @@ describe('paginateItems', () => {
       throw new Error('boom')
     }
     const items: number[] = []
-    await expect(async () => {
-      for await (const item of paginateItems(fetcher, (p) => p.items, undefined)) {
-        items.push(item)
-      }
-    }).rejects.toThrow(/boom/)
+    await expect(
+      (async () => {
+        for await (const item of paginateItems(fetcher, (p) => p.items, undefined)) {
+          items.push(item)
+        }
+      })(),
+    ).rejects.toThrow(/boom/)
     expect(items).toEqual([1, 2])
   })
 

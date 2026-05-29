@@ -1,7 +1,7 @@
 # @backblaze-labs/b2-sdk
 
-[![CI](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/ci.yml)
-[![API Docs](https://github.com/backblaze-labs/b2-typescript-sdk/actions/workflows/docs.yml/badge.svg)](https://backblaze-labs.github.io/b2-typescript-sdk/)
+[![CI](https://github.com/backblaze-labs/b2-sdk-typescript/actions/workflows/ci.yml/badge.svg)](https://github.com/backblaze-labs/b2-sdk-typescript/actions/workflows/ci.yml)
+[![API Docs](https://github.com/backblaze-labs/b2-sdk-typescript/actions/workflows/docs.yml/badge.svg)](https://backblaze-labs.github.io/b2-sdk-typescript/)
 [![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -17,6 +17,8 @@ The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript.
 **Fully typed.** Branded IDs, discriminated unions for encryption settings and errors, strict TypeScript with `exactOptionalPropertyTypes`.
 
 **Zero runtime dependencies.** The core package has no `dependencies` in `package.json`.
+
+**Full API reference:** [backblaze-labs.github.io/b2-sdk-typescript](https://backblaze-labs.github.io/b2-sdk-typescript/) (generated from source on every push to `main`).
 
 ## Install
 
@@ -440,6 +442,8 @@ import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze-labs/b2-sd
 // In-memory B2 server for tests (no network required)
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
+
+Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
 ## Custom transport
 

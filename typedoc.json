@@ -24,7 +24,7 @@
   "excludeExternals": true,
   "categorizeByGroup": true,
   "navigationLinks": {
-    "GitHub": "https://github.com/backblaze-labs/b2-typescript-sdk",
+    "GitHub": "https://github.com/backblaze-labs/b2-sdk-typescript",
     "Backblaze B2": "https://www.backblaze.com/cloud-storage"
   },
   "treatWarningsAsErrors": true,

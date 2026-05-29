@@ -17,7 +17,7 @@ name: Release
 #   - After 0.1.0 is live: npmjs.com -> @backblaze-labs/b2-sdk -> Settings ->
 #     "Trusted publishing" -> add a GitHub Actions publisher with:
 #         Organization/user:  backblaze-labs
-#         Repository:         b2-typescript-sdk
+#         Repository:         b2-sdk-typescript
 #         Workflow filename:  release.yml
 #         Environment:        (leave blank — none configured here)
 #   - Optionally then set the package to "Require two-factor authentication

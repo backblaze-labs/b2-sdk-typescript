@@ -97,6 +97,16 @@ export function createWriteStream(
     resolve: resolveDone,
     reject: rejectDone,
   } = Promise.withResolvers<FileVersion>()
+  // Attach a no-op rejection handler so a `done` that rejects before the
+  // caller observes it never surfaces as a process-level unhandled rejection.
+  // The error is not swallowed: `close()`/`abort()` also reject the writable
+  // (so `pipeTo`/`getWriter().close()` throw), and any later `await done` /
+  // `done.then(onRejected)` the caller attaches still sees the rejection —
+  // extra handlers on the same promise all fire. Mirrors the
+  // `task.catch(() => {})` pattern used for inflight part uploads below, and
+  // keeps the engine well-behaved under Bun and Node's strict
+  // unhandled-rejection mode.
+  done.catch(() => {})
 
   function ensureStarted(): Promise<LargeFileId> {
     if (largeFileId !== null) return Promise.resolve(largeFileId)

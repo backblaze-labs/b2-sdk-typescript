@@ -101,6 +101,11 @@ describe('createWriteStream branch coverage', () => {
       },
     })
     await expect(reader.pipeTo(writable)).rejects.toBeDefined()
+    // Observe `done` only after pipeTo has already rejected it. This is the
+    // real-world consumer ordering, and it works without tripping an
+    // unhandled rejection because the engine attaches an internal no-op
+    // `done.catch` (see src/upload/stream.ts). Under Bun / Node strict mode
+    // this would otherwise fail.
     const rejection = await done.then(
       () => null,
       (err) => err,
