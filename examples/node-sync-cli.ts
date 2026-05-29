@@ -12,8 +12,8 @@
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'
-import { B2Folder, LocalFolder, synchronize } from '@backblaze-labs/b2-sdk/sync'
 import type { CompareMode, KeepMode, SynchronizerUpConfig } from '@backblaze-labs/b2-sdk/sync'
+import { B2Folder, LocalFolder, synchronize } from '@backblaze-labs/b2-sdk/sync'
 
 async function main() {
   const localDir = process.argv[2]

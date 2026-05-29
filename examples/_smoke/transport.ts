@@ -13,8 +13,8 @@
  * they just add to the pre-seeded sim.
  */
 
-import { B2Client, BucketType } from '@backblaze-labs/b2-sdk'
 import type { HttpTransport } from '@backblaze-labs/b2-sdk'
+import { B2Client, BucketType } from '@backblaze-labs/b2-sdk'
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
 

@@ -5,11 +5,7 @@ import { createS3ClientConfig, presignGetObjectUrl } from './index.ts'
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(
-  overrides: {
-    s3ApiUrl?: string
-    accountId?: string
-    authToken?: string
-  } = {},
+  overrides: { s3ApiUrl?: string; accountId?: string; authToken?: string } = {},
 ): AccountInfo {
   const {
     s3ApiUrl = 'https://s3.us-west-004.backblazeb2.com',

@@ -3,7 +3,7 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
-import { REALM_URLS, getRealmUrl } from './realms.ts'
+import { getRealmUrl, REALM_URLS } from './realms.ts'
 import { UploadUrlPool } from './upload-url-pool.ts'
 
 const mockAuth: AuthorizeAccountResponse = {

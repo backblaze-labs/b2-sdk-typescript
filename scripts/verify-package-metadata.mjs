@@ -55,7 +55,7 @@ for (const re of installMatches) {
 }
 
 // --- README bare imports
-const importMatches = readme.matchAll(/from\s+['"](@[^'"\/]+\/[^'"]+)['"]/g)
+const importMatches = readme.matchAll(/from\s+['"](@[^'"/]+\/[^'"]+)['"]/g)
 for (const m of importMatches) {
   if (!m[1].startsWith(name)) {
     errors.push(`README.md: import "${m[1]}" should start with "${name}"`)
@@ -97,7 +97,9 @@ if (!/export const VERSION:\s*string\s*=\s*pkg\.version/.test(versionTs)) {
 
 if (errors.length > 0) {
   console.error(`verify-package-metadata: ${errors.length} problem(s) found`)
-  errors.forEach((e, i) => console.error(`  ${i + 1}. ${e}`))
+  errors.forEach((e, i) => {
+    console.error(`  ${i + 1}. ${e}`)
+  })
   process.exit(1)
 }
 

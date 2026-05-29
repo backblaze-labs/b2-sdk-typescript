@@ -2,8 +2,8 @@ import type { B2Client } from './client.ts'
 import { copyLargeFile } from './copy/large.ts'
 import {
   type DownloadResult,
-  type HeadResult,
   downloadByName,
+  type HeadResult,
   headByName,
 } from './download/single.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
@@ -513,7 +513,7 @@ export class Bucket {
     // listFileVersions sorts by name asc then upload timestamp desc, so the
     // first entry is the latest version.
     const latest = versions[0]
-    if (!latest || latest.action !== 'hide') return null
+    if (latest?.action !== 'hide') return null
     await this.deleteFileVersion(fileName, latest.fileId)
     return latest
   }

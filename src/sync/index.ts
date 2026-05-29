@@ -7,48 +7,48 @@
  * @packageDocumentation
  */
 
-export { LocalFolder } from './scanners/local.ts'
-export { B2Folder } from './scanners/b2.ts'
-export { zipFolders } from './pairing.ts'
-export { generateActions } from './policies/index.ts'
-export { filesAreDifferent } from './policies/compare.ts'
-export { synchronize } from './synchronizer.ts'
 export type {
   SyncAction,
   SyncActionType,
 } from './actions/index.ts'
 export {
-  UploadAction,
-  DownloadAction,
   CopyAction,
-  HideAction,
-  DeleteRemoteAction,
   DeleteLocalAction,
+  DeleteRemoteAction,
+  DownloadAction,
+  HideAction,
   SkipAction,
+  UploadAction,
 } from './actions/index.ts'
+export type { SyncPair } from './pairing.ts'
+export { zipFolders } from './pairing.ts'
+export { filesAreDifferent } from './policies/compare.ts'
+export type { ActionFactory } from './policies/index.ts'
+export { generateActions } from './policies/index.ts'
+export { B2Folder } from './scanners/b2.ts'
+export { LocalFolder } from './scanners/local.ts'
 export type {
+  B2SyncFolder,
+  LocalSyncFolder,
+  SynchronizerConfig,
+  SynchronizerDownConfig,
+  SynchronizerUpConfig,
+} from './synchronizer.ts'
+export { synchronize } from './synchronizer.ts'
+export type {
+  B2SyncPath,
   CompareMode,
   KeepMode,
-  SyncDirection,
-  SyncPath,
   LocalSyncPath,
-  B2SyncPath,
-  SyncEvent,
-  SyncEventType,
   SyncActionEvent,
   SyncActionEventType,
-  SyncSkipEvent,
-  SyncErrorEvent,
-  SyncOptions,
+  SyncDirection,
   SyncEncryptionProvider,
+  SyncErrorEvent,
+  SyncEvent,
+  SyncEventType,
   SyncFolder,
+  SyncOptions,
+  SyncPath,
+  SyncSkipEvent,
 } from './types.ts'
-export type { ActionFactory } from './policies/index.ts'
-export type { SyncPair } from './pairing.ts'
-export type {
-  SynchronizerConfig,
-  SynchronizerUpConfig,
-  SynchronizerDownConfig,
-  LocalSyncFolder,
-  B2SyncFolder,
-} from './synchronizer.ts'

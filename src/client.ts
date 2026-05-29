@@ -5,17 +5,17 @@ import { Bucket } from './bucket.ts'
 import type { RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
-import { UrlGuard, deriveAllowedSuffixes } from './http/url-guard.ts'
+import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
   BucketInfo,
+  BucketRetentionPolicy,
   BucketType,
   CorsRule,
   CreateBucketRequest,
   LifecycleRule,
 } from './types/bucket.ts'
-import type { BucketRetentionPolicy } from './types/bucket.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { ApplicationKeyId, BucketId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'

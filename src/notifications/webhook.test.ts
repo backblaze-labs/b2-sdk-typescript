@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   B2_WEBHOOK_SIGNATURE_HEADER,
-  type WebhookPayload,
   requireValidWebhook,
   verifyWebhookSignature,
+  type WebhookPayload,
 } from './webhook.ts'
 
 /**

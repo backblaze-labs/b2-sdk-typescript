@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { B2SsrfError } from '../errors/index.ts'
-import { UrlGuard, deriveAllowedSuffixes } from './url-guard.ts'
+import { deriveAllowedSuffixes, UrlGuard } from './url-guard.ts'
 
 describe('UrlGuard', () => {
   it('is permissive before any suffix is set', () => {

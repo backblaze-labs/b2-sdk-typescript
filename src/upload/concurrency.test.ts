@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { Semaphore, mapConcurrent } from './concurrency.ts'
+import { mapConcurrent, Semaphore } from './concurrency.ts'
 
 describe('Semaphore', () => {
   it('throws RangeError on a zero limit instead of deadlocking', () => {

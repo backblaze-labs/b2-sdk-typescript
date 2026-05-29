@@ -10,6 +10,7 @@ import {
   BadUploadUrlError,
   CapExceededError,
   ChecksumMismatchError,
+  classifyError,
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
@@ -17,7 +18,6 @@ import {
   RequestTimeoutError,
   ServiceUnavailableError,
   TooManyRequestsError,
-  classifyError,
 } from './index.ts'
 
 // ---------------------------------------------------------------------------

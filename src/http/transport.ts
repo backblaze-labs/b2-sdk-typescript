@@ -1,6 +1,6 @@
-import { B2Error, ExpiredAuthTokenError, NetworkError, classifyError } from '../errors/index.ts'
+import { B2Error, classifyError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions, computeBackoff, sleep } from './retry.ts'
+import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
 

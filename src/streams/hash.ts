@@ -14,6 +14,7 @@ let nodeCreateHash: NodeHashFactory | null | undefined
 async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
   if (nodeCreateHash !== undefined) return nodeCreateHash
   try {
+    // biome-ignore lint/suspicious/noTsIgnore: isomorphic import — @ts-ignore is silent when node:crypto resolves (Node) and suppresses the error when it doesn't (Deno/browser); @ts-expect-error can't do both
     // @ts-ignore -- node:crypto may not exist in browser/edge runtimes
     const crypto = await import('node:crypto')
     // Vite's browser shim resolves the import but does not implement

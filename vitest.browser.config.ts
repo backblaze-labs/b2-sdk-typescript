@@ -1,3 +1,4 @@
+import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
 
 /**
@@ -38,7 +39,7 @@ export default defineConfig({
     hookTimeout: 60_000,
     browser: {
       enabled: true,
-      provider: 'playwright',
+      provider: playwright(),
       // Headless in CI; toggle via VITEST_BROWSER_HEADLESS=false for local debugging.
       headless: process.env['VITEST_BROWSER_HEADLESS'] !== 'false',
       instances: engines.map((browser) => ({ browser })),

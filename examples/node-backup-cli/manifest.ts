@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { saltFromString, saltToString } from './crypto.ts'
 

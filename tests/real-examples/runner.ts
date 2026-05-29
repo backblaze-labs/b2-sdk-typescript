@@ -20,8 +20,8 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { B2Client } from '../../src/index.ts'
 import type { Bucket } from '../../src/index.ts'
+import { B2Client } from '../../src/index.ts'
 
 const NODE_MAJOR = (process.versions.node ?? '').split('.')[0] ?? 'unknown'
 const BUCKET_PREFIX = `sdk-examples-node${NODE_MAJOR}-`

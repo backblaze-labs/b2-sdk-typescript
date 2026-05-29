@@ -4,12 +4,12 @@ import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
-import { synchronize } from './synchronizer.ts'
 import type {
   SynchronizerConfig,
   SynchronizerDownConfig,
   SynchronizerUpConfig,
 } from './synchronizer.ts'
+import { synchronize } from './synchronizer.ts'
 import type { B2SyncPath, LocalSyncPath, SyncEvent, SyncFolder, SyncPath } from './types.ts'
 
 // ---------------------------------------------------------------------------

@@ -17,8 +17,8 @@ import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
-  type BucketId,
   accountId as accountIdOf,
+  type BucketId,
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
@@ -115,6 +115,7 @@ function parseFileInfoHeaders(headers: Record<string, string>): Record<string, s
   }
   return info
 }
+
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   validateBucketInfo,
@@ -308,10 +309,7 @@ export interface B2SimulatorOptions {
    * test debugging hard when a hook quietly stops firing. Register
    * `onHookError` to surface what would otherwise be invisible.
    */
-  onHookError?: (event: {
-    kind: 'webhook' | 'replication'
-    error: Error
-  }) => void
+  onHookError?: (event: { kind: 'webhook' | 'replication'; error: Error }) => void
   /**
    * When `true`, the simulator enforces application-key capability
    * checks, bucket scoping, prefix scoping, and auth-token expiry on
@@ -595,7 +593,7 @@ export class B2Simulator {
     namePrefix: string | null
     applicationKeyId: string
   } | null {
-    if (!authzHeader || !authzHeader.startsWith('Basic ')) return null
+    if (!authzHeader?.startsWith('Basic ')) return null
     // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
     // Wrapped in a try because malformed base64 throws.
     const decoded = (() => {

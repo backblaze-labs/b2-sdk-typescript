@@ -11,14 +11,14 @@ import { defineConfig } from 'vitest/config'
  *   - Lives in files named `*.slow.test.ts` next to the code they cover.
  *   - Run via `pnpm test:slow`. Default `pnpm test` excludes them so PR
  *     feedback stays under a minute.
- *   - `singleFork: true` + `isolate: false` keeps every test file running in
- *     the same long-lived fork. With `maxForks: 1` plus default per-file
- *     forking, vitest's IPC (tinypool's `onTaskUpdate` RPC) has a hard-coded
- *     ~60 s timeout that fires when an individual SHA-1 test runs >60 s on
- *     a slow runner. A single shared fork keeps the RPC connection warm
- *     across file boundaries and avoids the per-file re-handshake that
- *     races the timeout. Tests already create fresh `B2Simulator` instances
- *     per file, so vitest's per-file isolation isn't needed.
+ *   - `fileParallelism: false` + `isolate: false` keeps every test file running
+ *     in one long-lived worker (vitest 4 replaced `pool: 'forks'` +
+ *     `poolOptions.forks.singleFork` with this top-level option). vitest's IPC
+ *     (tinypool's `onTaskUpdate` RPC) has a hard-coded ~60 s timeout that fires
+ *     when an individual SHA-1 test runs >60 s on a slow runner. A single shared
+ *     worker keeps the RPC connection warm across file boundaries and avoids the
+ *     per-file re-handshake that races the timeout. Tests already create fresh
+ *     `B2Simulator` instances per file, so vitest's per-file isolation isn't needed.
  *   - `dangerouslyIgnoreUnhandledErrors: true` survives any residual RPC
  *     timeout that fires from the tinypool layer at teardown (an internal
  *     vitest-worker error, not a real test failure). All tests pass; this
@@ -32,12 +32,7 @@ export default defineConfig({
     include: ['src/**/*.slow.test.ts'],
     testTimeout: 180_000,
     hookTimeout: 60_000,
-    pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    fileParallelism: false,
     isolate: false,
     dangerouslyIgnoreUnhandledErrors: true,
   },

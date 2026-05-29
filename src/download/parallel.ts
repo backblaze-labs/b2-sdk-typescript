@@ -1,5 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { DEFAULT_RETRY_OPTIONS, computeBackoff, sleep } from '../http/retry.ts'
+import { computeBackoff, DEFAULT_RETRY_OPTIONS, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
 import type { FileId } from '../types/ids.ts'

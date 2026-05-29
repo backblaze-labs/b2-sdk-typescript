@@ -5,8 +5,8 @@ import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
 import { filesAreDifferent } from './policies/compare.ts'
-import { generateActions } from './policies/index.ts'
 import type { ActionFactory } from './policies/index.ts'
+import { generateActions } from './policies/index.ts'
 import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
 
 function makeSyncPath(relativePath: string, modTimeMillis: number, size: number): SyncPath {

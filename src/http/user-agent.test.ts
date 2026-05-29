@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { VERSION } from '../version.ts'
-import { SDK_PACKAGE, SDK_PRODUCT, getUserAgent } from './user-agent.ts'
+import { getUserAgent, SDK_PACKAGE, SDK_PRODUCT } from './user-agent.ts'
 
 describe('getUserAgent', () => {
   it('starts with the SDK product token + version', () => {

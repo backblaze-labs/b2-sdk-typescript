@@ -7,8 +7,8 @@
  * code each. The business logic stays in the example file itself.
  */
 
-import { B2Client } from '@backblaze-labs/b2-sdk'
 import type { HttpTransport } from '@backblaze-labs/b2-sdk'
+import { B2Client } from '@backblaze-labs/b2-sdk'
 import { smokeTransport } from './transport.ts'
 
 /**

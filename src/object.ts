@@ -1,8 +1,14 @@
 import type { Bucket } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { createParallelDownloadStream } from './download/parallel.ts'
-import { type DownloadResult, downloadByName } from './download/single.ts'
-import { type HeadResult, downloadById, headById, headByName } from './download/single.ts'
+import {
+  type DownloadResult,
+  downloadById,
+  downloadByName,
+  type HeadResult,
+  headById,
+  headByName,
+} from './download/single.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -12,7 +18,7 @@ import type { FileId, LargeFileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import { uploadSmallFile } from './upload/single.ts'
-import { type UploadWriteHandle, createWriteStream } from './upload/stream.ts'
+import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
 
 /** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
 export interface DownloadCallOptions {

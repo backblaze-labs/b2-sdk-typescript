@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
-import { type LargeFileId, bucketId } from '../types/ids.ts'
+import { bucketId, type LargeFileId } from '../types/ids.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
 
 /**

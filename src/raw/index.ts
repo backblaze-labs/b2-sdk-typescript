@@ -966,8 +966,8 @@ function applyLegalHoldHeader(
 }
 
 export {
-  encodeFileName,
-  decodeFileName,
   buildFileInfoHeaders,
+  decodeFileName,
+  encodeFileName,
   parseFileInfoHeaders,
 } from './encoding.ts'

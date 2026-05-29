@@ -46,10 +46,10 @@ const baseRequest: HttpRequest = {
 // ============================================================================
 
 describe('FetchTransport', () => {
-  let fetchSpy: ReturnType<typeof vi.fn>
+  let fetchSpy: ReturnType<typeof vi.fn<typeof fetch>>
 
   beforeEach(() => {
-    fetchSpy = vi.fn()
+    fetchSpy = vi.fn<typeof fetch>()
     globalThis.fetch = fetchSpy
   })
 
@@ -210,10 +210,10 @@ describe('FetchTransport', () => {
 // ============================================================================
 
 describe('RetryTransport', () => {
-  let innerTransport: HttpTransport & { send: ReturnType<typeof vi.fn> }
+  let innerTransport: HttpTransport & { send: ReturnType<typeof vi.fn<HttpTransport['send']>> }
 
   beforeEach(() => {
-    innerTransport = { send: vi.fn() }
+    innerTransport = { send: vi.fn<HttpTransport['send']>() }
   })
 
   // --------------------------------------------------------------------------
