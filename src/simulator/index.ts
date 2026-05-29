@@ -1207,7 +1207,7 @@ export class B2Simulator {
       'Content-Type': fv.contentType,
       'Content-Length': String(data.byteLength),
       'X-Bz-File-Id': fv.fileId,
-      'X-Bz-File-Name': encodeURIComponent(fv.fileName),
+      'X-Bz-File-Name': encodeFileName(fv.fileName),
       'X-Bz-Content-Sha1': fv.contentSha1 ?? 'none',
       'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
     }

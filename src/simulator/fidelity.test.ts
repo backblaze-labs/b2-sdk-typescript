@@ -616,3 +616,26 @@ describe('B2Simulator upload fileInfo round-trip', () => {
     expect(result.headers.fileInfo).toMatchObject({ color: 'forest green' })
   })
 })
+
+describe('B2Simulator download header encoding', () => {
+  it('encodes X-Bz-File-Name with B2 encodeFileName (preserves B2-safe chars)', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'name-encoding',
+      bucketType: BucketType.AllPrivate,
+    })
+    // '=' and '@' are B2-safe (encodeFileName preserves them); encodeURIComponent
+    // would percent-escape them. Assert the raw response header matches B2.
+    await bucket.upload({
+      fileName: 'release=v1@main.txt',
+      source: new BufferSource(new TextEncoder().encode('x')),
+    })
+    const resp = await sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/file/name-encoding/release=v1@main.txt',
+    })
+    expect(resp.status).toBe(200)
+    expect(resp.headers.get('X-Bz-File-Name')).toBe('release=v1@main.txt')
+  })
+})
