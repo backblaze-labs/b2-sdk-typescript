@@ -10,6 +10,7 @@
  */
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
@@ -1211,9 +1212,11 @@ export class B2Simulator {
       'X-Bz-Upload-Timestamp': String(fv.uploadTimestamp),
     }
     // Serialize stored fileInfo as X-Bz-Info-* response headers so custom
-    // metadata round-trips through download(), not just getFileInfo/list.
+    // metadata round-trips through download(), not just getFileInfo/list. Use
+    // the same B2 wire encoding (encodeFileName) the SDK's download parser
+    // decodes with (decodeFileName), rather than encodeURIComponent.
     for (const [key, value] of Object.entries(fv.fileInfo)) {
-      headers[`X-Bz-Info-${encodeURIComponent(key)}`] = encodeURIComponent(value)
+      headers[`X-Bz-Info-${encodeFileName(key)}`] = encodeFileName(value)
     }
     // Preserve the synthetic last-modified default only when the upload didn't
     // set one explicitly.
@@ -1770,6 +1773,20 @@ export class B2Simulator {
         'bad_request',
         `partSha1Array has ${req.partSha1Array.length} entries but ${sortedParts.length} parts were uploaded`,
       )
+    }
+    // B2 spec-compliance: partSha1Array is the ordered checksum list that
+    // confirms the right parts were uploaded in the right order. Compare each
+    // entry against the stored part's SHA-1; real B2 rejects a mismatch with
+    // `bad_request`.
+    for (let i = 0; i < sortedParts.length; i++) {
+      const [partNumber, part] = sortedParts[i] as [number, { data: Uint8Array; sha1: string }]
+      if (req.partSha1Array[i]?.toLowerCase() !== part.sha1) {
+        return this.error(
+          400,
+          'bad_request',
+          `part ${partNumber} SHA-1 does not match the uploaded part`,
+        )
+      }
     }
     // B2 spec-compliance: every non-last part must be at least
     // `absoluteMinimumPartSize`. The last part (highest part number)

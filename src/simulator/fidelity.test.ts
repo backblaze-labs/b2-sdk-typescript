@@ -526,6 +526,37 @@ describe('B2Simulator upload SHA-1 verification', () => {
       ),
     ).rejects.toThrow(/Sha1 did not match/i)
   })
+
+  it('rejects finishLargeFile when a partSha1Array entry does not match the uploaded part', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'finish-mismatch.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId as unknown as LargeFileId,
+    })
+    const part = new Uint8Array(1024).fill(9)
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part.byteLength,
+        contentSha1: await sha1Hex(part),
+      },
+      part as BodyInit,
+    )
+    // The part uploaded fine, but finish supplies the wrong checksum for it.
+    await expect(
+      client.raw.finishLargeFile(apiUrl, authToken, {
+        fileId: start.fileId as unknown as LargeFileId,
+        partSha1Array: ['0'.repeat(40)],
+      }),
+    ).rejects.toThrow(/does not match the uploaded part/i)
+  })
 })
 
 describe('B2Simulator upload fileInfo round-trip', () => {
@@ -576,10 +607,12 @@ describe('B2Simulator upload fileInfo round-trip', () => {
     await bucket.upload({
       fileName: 'dl-meta.txt',
       source: new BufferSource(new TextEncoder().encode('hi')),
-      fileInfo: { color: 'green' },
+      // Value with a space exercises the B2 wire encoding (encodeFileName)
+      // round-trip, not just plain alphanumerics.
+      fileInfo: { color: 'forest green' },
     })
     const result = await bucket.download('dl-meta.txt')
     await new Response(result.body).arrayBuffer() // drain to release the stream
-    expect(result.headers.fileInfo).toMatchObject({ color: 'green' })
+    expect(result.headers.fileInfo).toMatchObject({ color: 'forest green' })
   })
 })
