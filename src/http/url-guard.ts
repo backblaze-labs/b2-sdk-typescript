@@ -113,9 +113,12 @@ export class UrlGuard {
 /**
  * Extract host suffixes to allow from a B2 authorize-account response.
  *
- * Derives the parent domain (last two labels) of each realm URL — so
- * `api.us-west-004.backblazeb2.com` becomes `backblazeb2.com`. Always
- * includes `backblaze.com` because upload-pod URLs returned by
+ * Known B2 realm hosts under `backblazeb2.com` are collapsed to that parent.
+ * Unknown or custom realm hosts are allowed exactly as returned by
+ * `b2_authorize_account`, rather than by trimming to the last two labels.
+ * This avoids accidentally trusting broad public suffixes such as `co.uk`.
+ *
+ * Always includes `backblaze.com` because upload-pod URLs returned by
  * `b2_get_upload_url` use that parent domain (`pod-NNN-NNNN-NN.backblaze.com`)
  * rather than `backblazeb2.com`.
  *
@@ -132,10 +135,9 @@ export function deriveAllowedSuffixes(storageApi: {
   for (const url of [storageApi.apiUrl, storageApi.downloadUrl, storageApi.s3ApiUrl]) {
     try {
       const host = new URL(url).hostname
-      const parts = host.split('.')
-      if (parts.length >= 2) {
-        suffixes.add(parts.slice(-2).join('.'))
-      }
+      suffixes.add(
+        host === 'backblazeb2.com' || host.endsWith('.backblazeb2.com') ? 'backblazeb2.com' : host,
+      )
     } catch {
       // Skip malformed URLs. The auth response is from B2 itself; malformed
       // entries would already have caused other failures upstream.

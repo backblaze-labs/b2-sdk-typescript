@@ -275,6 +275,51 @@ describe('B2Client SSRF guard', () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it('honors allowedHostSuffixes: [] as an explicit guard disable after authorize()', async () => {
+    const { vi } = await import('vitest')
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            accountId: 'a',
+            authorizationToken: 't',
+            apiInfo: {
+              storageApi: {
+                apiUrl: 'https://api.backblazeb2.com',
+                downloadUrl: 'https://f001.backblazeb2.com',
+                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+                absoluteMinimumPartSize: 5_000_000,
+                recommendedPartSize: 100_000_000,
+                capabilities: [Capability.ReadFiles],
+                bucketId: null,
+                bucketName: null,
+                namePrefix: null,
+              },
+            },
+            applicationKeyExpirationTimestamp: null,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+    )
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 's',
+        allowedHostSuffixes: [],
+      })
+      await client.authorize()
+
+      expect(client.urlGuard?.getAllowedSuffixes()).toEqual([])
+      expect(() => client.urlGuard?.check('http://169.254.169.254/latest/meta-data/')).not.toThrow()
+      expect(() => client.urlGuard?.check('https://attacker.example/x')).not.toThrow()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
 })
 
 // --- Download tests ---

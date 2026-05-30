@@ -142,7 +142,9 @@ export class B2Client {
       const derived = deriveAllowedSuffixes(auth.apiInfo.storageApi)
       const merged =
         this.userAllowedSuffixes !== undefined
-          ? Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
+          ? this.userAllowedSuffixes.length === 0
+            ? []
+            : Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
           : derived
       this.urlGuard.setAllowedSuffixes(merged)
     }
