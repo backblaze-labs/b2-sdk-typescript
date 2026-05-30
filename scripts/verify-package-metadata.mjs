@@ -27,6 +27,10 @@ async function read(rel) {
   return await fs.readFile(join(repo, rel), 'utf8')
 }
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 const pkg = JSON.parse(await read('package.json'))
 const { name, version } = pkg
 const tarballPrefix = `${name.replace(/^@/, '').replace(/\//g, '-')}-${version}` // e.g. backblaze-labs-b2-sdk-0.1.0
@@ -64,7 +68,7 @@ for (const m of importMatches) {
 
 // --- CHANGELOG has the version
 const changelog = await read('CHANGELOG.md')
-if (!new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm').test(changelog)) {
+if (!new RegExp(`^## \\[${escapeRegExp(version)}\\]`, 'm').test(changelog)) {
   errors.push(`CHANGELOG.md missing "## [${version}]" heading for the current version`)
 }
 
