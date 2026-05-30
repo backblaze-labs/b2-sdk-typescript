@@ -27,6 +27,10 @@ import { fileURLToPath } from 'node:url'
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const changelogPath = join(repo, 'CHANGELOG.md')
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 const pkg = JSON.parse(await fs.readFile(join(repo, 'package.json'), 'utf8'))
 const version = pkg.version
 const repoUrl = (pkg.repository?.url ?? '').replace(/\.git$/, '').replace(/\/$/, '')
@@ -50,7 +54,7 @@ let text = await fs.readFile(changelogPath, 'utf8')
 
 // --- Guard: a `## [<version>]` heading must not already exist (idempotency /
 // double-run protection).
-if (new RegExp(`^## \\[${version.replace(/\./g, '\\.')}\\]`, 'm').test(text)) {
+if (new RegExp(`^## \\[${escapeRegExp(version)}\\]`, 'm').test(text)) {
   console.error(
     `cut-changelog: CHANGELOG.md already has a "## [${version}]" section. Nothing to do.`,
   )

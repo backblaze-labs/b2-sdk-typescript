@@ -10,6 +10,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 # Every job in this workflow checks the same example sources directly against
 # `src/` (no build step). This is only possible because the SDK is
 # source-isomorphic: every internal import uses `.ts` extensions, and
