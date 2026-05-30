@@ -231,30 +231,33 @@ describe('B2Client SSRF guard', () => {
   it('merges user-supplied allowedHostSuffixes with the auto-derived set', async () => {
     const { vi } = await import('vitest')
     const originalFetch = globalThis.fetch
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            accountId: 'a',
-            authorizationToken: 't',
-            apiInfo: {
-              storageApi: {
-                apiUrl: 'https://api.backblazeb2.com',
-                downloadUrl: 'https://f001.backblazeb2.com',
-                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
-                absoluteMinimumPartSize: 5_000_000,
-                recommendedPartSize: 100_000_000,
-                capabilities: [Capability.ReadFiles],
-                bucketId: null,
-                bucketName: null,
-                namePrefix: null,
-              },
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const u = typeof url === 'string' ? url : url.toString()
+      if (!u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+        throw new Error(`unexpected fetch: ${u}`)
+      }
+      return new Response(
+        JSON.stringify({
+          accountId: 'a',
+          authorizationToken: 't',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.backblazeb2.com',
+              downloadUrl: 'https://f001.backblazeb2.com',
+              s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              capabilities: [Capability.ReadFiles],
+              bucketId: null,
+              bucketName: null,
+              namePrefix: null,
             },
-            applicationKeyExpirationTimestamp: null,
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-    )
+          },
+          applicationKeyExpirationTimestamp: null,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     try {
@@ -279,30 +282,33 @@ describe('B2Client SSRF guard', () => {
   it('honors allowedHostSuffixes: [] as an explicit guard disable after authorize()', async () => {
     const { vi } = await import('vitest')
     const originalFetch = globalThis.fetch
-    const fetchSpy = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            accountId: 'a',
-            authorizationToken: 't',
-            apiInfo: {
-              storageApi: {
-                apiUrl: 'https://api.backblazeb2.com',
-                downloadUrl: 'https://f001.backblazeb2.com',
-                s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
-                absoluteMinimumPartSize: 5_000_000,
-                recommendedPartSize: 100_000_000,
-                capabilities: [Capability.ReadFiles],
-                bucketId: null,
-                bucketName: null,
-                namePrefix: null,
-              },
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const u = typeof url === 'string' ? url : url.toString()
+      if (!u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+        throw new Error(`unexpected fetch: ${u}`)
+      }
+      return new Response(
+        JSON.stringify({
+          accountId: 'a',
+          authorizationToken: 't',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.backblazeb2.com',
+              downloadUrl: 'https://f001.backblazeb2.com',
+              s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              capabilities: [Capability.ReadFiles],
+              bucketId: null,
+              bucketName: null,
+              namePrefix: null,
             },
-            applicationKeyExpirationTimestamp: null,
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        ),
-    )
+          },
+          applicationKeyExpirationTimestamp: null,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
     globalThis.fetch = fetchSpy as unknown as typeof fetch
 
     try {
@@ -316,6 +322,7 @@ describe('B2Client SSRF guard', () => {
       expect(client.urlGuard?.getAllowedSuffixes()).toEqual([])
       expect(() => client.urlGuard?.check('http://169.254.169.254/latest/meta-data/')).not.toThrow()
       expect(() => client.urlGuard?.check('https://attacker.example/x')).not.toThrow()
+      expect(fetchSpy).toHaveBeenCalledOnce()
     } finally {
       globalThis.fetch = originalFetch
     }
