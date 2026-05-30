@@ -358,7 +358,45 @@ describe('extractDownloadHeaders (via downloadById)', () => {
  * Used to test createParallelDownloadStream without depending on the full
  * simulator (which does support ranges, but we want isolated unit-level tests).
  */
-function createMockTransport(fileData: Uint8Array, fileId: string): HttpTransport {
+function byteResponse(status: number, data: Uint8Array, headers?: HeadersInit): HttpResponse {
+  return {
+    status,
+    headers: new Headers(headers),
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(data)
+        controller.close()
+      },
+    }),
+    json: () => Promise.reject(new Error('Not JSON')),
+    text: () => Promise.resolve(new TextDecoder().decode(data)),
+    arrayBuffer: () =>
+      Promise.resolve(
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+      ),
+  }
+}
+
+function jsonResponse<T extends Record<string, unknown>>(status: number, payload: T): HttpResponse {
+  const text = JSON.stringify(payload)
+  const data = new TextEncoder().encode(text)
+  return {
+    ...byteResponse(status, data, { 'Content-Type': 'application/json' }),
+    json: <U>() => Promise.resolve(payload as unknown as U),
+    text: () => Promise.resolve(text),
+  }
+}
+
+function createMockTransport(
+  fileData: Uint8Array,
+  fileId: string,
+  options?: {
+    onDownload?: (
+      request: HttpRequest,
+      rangeHeader: string | undefined,
+    ) => HttpResponse | undefined | Promise<HttpResponse | undefined>
+  },
+): HttpTransport {
   return {
     async send(request: HttpRequest): Promise<HttpResponse> {
       const url = request.url
@@ -403,8 +441,12 @@ function createMockTransport(fileData: Uint8Array, fileId: string): HttpTranspor
       // Handle download_file_by_id with range
       if (url.includes('b2_download_file_by_id')) {
         const rangeHeader = request.headers?.['Range'] ?? request.headers?.['range']
+        const override = await options?.onDownload?.(request, rangeHeader)
+        if (override !== undefined) return override
+
         let data = fileData
         let status = 200
+        let contentRange: string | undefined
 
         if (rangeHeader) {
           const match = rangeHeader.match(/bytes=(\d+)-(\d+)?/)
@@ -414,34 +456,21 @@ function createMockTransport(fileData: Uint8Array, fileId: string): HttpTranspor
               match[2] !== undefined ? Number.parseInt(match[2], 10) : fileData.byteLength - 1
             data = fileData.slice(start, end + 1)
             status = 206
+            contentRange = `bytes ${start}-${end}/${fileData.byteLength}`
           }
         }
 
         const responseHeaders = new Headers({
           'Content-Type': 'application/octet-stream',
           'Content-Length': String(data.byteLength),
+          ...(contentRange !== undefined ? { 'Content-Range': contentRange } : {}),
           'X-Bz-File-Id': fileId,
           'X-Bz-File-Name': 'mock-file.bin',
           'X-Bz-Content-Sha1': 'none',
           'X-Bz-Upload-Timestamp': String(Date.now()),
         })
 
-        return {
-          status,
-          headers: responseHeaders,
-          body: new ReadableStream({
-            start(controller) {
-              controller.enqueue(new Uint8Array(data))
-              controller.close()
-            },
-          }),
-          json: () => Promise.reject(new Error('Not JSON')),
-          text: () => Promise.resolve(new TextDecoder().decode(data)),
-          arrayBuffer: () =>
-            Promise.resolve(
-              data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
-            ),
-        }
+        return byteResponse(status, new Uint8Array(data), responseHeaders)
       }
 
       return {
@@ -621,10 +650,10 @@ describe('createParallelDownloadStream', () => {
             arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
           }
         }
-        // The interesting branch: body === null on a 200 OK.
+        // The interesting branch: body === null on an otherwise valid range response.
         return {
-          status: 200,
-          headers: new Headers({ 'Content-Length': '0' }),
+          status: 206,
+          headers: new Headers({ 'Content-Length': '0', 'Content-Range': 'bytes 0-29/100' }),
           body: null,
           json: () => Promise.reject(new Error('no body')),
           text: () => Promise.resolve(''),
@@ -649,6 +678,171 @@ describe('createParallelDownloadStream', () => {
     })
 
     await expect(readStream(stream)).rejects.toThrow(/no body/i)
+  })
+
+  it('does not retry non-retryable B2 errors for a range', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'non-retryable'
+    let attempts = 0
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () => {
+        attempts++
+        return jsonResponse(403, {
+          status: 403,
+          code: 'access_denied',
+          message: 'denied',
+        })
+      },
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+      maxRetries: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/denied/i)
+    expect(attempts).toBe(1)
+  })
+
+  it('uses only the transport retry budget by default', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'transport-budget'
+    let attempts = 0
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () => {
+        attempts++
+        return jsonResponse(503, {
+          status: 503,
+          code: 'service_unavailable',
+          message: 'try again',
+        })
+      },
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: {
+        maxRetries: 1,
+        initialRetryDelayMs: 1,
+        maxRetryDelayMs: 1,
+      },
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/try again/i)
+    expect(attempts).toBe(2)
+  })
+
+  it('rejects a ranged response that returns 200 instead of 206', async () => {
+    const fileData = new Uint8Array(30)
+    for (let i = 0; i < 30; i++) fileData[i] = i
+    const fakeFileId = 'wrong-status'
+    let attempts = 0
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () => {
+        attempts++
+        return byteResponse(200, fileData, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(fileData.byteLength),
+        })
+      },
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+      maxRetries: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/Expected HTTP 206/i)
+    expect(attempts).toBe(1)
+  })
+
+  it('rejects a ranged response with mismatched Content-Range', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'wrong-content-range'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () =>
+        byteResponse(206, fileData, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(fileData.byteLength),
+          'Content-Range': 'bytes 1-30/31',
+        }),
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/does not match requested range/i)
+  })
+
+  it('rejects truncated range bodies', async () => {
+    const fileData = new Uint8Array(30)
+    const truncated = fileData.slice(0, 29)
+    const fakeFileId = 'truncated'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () =>
+        byteResponse(206, truncated, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(truncated.byteLength),
+          'Content-Range': 'bytes 0-29/30',
+        }),
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/Expected 30 bytes/i)
   })
 
   // Branch: AbortSignal already aborted when the stream starts. The first

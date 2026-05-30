@@ -165,13 +165,12 @@ const partial = await bucket.download('large-file.bin', {
 })
 
 // Parallel ranged download (for large files).
-// Each range is retried independently with exponential backoff so a single
-// transient 503 does not kill the whole transfer.
+// Each range uses the client's configured RetryTransport budget, so transient
+// 503s are retried without adding a second default retry layer per chunk.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
   rangeSize: 10 * 1024 * 1024,
-  maxRetries: 5,
 })
 ```
 

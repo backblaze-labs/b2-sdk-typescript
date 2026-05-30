@@ -1,10 +1,13 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { computeBackoff, DEFAULT_RETRY_OPTIONS, sleep } from '../http/retry.ts'
+import { B2Error, classifyError, NetworkError } from '../errors/index.ts'
+import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
+import type { B2ErrorResponse } from '../types/errors.ts'
 import type { FileId } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
+import { utf8Decoder } from '../util/text-codec.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -16,7 +19,11 @@ export interface ParallelDownloadOptions {
   readonly rangeSize?: number
   /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
-  /** Maximum retry attempts per range on transient failures. Defaults to 5. */
+  /**
+   * Extra retry attempts per range on transient failures. Defaults to 0 because
+   * `B2Client` already applies `RetryTransport`; set this only when supplying a
+   * raw client that does not already retry transport failures.
+   */
   readonly maxRetries?: number
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
@@ -52,12 +59,13 @@ export function createParallelDownloadStream(
   const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
-  // `maxRetries` is part of `DEFAULT_RETRY_OPTIONS`; only override when
-  // the caller supplied an explicit value so the shared default stays
-  // the single source of truth.
+  // The high-level B2Client already wraps the raw transport in RetryTransport.
+  // Keep the parallel-download outer retry disabled by default so each range
+  // has one retry budget unless callers explicitly opt into an extra raw-client
+  // retry layer.
   const retryOptions = {
     ...DEFAULT_RETRY_OPTIONS,
-    ...(options.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+    maxRetries: options.maxRetries ?? 0,
   }
   const abort = options.signal
 
@@ -98,6 +106,7 @@ export function createParallelDownloadStream(
             options.fileId,
             range.start,
             range.end,
+            totalSize,
             retryOptions,
             abort,
           )
@@ -183,6 +192,7 @@ export function createParallelDownloadStream(
  * @param fileId - ID of the file being downloaded.
  * @param start - Inclusive byte offset where the range begins.
  * @param end - Inclusive byte offset where the range ends.
+ * @param totalSize - Expected complete file size.
  * @param retryOptions - Retry settings controlling attempts and backoff.
  * @param signal - Optional abort signal that cancels the range and any pending retry.
  *
@@ -194,13 +204,18 @@ async function fetchRangeWithRetry(
   fileId: FileId,
   start: number,
   end: number,
-  retryOptions: typeof DEFAULT_RETRY_OPTIONS,
+  totalSize: number,
+  retryOptions: RetryOptions,
   signal: AbortSignal | undefined,
 ): Promise<Uint8Array> {
   let lastError: unknown
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     if (attempt > 0) {
-      const delay = computeBackoff(attempt - 1, retryOptions)
+      const retryAfter =
+        lastError instanceof B2Error && lastError.retryAfter !== undefined
+          ? lastError.retryAfter
+          : undefined
+      const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
       await sleep(delay, signal)
     }
     try {
@@ -214,14 +229,136 @@ async function fetchRangeWithRetry(
           ...(signal !== undefined ? { signal } : {}),
         },
       )
+      if (resp.status < 200 || resp.status >= 300) {
+        throw await classifyDownloadResponseError(resp)
+      }
       if (!resp.body) throw new Error('Download chunk has no body')
-      return await collectStream(resp.body)
+      const data = await collectStream(resp.body)
+      validateRangeResponse(resp, start, end, totalSize, data.byteLength)
+      return data
     } catch (err) {
       lastError = err
       // Honour AbortSignal cancellation: don't retry past an abort.
       if (signal?.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
+      if (!isRetryableRangeError(err) || attempt === retryOptions.maxRetries) {
+        throw err
+      }
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
+}
+
+class RangeValidationError extends Error {
+  readonly retryable = false
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'RangeValidationError'
+  }
+}
+
+function validateRangeResponse(
+  response: { headers: Headers; status: number },
+  start: number,
+  end: number,
+  totalSize: number,
+  byteLength: number,
+): void {
+  const expectedLength = end - start + 1
+  if (response.status !== 206) {
+    throw new RangeValidationError(
+      `Expected HTTP 206 Partial Content for range ${start}-${end}, got ${response.status}`,
+    )
+  }
+
+  const contentRange = response.headers.get('Content-Range')
+  if (contentRange === null) {
+    throw new RangeValidationError(`Missing Content-Range for range ${start}-${end}`)
+  }
+
+  const match = contentRange.match(/^bytes (\d+)-(\d+)\/(\d+|\*)$/)
+  if (match === null) {
+    throw new RangeValidationError(
+      `Invalid Content-Range for range ${start}-${end}: ${contentRange}`,
+    )
+  }
+
+  const actualStart = Number.parseInt(match[1] ?? '', 10)
+  const actualEnd = Number.parseInt(match[2] ?? '', 10)
+  const actualTotal = match[3] ?? ''
+  if (actualStart !== start || actualEnd !== end) {
+    throw new RangeValidationError(
+      `Content-Range ${contentRange} does not match requested range ${start}-${end}`,
+    )
+  }
+
+  if (actualTotal === '*') {
+    throw new RangeValidationError(`Content-Range ${contentRange} does not include total size`)
+  }
+
+  const parsedTotal = Number.parseInt(actualTotal, 10)
+  if (parsedTotal !== totalSize) {
+    throw new RangeValidationError(
+      `Content-Range ${contentRange} does not match expected total size ${totalSize}`,
+    )
+  }
+
+  if (byteLength !== expectedLength) {
+    throw new RangeValidationError(
+      `Expected ${expectedLength} bytes for range ${start}-${end}, got ${byteLength}`,
+    )
+  }
+}
+
+async function classifyDownloadResponseError(response: {
+  headers: Headers
+  status: number
+  body: ReadableStream<Uint8Array> | null
+}): Promise<B2Error> {
+  let errorBody: B2ErrorResponse = {
+    status: response.status,
+    code: 'internal_error',
+    message: `HTTP ${response.status}`,
+  }
+
+  if (response.body !== null) {
+    const bytes = await collectStream(response.body)
+    try {
+      const parsed = JSON.parse(utf8Decoder.decode(bytes)) as Partial<B2ErrorResponse>
+      errorBody = {
+        status: response.status,
+        code: parsed.code ?? 'internal_error',
+        message: parsed.message ?? `HTTP ${response.status}`,
+      }
+    } catch {
+      // Keep the synthetic errorBody above when the response body is not JSON.
+    }
+  }
+
+  const retryAfterHeader = response.headers.get('Retry-After')
+  const retryAfter = retryAfterHeader !== null ? Number.parseInt(retryAfterHeader, 10) : undefined
+  const requestId = response.headers.get('X-Bz-Request-Id') ?? undefined
+
+  return classifyError(errorBody, {
+    ...(retryAfter !== undefined ? { retryAfter } : {}),
+    ...(requestId !== undefined ? { requestId } : {}),
+  })
+}
+
+function isRetryableRangeError(err: unknown): boolean {
+  if (err instanceof B2Error || err instanceof NetworkError) return err.retryable
+  if (hasRetryableFlag(err)) return err.retryable
+  // Bare FetchTransport surfaces network failures as TypeError. Validation
+  // failures use RangeValidationError above, so they never land here.
+  return err instanceof TypeError
+}
+
+function hasRetryableFlag(err: unknown): err is { retryable: boolean } {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'retryable' in err &&
+    typeof (err as { retryable?: unknown }).retryable === 'boolean'
+  )
 }
