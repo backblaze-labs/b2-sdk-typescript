@@ -1,0 +1,6 @@
+rules:
+  cache-poisoning:
+    ignore:
+      # The release workflow needs setup-node to publish through npm trusted
+      # publishing; the job runs only from release tags or manual dispatch.
+      - release.yml:54
