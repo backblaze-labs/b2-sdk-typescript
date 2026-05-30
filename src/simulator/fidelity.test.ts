@@ -5,6 +5,7 @@ import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import { MetadataDirective } from '../types/file.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
 
@@ -637,5 +638,149 @@ describe('B2Simulator download header encoding', () => {
     })
     expect(resp.status).toBe(200)
     expect(resp.headers.get('X-Bz-File-Name')).toBe('release=v1@main.txt')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// copy_file: metadataDirective (COPY/REPLACE), contentType, fileInfo, range
+// ---------------------------------------------------------------------------
+
+describe('B2Simulator copy_file fidelity', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'copy-fidelity',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  /** Upload a 10-byte source file with metadata, return its FileVersion. */
+  async function uploadSource(fileName: string) {
+    return bucket.upload({
+      fileName,
+      source: new BufferSource(new TextEncoder().encode('abcdefghij')),
+      contentType: 'text/markdown',
+      fileInfo: { origin: 'src', tag: 'v1' },
+    })
+  }
+
+  function rawCopy(req: Parameters<typeof client.raw.copyFile>[2]) {
+    return client.raw.copyFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      req,
+    )
+  }
+
+  it('COPY directive (default) preserves the source contentType and fileInfo', async () => {
+    const src = await uploadSource('src-copy.txt')
+    const copy = await rawCopy({ sourceFileId: src.fileId, fileName: 'dst-copy.txt' })
+    expect(copy.contentType).toBe('text/markdown')
+    expect(copy.fileInfo).toMatchObject({ origin: 'src', tag: 'v1' })
+    expect(copy.contentLength).toBe(10)
+  })
+
+  it('REPLACE directive applies the request contentType and fileInfo', async () => {
+    const src = await uploadSource('src-replace.txt')
+    const copy = await rawCopy({
+      sourceFileId: src.fileId,
+      fileName: 'dst-replace.txt',
+      metadataDirective: MetadataDirective.Replace,
+      contentType: 'application/json',
+      fileInfo: { origin: 'replaced', extra: 'yes' },
+    })
+    expect(copy.contentType).toBe('application/json')
+    expect(copy.fileInfo).toMatchObject({ origin: 'replaced', extra: 'yes' })
+    expect(copy.fileInfo).not.toHaveProperty('tag') // source's fileInfo not carried over
+  })
+
+  it('rejects REPLACE without a contentType (400)', async () => {
+    const src = await uploadSource('src-replace-no-type.txt')
+    await expect(
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: 'dst-replace-no-type.txt',
+        metadataDirective: MetadataDirective.Replace,
+      }),
+    ).rejects.toThrow(/contentType is required/i)
+  })
+
+  it('copies only the requested byte range and recomputes its sha1', async () => {
+    const bytes = new TextEncoder().encode('abcdefghij')
+    const src = await bucket.upload({ fileName: 'src-range.txt', source: new BufferSource(bytes) })
+    const copy = await rawCopy({
+      sourceFileId: src.fileId,
+      fileName: 'dst-range.txt',
+      range: 'bytes=0-3', // first 4 bytes -> 'abcd'
+    })
+    expect(copy.contentLength).toBe(4)
+    expect(copy.contentSha1).toBe(await sha1Hex(bytes.slice(0, 4)))
+    // The stored bytes are the slice, not the whole source.
+    const dl = await bucket.download('dst-range.txt')
+    const data = new Uint8Array(await new Response(dl.body).arrayBuffer())
+    expect(new TextDecoder().decode(data)).toBe('abcd')
+  })
+
+  it('rejects an unsatisfiable copy range with 416', async () => {
+    const src = await bucket.upload({
+      fileName: 'src-badrange.txt',
+      source: new BufferSource(new TextEncoder().encode('abc')),
+    })
+    await expect(
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: 'dst-badrange.txt',
+        range: 'bytes=100-200', // well-formed but past EOF (3 bytes)
+      }),
+    ).rejects.toThrow(/Unsatisfiable copy range/i)
+  })
+
+  it.each([
+    'bytes=abc',
+    'bytes=5-1',
+    'bytes=-0',
+  ])('rejects a malformed copy range (%s) with 400, not 416', async (range) => {
+    const src = await bucket.upload({
+      fileName: `src-malformed-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
+      source: new BufferSource(new TextEncoder().encode('abcdefghij')),
+    })
+    await expect(
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: `dst-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
+        range,
+      }),
+    ).rejects.toThrow(/Malformed copy range/i)
+  })
+
+  it('rejects replacement contentType/fileInfo in COPY (default) mode', async () => {
+    const src = await uploadSource('src-copy-with-meta.txt')
+    // contentType supplied without REPLACE.
+    await expect(
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: 'dst-ct.txt',
+        contentType: 'application/json',
+      }),
+    ).rejects.toThrow(/may only be set when metadataDirective is REPLACE/i)
+    // fileInfo supplied without REPLACE.
+    await expect(
+      rawCopy({ sourceFileId: src.fileId, fileName: 'dst-fi.txt', fileInfo: { a: 'b' } }),
+    ).rejects.toThrow(/may only be set when metadataDirective is REPLACE/i)
+  })
+
+  it('rejects an unknown metadataDirective', async () => {
+    const src = await uploadSource('src-bad-directive.txt')
+    await expect(
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: 'dst-bad-directive.txt',
+        metadataDirective: 'MERGE' as never,
+      }),
+    ).rejects.toThrow(/Invalid metadataDirective/i)
   })
 })

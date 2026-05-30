@@ -788,8 +788,16 @@ export class B2Simulator {
           body as { fileId: string; fileName: string; bypassGovernance?: boolean },
         )
       case 'b2_copy_file':
-        return this.copyFile(
-          body as { sourceFileId: string; fileName: string; destinationBucketId?: string },
+        return await this.copyFile(
+          body as {
+            sourceFileId: string
+            fileName: string
+            destinationBucketId?: string
+            range?: string
+            metadataDirective?: string
+            contentType?: string
+            fileInfo?: Record<string, string>
+          },
         )
       case 'b2_start_large_file':
         return this.startLargeFile(
@@ -1644,10 +1652,15 @@ export class B2Simulator {
     return { status: 200, body: { fileId: req.fileId, fileName: req.fileName } }
   }
 
-  private copyFile(req: { sourceFileId: string; fileName: string; destinationBucketId?: string }): {
-    status: number
-    body: unknown
-  } {
+  private async copyFile(req: {
+    sourceFileId: string
+    fileName: string
+    destinationBucketId?: string
+    range?: string
+    metadataDirective?: string
+    contentType?: string
+    fileInfo?: Record<string, string>
+  }): Promise<{ status: number; body: unknown }> {
     const nameError = validateFileName(req.fileName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
     const found = this.findFile(req.sourceFileId)
@@ -1657,15 +1670,70 @@ export class B2Simulator {
     const destBucket = this.buckets.get(destBucketId)
     if (!destBucket) return this.error(400, 'bad_bucket_id', 'Destination bucket not found')
 
+    // Honor an optional byte range: copy only the requested slice. The copied
+    // content differs from the source, so its SHA-1 is recomputed; a full copy
+    // preserves the source's stored SHA-1 (including 'none' for large files).
+    let data = sourceStored.data
+    let contentSha1 = sourceStored.fileVersion.contentSha1 ?? 'none'
+    if (req.range !== undefined) {
+      const parsed = parseRangeHeader(req.range, sourceStored.data.byteLength)
+      // B2 returns 416 for a well-formed-but-unsatisfiable range; a malformed
+      // range is an invalid request field, so 400 bad_request.
+      if (parsed.kind === 'malformed') {
+        return this.error(400, 'bad_request', `Malformed copy range: ${req.range}`)
+      }
+      if (parsed.kind === 'unsatisfiable') {
+        return this.error(416, 'range_not_satisfiable', `Unsatisfiable copy range: ${req.range}`)
+      }
+      data = sourceStored.data.subarray(parsed.start, parsed.end + 1)
+      contentSha1 = await sha1Hex(data)
+    }
+
+    // Metadata directive: COPY (default) preserves the source's contentType +
+    // fileInfo and forbids replacement metadata; REPLACE applies the request's
+    // (contentType required, fileInfo validated). Real B2 rejects an unknown
+    // directive, and rejects contentType/fileInfo supplied in COPY mode.
+    const directive = req.metadataDirective
+    if (directive !== undefined && directive !== 'COPY' && directive !== 'REPLACE') {
+      return this.error(400, 'bad_request', `Invalid metadataDirective: ${directive}`)
+    }
+    let contentType: string
+    let fileInfo: Record<string, string>
+    if (directive === 'REPLACE') {
+      if (req.contentType === undefined) {
+        return this.error(
+          400,
+          'bad_request',
+          'contentType is required when metadataDirective is REPLACE',
+        )
+      }
+      const replaceFileInfo = req.fileInfo ?? {}
+      const fileInfoError = validateFileInfo(replaceFileInfo)
+      if (fileInfoError) return this.error(400, fileInfoError.code, fileInfoError.message)
+      contentType = req.contentType
+      fileInfo = replaceFileInfo
+    } else {
+      if (req.contentType !== undefined || req.fileInfo !== undefined) {
+        return this.error(
+          400,
+          'bad_request',
+          'contentType and fileInfo may only be set when metadataDirective is REPLACE',
+        )
+      }
+      contentType = sourceStored.fileVersion.contentType
+      fileInfo = sourceStored.fileVersion.fileInfo
+    }
+
     const fileVersion = this.makeFileVersion({
       bucketId: destBucketId,
       fileName: req.fileName,
-      contentType: sourceStored.fileVersion.contentType,
-      contentLength: sourceStored.data.byteLength,
-      contentSha1: sourceStored.fileVersion.contentSha1 ?? 'none',
+      contentType,
+      contentLength: data.byteLength,
+      contentSha1,
+      fileInfo,
       action: FileAction.Copy,
     })
-    const copied: StoredFile = { fileVersion, data: new Uint8Array(sourceStored.data) }
+    const copied: StoredFile = { fileVersion, data: new Uint8Array(data) }
     const existing = destBucket.files.get(req.fileName)
     if (existing) {
       existing.push(copied)
