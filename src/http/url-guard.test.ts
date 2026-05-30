@@ -148,15 +148,39 @@ describe('deriveAllowedSuffixes', () => {
     expect(suffixes).toEqual(['backblaze.com'])
   })
 
-  it('handles realms with different parent domains gracefully', () => {
-    // Hypothetical alternate realm. The derived list should include both.
+  it('keeps custom realm suffixes scoped to returned hostnames', () => {
+    // Hypothetical alternate realm. Unknown realm hosts are used as scoped
+    // suffixes rooted at the authorize-account hostnames, not expanded to
+    // the broader b2-staging.io parent domain.
     const suffixes = deriveAllowedSuffixes({
       apiUrl: 'https://api.b2-staging.io',
       downloadUrl: 'https://f001.b2-staging.io',
       s3ApiUrl: 'https://s3.b2-staging.io',
     })
-    expect(suffixes).toContain('b2-staging.io')
+    expect(suffixes).toContain('api.b2-staging.io')
+    expect(suffixes).toContain('f001.b2-staging.io')
+    expect(suffixes).toContain('s3.b2-staging.io')
+    expect(suffixes).not.toContain('b2-staging.io')
     expect(suffixes).toContain('backblaze.com')
+  })
+
+  it('does not collapse custom realms to broad public suffixes', () => {
+    const suffixes = deriveAllowedSuffixes({
+      apiUrl: 'https://api.example.co.uk',
+      downloadUrl: 'https://download.example.co.uk',
+      s3ApiUrl: 'https://s3.example.co.uk',
+    })
+    expect(suffixes).toEqual([
+      'api.example.co.uk',
+      'backblaze.com',
+      'download.example.co.uk',
+      's3.example.co.uk',
+    ])
+
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(suffixes)
+    expect(() => guard.check('https://api.example.co.uk/b2api/v3/x')).not.toThrow()
+    expect(() => guard.check('https://attacker.co.uk/x')).toThrow(B2SsrfError)
   })
 
   it('the allow-list lets through the canonical upload-pod hostname pattern', () => {
