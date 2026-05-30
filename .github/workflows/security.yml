@@ -1,0 +1,22 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  github-actions:
+    name: GitHub Actions security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: backblaze-labs/github-actions/actions/gha-security@7dedd1467663493ccb5b5ca6d3a2533d3604f7b0 # v0.1.0
+
