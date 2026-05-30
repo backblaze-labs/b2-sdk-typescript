@@ -114,9 +114,10 @@ export class UrlGuard {
  * Extract host suffixes to allow from a B2 authorize-account response.
  *
  * Known B2 realm hosts under `backblazeb2.com` are collapsed to that parent.
- * Unknown or custom realm hosts are allowed exactly as returned by
- * `b2_authorize_account`, rather than by trimming to the last two labels.
- * This avoids accidentally trusting broad public suffixes such as `co.uk`.
+ * Unknown or custom realm hosts are used as scoped suffixes: the returned
+ * hostname and its subdomains are allowed, but sibling hosts and parent
+ * domains are not. This avoids accidentally trusting broad public suffixes
+ * such as `co.uk`.
  *
  * Always includes `backblaze.com` because upload-pod URLs returned by
  * `b2_get_upload_url` use that parent domain (`pod-NNN-NNNN-NN.backblaze.com`)

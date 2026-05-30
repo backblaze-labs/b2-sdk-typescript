@@ -513,7 +513,7 @@ new B2Client({
 })
 ```
 
-Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK trusts the exact hosts returned by `b2_authorize_account`; it does not broaden unknown domains to public suffixes such as `co.uk`.
+Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 

@@ -148,9 +148,10 @@ describe('deriveAllowedSuffixes', () => {
     expect(suffixes).toEqual(['backblaze.com'])
   })
 
-  it('keeps custom realm hosts exact instead of deriving their parent domain', () => {
-    // Hypothetical alternate realm. Unknown realm hosts are trusted exactly
-    // as returned by authorize-account rather than expanded to b2-staging.io.
+  it('keeps custom realm suffixes scoped to returned hostnames', () => {
+    // Hypothetical alternate realm. Unknown realm hosts are used as scoped
+    // suffixes rooted at the authorize-account hostnames, not expanded to
+    // the broader b2-staging.io parent domain.
     const suffixes = deriveAllowedSuffixes({
       apiUrl: 'https://api.b2-staging.io',
       downloadUrl: 'https://f001.b2-staging.io',
