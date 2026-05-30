@@ -75,21 +75,36 @@ describe('createParallelDownloadStream per-range retry', () => {
               headers: new Headers(),
               body: new ReadableStream({
                 start(c) {
-                  c.enqueue(new TextEncoder().encode('{"code":"service_unavailable"}'))
+                  c.enqueue(
+                    new TextEncoder().encode(
+                      '{"status":503,"code":"service_unavailable","message":"try again"}',
+                    ),
+                  )
                   c.close()
                 },
               }),
-              json: <T>() => Promise.resolve({ code: 'service_unavailable' } as T),
-              text: () => Promise.resolve('{"code":"service_unavailable"}'),
+              json: <T>() =>
+                Promise.resolve({
+                  status: 503,
+                  code: 'service_unavailable',
+                  message: 'try again',
+                } as T),
+              text: () =>
+                Promise.resolve(
+                  '{"status":503,"code":"service_unavailable","message":"try again"}',
+                ),
               arrayBuffer: () =>
                 Promise.resolve(
-                  new TextEncoder().encode('{"code":"service_unavailable"}').buffer as ArrayBuffer,
+                  new TextEncoder().encode(
+                    '{"status":503,"code":"service_unavailable","message":"try again"}',
+                  ).buffer as ArrayBuffer,
                 ),
             }
           }
 
           let data = fileData
           let status = 200
+          let contentRange: string | undefined
           const match = rangeHeader.match(/bytes=(\d+)-(\d+)?/)
           if (match) {
             const start = Number.parseInt(match[1] ?? '0', 10)
@@ -97,10 +112,12 @@ describe('createParallelDownloadStream per-range retry', () => {
               match[2] !== undefined ? Number.parseInt(match[2], 10) : fileData.byteLength - 1
             data = fileData.slice(start, end + 1)
             status = 206
+            contentRange = `bytes ${start}-${end}/${fileData.byteLength}`
           }
           const responseHeaders = new Headers({
             'Content-Type': 'application/octet-stream',
             'Content-Length': String(data.byteLength),
+            ...(contentRange !== undefined ? { 'Content-Range': contentRange } : {}),
             'X-Bz-File-Id': fileId,
             'X-Bz-File-Name': 'flaky.bin',
             'X-Bz-Content-Sha1': 'none',
