@@ -1,3 +1,5 @@
 allowBuilds:
   '@biomejs/biome': true
   esbuild: true
+overrides:
+  ws: 8.20.1
