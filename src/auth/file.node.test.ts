@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -81,6 +81,49 @@ describe('FileAccountInfo', () => {
     expect(onDisk).toBe('')
   })
 
+  it('writes the cache file with owner-only permissions on POSIX platforms', async () => {
+    const sim = new B2Simulator()
+    const accountInfo = new FileAccountInfo(storePath)
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+      accountInfo,
+    })
+    await client.authorize()
+    await accountInfo.flushed()
+
+    if (process.platform === 'win32') {
+      return
+    }
+
+    expect((await stat(storePath)).mode & 0o777).toBe(0o600)
+  })
+
+  it('replaces a broadly-readable cache file with a private atomic write', async () => {
+    await writeFile(storePath, '{"stale":true}', { encoding: 'utf8', mode: 0o666 })
+    await chmod(storePath, 0o666)
+
+    const sim = new B2Simulator()
+    const accountInfo = new FileAccountInfo(storePath)
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+      accountInfo,
+    })
+    await client.authorize()
+    await accountInfo.flushed()
+
+    const onDisk = JSON.parse(await readFile(storePath, 'utf8')) as { accountId?: string }
+    expect(onDisk.accountId).toBe('sim_account_0001')
+    expect(await readdir(tempDir)).toEqual(['auth.json'])
+
+    if (process.platform !== 'win32') {
+      expect((await stat(storePath)).mode & 0o777).toBe(0o600)
+    }
+  })
+
   it('persists across multiple setAuth calls', async () => {
     const sim = new B2Simulator()
     const accountInfo = new FileAccountInfo(storePath)
@@ -109,6 +152,7 @@ describe('FileAccountInfo', () => {
       accountInfo,
     })
     await client.authorize()
+    await accountInfo.flushed()
 
     expect(accountInfo.getAccountId()).toBe('sim_account_0001')
     expect(accountInfo.getApiUrl()).toBeTruthy()
@@ -130,6 +174,7 @@ describe('FileAccountInfo', () => {
       accountInfo,
     })
     await client.authorize()
+    await accountInfo.flushed()
     const bucket = await client.createBucket({
       bucketName: 'pool-delegate',
       bucketType: BucketType.AllPrivate,

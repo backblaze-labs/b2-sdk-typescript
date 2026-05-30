@@ -1,14 +1,19 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
 
+const PRIVATE_FILE_MODE = 0o600
+
 /**
  * Node-only {@link AccountInfo} backend that persists the authorization
  * response to a JSON file. Upload URL pools remain in memory because URLs are
  * short-lived and shouldn't be shared across processes.
+ * The JSON file contains a live B2 authorization token, so treat it as
+ * sensitive and keep it out of shared or world-readable locations.
  *
  * On instantiation, call {@link FileAccountInfo.load} to populate state from
  * disk (or start fresh if the file is missing or corrupt). The authorization
@@ -58,17 +63,32 @@ export class FileAccountInfo implements AccountInfo {
     const next = this.writeQueue.then(async () => {
       if (auth === null) {
         try {
-          await writeFile(this.path, '', 'utf8')
+          await this.writePrivateFileAtomically('')
         } catch {
           // Best-effort
         }
         return
       }
-      await mkdir(dirname(this.path), { recursive: true })
-      await writeFile(this.path, JSON.stringify(auth), 'utf8')
+      await this.writePrivateFileAtomically(JSON.stringify(auth))
     })
     this.writeQueue = next.catch(() => {})
     return next
+  }
+
+  private async writePrivateFileAtomically(contents: string): Promise<void> {
+    const dir = dirname(this.path)
+    const tempPath = join(dir, `.${basename(this.path)}.${process.pid}.${randomUUID()}.tmp`)
+    await mkdir(dir, { recursive: true })
+
+    try {
+      await writeFile(tempPath, contents, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
+      await chmod(tempPath, PRIVATE_FILE_MODE)
+      await rename(tempPath, this.path)
+      await chmod(this.path, PRIVATE_FILE_MODE)
+    } catch (error) {
+      await rm(tempPath, { force: true }).catch(() => {})
+      throw error
+    }
   }
 
   /**
