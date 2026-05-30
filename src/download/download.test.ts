@@ -377,11 +377,17 @@ function byteResponse(status: number, data: Uint8Array, headers?: HeadersInit): 
   }
 }
 
-function jsonResponse<T extends Record<string, unknown>>(status: number, payload: T): HttpResponse {
+function jsonResponse<T extends Record<string, unknown>>(
+  status: number,
+  payload: T,
+  headers?: HeadersInit,
+): HttpResponse {
   const text = JSON.stringify(payload)
   const data = new TextEncoder().encode(text)
+  const responseHeaders = new Headers(headers)
+  responseHeaders.set('Content-Type', 'application/json')
   return {
-    ...byteResponse(status, data, { 'Content-Type': 'application/json' }),
+    ...byteResponse(status, data, responseHeaders),
     json: <U>() => Promise.resolve(payload as unknown as U),
     text: () => Promise.resolve(text),
   }
@@ -815,6 +821,44 @@ describe('createParallelDownloadStream', () => {
     await expect(readStream(stream)).rejects.toThrow(/does not match requested range/i)
   })
 
+  it.each([
+    ['missing Content-Range', {}, /Missing Content-Range/i],
+    ['invalid Content-Range', { 'Content-Range': 'bytes nope' }, /Invalid Content-Range/i],
+    ['wildcard total size', { 'Content-Range': 'bytes 0-29/*' }, /does not include total size/i],
+    [
+      'wrong total size',
+      { 'Content-Range': 'bytes 0-29/31' },
+      /does not match expected total size/i,
+    ],
+  ])('rejects a ranged response with %s', async (_caseName, extraHeaders, expected) => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'bad-content-range'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () =>
+        byteResponse(206, fileData, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(fileData.byteLength),
+          ...extraHeaders,
+        }),
+    })
+
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(expected)
+  })
+
   it('rejects truncated range bodies', async () => {
     const fileData = new Uint8Array(30)
     const truncated = fileData.slice(0, 29)
@@ -843,6 +887,118 @@ describe('createParallelDownloadStream', () => {
     })
 
     await expect(readStream(stream)).rejects.toThrow(/Expected 30 bytes/i)
+  })
+
+  it('classifies raw non-2xx range responses before retry decisions', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'raw-503'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () =>
+        jsonResponse(
+          503,
+          {
+            status: 503,
+            code: 'service_unavailable',
+            message: 'try again',
+          },
+          {
+            'Retry-After': '7',
+            'X-Bz-Request-Id': 'req-123',
+          },
+        ),
+    })
+    const { RawClient } = await import('../raw/index.ts')
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+      maxRetries: 0,
+    })
+
+    await expect(readStream(stream)).rejects.toMatchObject({
+      name: 'ServiceUnavailableError',
+      status: 503,
+      code: 'service_unavailable',
+      retryable: true,
+      retryAfter: 7,
+      requestId: 'req-123',
+    })
+  })
+
+  it('falls back to a synthetic B2 error for raw non-json range errors', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'raw-500'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () =>
+        byteResponse(500, new TextEncoder().encode('not json'), {
+          'Content-Type': 'text/plain',
+        }),
+    })
+    const { RawClient } = await import('../raw/index.ts')
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+      maxRetries: 0,
+    })
+
+    await expect(readStream(stream)).rejects.toMatchObject({
+      name: 'B2Error',
+      status: 500,
+      code: 'internal_error',
+      message: 'HTTP 500',
+      retryable: true,
+    })
+  })
+
+  it('classifies raw non-2xx range responses without bodies', async () => {
+    const fileData = new Uint8Array(30)
+    const fakeFileId = 'raw-429'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: () => ({
+        status: 429,
+        headers: new Headers(),
+        body: null,
+        json: () => Promise.reject(new Error('No JSON body')),
+        text: () => Promise.resolve(''),
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      }),
+    })
+    const { RawClient } = await import('../raw/index.ts')
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 30,
+      rangeSize: 30,
+      concurrency: 1,
+      maxRetries: 0,
+    })
+
+    await expect(readStream(stream)).rejects.toMatchObject({
+      name: 'TooManyRequestsError',
+      status: 429,
+      code: 'internal_error',
+      retryable: true,
+    })
   })
 
   // Branch: AbortSignal already aborted when the stream starts. The first
