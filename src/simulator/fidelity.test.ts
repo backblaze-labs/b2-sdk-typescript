@@ -734,8 +734,45 @@ describe('B2Simulator copy_file fidelity', () => {
       rawCopy({
         sourceFileId: src.fileId,
         fileName: 'dst-badrange.txt',
-        range: 'bytes=100-200',
+        range: 'bytes=100-200', // well-formed but past EOF (3 bytes)
       }),
-    ).rejects.toThrow(/Invalid copy range/i)
+    ).rejects.toThrow(/Unsatisfiable copy range/i)
+  })
+
+  it.each(['bytes=abc', 'bytes=5-1', 'bytes=-0'])(
+    'rejects a malformed copy range (%s) with 400, not 416',
+    async (range) => {
+      const src = await bucket.upload({
+        fileName: `src-malformed-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
+        source: new BufferSource(new TextEncoder().encode('abcdefghij')),
+      })
+      await expect(
+        rawCopy({ sourceFileId: src.fileId, fileName: `dst-${range.replace(/[^a-z0-9]/gi, '')}.txt`, range }),
+      ).rejects.toThrow(/Malformed copy range/i)
+    },
+  )
+
+  it('rejects replacement contentType/fileInfo in COPY (default) mode', async () => {
+    const src = await uploadSource('src-copy-with-meta.txt')
+    // contentType supplied without REPLACE.
+    await expect(
+      rawCopy({ sourceFileId: src.fileId, fileName: 'dst-ct.txt', contentType: 'application/json' }),
+    ).rejects.toThrow(/may only be set when metadataDirective is REPLACE/i)
+    // fileInfo supplied without REPLACE.
+    await expect(
+      rawCopy({ sourceFileId: src.fileId, fileName: 'dst-fi.txt', fileInfo: { a: 'b' } }),
+    ).rejects.toThrow(/may only be set when metadataDirective is REPLACE/i)
+  })
+
+  it('rejects an unknown metadataDirective', async () => {
+    const src = await uploadSource('src-bad-directive.txt')
+    await expect(
+      // biome-ignore lint/suspicious/noExplicitAny: testing an invalid wire value
+      rawCopy({
+        sourceFileId: src.fileId,
+        fileName: 'dst-bad-directive.txt',
+        metadataDirective: 'MERGE' as never,
+      }),
+    ).rejects.toThrow(/Invalid metadataDirective/i)
   })
 })

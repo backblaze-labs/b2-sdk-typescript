@@ -1677,20 +1677,29 @@ export class B2Simulator {
     let contentSha1 = sourceStored.fileVersion.contentSha1 ?? 'none'
     if (req.range !== undefined) {
       const parsed = parseRangeHeader(req.range, sourceStored.data.byteLength)
-      if (parsed.kind !== 'ok') {
-        return this.error(416, 'range_not_satisfiable', `Invalid copy range: ${req.range}`)
+      // B2 returns 416 for a well-formed-but-unsatisfiable range; a malformed
+      // range is an invalid request field, so 400 bad_request.
+      if (parsed.kind === 'malformed') {
+        return this.error(400, 'bad_request', `Malformed copy range: ${req.range}`)
+      }
+      if (parsed.kind === 'unsatisfiable') {
+        return this.error(416, 'range_not_satisfiable', `Unsatisfiable copy range: ${req.range}`)
       }
       data = sourceStored.data.subarray(parsed.start, parsed.end + 1)
       contentSha1 = await sha1Hex(data)
     }
 
     // Metadata directive: COPY (default) preserves the source's contentType +
-    // fileInfo; REPLACE applies the request's. Real B2 requires contentType on
-    // REPLACE and validates the supplied fileInfo.
-    const replace = req.metadataDirective === 'REPLACE'
+    // fileInfo and forbids replacement metadata; REPLACE applies the request's
+    // (contentType required, fileInfo validated). Real B2 rejects an unknown
+    // directive, and rejects contentType/fileInfo supplied in COPY mode.
+    const directive = req.metadataDirective
+    if (directive !== undefined && directive !== 'COPY' && directive !== 'REPLACE') {
+      return this.error(400, 'bad_request', `Invalid metadataDirective: ${directive}`)
+    }
     let contentType: string
     let fileInfo: Record<string, string>
-    if (replace) {
+    if (directive === 'REPLACE') {
       if (req.contentType === undefined) {
         return this.error(
           400,
@@ -1704,6 +1713,13 @@ export class B2Simulator {
       contentType = req.contentType
       fileInfo = replaceFileInfo
     } else {
+      if (req.contentType !== undefined || req.fileInfo !== undefined) {
+        return this.error(
+          400,
+          'bad_request',
+          'contentType and fileInfo may only be set when metadataDirective is REPLACE',
+        )
+      }
       contentType = sourceStored.fileVersion.contentType
       fileInfo = sourceStored.fileVersion.fileInfo
     }

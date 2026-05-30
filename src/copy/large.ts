@@ -1,7 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
-import type { FileVersion } from '../types/file.ts'
+import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { cancelLargeFileBestEffort } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
@@ -73,14 +73,25 @@ export async function copyLargeFile(
 
   // Below the part threshold, take the single-call fast path.
   if (totalSize <= partSize) {
+    // `b2_copy_file` only accepts replacement contentType/fileInfo under
+    // `metadataDirective: REPLACE`; supplying them in the default COPY mode is
+    // rejected by B2. When the caller sets either, switch to REPLACE with a
+    // required contentType (the override, else the source's, else b2/x-auto),
+    // matching the multipart path's metadata semantics below.
+    const replaceMetadata = options.contentType !== undefined || options.fileInfo !== undefined
     return raw.copyFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
       sourceFileId: options.sourceFileId,
       fileName: options.fileName,
       ...(options.destinationBucketId !== undefined
         ? { destinationBucketId: options.destinationBucketId }
         : {}),
-      ...(options.contentType !== undefined ? { contentType: options.contentType } : {}),
-      ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
+      ...(replaceMetadata
+        ? {
+            metadataDirective: MetadataDirective.Replace,
+            contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
+            fileInfo: options.fileInfo ?? {},
+          }
+        : {}),
       ...(options.destinationServerSideEncryption !== undefined
         ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
         : {}),
