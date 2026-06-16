@@ -1,22 +1,39 @@
 import { describe, expect, it } from 'vitest'
 
-import type { B2ErrorResponse } from '../types/errors.ts'
+import {
+  type B2ErrorResponse,
+  KNOWN_B2_ERROR_CODES,
+  type KnownB2ErrorCode,
+} from '../types/errors.ts'
 
 import {
   AccessDeniedError,
   B2Error,
   BadAuthTokenError,
+  BadBucketIdError,
+  BadJsonError,
   BadRequestError,
   BadUploadUrlError,
   CapExceededError,
   ChecksumMismatchError,
+  ConflictError,
   classifyError,
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
+  InternalError,
+  InvalidBucketIdError,
+  InvalidFileIdError,
+  InvalidPartNumberError,
+  MethodNotAllowedError,
   NetworkError,
+  NotFoundError,
+  OutOfRangeError,
+  RangeNotSatisfiableError,
   RequestTimeoutError,
   ServiceUnavailableError,
+  TooManyBucketsError,
+  TooManyFilesError,
   TooManyRequestsError,
 } from './index.ts'
 
@@ -31,6 +48,11 @@ function makeResponse(overrides: Partial<B2ErrorResponse> = {}): B2ErrorResponse
     message: overrides.message ?? 'Test error message',
   }
 }
+
+type B2ErrorClass = new (
+  response: B2ErrorResponse,
+  options?: { retryAfter?: number; requestId?: string },
+) => B2Error
 
 // ---------------------------------------------------------------------------
 // B2Error base class
@@ -375,79 +397,51 @@ describe('NetworkError', () => {
 
 describe('classifyError', () => {
   describe('code-based classification', () => {
-    it('maps expired_auth_token to ExpiredAuthTokenError', () => {
-      const res = makeResponse({ status: 401, code: 'expired_auth_token' })
-      expect(classifyError(res)).toBeInstanceOf(ExpiredAuthTokenError)
+    const classificationCases = {
+      expired_auth_token: { status: 401, ctor: ExpiredAuthTokenError },
+      bad_auth_token: { status: 401, ctor: BadAuthTokenError },
+      unauthorized: { status: 401, ctor: BadAuthTokenError },
+      bad_request: { status: 400, ctor: BadRequestError },
+      bad_bucket_id: { status: 400, ctor: BadBucketIdError },
+      not_found: { status: 404, ctor: NotFoundError },
+      method_not_allowed: { status: 405, ctor: MethodNotAllowedError },
+      request_timeout: { status: 408, ctor: RequestTimeoutError },
+      conflict: { status: 409, ctor: ConflictError },
+      duplicate_bucket_name: { status: 400, ctor: DuplicateBucketNameError },
+      too_many_buckets: { status: 400, ctor: TooManyBucketsError },
+      too_many_files: { status: 400, ctor: TooManyFilesError },
+      cap_exceeded: { status: 403, ctor: CapExceededError },
+      storage_cap_exceeded: { status: 403, ctor: CapExceededError },
+      transaction_cap_exceeded: { status: 403, ctor: CapExceededError },
+      access_denied: { status: 403, ctor: AccessDeniedError },
+      service_unavailable: { status: 503, ctor: ServiceUnavailableError },
+      internal_error: { status: 500, ctor: InternalError },
+      bad_json: { status: 400, ctor: BadJsonError },
+      invalid_bucket_id: { status: 400, ctor: InvalidBucketIdError },
+      file_not_present: { status: 404, ctor: FileNotPresentError },
+      no_such_file: { status: 404, ctor: FileNotPresentError },
+      out_of_range: { status: 400, ctor: OutOfRangeError },
+      range_not_satisfiable: { status: 416, ctor: RangeNotSatisfiableError },
+      invalid_file_id: { status: 400, ctor: InvalidFileIdError },
+      invalid_part_number: { status: 400, ctor: InvalidPartNumberError },
+      bad_sha1_checksum: { status: 400, ctor: ChecksumMismatchError },
+      download_cap_exceeded: { status: 403, ctor: CapExceededError },
+    } satisfies Record<KnownB2ErrorCode, { status: number; ctor: B2ErrorClass }>
+
+    const classificationEntries = KNOWN_B2_ERROR_CODES.map(
+      (code) => [code, classificationCases[code]] as const,
+    )
+
+    it('has a classification case for every known B2 error code', () => {
+      expect(Object.keys(classificationCases).sort()).toEqual([...KNOWN_B2_ERROR_CODES].sort())
     })
 
-    it('maps bad_auth_token to BadAuthTokenError', () => {
-      const res = makeResponse({ status: 401, code: 'bad_auth_token' })
-      expect(classifyError(res)).toBeInstanceOf(BadAuthTokenError)
-    })
+    it.each(classificationEntries)('maps %s to a specific subclass', (code, { status, ctor }) => {
+      const res = makeResponse({ status, code })
+      const err = classifyError(res)
 
-    it('maps unauthorized to BadAuthTokenError', () => {
-      const res = makeResponse({ status: 401, code: 'unauthorized' })
-      expect(classifyError(res)).toBeInstanceOf(BadAuthTokenError)
-    })
-
-    it('maps service_unavailable to ServiceUnavailableError', () => {
-      const res = makeResponse({ status: 503, code: 'service_unavailable' })
-      expect(classifyError(res)).toBeInstanceOf(ServiceUnavailableError)
-    })
-
-    it('maps request_timeout to RequestTimeoutError', () => {
-      const res = makeResponse({ status: 408, code: 'request_timeout' })
-      expect(classifyError(res)).toBeInstanceOf(RequestTimeoutError)
-    })
-
-    it('maps cap_exceeded to CapExceededError', () => {
-      const res = makeResponse({ status: 403, code: 'cap_exceeded' })
-      expect(classifyError(res)).toBeInstanceOf(CapExceededError)
-    })
-
-    it('maps storage_cap_exceeded to CapExceededError', () => {
-      const res = makeResponse({ status: 403, code: 'storage_cap_exceeded' })
-      expect(classifyError(res)).toBeInstanceOf(CapExceededError)
-    })
-
-    it('maps transaction_cap_exceeded to CapExceededError', () => {
-      const res = makeResponse({ status: 403, code: 'transaction_cap_exceeded' })
-      expect(classifyError(res)).toBeInstanceOf(CapExceededError)
-    })
-
-    it('maps download_cap_exceeded to CapExceededError', () => {
-      const res = makeResponse({ status: 403, code: 'download_cap_exceeded' })
-      expect(classifyError(res)).toBeInstanceOf(CapExceededError)
-    })
-
-    it('maps access_denied to AccessDeniedError', () => {
-      const res = makeResponse({ status: 403, code: 'access_denied' })
-      expect(classifyError(res)).toBeInstanceOf(AccessDeniedError)
-    })
-
-    it('maps file_not_present to FileNotPresentError', () => {
-      const res = makeResponse({ status: 404, code: 'file_not_present' })
-      expect(classifyError(res)).toBeInstanceOf(FileNotPresentError)
-    })
-
-    it('maps no_such_file to FileNotPresentError', () => {
-      const res = makeResponse({ status: 404, code: 'no_such_file' })
-      expect(classifyError(res)).toBeInstanceOf(FileNotPresentError)
-    })
-
-    it('maps duplicate_bucket_name to DuplicateBucketNameError', () => {
-      const res = makeResponse({ status: 400, code: 'duplicate_bucket_name' })
-      expect(classifyError(res)).toBeInstanceOf(DuplicateBucketNameError)
-    })
-
-    it('maps bad_sha1_checksum to ChecksumMismatchError', () => {
-      const res = makeResponse({ status: 400, code: 'bad_sha1_checksum' })
-      expect(classifyError(res)).toBeInstanceOf(ChecksumMismatchError)
-    })
-
-    it('maps bad_request to BadRequestError', () => {
-      const res = makeResponse({ status: 400, code: 'bad_request' })
-      expect(classifyError(res)).toBeInstanceOf(BadRequestError)
+      expect(err).toBeInstanceOf(ctor)
+      expect(err.constructor).not.toBe(B2Error)
     })
   })
 
@@ -470,7 +464,7 @@ describe('classifyError', () => {
 
   describe('unknown codes', () => {
     it('falls back to B2Error for an unrecognized code and status', () => {
-      const res = makeResponse({ status: 500, code: 'internal_error', message: 'Server error' })
+      const res = makeResponse({ status: 500, code: 'some_unknown_code', message: 'Server error' })
       const err = classifyError(res)
       expect(err).toBeInstanceOf(B2Error)
       expect(err).not.toBeInstanceOf(BadRequestError)
@@ -478,10 +472,10 @@ describe('classifyError', () => {
     })
 
     it('preserves status, code, and message on the fallback B2Error', () => {
-      const res = makeResponse({ status: 500, code: 'internal_error', message: 'Oops' })
+      const res = makeResponse({ status: 500, code: 'some_unknown_code', message: 'Oops' })
       const err = classifyError(res)
       expect(err.status).toBe(500)
-      expect(err.code).toBe('internal_error')
+      expect(err.code).toBe('some_unknown_code')
       expect(err.message).toBe('Oops')
     })
   })

@@ -18,7 +18,14 @@
  * @packageDocumentation
  */
 
-import type { B2ErrorCode, B2ErrorResponse } from '../types/errors.ts'
+import {
+  type B2ErrorCode,
+  type B2ErrorResponse,
+  KNOWN_B2_ERROR_CODES,
+  type KnownB2ErrorCode,
+} from '../types/errors.ts'
+
+type B2ErrorOptions = { retryAfter?: number; requestId?: string }
 
 /**
  * Base error class for all B2 API errors.
@@ -91,6 +98,19 @@ export class ServiceUnavailableError extends B2Error {
   }
 }
 
+/** Thrown when B2 reports an internal server error. */
+export class InternalError extends B2Error {
+  /**
+   * Creates a new InternalError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InternalError'
+  }
+}
+
 /** Thrown when a request times out on the server side (HTTP 408). */
 export class RequestTimeoutError extends B2Error {
   /**
@@ -114,6 +134,32 @@ export class TooManyRequestsError extends B2Error {
   constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
     super(response, options)
     this.name = 'TooManyRequestsError'
+  }
+}
+
+/** Thrown when the account has reached the maximum number of buckets. */
+export class TooManyBucketsError extends B2Error {
+  /**
+   * Creates a new TooManyBucketsError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'TooManyBucketsError'
+  }
+}
+
+/** Thrown when the bucket or request has reached the maximum number of files. */
+export class TooManyFilesError extends B2Error {
+  /**
+   * Creates a new TooManyFilesError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'TooManyFilesError'
   }
 }
 
@@ -156,6 +202,19 @@ export class FileNotPresentError extends B2Error {
   }
 }
 
+/** Thrown when a requested B2 resource does not exist. */
+export class NotFoundError extends B2Error {
+  /**
+   * Creates a new NotFoundError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'NotFoundError'
+  }
+}
+
 /** Thrown when creating a bucket with a name that already exists in the account. */
 export class DuplicateBucketNameError extends B2Error {
   /**
@@ -169,6 +228,45 @@ export class DuplicateBucketNameError extends B2Error {
   }
 }
 
+/** Thrown when a bucket ID is malformed or does not identify a valid bucket. */
+export class BadBucketIdError extends B2Error {
+  /**
+   * Creates a new BadBucketIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'BadBucketIdError'
+  }
+}
+
+/** Thrown when the B2 endpoint does not allow the request method. */
+export class MethodNotAllowedError extends B2Error {
+  /**
+   * Creates a new MethodNotAllowedError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'MethodNotAllowedError'
+  }
+}
+
+/** Thrown when the request conflicts with current B2 resource state. */
+export class ConflictError extends B2Error {
+  /**
+   * Creates a new ConflictError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'ConflictError'
+  }
+}
+
 /** Thrown for general bad request errors (HTTP 400) not covered by a more specific subclass. */
 export class BadRequestError extends B2Error {
   /**
@@ -179,6 +277,84 @@ export class BadRequestError extends B2Error {
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
     this.name = 'BadRequestError'
+  }
+}
+
+/** Thrown when B2 cannot parse the JSON request body. */
+export class BadJsonError extends B2Error {
+  /**
+   * Creates a new BadJsonError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'BadJsonError'
+  }
+}
+
+/** Thrown when a bucket ID has a valid shape but does not identify a usable bucket. */
+export class InvalidBucketIdError extends B2Error {
+  /**
+   * Creates a new InvalidBucketIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidBucketIdError'
+  }
+}
+
+/** Thrown when a numeric request parameter is outside the allowed range. */
+export class OutOfRangeError extends B2Error {
+  /**
+   * Creates a new OutOfRangeError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'OutOfRangeError'
+  }
+}
+
+/** Thrown when a requested byte range cannot be satisfied. */
+export class RangeNotSatisfiableError extends B2Error {
+  /**
+   * Creates a new RangeNotSatisfiableError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'RangeNotSatisfiableError'
+  }
+}
+
+/** Thrown when a file ID is malformed or does not identify a valid file. */
+export class InvalidFileIdError extends B2Error {
+  /**
+   * Creates a new InvalidFileIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidFileIdError'
+  }
+}
+
+/** Thrown when a multipart upload part number is invalid. */
+export class InvalidPartNumberError extends B2Error {
+  /**
+   * Creates a new InvalidPartNumberError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidPartNumberError'
   }
 }
 
@@ -331,12 +507,93 @@ function isTransient(status: number, code: B2ErrorCode): boolean {
   return false
 }
 
+const knownB2ErrorCodes: ReadonlySet<string> = new Set(KNOWN_B2_ERROR_CODES)
+
+function isKnownB2ErrorCode(code: B2ErrorCode): code is KnownB2ErrorCode {
+  return knownB2ErrorCodes.has(code)
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled B2 error code: ${String(value)}`)
+}
+
+function classifyKnownError(
+  response: B2ErrorResponse,
+  code: KnownB2ErrorCode,
+  options?: B2ErrorOptions,
+): B2Error {
+  switch (code) {
+    case 'expired_auth_token':
+      return new ExpiredAuthTokenError(response, options)
+    case 'bad_auth_token':
+    case 'unauthorized':
+      return new BadAuthTokenError(response, options)
+    case 'bad_request':
+      return new BadRequestError(response, options)
+    case 'bad_bucket_id':
+      return new BadBucketIdError(response, options)
+    case 'not_found':
+      return new NotFoundError(response, options)
+    case 'method_not_allowed':
+      return new MethodNotAllowedError(response, options)
+    case 'request_timeout':
+      return new RequestTimeoutError(response, options)
+    case 'conflict':
+      return new ConflictError(response, options)
+    case 'duplicate_bucket_name':
+      return new DuplicateBucketNameError(response, options)
+    case 'too_many_buckets':
+      return new TooManyBucketsError(response, options)
+    case 'too_many_files':
+      return new TooManyFilesError(response, options)
+    case 'cap_exceeded':
+    case 'storage_cap_exceeded':
+    case 'transaction_cap_exceeded':
+    case 'download_cap_exceeded':
+      return new CapExceededError(response, options)
+    case 'access_denied':
+      return new AccessDeniedError(response, options)
+    case 'service_unavailable':
+      return new ServiceUnavailableError(response, options)
+    case 'internal_error':
+      return new InternalError(response, options)
+    case 'bad_json':
+      return new BadJsonError(response, options)
+    case 'invalid_bucket_id':
+      return new InvalidBucketIdError(response, options)
+    case 'file_not_present':
+    case 'no_such_file':
+      return new FileNotPresentError(response, options)
+    case 'out_of_range':
+      return new OutOfRangeError(response, options)
+    case 'range_not_satisfiable':
+      return new RangeNotSatisfiableError(response, options)
+    case 'invalid_file_id':
+      return new InvalidFileIdError(response, options)
+    case 'invalid_part_number':
+      return new InvalidPartNumberError(response, options)
+    case 'bad_sha1_checksum':
+      return new ChecksumMismatchError(response, options)
+    default:
+      return assertNever(code)
+  }
+}
+
+function classifyUnknownError(response: B2ErrorResponse, options?: B2ErrorOptions): B2Error {
+  if (response.status === 429) return new TooManyRequestsError(response, options)
+  if (response.status === 503) return new ServiceUnavailableError(response, options)
+  if (response.status === 408) return new RequestTimeoutError(response, options)
+
+  return new B2Error(response, options)
+}
+
 /**
  * Maps a B2 error response to the appropriate {@link B2Error} subclass.
- * Uses the error code for exact matching, then falls back to HTTP status codes.
+ * Uses known error codes for exact matching, then falls back to HTTP status
+ * codes for unknown future B2 codes.
  *
- * Maintainer note: when B2 documents a new error code, add a `case`
- * branch below pointing at the matching {@link B2Error} subclass. Unknown
+ * Maintainer note: when B2 documents a new error code, add it to
+ * `KNOWN_B2_ERROR_CODES` and the `classifyKnownError` switch. Unknown
  * codes fall through to the HTTP-status-based heuristic and finally to a
  * generic `B2Error` — that's safe but loses semantic specificity (the
  * caller can't `instanceof` against a precise subclass and the retry
@@ -349,43 +606,15 @@ function isTransient(status: number, code: B2ErrorCode): boolean {
  *
  * @returns A typed B2Error subclass instance.
  */
-export function classifyError(
-  response: B2ErrorResponse,
-  options?: { retryAfter?: number; requestId?: string },
-): B2Error {
-  switch (response.code) {
-    case 'expired_auth_token':
-      return new ExpiredAuthTokenError(response, options)
-    case 'bad_auth_token':
-    case 'unauthorized':
-      return new BadAuthTokenError(response, options)
-    case 'service_unavailable':
-      return new ServiceUnavailableError(response, options)
-    case 'request_timeout':
-      return new RequestTimeoutError(response, options)
-    case 'cap_exceeded':
-    case 'storage_cap_exceeded':
-    case 'transaction_cap_exceeded':
-    case 'download_cap_exceeded':
-      return new CapExceededError(response, options)
-    case 'access_denied':
-      return new AccessDeniedError(response, options)
-    case 'file_not_present':
-    case 'no_such_file':
-      return new FileNotPresentError(response, options)
-    case 'duplicate_bucket_name':
-      return new DuplicateBucketNameError(response, options)
-    case 'bad_sha1_checksum':
-      return new ChecksumMismatchError(response, options)
-    case 'bad_request':
-      return new BadRequestError(response, options)
-    default:
-      break
+export function classifyError(response: B2ErrorResponse, options?: B2ErrorOptions): B2Error {
+  // `RetryTransport` and ranged-download parsing synthesize `internal_error`
+  // when a non-JSON response body cannot provide a real B2 code. Only the
+  // documented 500/internal_error pair should classify as InternalError.
+  if (response.code === 'internal_error' && response.status !== 500) {
+    return classifyUnknownError(response, options)
   }
 
-  if (response.status === 429) return new TooManyRequestsError(response, options)
-  if (response.status === 503) return new ServiceUnavailableError(response, options)
-  if (response.status === 408) return new RequestTimeoutError(response, options)
+  if (isKnownB2ErrorCode(response.code)) return classifyKnownError(response, response.code, options)
 
-  return new B2Error(response, options)
+  return classifyUnknownError(response, options)
 }
