@@ -353,6 +353,113 @@ describe('ChecksumMismatchError', () => {
   })
 })
 
+const newSubclassCases = [
+  {
+    label: 'InternalError',
+    ctor: InternalError,
+    response: makeResponse({ status: 500, code: 'internal_error' }),
+    retryable: true,
+  },
+  {
+    label: 'TooManyBucketsError',
+    ctor: TooManyBucketsError,
+    response: makeResponse({ status: 400, code: 'too_many_buckets' }),
+    retryable: false,
+  },
+  {
+    label: 'TooManyFilesError',
+    ctor: TooManyFilesError,
+    response: makeResponse({ status: 400, code: 'too_many_files' }),
+    retryable: false,
+  },
+  {
+    label: 'NotFoundError',
+    ctor: NotFoundError,
+    response: makeResponse({ status: 404, code: 'not_found' }),
+    retryable: false,
+  },
+  {
+    label: 'BadBucketIdError',
+    ctor: BadBucketIdError,
+    response: makeResponse({ status: 400, code: 'bad_bucket_id' }),
+    retryable: false,
+  },
+  {
+    label: 'MethodNotAllowedError',
+    ctor: MethodNotAllowedError,
+    response: makeResponse({ status: 405, code: 'method_not_allowed' }),
+    retryable: false,
+  },
+  {
+    label: 'ConflictError',
+    ctor: ConflictError,
+    response: makeResponse({ status: 409, code: 'conflict' }),
+    retryable: false,
+  },
+  {
+    label: 'BadJsonError',
+    ctor: BadJsonError,
+    response: makeResponse({ status: 400, code: 'bad_json' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidBucketIdError',
+    ctor: InvalidBucketIdError,
+    response: makeResponse({ status: 400, code: 'invalid_bucket_id' }),
+    retryable: false,
+  },
+  {
+    label: 'OutOfRangeError',
+    ctor: OutOfRangeError,
+    response: makeResponse({ status: 400, code: 'out_of_range' }),
+    retryable: false,
+  },
+  {
+    label: 'RangeNotSatisfiableError',
+    ctor: RangeNotSatisfiableError,
+    response: makeResponse({ status: 416, code: 'range_not_satisfiable' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidFileIdError',
+    ctor: InvalidFileIdError,
+    response: makeResponse({ status: 400, code: 'invalid_file_id' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidPartNumberError',
+    ctor: InvalidPartNumberError,
+    response: makeResponse({ status: 400, code: 'invalid_part_number' }),
+    retryable: false,
+  },
+] satisfies Array<{
+  label: string
+  ctor: B2ErrorClass
+  response: B2ErrorResponse
+  retryable: boolean
+}>
+
+describe.each(newSubclassCases)('$label', ({ label, ctor, response, retryable }) => {
+  it('extends B2Error', () => {
+    expect(new ctor(response)).toBeInstanceOf(B2Error)
+  })
+
+  it('sets name to the subclass name', () => {
+    expect(new ctor(response).name).toBe(label)
+  })
+
+  it('sets the retryable contract', () => {
+    expect(new ctor(response).retryable).toBe(retryable)
+  })
+
+  it('passes through request and retry metadata', () => {
+    const err = new ctor(response, { requestId: 'req-new-subclass', retryAfter: 9 })
+
+    expect(err.requestId).toBe('req-new-subclass')
+    expect(err.retryAfter).toBe(9)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // NetworkError
 // ---------------------------------------------------------------------------

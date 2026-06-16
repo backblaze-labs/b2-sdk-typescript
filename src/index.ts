@@ -22,6 +22,7 @@ export {
 } from './bucket.ts'
 export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
 export type { DownloadResult, HeadResult } from './download/single.ts'
+export type { B2ErrorOptions } from './errors/index.ts'
 
 export {
   AccessDeniedError,

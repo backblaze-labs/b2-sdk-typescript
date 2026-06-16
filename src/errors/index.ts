@@ -25,7 +25,7 @@ import {
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
 
-type B2ErrorOptions = { retryAfter?: number; requestId?: string }
+export type B2ErrorOptions = { retryAfter?: number; requestId?: string }
 
 /**
  * Base error class for all B2 API errors.
