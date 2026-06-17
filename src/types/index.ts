@@ -52,7 +52,8 @@ export {
   SSE_NONE,
   sseCustomer,
 } from './encryption.ts'
-export type { B2ErrorCode, B2ErrorResponse } from './errors.ts'
+export type { B2ErrorCode, B2ErrorResponse, KnownB2ErrorCode } from './errors.ts'
+export { KNOWN_B2_ERROR_CODES } from './errors.ts'
 export type {
   CopyFileRequest,
   CopyPartRequest,

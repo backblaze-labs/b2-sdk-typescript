@@ -22,6 +22,7 @@ export {
 } from './bucket.ts'
 export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
 export type { DownloadResult, HeadResult } from './download/single.ts'
+export type { B2ErrorOptions } from './errors/index.ts'
 
 export {
   AccessDeniedError,
@@ -29,17 +30,34 @@ export {
   B2InsufficientCapabilityError,
   B2SsrfError,
   BadAuthTokenError,
+  BadBucketIdError,
+  BadJsonError,
   BadRequestError,
   BadUploadUrlError,
   CapExceededError,
   ChecksumMismatchError,
+  ConflictError,
   classifyError,
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
+  InternalError,
+  InvalidBucketIdError,
+  InvalidBucketInfoError,
+  InvalidBucketNameError,
+  InvalidFileIdError,
+  InvalidFileInfoError,
+  InvalidFileNameError,
+  InvalidPartNumberError,
+  MethodNotAllowedError,
   NetworkError,
+  NotFoundError,
+  OutOfRangeError,
+  RangeNotSatisfiableError,
   RequestTimeoutError,
   ServiceUnavailableError,
+  TooManyBucketsError,
+  TooManyFilesError,
   TooManyRequestsError,
 } from './errors/index.ts'
 export type { RetryOptions } from './http/retry.ts'
@@ -77,6 +95,7 @@ export {
   SSE_NONE,
   sseCustomer,
 } from './types/encryption.ts'
+export { KNOWN_B2_ERROR_CODES } from './types/errors.ts'
 export { FileAction, MetadataDirective } from './types/file.ts'
 // Branded-ID factory functions. The `export type *` line above re-exports
 // the type aliases (BucketId, FileId, etc.) but value-level factory

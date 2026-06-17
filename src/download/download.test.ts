@@ -932,7 +932,7 @@ describe('createParallelDownloadStream', () => {
     })
   })
 
-  it('falls back to a synthetic B2 error for raw non-json range errors', async () => {
+  it('classifies synthetic 500 range errors as internal errors', async () => {
     const fileData = new Uint8Array(30)
     const fakeFileId = 'raw-500'
     const transport = createMockTransport(fileData, fakeFileId, {
@@ -957,7 +957,7 @@ describe('createParallelDownloadStream', () => {
     })
 
     await expect(readStream(stream)).rejects.toMatchObject({
-      name: 'B2Error',
+      name: 'InternalError',
       status: 500,
       code: 'internal_error',
       message: 'HTTP 500',
