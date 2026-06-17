@@ -228,6 +228,32 @@ export class DuplicateBucketNameError extends B2Error {
   }
 }
 
+/** Thrown when a bucket name is malformed, reserved, or otherwise rejected by B2. */
+export class InvalidBucketNameError extends B2Error {
+  /**
+   * Creates a new InvalidBucketNameError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidBucketNameError'
+  }
+}
+
+/** Thrown when bucket metadata fails B2 validation. */
+export class InvalidBucketInfoError extends B2Error {
+  /**
+   * Creates a new InvalidBucketInfoError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidBucketInfoError'
+  }
+}
+
 /** Thrown when a bucket ID is malformed or does not identify a valid bucket. */
 export class BadBucketIdError extends B2Error {
   /**
@@ -329,6 +355,32 @@ export class RangeNotSatisfiableError extends B2Error {
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'RangeNotSatisfiableError'
+  }
+}
+
+/** Thrown when a file name is malformed or otherwise rejected by B2. */
+export class InvalidFileNameError extends B2Error {
+  /**
+   * Creates a new InvalidFileNameError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidFileNameError'
+  }
+}
+
+/** Thrown when file metadata fails B2 validation. */
+export class InvalidFileInfoError extends B2Error {
+  /**
+   * Creates a new InvalidFileInfoError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidFileInfoError'
   }
 }
 
@@ -525,6 +577,9 @@ function classifyKnownError(
       return new BadAuthTokenError(response, options)
     case 'bad_request':
       return new BadRequestError(response, options)
+    case 'bad_bucket_name':
+    case 'invalid_bucket_name':
+      return new InvalidBucketNameError(response, options)
     case 'bad_bucket_id':
       return new BadBucketIdError(response, options)
     case 'not_found':
@@ -533,6 +588,8 @@ function classifyKnownError(
       return new MethodNotAllowedError(response, options)
     case 'request_timeout':
       return new RequestTimeoutError(response, options)
+    case 'too_many_requests':
+      return new TooManyRequestsError(response, options)
     case 'conflict':
       return new ConflictError(response, options)
     case 'duplicate_bucket_name':
@@ -556,6 +613,8 @@ function classifyKnownError(
       return new BadJsonError(response, options)
     case 'invalid_bucket_id':
       return new InvalidBucketIdError(response, options)
+    case 'invalid_bucket_info':
+      return new InvalidBucketInfoError(response, options)
     case 'file_not_present':
     case 'no_such_file':
       return new FileNotPresentError(response, options)
@@ -565,6 +624,10 @@ function classifyKnownError(
       return new RangeNotSatisfiableError(response, options)
     case 'invalid_file_id':
       return new InvalidFileIdError(response, options)
+    case 'invalid_file_name':
+      return new InvalidFileNameError(response, options)
+    case 'invalid_file_info':
+      return new InvalidFileInfoError(response, options)
     case 'invalid_part_number':
       return new InvalidPartNumberError(response, options)
     case 'bad_sha1_checksum':
