@@ -1,7 +1,8 @@
 /**
- * Known B2 API error codes.
- * The union includes a `string & {}` fallback to allow unknown error codes
- * while still providing autocomplete for well-known values.
+ * B2 API error codes documented by the SDK.
+ * This list drives `KnownB2ErrorCode`; `B2ErrorCode` adds a string fallback
+ * so callers can receive unknown future server codes while keeping autocomplete
+ * for known values.
  */
 export const KNOWN_B2_ERROR_CODES = [
   'expired_auth_token',

@@ -51,7 +51,7 @@ function makeResponse(overrides: Partial<B2ErrorResponse> = {}): B2ErrorResponse
 
 type B2ErrorClass = new (
   response: B2ErrorResponse,
-  options?: { retryAfter?: number; requestId?: string },
+  options?: ConstructorParameters<typeof B2Error>[1],
 ) => B2Error
 
 // ---------------------------------------------------------------------------
