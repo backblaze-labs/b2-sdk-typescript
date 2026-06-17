@@ -109,6 +109,7 @@ describe('downloadById', () => {
     expect(result.headers.contentLength).toBe(content.byteLength)
     expect(result.headers.fileName).toBe('byid.bin')
     expect(result.headers.fileId).toBe(uploaded.fileId)
+    expect(result.headers.contentSha1).toBe(await sha1Hex(content))
     expect(result.headers.uploadTimestamp).toBeGreaterThan(0)
   })
 
@@ -557,6 +558,43 @@ describe('createParallelDownloadStream', () => {
     for (let i = 0; i < 100; i++) {
       expect(result[i]).toBe(i)
     }
+  })
+
+  it('errors with ChecksumMismatchError when range SHA-1 headers disagree', async () => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const expectedSha1 = await sha1Hex(fileData)
+    const fakeFileId = 'parallel_changed_sha1'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: expectedSha1,
+      onDownload: (_request, rangeHeader) => {
+        if (rangeHeader !== 'bytes=30-59') return undefined
+        const data = fileData.slice(30, 60)
+        return byteResponse(206, data, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.byteLength),
+          'Content-Range': `bytes 30-59/${fileData.byteLength}`,
+          'X-Bz-File-Id': fakeFileId,
+          'X-Bz-File-Name': 'mock-file.bin',
+          'X-Bz-Content-Sha1': '0'.repeat(40),
+          'X-Bz-Upload-Timestamp': '1',
+        })
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
   })
 
   it('errors with ChecksumMismatchError when assembled ranges fail SHA-1 verification', async () => {

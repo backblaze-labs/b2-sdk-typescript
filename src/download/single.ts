@@ -12,7 +12,12 @@ import { verifyDownloadStream } from './checksum.ts'
 export interface DownloadResult {
   /** Parsed B2 response headers (content type, SHA-1, file info, etc.). */
   readonly headers: DownloadHeaders
-  /** Streaming body of the downloaded file. */
+  /**
+   * Streaming body of the downloaded file.
+   *
+   * If checksum verification fails, the stream errors after bytes have already
+   * flowed; discard any partially written output on `ChecksumMismatchError`.
+   */
   readonly body: ReadableStream<Uint8Array>
 }
 
