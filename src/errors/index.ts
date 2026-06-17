@@ -48,7 +48,7 @@ export class B2Error extends Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional retry and request metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response.message)
     this.name = 'B2Error'
     this.status = response.status
@@ -66,7 +66,7 @@ export class ExpiredAuthTokenError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'ExpiredAuthTokenError'
   }
@@ -79,7 +79,7 @@ export class BadAuthTokenError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'BadAuthTokenError'
   }
@@ -92,7 +92,7 @@ export class ServiceUnavailableError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'ServiceUnavailableError'
   }
@@ -118,7 +118,7 @@ export class RequestTimeoutError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'RequestTimeoutError'
   }
@@ -131,7 +131,7 @@ export class TooManyRequestsError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'TooManyRequestsError'
   }
@@ -170,7 +170,7 @@ export class CapExceededError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'CapExceededError'
   }
@@ -183,7 +183,7 @@ export class AccessDeniedError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'AccessDeniedError'
   }
@@ -196,7 +196,7 @@ export class FileNotPresentError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'FileNotPresentError'
   }
@@ -222,7 +222,7 @@ export class DuplicateBucketNameError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'DuplicateBucketNameError'
   }
@@ -274,7 +274,7 @@ export class BadRequestError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'BadRequestError'
   }
@@ -378,7 +378,7 @@ export class BadUploadUrlError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'BadUploadUrlError'
   }
@@ -388,15 +388,10 @@ export class BadUploadUrlError extends B2Error {
  * Thrown when the uploaded file's SHA-1 checksum does not match the
  * expected value.
  *
- * Forward-compat insurance: the B2 API currently rejects mismatched
- * uploads with a generic `bad_request` code, so {@link classifyError}
- * never actually instantiates this class today. It's part of the
- * public API so consumers can pre-write `instanceof` checks; when B2
- * documents a dedicated checksum-mismatch code, the `classifyError`
- * switch gets a matching case and existing consumer code starts
- * catching the typed error without any changes on their side.
- *
- * Until then, expect `BadRequestError` for SHA-1 mismatch scenarios.
+ * When B2 returns `bad_sha1_checksum`, {@link classifyError} instantiates
+ * this class so callers can handle checksum failures with `instanceof`.
+ * Generic `bad_request` checksum failures continue to classify as
+ * {@link BadRequestError}.
  */
 export class ChecksumMismatchError extends B2Error {
   /**
@@ -404,7 +399,7 @@ export class ChecksumMismatchError extends B2Error {
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
-  constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
     this.name = 'ChecksumMismatchError'
   }

@@ -20,6 +20,7 @@ export const KNOWN_B2_ERROR_CODES = [
   'cap_exceeded',
   'storage_cap_exceeded',
   'transaction_cap_exceeded',
+  'download_cap_exceeded',
   'access_denied',
   'service_unavailable',
   'internal_error',
@@ -32,7 +33,6 @@ export const KNOWN_B2_ERROR_CODES = [
   'invalid_file_id',
   'invalid_part_number',
   'bad_sha1_checksum',
-  'download_cap_exceeded',
 ] as const
 
 /** B2 error codes documented by the SDK and classified exhaustively. */
