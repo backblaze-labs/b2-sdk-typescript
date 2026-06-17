@@ -64,7 +64,7 @@ export class ExpiredAuthTokenError extends B2Error {
   /**
    * Creates a new ExpiredAuthTokenError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -77,7 +77,7 @@ export class BadAuthTokenError extends B2Error {
   /**
    * Creates a new BadAuthTokenError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -90,7 +90,7 @@ export class ServiceUnavailableError extends B2Error {
   /**
    * Creates a new ServiceUnavailableError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
     super(response, options)
@@ -103,7 +103,7 @@ export class InternalError extends B2Error {
   /**
    * Creates a new InternalError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -116,7 +116,7 @@ export class RequestTimeoutError extends B2Error {
   /**
    * Creates a new RequestTimeoutError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -129,7 +129,7 @@ export class TooManyRequestsError extends B2Error {
   /**
    * Creates a new TooManyRequestsError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { retryAfter?: number; requestId?: string }) {
     super(response, options)
@@ -142,7 +142,7 @@ export class TooManyBucketsError extends B2Error {
   /**
    * Creates a new TooManyBucketsError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -155,7 +155,7 @@ export class TooManyFilesError extends B2Error {
   /**
    * Creates a new TooManyFilesError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -168,7 +168,7 @@ export class CapExceededError extends B2Error {
   /**
    * Creates a new CapExceededError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -181,7 +181,7 @@ export class AccessDeniedError extends B2Error {
   /**
    * Creates a new AccessDeniedError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -194,7 +194,7 @@ export class FileNotPresentError extends B2Error {
   /**
    * Creates a new FileNotPresentError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -207,7 +207,7 @@ export class NotFoundError extends B2Error {
   /**
    * Creates a new NotFoundError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -220,7 +220,7 @@ export class DuplicateBucketNameError extends B2Error {
   /**
    * Creates a new DuplicateBucketNameError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -233,7 +233,7 @@ export class BadBucketIdError extends B2Error {
   /**
    * Creates a new BadBucketIdError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -246,7 +246,7 @@ export class MethodNotAllowedError extends B2Error {
   /**
    * Creates a new MethodNotAllowedError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -259,7 +259,7 @@ export class ConflictError extends B2Error {
   /**
    * Creates a new ConflictError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -272,7 +272,7 @@ export class BadRequestError extends B2Error {
   /**
    * Creates a new BadRequestError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -285,7 +285,7 @@ export class BadJsonError extends B2Error {
   /**
    * Creates a new BadJsonError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -298,7 +298,7 @@ export class InvalidBucketIdError extends B2Error {
   /**
    * Creates a new InvalidBucketIdError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -311,7 +311,7 @@ export class OutOfRangeError extends B2Error {
   /**
    * Creates a new OutOfRangeError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -324,7 +324,7 @@ export class RangeNotSatisfiableError extends B2Error {
   /**
    * Creates a new RangeNotSatisfiableError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -337,7 +337,7 @@ export class InvalidFileIdError extends B2Error {
   /**
    * Creates a new InvalidFileIdError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -350,7 +350,7 @@ export class InvalidPartNumberError extends B2Error {
   /**
    * Creates a new InvalidPartNumberError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
@@ -376,7 +376,7 @@ export class BadUploadUrlError extends B2Error {
   /**
    * Creates a new BadUploadUrlError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -402,7 +402,7 @@ export class ChecksumMismatchError extends B2Error {
   /**
    * Creates a new ChecksumMismatchError instance.
    * @param response - Parsed B2 error response body.
-   * @param options - The error details including HTTP status, error code, message, and optional request ID.
+   * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: { requestId?: string }) {
     super(response, options)
@@ -593,13 +593,11 @@ function classifyUnknownError(response: B2ErrorResponse, options?: B2ErrorOption
  * codes for unknown future B2 codes.
  *
  * Maintainer note: when B2 documents a new error code, add it to
- * `KNOWN_B2_ERROR_CODES` and the `classifyKnownError` switch. Unknown
- * codes fall through to the HTTP-status-based heuristic and finally to a
- * generic `B2Error` — that's safe but loses semantic specificity (the
- * caller can't `instanceof` against a precise subclass and the retry
- * decision relies on status alone). The `B2ErrorCode` union in
- * `src/types/errors.ts` should also gain the new code at the same time
- * so the switch is exhaustive again.
+ * `KNOWN_B2_ERROR_CODES` in `src/types/errors.ts` and add a matching
+ * `classifyKnownError` switch case. Unknown codes fall through to the
+ * HTTP-status-based heuristic and finally to a generic `B2Error`, which is
+ * safe but loses semantic specificity (the caller can't `instanceof` against
+ * a precise subclass and the retry decision relies on status alone).
  *
  * @param response - Parsed B2 error response body.
  * @param options - Optional retry and request metadata from response headers.
