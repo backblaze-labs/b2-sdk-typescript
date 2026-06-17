@@ -6,6 +6,7 @@ import type { DownloadHeaders } from '../types/download.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
+import { verifyDownloadStream } from './checksum.ts'
 
 /** Result of a single-request file download. */
 export interface DownloadResult {
@@ -127,7 +128,7 @@ export async function downloadById(
     headers,
     // HEAD requests legitimately have no body; return an empty stream so the
     // result shape stays consistent.
-    body: instrumentProgress(resp.body ?? emptyStream(), headers.contentLength, options.onProgress),
+    body: prepareDownloadBody(resp.body ?? emptyStream(), headers, options),
   }
 }
 
@@ -160,7 +161,7 @@ export async function downloadByName(
   const headers = extractDownloadHeaders(resp.headers)
   return {
     headers,
-    body: instrumentProgress(resp.body ?? emptyStream(), headers.contentLength, options.onProgress),
+    body: prepareDownloadBody(resp.body ?? emptyStream(), headers, options),
   }
 }
 
@@ -287,6 +288,30 @@ function emptyStream(): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+/**
+ * Applies stream wrappers common to single-request downloads.
+ *
+ * Full-body GET downloads are checksum-verified when B2 supplies a real
+ * whole-file SHA-1. HEAD requests and ranged GETs are skipped because the
+ * response body is empty or partial while `X-Bz-Content-Sha1` describes the
+ * full file version.
+ *
+ * @param body - Download response body.
+ * @param headers - Parsed download headers.
+ * @param options - Caller-supplied download options.
+ *
+ * @returns A stream wrapped for checksum verification and progress reporting.
+ */
+function prepareDownloadBody(
+  body: ReadableStream<Uint8Array>,
+  headers: DownloadHeaders,
+  options: DownloadCommonOptions,
+): ReadableStream<Uint8Array> {
+  const shouldVerify = options.method !== 'HEAD' && options.range === undefined
+  const verifiedBody = shouldVerify ? verifyDownloadStream(body, headers.contentSha1) : body
+  return instrumentProgress(verifiedBody, headers.contentLength, options.onProgress)
 }
 
 /**
