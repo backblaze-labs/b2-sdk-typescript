@@ -44,6 +44,11 @@ export const KNOWN_B2_ERROR_CODES = [
 /** B2 error codes documented by the SDK and classified exhaustively. */
 export type KnownB2ErrorCode = (typeof KNOWN_B2_ERROR_CODES)[number]
 
+/**
+ * B2 API error code value.
+ * Known codes are enumerated for autocomplete; unknown future server codes are
+ * still accepted as strings.
+ */
 export type B2ErrorCode = KnownB2ErrorCode | (string & {})
 
 /** Standard error response body returned by the B2 API on failure. */

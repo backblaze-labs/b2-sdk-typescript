@@ -95,6 +95,7 @@ export {
   SSE_NONE,
   sseCustomer,
 } from './types/encryption.ts'
+export { KNOWN_B2_ERROR_CODES } from './types/errors.ts'
 export { FileAction, MetadataDirective } from './types/file.ts'
 // Branded-ID factory functions. The `export type *` line above re-exports
 // the type aliases (BucketId, FileId, etc.) but value-level factory

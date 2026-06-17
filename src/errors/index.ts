@@ -25,7 +25,13 @@ import {
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
 
-export type B2ErrorOptions = { retryAfter?: number; requestId?: string }
+/** Metadata captured from B2 error response headers. */
+export interface B2ErrorOptions {
+  /** Retry delay in seconds from the `Retry-After` response header, if present. */
+  readonly retryAfter?: number
+  /** B2 request ID from the `X-Bz-Request-Id` response header, if present. */
+  readonly requestId?: string
+}
 
 /**
  * Base error class for all B2 API errors.
