@@ -372,12 +372,17 @@ describe('UploadUrlPool', () => {
 // -- getRealmUrl --------------------------------------------------------
 
 describe('getRealmUrl', () => {
-  it('returns the well-known URL for the production realm', () => {
-    expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
+  it.each([
+    ['production', 'https://api.backblazeb2.com'],
+    ['staging', 'https://api.backblaze.net'],
+    ['dev', 'http://api.backblazeb2.xyz:8180'],
+    ['eu', 'https://api003.backblazeb2.com'],
+  ])('returns the well-known URL for the %s realm', (realm, url) => {
+    expect(getRealmUrl(realm)).toBe(url)
   })
 
-  it('returns the well-known URL for the staging realm', () => {
-    expect(getRealmUrl('staging')).toBe('https://api.backblazeb2.com')
+  it('does not alias staging to production', () => {
+    expect(getRealmUrl('staging')).not.toBe(getRealmUrl('production'))
   })
 
   it('returns a custom URL as-is when it is not a known realm name', () => {
@@ -386,11 +391,15 @@ describe('getRealmUrl', () => {
   })
 
   it('returns an unknown realm name as-is (fallback behavior)', () => {
-    expect(getRealmUrl('dev')).toBe('dev')
+    expect(getRealmUrl('sandbox')).toBe('sandbox')
   })
 
   it('REALM_URLS contains the expected known realms', () => {
-    expect(Object.keys(REALM_URLS)).toContain('production')
-    expect(Object.keys(REALM_URLS)).toContain('staging')
+    expect(REALM_URLS).toEqual({
+      dev: 'http://api.backblazeb2.xyz:8180',
+      eu: 'https://api003.backblazeb2.com',
+      production: 'https://api.backblazeb2.com',
+      staging: 'https://api.backblaze.net',
+    })
   })
 })

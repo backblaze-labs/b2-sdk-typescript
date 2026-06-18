@@ -1,7 +1,9 @@
 /** Map of known realm names to their base API URLs. */
 export const REALM_URLS: Record<string, string> = {
+  dev: 'http://api.backblazeb2.xyz:8180',
+  eu: 'https://api003.backblazeb2.com',
   production: 'https://api.backblazeb2.com',
-  staging: 'https://api.backblazeb2.com',
+  staging: 'https://api.backblaze.net',
 }
 
 /**

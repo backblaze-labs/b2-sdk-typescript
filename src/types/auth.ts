@@ -152,6 +152,9 @@ export interface AuthorizeAccountRequest {
   readonly applicationKeyId: string
   /** The application key secret. */
   readonly applicationKey: string
-  /** Optional realm override (e.g., `'production'`, `'staging'`). Defaults to production. */
+  /**
+   * Optional realm override (e.g., `'production'`, `'staging'`, `'dev'`, `'eu'`).
+   * Defaults to production.
+   */
   readonly realm?: string
 }
