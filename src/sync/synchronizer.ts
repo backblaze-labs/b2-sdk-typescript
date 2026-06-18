@@ -249,7 +249,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           const fileName = `${prefix}${relPath}`
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
-            source.size,
+            data.byteLength,
           )
           await bucket.upload({
             fileName,

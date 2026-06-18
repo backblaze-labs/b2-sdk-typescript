@@ -428,7 +428,8 @@ describe('synchronize', () => {
           relativePath: 'secret.txt',
           absolutePath: filePath,
           modTimeMillis: 2000,
-          size: 6,
+          // Deliberately stale to verify the provider sees the bytes actually read.
+          size: 999,
         }
         const source = makeMemoryFolder([sourceFile], 'local')
         const dest = makeMemoryFolder([], 'b2')
