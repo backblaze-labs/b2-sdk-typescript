@@ -41,15 +41,16 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
 
 /**
  * Incrementally computes SHA-1 hashes over streaming data.
- * Uses Node.js `crypto` when available, falling back to WebCrypto.
+ * Uses Node.js `crypto` when available, falling back to a dependency-free
+ * incremental JavaScript implementation.
  */
 export class IncrementalSha1 {
-  /** Buffered chunks for WebCrypto fallback path. */
-  private chunks: Uint8Array[] = []
   /** Total bytes fed into the hash so far. */
   private totalLength = 0
-  /** Node.js hash instance, or null if using WebCrypto fallback. */
+  /** Node.js hash instance, or null if using the JavaScript fallback. */
   private nodeHash: NodeHasher | null = null
+  /** Streaming JavaScript fallback used when Node crypto is unavailable. */
+  private jsHash = new JsSha1Hasher()
   /** Resolves once the crypto backend has been loaded. */
   private initPromise: Promise<void>
 
@@ -71,7 +72,7 @@ export class IncrementalSha1 {
     if (this.nodeHash) {
       this.nodeHash.update(data)
     } else {
-      this.chunks.push(new Uint8Array(data))
+      this.jsHash.update(data)
     }
     this.totalLength += data.byteLength
   }
@@ -86,17 +87,8 @@ export class IncrementalSha1 {
       return this.nodeHash.digest('hex')
     }
 
-    /* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable */
-    const combined = new Uint8Array(this.totalLength)
-    let offset = 0
-    for (const chunk of this.chunks) {
-      combined.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-
-    const hashBuffer = await crypto.subtle.digest('SHA-1', combined)
-    return hexEncode(new Uint8Array(hashBuffer))
-    /* v8 ignore stop */
+    /* v8 ignore next -- non-Node runtime fallback, exercised by browser-mode tests */
+    return this.jsHash.digest()
   }
 
   /**
@@ -108,6 +100,149 @@ export class IncrementalSha1 {
     return this.totalLength
   }
 }
+
+/* v8 ignore start -- JavaScript fallback path, exercised by browser-mode tests */
+class JsSha1Hasher {
+  private h0 = 0x67452301
+  private h1 = 0xefcdab89
+  private h2 = 0x98badcfe
+  private h3 = 0x10325476
+  private h4 = 0xc3d2e1f0
+  private readonly block = new Uint8Array(64)
+  private blockLength = 0
+  private bytesProcessed = 0
+  private digested = false
+  private readonly words = new Uint32Array(80)
+
+  update(data: Uint8Array): void {
+    if (this.digested) throw new Error('SHA-1 digest has already been finalized')
+    this.bytesProcessed += data.byteLength
+
+    let offset = 0
+    if (this.blockLength > 0) {
+      const toCopy = Math.min(64 - this.blockLength, data.byteLength)
+      this.block.set(data.subarray(0, toCopy), this.blockLength)
+      this.blockLength += toCopy
+      offset = toCopy
+      if (this.blockLength === 64) {
+        this.processBlock(this.block, 0)
+        this.blockLength = 0
+      }
+    }
+
+    while (offset + 64 <= data.byteLength) {
+      this.processBlock(data, offset)
+      offset += 64
+    }
+
+    if (offset < data.byteLength) {
+      this.block.set(data.subarray(offset), 0)
+      this.blockLength = data.byteLength - offset
+    }
+  }
+
+  digest(): string {
+    if (this.digested) throw new Error('SHA-1 digest has already been finalized')
+    this.digested = true
+
+    const bitLengthHigh = Math.floor(this.bytesProcessed / 0x20000000)
+    const bitLengthLow = (this.bytesProcessed << 3) >>> 0
+
+    this.block[this.blockLength] = 0x80
+    this.blockLength++
+
+    if (this.blockLength > 56) {
+      this.block.fill(0, this.blockLength, 64)
+      this.processBlock(this.block, 0)
+      this.blockLength = 0
+    }
+
+    this.block.fill(0, this.blockLength, 56)
+    this.writeUint32(56, bitLengthHigh)
+    this.writeUint32(60, bitLengthLow)
+    this.processBlock(this.block, 0)
+
+    return (
+      wordToHex(this.h0) +
+      wordToHex(this.h1) +
+      wordToHex(this.h2) +
+      wordToHex(this.h3) +
+      wordToHex(this.h4)
+    )
+  }
+
+  private writeUint32(offset: number, value: number): void {
+    this.block[offset] = (value >>> 24) & 0xff
+    this.block[offset + 1] = (value >>> 16) & 0xff
+    this.block[offset + 2] = (value >>> 8) & 0xff
+    this.block[offset + 3] = value & 0xff
+  }
+
+  private processBlock(block: Uint8Array, offset: number): void {
+    const words = this.words
+    for (let i = 0; i < 16; i++) {
+      const j = offset + i * 4
+      words[i] =
+        ((block[j] ?? 0) << 24) |
+        ((block[j + 1] ?? 0) << 16) |
+        ((block[j + 2] ?? 0) << 8) |
+        (block[j + 3] ?? 0)
+    }
+
+    for (let i = 16; i < 80; i++) {
+      words[i] = rotateLeft(
+        (words[i - 3] ?? 0) ^ (words[i - 8] ?? 0) ^ (words[i - 14] ?? 0) ^ (words[i - 16] ?? 0),
+        1,
+      )
+    }
+
+    let a = this.h0
+    let b = this.h1
+    let c = this.h2
+    let d = this.h3
+    let e = this.h4
+
+    for (let i = 0; i < 80; i++) {
+      let f: number
+      let k: number
+      if (i < 20) {
+        f = (b & c) | (~b & d)
+        k = 0x5a827999
+      } else if (i < 40) {
+        f = b ^ c ^ d
+        k = 0x6ed9eba1
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d)
+        k = 0x8f1bbcdc
+      } else {
+        f = b ^ c ^ d
+        k = 0xca62c1d6
+      }
+
+      const temp = (rotateLeft(a, 5) + f + e + k + (words[i] ?? 0)) >>> 0
+      e = d
+      d = c
+      c = rotateLeft(b, 30)
+      b = a
+      a = temp
+    }
+
+    this.h0 = (this.h0 + a) >>> 0
+    this.h1 = (this.h1 + b) >>> 0
+    this.h2 = (this.h2 + c) >>> 0
+    this.h3 = (this.h3 + d) >>> 0
+    this.h4 = (this.h4 + e) >>> 0
+  }
+}
+
+function rotateLeft(value: number, bits: number): number {
+  return ((value << bits) | (value >>> (32 - bits))) >>> 0
+}
+
+function wordToHex(word: number): string {
+  return word.toString(16).padStart(8, '0')
+}
+/* v8 ignore stop */
 
 /* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable (browser/edge runtimes) */
 /**

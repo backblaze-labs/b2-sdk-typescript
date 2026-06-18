@@ -174,6 +174,8 @@ const stream = obj.createReadStream(fileId, totalSize, {
 })
 ```
 
+Full-body downloads are automatically verified when B2 returns a real `X-Bz-Content-Sha1` digest. If the downloaded bytes do not match, the body stream errors with `ChecksumMismatchError`; discard any partially written output when piping to disk. HEAD requests, range GETs, and files whose SHA-1 is unavailable are not verified because no matching whole-body digest exists.
+
 ### File operations
 
 ```ts
@@ -612,7 +614,7 @@ try {
 
 The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct access to features that live in B2's native API:
 
-- **Per-part and whole-file SHA-1 verification** on multipart uploads.
+- **Per-part and whole-file SHA-1 verification** on multipart uploads, plus automatic whole-file verification on downloads when B2 provides a digest.
 - **`b2_copy_part` server-side multipart copy** via `bucket.copyLargeFile()` — no client-side bytes touched.
 - **File retention + legal hold** (object lock) on `bucket.updateFileRetention()` and `bucket.updateFileLegalHold()`.
 - **Time-scoped download tokens** via `bucket.getDownloadAuthorization()` for sharing without exposing the application key.

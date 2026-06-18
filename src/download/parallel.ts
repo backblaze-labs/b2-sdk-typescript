@@ -3,11 +3,18 @@ import { B2Error, classifyError, NetworkError } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
+import { IncrementalSha1 } from '../streams/hash.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import type { FileId } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { normalizeSha1 } from '../util/normalize.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 import { utf8Decoder } from '../util/text-codec.ts'
+import {
+  assertDownloadSha1,
+  assertDownloadSha1HeaderAgreement,
+  isVerifiableSha1,
+} from './checksum.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -27,6 +34,11 @@ export interface ParallelDownloadOptions {
   readonly maxRetries?: number
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
+}
+
+interface RangeDownloadResult {
+  readonly data: Uint8Array
+  readonly contentSha1: string | null
 }
 
 /**
@@ -78,9 +90,11 @@ export function createParallelDownloadStream(
   // single range's latency.
   const windowSize = concurrency * 2
   const inflight = new Map<number, Promise<void>>()
-  const buffer = new Map<number, Uint8Array>()
+  const buffer = new Map<number, RangeDownloadResult>()
+  let assembledSha1: IncrementalSha1 | null = null
   let nextToSchedule = 0
   let nextToEmit = 0
+  let expectedSha1: string | null | undefined
   let firstError: unknown = null
 
   function scheduleNext(): void {
@@ -100,7 +114,7 @@ export function createParallelDownloadStream(
       nextToSchedule++
       const task = (async () => {
         try {
-          const data = await fetchRangeWithRetry(
+          const result = await fetchRangeWithRetry(
             raw,
             accountInfo,
             options.fileId,
@@ -110,7 +124,7 @@ export function createParallelDownloadStream(
             retryOptions,
             abort,
           )
-          buffer.set(idx, data)
+          buffer.set(idx, result)
         } catch (err) {
           if (firstError === null) firstError = err
         } finally {
@@ -140,26 +154,33 @@ export function createParallelDownloadStream(
         while (!buffer.has(nextToEmit)) {
           abort?.throwIfAborted()
           if (firstError !== null) throw firstError
-          /* v8 ignore start -- defensive close: every code path that
-             populates `nextToEmit < ranges.length` also schedules into
-             `inflight`. The pre-warm in `start()` plus `scheduleNext()`
-             after each enqueue guarantee that whenever there are
-             pending ranges, at least one is in flight. This guard
-             exists only so a future refactor can't accidentally stall
-             the stream by leaving both maps empty mid-stream. */
+          // Zero-byte downloads have no planned ranges and close here. For
+          // non-empty downloads, this guard prevents a future refactor from
+          // stalling the stream if it leaves both maps empty mid-stream.
           if (inflight.size === 0) {
             controller.close()
             return
           }
-          /* v8 ignore stop */
           await Promise.race(inflight.values())
         }
 
-        const data = buffer.get(nextToEmit)
-        if (data !== undefined) {
+        const result = buffer.get(nextToEmit)
+        if (result !== undefined) {
           buffer.delete(nextToEmit)
           nextToEmit++
-          controller.enqueue(data)
+          const rangeSha1 = normalizeExpectedSha1(result.contentSha1)
+          if (expectedSha1 === undefined) {
+            expectedSha1 = rangeSha1
+          } else {
+            // B2 range responses should agree on the same whole-file SHA-1;
+            // any value or presence change makes verification untrustworthy.
+            assertDownloadSha1HeaderAgreement(expectedSha1, rangeSha1)
+          }
+          if (expectedSha1 !== null) {
+            assembledSha1 ??= new IncrementalSha1()
+            await assembledSha1.update(result.data)
+          }
+          controller.enqueue(result.data)
         }
 
         // Top up the window now that we freed a slot by emitting.
@@ -171,6 +192,9 @@ export function createParallelDownloadStream(
           inflight.size === 0 &&
           firstError === null
         ) {
+          if (expectedSha1 !== undefined && expectedSha1 !== null && assembledSha1 !== null) {
+            assertDownloadSha1(expectedSha1, await assembledSha1.digest())
+          }
           controller.close()
         }
       } catch (err) {
@@ -207,7 +231,7 @@ async function fetchRangeWithRetry(
   totalSize: number,
   retryOptions: RetryOptions,
   signal: AbortSignal | undefined,
-): Promise<Uint8Array> {
+): Promise<RangeDownloadResult> {
   let lastError: unknown
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     if (attempt > 0) {
@@ -235,7 +259,10 @@ async function fetchRangeWithRetry(
       if (!resp.body) throw new Error('Download chunk has no body')
       const data = await collectStream(resp.body)
       validateRangeResponse(resp, start, end, totalSize, data.byteLength)
-      return data
+      return {
+        data,
+        contentSha1: normalizeSha1(resp.headers.get('X-Bz-Content-Sha1')),
+      }
     } catch (err) {
       lastError = err
       // Honour AbortSignal cancellation: don't retry past an abort.
@@ -247,6 +274,10 @@ async function fetchRangeWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
+}
+
+function normalizeExpectedSha1(contentSha1: string | null): string | null {
+  return isVerifiableSha1(contentSha1) ? contentSha1.toLowerCase() : null
 }
 
 class RangeValidationError extends Error {

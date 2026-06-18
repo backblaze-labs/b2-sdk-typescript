@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
+import { ChecksumMismatchError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { RawClient } from '../raw/index.ts'
+import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient, readStream } from '../test-utils/index.ts'
 import type { FileId } from '../types/ids.ts'
@@ -106,7 +109,38 @@ describe('downloadById', () => {
     expect(result.headers.contentLength).toBe(content.byteLength)
     expect(result.headers.fileName).toBe('byid.bin')
     expect(result.headers.fileId).toBe(uploaded.fileId)
+    expect(result.headers.contentSha1).toBe(await sha1Hex(content))
     expect(result.headers.uploadTimestamp).toBeGreaterThan(0)
+  })
+
+  it('errors with ChecksumMismatchError when body does not match X-Bz-Content-Sha1', async () => {
+    const expectedBody = new TextEncoder().encode('expected body')
+    const corruptBody = new TextEncoder().encode('corrupt body')
+    const expectedSha1 = await sha1Hex(expectedBody)
+    const raw = new RawClient({
+      transport: {
+        async send(): Promise<HttpResponse> {
+          return byteResponse(200, corruptBody, {
+            'Content-Type': 'application/octet-stream',
+            'Content-Length': String(corruptBody.byteLength),
+            'X-Bz-File-Id': 'bad_download_sha1',
+            'X-Bz-File-Name': 'bad-sha1.bin',
+            'X-Bz-Content-Sha1': expectedSha1,
+            'X-Bz-Upload-Timestamp': '1',
+          })
+        },
+      },
+    })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const result = await downloadById(raw, accountInfo as unknown as AccountInfo, {
+      fileId: 'bad_download_sha1' as FileId,
+    })
+
+    await expect(readStream(result.body)).rejects.toBeInstanceOf(ChecksumMismatchError)
   })
 
   it('range download returns partial content', async () => {
@@ -397,6 +431,7 @@ function createMockTransport(
   fileData: Uint8Array,
   fileId: string,
   options?: {
+    contentSha1?: string
     onDownload?: (
       request: HttpRequest,
       rangeHeader: string | undefined,
@@ -472,7 +507,7 @@ function createMockTransport(
           ...(contentRange !== undefined ? { 'Content-Range': contentRange } : {}),
           'X-Bz-File-Id': fileId,
           'X-Bz-File-Name': 'mock-file.bin',
-          'X-Bz-Content-Sha1': 'none',
+          'X-Bz-Content-Sha1': options?.contentSha1 ?? 'none',
           'X-Bz-Upload-Timestamp': String(Date.now()),
         })
 
@@ -498,8 +533,9 @@ describe('createParallelDownloadStream', () => {
     for (let i = 0; i < 100; i++) fileData[i] = i
     const fakeFileId = 'fake_file_001'
 
-    const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.ts')
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: await sha1Hex(fileData),
+    })
     const raw = new RawClient({ transport })
 
     // Build a minimal accountInfo that provides download URL and auth token
@@ -523,13 +559,129 @@ describe('createParallelDownloadStream', () => {
     }
   })
 
+  it('errors with ChecksumMismatchError when range SHA-1 headers disagree', async () => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const expectedSha1 = await sha1Hex(fileData)
+    const fakeFileId = 'parallel_changed_sha1'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: expectedSha1,
+      onDownload: (_request, rangeHeader) => {
+        if (rangeHeader !== 'bytes=30-59') return undefined
+        const data = fileData.slice(30, 60)
+        return byteResponse(206, data, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.byteLength),
+          'Content-Range': `bytes 30-59/${fileData.byteLength}`,
+          'X-Bz-File-Id': fakeFileId,
+          'X-Bz-File-Name': 'mock-file.bin',
+          'X-Bz-Content-Sha1': '0'.repeat(40),
+          'X-Bz-Upload-Timestamp': '1',
+        })
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
+  })
+
+  it.each([
+    ['first range lacks a digest and a later range has one', 'bytes=0-29', 'none'],
+    ['later range drops the digest after the first range sets one', 'bytes=30-59', undefined],
+  ])('errors with ChecksumMismatchError when %s', async (_caseName, overrideRange, headerValue) => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const expectedSha1 = await sha1Hex(fileData)
+    const fakeFileId = 'parallel_sha1_presence_changed'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: expectedSha1,
+      onDownload: (_request, rangeHeader) => {
+        if (rangeHeader !== overrideRange) return undefined
+        const range = rangeHeader === 'bytes=0-29' ? { start: 0, end: 29 } : { start: 30, end: 59 }
+        const data = fileData.slice(range.start, range.end + 1)
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.byteLength),
+          'Content-Range': `bytes ${range.start}-${range.end}/${fileData.byteLength}`,
+          'X-Bz-File-Id': fakeFileId,
+          'X-Bz-File-Name': 'mock-file.bin',
+          'X-Bz-Upload-Timestamp': '1',
+        }
+        if (headerValue !== undefined) headers['X-Bz-Content-Sha1'] = headerValue
+        return byteResponse(206, data, headers)
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
+  })
+
+  it('errors with ChecksumMismatchError when assembled ranges fail SHA-1 verification', async () => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const expectedSha1 = await sha1Hex(fileData)
+    const fakeFileId = 'parallel_bad_sha1'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: expectedSha1,
+      onDownload: (_request, rangeHeader) => {
+        if (rangeHeader !== 'bytes=30-59') return undefined
+        const data = fileData.slice(30, 60)
+        data[0] = 255
+        return byteResponse(206, data, {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.byteLength),
+          'Content-Range': `bytes 30-59/${fileData.byteLength}`,
+          'X-Bz-File-Id': fakeFileId,
+          'X-Bz-File-Name': 'mock-file.bin',
+          'X-Bz-Content-Sha1': expectedSha1,
+          'X-Bz-Upload-Timestamp': '1',
+        })
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
+  })
+
   it('single-range download works when file is smaller than range size', async () => {
     const fileData = new Uint8Array(15)
     for (let i = 0; i < 15; i++) fileData[i] = i + 10
     const fakeFileId = 'fake_file_002'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -551,6 +703,31 @@ describe('createParallelDownloadStream', () => {
     }
   })
 
+  it('closes cleanly for a zero-byte parallel download', async () => {
+    const fakeFileId = 'empty-parallel'
+    const raw = new RawClient({
+      transport: {
+        async send(): Promise<HttpResponse> {
+          throw new Error('Zero-byte parallel downloads should not request ranges')
+        },
+      },
+    })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 0,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    const result = await readStream(stream)
+    expect(result.byteLength).toBe(0)
+  })
+
   it('handles the last range being shorter than rangeSize', async () => {
     // 50 bytes with 20-byte ranges: chunks are [0-19], [20-39], [40-49]
     const fileData = new Uint8Array(50)
@@ -558,7 +735,6 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_003'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -907,7 +1083,6 @@ describe('createParallelDownloadStream', () => {
           },
         ),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
@@ -941,7 +1116,6 @@ describe('createParallelDownloadStream', () => {
           'Content-Type': 'text/plain',
         }),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
@@ -978,7 +1152,6 @@ describe('createParallelDownloadStream', () => {
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       }),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
