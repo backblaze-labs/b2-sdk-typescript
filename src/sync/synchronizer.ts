@@ -188,7 +188,13 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
   if (!bucket) throw new Error(`Bucket required for ${context} actions`)
 }
 
-/** Narrows a setting to SSE-C; non-SSE-C source settings need no key on read. */
+/**
+ * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
+ *
+ * @param setting - Provider-supplied encryption setting, or undefined.
+ *
+ * @returns The SSE-C setting when one is provided; otherwise undefined.
+ */
 function toSseCEncryptionSetting(
   setting: EncryptionSetting | undefined,
 ): Extract<EncryptionSetting, { readonly mode: 'SSE-C' }> | undefined {
@@ -196,7 +202,13 @@ function toSseCEncryptionSetting(
   return setting
 }
 
-/** Builds a download key from SSE-C settings; non-SSE-C downloads need no key. */
+/**
+ * Builds a download key from SSE-C settings; non-SSE-C downloads need no key.
+ *
+ * @param setting - Provider-supplied encryption setting, or undefined.
+ *
+ * @returns A download key for SSE-C files; otherwise undefined.
+ */
 function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
   const sseC = toSseCEncryptionSetting(setting)
   if (sseC === undefined) return undefined
