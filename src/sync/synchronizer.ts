@@ -1,5 +1,7 @@
 import type { Bucket } from '../bucket.ts'
+import type { SseCDownloadKey } from '../raw/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -187,6 +189,31 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
 }
 
 /**
+ * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
+ *
+ * @param setting - Provider-supplied encryption setting, or undefined.
+ *
+ * @returns The SSE-C setting when one is provided; otherwise undefined.
+ */
+function toSseCEncryptionSetting(
+  setting: EncryptionSetting | undefined,
+): Extract<EncryptionSetting, { readonly mode: 'SSE-C' }> | undefined {
+  if (setting?.mode !== 'SSE-C') return undefined
+  return setting
+}
+
+/**
+ * Returns a download key from SSE-C settings; non-SSE-C downloads need no key.
+ *
+ * @param setting - Provider-supplied encryption setting, or undefined.
+ *
+ * @returns A download key for SSE-C files; otherwise undefined.
+ */
+function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
+  return toSseCEncryptionSetting(setting)
+}
+
+/**
  * Creates a configured sync engine wired to the bucket and paths in the given config.
  *
  * For sync operations that may need to remove destination-only files (the
@@ -225,9 +252,15 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         async (absPath, relPath) => {
           const { readFile } = await import('node:fs/promises')
           const data = await readFile(absPath)
+          const fileName = `${prefix}${relPath}`
+          const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
+            fileName,
+            data.byteLength,
+          )
           await bucket.upload({
-            fileName: `${prefix}${relPath}`,
+            fileName,
             source: new BufferSource(new Uint8Array(data)),
+            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
           })
         },
       )
@@ -240,7 +273,12 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
-        const result = await bucket.download(source.selectedVersion.fileName)
+        const serverSideEncryption = toSseCDownloadKey(
+          config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
+        )
+        const result = await bucket.download(source.selectedVersion.fileName, {
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+        })
         const reader = result.body.getReader()
         let combined: Uint8Array
         try {
@@ -278,9 +316,18 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'copy')
 
       return new CopyAction(source.relativePath, source.size, async () => {
+        const destinationServerSideEncryption =
+          config.options.encryptionProvider?.getSettingForUpload(destPath, source.size)
+        const sourceServerSideEncryption = toSseCEncryptionSetting(
+          config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
+        )
         await bucket.copyFile({
           sourceFileId: source.selectedVersion.fileId,
           fileName: destPath,
+          ...(destinationServerSideEncryption !== undefined
+            ? { destinationServerSideEncryption }
+            : {}),
+          ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
         })
       })
     },

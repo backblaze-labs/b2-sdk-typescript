@@ -741,13 +741,27 @@ export class Bucket {
     contentType?: string
     /** Override file info (only with `REPLACE` metadata directive). */
     fileInfo?: Record<string, string>
-    /** Server-side encryption for the destination file. */
+    /**
+     * @deprecated Renamed to `destinationServerSideEncryption` for consistency with
+     * multipart copy. Still honored as a fallback when the new field is absent.
+     */
     serverSideEncryption?: EncryptionSetting
+    /** Server-side encryption for the destination file. Preferred over `serverSideEncryption`. */
+    destinationServerSideEncryption?: EncryptionSetting
+    /** SSE-C settings for the source if it was uploaded with SSE-C. */
+    sourceServerSideEncryption?: EncryptionSetting
   }): Promise<FileVersion> {
+    const { serverSideEncryption, destinationServerSideEncryption, ...copyOptions } = options
+    const destinationEncryption = destinationServerSideEncryption ?? serverSideEncryption
     return this.client.raw.copyFile(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
-      options,
+      {
+        ...copyOptions,
+        ...(destinationEncryption !== undefined
+          ? { destinationServerSideEncryption: destinationEncryption }
+          : {}),
+      },
     )
   }
 

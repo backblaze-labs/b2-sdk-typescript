@@ -151,4 +151,84 @@ describe('copyLargeFile', () => {
     })
     expect(body['sourceServerSideEncryption']).toEqual({ mode: EncryptionMode.None })
   })
+
+  it('Bucket.copyFile maps destination and source SSE options to the raw request', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const captured: { endpoint: string; body: Record<string, unknown> }[] = []
+    const transport = {
+      async send(req: Parameters<typeof inner.send>[0]) {
+        if (typeof req.body === 'string') {
+          const endpoint = req.url.split('/').pop() ?? ''
+          try {
+            captured.push({ endpoint, body: JSON.parse(req.body) as Record<string, unknown> })
+          } catch {
+            // not all bodies are JSON
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const c = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-bucket-sse',
+      bucketType: BucketType.AllPrivate,
+    })
+    const content = new TextEncoder().encode('bucket copy sse')
+    const uploaded = await bucket.upload({
+      fileName: 'bucket-sse-src.txt',
+      source: new BufferSource(content),
+    })
+
+    const destinationSse = {
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    } as const
+    const sourceSse = {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'customer-key',
+      customerKeyMd5: 'customer-key-md5',
+    } as const
+    const preferredDestination = { mode: EncryptionMode.None } as const
+
+    await bucket.copyFile({
+      sourceFileId: uploaded.fileId,
+      fileName: 'destination-field.txt',
+      destinationServerSideEncryption: destinationSse,
+      sourceServerSideEncryption: sourceSse,
+    })
+    await bucket.copyFile({
+      sourceFileId: uploaded.fileId,
+      fileName: 'deprecated-alias.txt',
+      serverSideEncryption: destinationSse,
+    })
+    await bucket.copyFile({
+      sourceFileId: uploaded.fileId,
+      fileName: 'preferred-field.txt',
+      serverSideEncryption: destinationSse,
+      destinationServerSideEncryption: preferredDestination,
+    })
+    await bucket.copyFile({
+      sourceFileId: uploaded.fileId,
+      fileName: 'plain-copy.txt',
+    })
+
+    const copyFileBodies = captured.filter((c) => c.endpoint === 'b2_copy_file').map((c) => c.body)
+    expect(copyFileBodies).toHaveLength(4)
+    expect(copyFileBodies[0]?.['destinationServerSideEncryption']).toEqual(destinationSse)
+    expect(copyFileBodies[0]?.['sourceServerSideEncryption']).toEqual(sourceSse)
+    expect(copyFileBodies[0]?.['serverSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[1]?.['destinationServerSideEncryption']).toEqual(destinationSse)
+    expect(copyFileBodies[1]?.['serverSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[2]?.['destinationServerSideEncryption']).toEqual(preferredDestination)
+    expect(copyFileBodies[3]?.['destinationServerSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[3]?.['sourceServerSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[3]?.['serverSideEncryption']).toBeUndefined()
+  })
 })
