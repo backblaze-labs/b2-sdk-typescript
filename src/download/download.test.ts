@@ -536,7 +536,6 @@ describe('createParallelDownloadStream', () => {
     const transport = createMockTransport(fileData, fakeFileId, {
       contentSha1: await sha1Hex(fileData),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     // Build a minimal accountInfo that provides download URL and auth token
@@ -683,7 +682,6 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_002'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -737,7 +735,6 @@ describe('createParallelDownloadStream', () => {
     const fakeFileId = 'fake_file_003'
 
     const transport = createMockTransport(fileData, fakeFileId)
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
 
     const accountInfo = {
@@ -1086,7 +1083,6 @@ describe('createParallelDownloadStream', () => {
           },
         ),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
@@ -1120,7 +1116,6 @@ describe('createParallelDownloadStream', () => {
           'Content-Type': 'text/plain',
         }),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
@@ -1157,7 +1152,6 @@ describe('createParallelDownloadStream', () => {
         arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
       }),
     })
-    const { RawClient } = await import('../raw/index.ts')
     const raw = new RawClient({ transport })
     const accountInfo = {
       getDownloadUrl: () => 'http://mock:0',
