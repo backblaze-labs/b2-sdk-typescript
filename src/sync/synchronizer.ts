@@ -260,10 +260,9 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
-        const result =
-          serverSideEncryption !== undefined
-            ? await bucket.download(source.selectedVersion.fileName, { serverSideEncryption })
-            : await bucket.download(source.selectedVersion.fileName)
+        const result = await bucket.download(source.selectedVersion.fileName, {
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+        })
         const reader = result.body.getReader()
         let combined: Uint8Array
         try {
