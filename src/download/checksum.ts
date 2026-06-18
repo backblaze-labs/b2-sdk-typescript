@@ -32,7 +32,7 @@ export function isVerifiableSha1(sha1: string | null | undefined): sha1 is strin
  *
  * @returns A typed checksum mismatch error.
  */
-export function createDownloadChecksumMismatchError(
+function createDownloadChecksumMismatchError(
   expectedSha1: string,
   actualSha1: string,
 ): ChecksumMismatchError {

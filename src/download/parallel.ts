@@ -154,18 +154,13 @@ export function createParallelDownloadStream(
         while (!buffer.has(nextToEmit)) {
           abort?.throwIfAborted()
           if (firstError !== null) throw firstError
-          /* v8 ignore start -- defensive close: every code path that
-             populates `nextToEmit < ranges.length` also schedules into
-             `inflight`. The pre-warm in `start()` plus `scheduleNext()`
-             after each enqueue guarantee that whenever there are
-             pending ranges, at least one is in flight. This guard
-             exists only so a future refactor can't accidentally stall
-             the stream by leaving both maps empty mid-stream. */
+          // Zero-byte downloads have no planned ranges and close here. For
+          // non-empty downloads, this guard prevents a future refactor from
+          // stalling the stream if it leaves both maps empty mid-stream.
           if (inflight.size === 0) {
             controller.close()
             return
           }
-          /* v8 ignore stop */
           await Promise.race(inflight.values())
         }
 
@@ -177,6 +172,8 @@ export function createParallelDownloadStream(
           if (expectedSha1 === undefined) {
             expectedSha1 = rangeSha1
           } else {
+            // B2 range responses should agree on the same whole-file SHA-1;
+            // any value or presence change makes verification untrustworthy.
             assertDownloadSha1HeaderAgreement(expectedSha1, rangeSha1)
           }
           if (expectedSha1 !== null) {

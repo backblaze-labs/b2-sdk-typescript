@@ -705,6 +705,31 @@ describe('createParallelDownloadStream', () => {
     }
   })
 
+  it('closes cleanly for a zero-byte parallel download', async () => {
+    const fakeFileId = 'empty-parallel'
+    const raw = new RawClient({
+      transport: {
+        async send(): Promise<HttpResponse> {
+          throw new Error('Zero-byte parallel downloads should not request ranges')
+        },
+      },
+    })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 0,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    const result = await readStream(stream)
+    expect(result.byteLength).toBe(0)
+  })
+
   it('handles the last range being shorter than rangeSize', async () => {
     // 50 bytes with 20-byte ranges: chunks are [0-19], [20-39], [40-49]
     const fileData = new Uint8Array(50)
