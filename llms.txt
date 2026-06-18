@@ -1,0 +1,146 @@
+# @backblaze-labs/b2-sdk
+
+> The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript. Zero runtime dependencies. Isomorphic — runs unmodified in Node.js 22+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge.
+
+## Install
+
+```bash
+npm install @backblaze-labs/b2-sdk
+```
+
+## Quick start
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+const client = new B2Client({
+  applicationKeyId: process.env.B2_APPLICATION_KEY_ID,
+  applicationKey: process.env.B2_APPLICATION_KEY,
+})
+
+await client.authorize()
+const bucket = await client.getBucket('my-bucket')
+const file = await bucket.upload({
+  fileName: 'hello.txt',
+  source: new BufferSource(new TextEncoder().encode('Hello, B2!')),
+  contentType: 'text/plain',
+})
+```
+
+## Environment variables
+
+The SDK reads no env vars automatically — pass them explicitly at construction:
+
+| Variable | Description |
+|---|---|
+| `B2_APPLICATION_KEY_ID` | Application key ID from Backblaze console |
+| `B2_APPLICATION_KEY` | Application key secret |
+| `B2_BUCKET_NAME` | Target bucket name |
+| `B2_REGION` | e.g. `us-east-005` |
+| `B2_PUBLIC_URL_BASE` | e.g. `https://s3.us-east-005.backblazeb2.com` |
+
+## S3-compatible endpoint
+
+B2 is S3-compatible. When using third-party S3 clients instead of this SDK:
+
+```ts
+// Endpoint pattern: https://s3.<region>.backblazeb2.com
+const endpoint = `https://s3.${process.env.B2_REGION}.backblazeb2.com`
+```
+
+## Core exports
+
+| Import path | What it contains |
+|---|---|
+| `@backblaze-labs/b2-sdk` | `B2Client`, `Bucket`, `B2Object`, `BufferSource`, all types |
+| `@backblaze-labs/b2-sdk/errors` | Typed error classes (`B2Error`, `AuthorizationError`, etc.) |
+| `@backblaze-labs/b2-sdk/streams` | `StreamSource`, `WritableStreamSink` for streaming uploads/downloads |
+| `@backblaze-labs/b2-sdk/sync` | `syncDirectory` — sync a local directory to a B2 bucket |
+| `@backblaze-labs/b2-sdk/raw` | Direct access to B2 native API calls |
+| `@backblaze-labs/b2-sdk/s3` | S3-compatible client helpers |
+| `@backblaze-labs/b2-sdk/auth` | Auth helpers, `AuthorizedClient` |
+| `@backblaze-labs/b2-sdk/notifications` | Bucket event notifications |
+| `@backblaze-labs/b2-sdk/simulator` | In-process B2 simulator for tests |
+
+## Common patterns
+
+### Upload a file
+
+```ts
+// Small file (< part size, ~100 MB) — single request
+await bucket.upload({ fileName: 'data.json', source: new BufferSource(bytes), contentType: 'application/json' })
+
+// Large file — automatic multipart with parallel parts
+await bucket.upload({ fileName: 'model.bin', source: new BufferSource(largeBuffer) })
+
+// Streaming upload
+import { StreamSource } from '@backblaze-labs/b2-sdk/streams'
+await bucket.upload({ fileName: 'stream.bin', source: new StreamSource(readableStream) })
+
+// Resume a failed multipart upload
+await bucket.upload({ fileName: 'large.bin', source, resume: true })
+```
+
+### Download a file
+
+```ts
+const obj = await bucket.getObject('hello.txt')
+const text = await obj.download().then(r => r.text())
+```
+
+### List files
+
+```ts
+for await (const file of bucket.listFiles({ prefix: 'logs/' })) {
+  console.log(file.fileName, file.contentLength)
+}
+```
+
+### Delete files
+
+```ts
+await bucket.deleteObject('hello.txt')
+
+// Bulk delete by prefix
+await bucket.bulkDelete({ prefix: 'tmp/' })
+```
+
+### Server-side encryption
+
+```ts
+import { SseMode } from '@backblaze-labs/b2-sdk'
+await bucket.upload({ fileName: 'secret.bin', source, serverSideEncryption: { mode: SseMode.SSE_B2 } })
+```
+
+### Application keys
+
+```ts
+import { Capability } from '@backblaze-labs/b2-sdk'
+const key = await client.createKey({ keyName: 'my-key', capabilities: [Capability.ReadFiles, Capability.WriteFiles] })
+```
+
+### In-process simulator (for tests)
+
+```ts
+import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
+const sim = new B2Simulator()
+const client = sim.createClient()
+await client.authorize()
+```
+
+## Error handling
+
+```ts
+import { B2Error, AuthorizationError } from '@backblaze-labs/b2-sdk/errors'
+
+try {
+  await client.authorize()
+} catch (err) {
+  if (err instanceof AuthorizationError) { /* bad credentials */ }
+  if (err instanceof B2Error) { console.log(err.status, err.code) }
+}
+```
+
+## Full API reference
+
+https://backblaze-labs.github.io/b2-sdk-typescript/
