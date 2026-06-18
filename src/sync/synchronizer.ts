@@ -203,20 +203,14 @@ function toSseCEncryptionSetting(
 }
 
 /**
- * Builds a download key from SSE-C settings; non-SSE-C downloads need no key.
+ * Returns a download key from SSE-C settings; non-SSE-C downloads need no key.
  *
  * @param setting - Provider-supplied encryption setting, or undefined.
  *
  * @returns A download key for SSE-C files; otherwise undefined.
  */
 function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
-  const sseC = toSseCEncryptionSetting(setting)
-  if (sseC === undefined) return undefined
-  return {
-    algorithm: sseC.algorithm,
-    customerKey: sseC.customerKey,
-    customerKeyMd5: sseC.customerKeyMd5,
-  }
+  return toSseCEncryptionSetting(setting)
 }
 
 /**

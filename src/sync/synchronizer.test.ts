@@ -629,12 +629,9 @@ describe('synchronize', () => {
         expect(getSettingForDownload).toHaveBeenCalledWith(sourceFile.selectedVersion)
         expect(getSettingForUpload).not.toHaveBeenCalled()
         expect(mockBucket.download).toHaveBeenCalledWith('secret.txt', {
-          serverSideEncryption: {
-            algorithm: EncryptionAlgorithm.Aes256,
-            customerKey: 'customer-key',
-            customerKeyMd5: 'customer-key-md5',
-          },
+          serverSideEncryption: sourceSse,
         })
+        expect(mockBucket.download.mock.calls[0]?.[1]?.serverSideEncryption).toBe(sourceSse)
       } finally {
         await rm(root, { recursive: true, force: true })
       }
