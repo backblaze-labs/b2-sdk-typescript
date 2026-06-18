@@ -742,8 +742,8 @@ export class Bucket {
     /** Override file info (only with `REPLACE` metadata directive). */
     fileInfo?: Record<string, string>
     /**
-     * Server-side encryption for the destination file.
-     * @deprecated Use `destinationServerSideEncryption` for consistency with multipart copy.
+     * @deprecated Renamed to `destinationServerSideEncryption` for consistency with
+     * multipart copy. Still honored as a fallback when the new field is absent.
      */
     serverSideEncryption?: EncryptionSetting
     /** Server-side encryption for the destination file. Preferred over `serverSideEncryption`. */
