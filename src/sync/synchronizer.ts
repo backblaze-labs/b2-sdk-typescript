@@ -1,5 +1,7 @@
 import type { Bucket } from '../bucket.ts'
+import type { SseCDownloadKey } from '../raw/index.ts'
 import { BufferSource } from '../streams/source.ts'
+import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -186,6 +188,15 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
   if (!bucket) throw new Error(`Bucket required for ${context} actions`)
 }
 
+function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
+  if (setting?.mode !== 'SSE-C') return undefined
+  return {
+    algorithm: setting.algorithm,
+    customerKey: setting.customerKey,
+    customerKeyMd5: setting.customerKeyMd5,
+  }
+}
+
 /**
  * Creates a configured sync engine wired to the bucket and paths in the given config.
  *
@@ -225,9 +236,15 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         async (absPath, relPath) => {
           const { readFile } = await import('node:fs/promises')
           const data = await readFile(absPath)
+          const fileName = `${prefix}${relPath}`
+          const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
+            fileName,
+            source.size,
+          )
           await bucket.upload({
-            fileName: `${prefix}${relPath}`,
+            fileName,
             source: new BufferSource(new Uint8Array(data)),
+            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
           })
         },
       )
@@ -240,7 +257,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
-        const result = await bucket.download(source.selectedVersion.fileName)
+        const serverSideEncryption = toSseCDownloadKey(
+          config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
+        )
+        const result =
+          serverSideEncryption !== undefined
+            ? await bucket.download(source.selectedVersion.fileName, { serverSideEncryption })
+            : await bucket.download(source.selectedVersion.fileName)
         const reader = result.body.getReader()
         let combined: Uint8Array
         try {
@@ -278,9 +301,18 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'copy')
 
       return new CopyAction(source.relativePath, source.size, async () => {
+        const destinationServerSideEncryption =
+          config.options.encryptionProvider?.getSettingForUpload(destPath, source.size)
+        const sourceServerSideEncryption = config.options.encryptionProvider?.getSettingForDownload(
+          source.selectedVersion,
+        )
         await bucket.copyFile({
           sourceFileId: source.selectedVersion.fileId,
           fileName: destPath,
+          ...(destinationServerSideEncryption !== undefined
+            ? { destinationServerSideEncryption }
+            : {}),
+          ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
         })
       })
     },

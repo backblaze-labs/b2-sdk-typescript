@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { daysFromNow } from '../test-utils/index.ts'
-import { EncryptionMode } from '../types/encryption.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import type {
@@ -10,7 +10,14 @@ import type {
   SynchronizerUpConfig,
 } from './synchronizer.ts'
 import { synchronize } from './synchronizer.ts'
-import type { B2SyncPath, LocalSyncPath, SyncEvent, SyncFolder, SyncPath } from './types.ts'
+import type {
+  B2SyncPath,
+  LocalSyncPath,
+  SyncEncryptionProvider,
+  SyncEvent,
+  SyncFolder,
+  SyncPath,
+} from './types.ts'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -387,6 +394,143 @@ describe('synchronize', () => {
       } finally {
         await rm(root, { recursive: true, force: true })
       }
+    })
+  })
+
+  describe('encryptionProvider', () => {
+    const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
+    const destinationSse = {
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    } as const
+    const sourceSse = {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'customer-key',
+      customerKeyMd5: 'customer-key-md5',
+    } as const
+
+    it.skipIf(!isNode)('passes upload settings to local-to-B2 uploads', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sse-up-'))
+      try {
+        const filePath = join(root, 'secret.txt')
+        await writeFile(filePath, 'secret')
+
+        const mockBucket = makeMockBucket()
+        const getSettingForUpload = vi.fn(() => destinationSse)
+        const getSettingForDownload = vi.fn(() => undefined)
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'secret.txt',
+          absolutePath: filePath,
+          modTimeMillis: 2000,
+          size: 6,
+        }
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            encryptionProvider: { getSettingForUpload, getSettingForDownload },
+          },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: 'encrypted/',
+        }
+
+        await collectEvents(config)
+
+        expect(getSettingForUpload).toHaveBeenCalledWith('encrypted/secret.txt', 6)
+        expect(getSettingForDownload).not.toHaveBeenCalled()
+        expect(mockBucket.upload).toHaveBeenCalledWith(
+          expect.objectContaining({
+            fileName: 'encrypted/secret.txt',
+            serverSideEncryption: destinationSse,
+          }),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('passes SSE-C download keys to B2-to-local downloads', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sse-dl-'))
+      try {
+        const mockBucket = makeMockBucket()
+        const getSettingForUpload = vi.fn(() => undefined)
+        const getSettingForDownload = vi.fn(() => sourceSse)
+        const sourceFile = makeB2SyncPath('secret.txt', 2000, 3)
+        const source = makeMemoryFolder([sourceFile], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            encryptionProvider: { getSettingForUpload, getSettingForDownload },
+          },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        await collectEvents(config)
+
+        expect(getSettingForDownload).toHaveBeenCalledWith(sourceFile.selectedVersion)
+        expect(getSettingForUpload).not.toHaveBeenCalled()
+        expect(mockBucket.download).toHaveBeenCalledWith('secret.txt', {
+          serverSideEncryption: {
+            algorithm: EncryptionAlgorithm.Aes256,
+            customerKey: 'customer-key',
+            customerKeyMd5: 'customer-key-md5',
+          },
+        })
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it('passes source and destination settings to B2-to-B2 copies', async () => {
+      const mockBucket = makeMockBucket()
+      const getSettingForUpload = vi.fn(() => destinationSse)
+      const getSettingForDownload = vi.fn(() => sourceSse)
+      const sourceFile = makeB2SyncPath('copy.txt', 1000, 42)
+      const source = makeMemoryFolder([sourceFile], 'b2')
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'no-delete',
+          encryptionProvider: {
+            getSettingForUpload,
+            getSettingForDownload,
+          } satisfies SyncEncryptionProvider,
+        },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      await collectEvents(config)
+
+      expect(getSettingForUpload).toHaveBeenCalledWith('copy.txt', 42)
+      expect(getSettingForDownload).toHaveBeenCalledWith(sourceFile.selectedVersion)
+      expect(mockBucket.copyFile).toHaveBeenCalledWith({
+        sourceFileId: sourceFile.selectedVersion.fileId,
+        fileName: 'copy.txt',
+        destinationServerSideEncryption: destinationSse,
+        sourceServerSideEncryption: sourceSse,
+      })
     })
   })
 
