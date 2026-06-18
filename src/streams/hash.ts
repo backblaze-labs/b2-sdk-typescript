@@ -87,7 +87,7 @@ export class IncrementalSha1 {
       return this.nodeHash.digest('hex')
     }
 
-    /* v8 ignore next -- non-Node runtime fallback, covered by browser-mode tests */
+    /* v8 ignore next -- non-Node runtime fallback, exercised by browser-mode tests */
     return this.jsHash.digest()
   }
 
@@ -101,7 +101,7 @@ export class IncrementalSha1 {
   }
 }
 
-/* v8 ignore start -- JavaScript fallback path, covered by browser-mode tests */
+/* v8 ignore start -- JavaScript fallback path, exercised by browser-mode tests */
 class JsSha1Hasher {
   private h0 = 0x67452301
   private h1 = 0xefcdab89
