@@ -597,6 +597,48 @@ describe('createParallelDownloadStream', () => {
     await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
   })
 
+  it.each([
+    ['first range lacks a digest and a later range has one', 'bytes=0-29', 'none'],
+    ['later range drops the digest after the first range sets one', 'bytes=30-59', undefined],
+  ])('errors with ChecksumMismatchError when %s', async (_caseName, overrideRange, headerValue) => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const expectedSha1 = await sha1Hex(fileData)
+    const fakeFileId = 'parallel_sha1_presence_changed'
+    const transport = createMockTransport(fileData, fakeFileId, {
+      contentSha1: expectedSha1,
+      onDownload: (_request, rangeHeader) => {
+        if (rangeHeader !== overrideRange) return undefined
+        const range = rangeHeader === 'bytes=0-29' ? { start: 0, end: 29 } : { start: 30, end: 59 }
+        const data = fileData.slice(range.start, range.end + 1)
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': String(data.byteLength),
+          'Content-Range': `bytes ${range.start}-${range.end}/${fileData.byteLength}`,
+          'X-Bz-File-Id': fakeFileId,
+          'X-Bz-File-Name': 'mock-file.bin',
+          'X-Bz-Upload-Timestamp': '1',
+        }
+        if (headerValue !== undefined) headers['X-Bz-Content-Sha1'] = headerValue
+        return byteResponse(206, data, headers)
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 30,
+      concurrency: 2,
+    })
+
+    await expect(readStream(stream)).rejects.toBeInstanceOf(ChecksumMismatchError)
+  })
+
   it('errors with ChecksumMismatchError when assembled ranges fail SHA-1 verification', async () => {
     const fileData = new Uint8Array(100)
     for (let i = 0; i < 100; i++) fileData[i] = i

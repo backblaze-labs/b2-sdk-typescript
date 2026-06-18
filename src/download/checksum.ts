@@ -60,6 +60,28 @@ export function assertDownloadSha1(expectedSha1: string, actualSha1: string): vo
 }
 
 /**
+ * Throws when two range responses disagree about the expected whole-file SHA-1.
+ *
+ * @param expectedSha1 - The first range's verifiable SHA-1, or null when unavailable.
+ * @param actualSha1 - The current range's verifiable SHA-1, or null when unavailable.
+ *
+ * @throws ChecksumMismatchError when the two header states differ.
+ */
+export function assertDownloadSha1HeaderAgreement(
+  expectedSha1: string | null,
+  actualSha1: string | null,
+): void {
+  if (expectedSha1 === actualSha1) return
+  const expected = formatSha1ForMessage(expectedSha1)
+  const actual = formatSha1ForMessage(actualSha1)
+  throw new ChecksumMismatchError({
+    status: 400,
+    code: 'bad_sha1_checksum',
+    message: `Downloaded content SHA-1 header mismatch: expected ${expected}, got ${actual}`,
+  })
+}
+
+/**
  * Wraps a download stream with whole-body SHA-1 verification.
  *
  * If B2 did not provide a verifiable whole-file SHA-1 (for example,
@@ -87,4 +109,8 @@ export function verifyDownloadStream(
     },
   })
   return body.pipeThrough(transform)
+}
+
+function formatSha1ForMessage(sha1: string | null): string {
+  return sha1 === null ? 'missing or unverifiable' : sha1.toLowerCase()
 }

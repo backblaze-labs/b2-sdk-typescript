@@ -10,7 +10,11 @@ import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 import { utf8Decoder } from '../util/text-codec.ts'
-import { assertDownloadSha1, isVerifiableSha1 } from './checksum.ts'
+import {
+  assertDownloadSha1,
+  assertDownloadSha1HeaderAgreement,
+  isVerifiableSha1,
+} from './checksum.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -170,9 +174,10 @@ export function createParallelDownloadStream(
           buffer.delete(nextToEmit)
           nextToEmit++
           const rangeSha1 = normalizeExpectedSha1(result.contentSha1)
-          if (expectedSha1 === undefined) expectedSha1 = rangeSha1
-          if (rangeSha1 !== null && expectedSha1 !== null) {
-            assertDownloadSha1(expectedSha1, rangeSha1)
+          if (expectedSha1 === undefined) {
+            expectedSha1 = rangeSha1
+          } else {
+            assertDownloadSha1HeaderAgreement(expectedSha1, rangeSha1)
           }
           if (expectedSha1 !== null) {
             assembledSha1 ??= new IncrementalSha1()
