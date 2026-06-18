@@ -188,12 +188,22 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
   if (!bucket) throw new Error(`Bucket required for ${context} actions`)
 }
 
-function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
+/** Narrows a setting to SSE-C; non-SSE-C source settings need no key on read. */
+function toSseCEncryptionSetting(
+  setting: EncryptionSetting | undefined,
+): Extract<EncryptionSetting, { readonly mode: 'SSE-C' }> | undefined {
   if (setting?.mode !== 'SSE-C') return undefined
+  return setting
+}
+
+/** Builds a download key from SSE-C settings; non-SSE-C downloads need no key. */
+function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownloadKey | undefined {
+  const sseC = toSseCEncryptionSetting(setting)
+  if (sseC === undefined) return undefined
   return {
-    algorithm: setting.algorithm,
-    customerKey: setting.customerKey,
-    customerKeyMd5: setting.customerKeyMd5,
+    algorithm: sseC.algorithm,
+    customerKey: sseC.customerKey,
+    customerKeyMd5: sseC.customerKeyMd5,
   }
 }
 
@@ -302,8 +312,8 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       return new CopyAction(source.relativePath, source.size, async () => {
         const destinationServerSideEncryption =
           config.options.encryptionProvider?.getSettingForUpload(destPath, source.size)
-        const sourceServerSideEncryption = config.options.encryptionProvider?.getSettingForDownload(
-          source.selectedVersion,
+        const sourceServerSideEncryption = toSseCEncryptionSetting(
+          config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
         await bucket.copyFile({
           sourceFileId: source.selectedVersion.fileId,

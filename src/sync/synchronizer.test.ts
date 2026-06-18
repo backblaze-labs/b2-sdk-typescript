@@ -392,6 +392,7 @@ describe('synchronize', () => {
         const downloadEvents = events.filter((e) => e.type === 'download-done')
         expect(downloadEvents).toHaveLength(1)
         expect(downloadEvents[0]?.path).toBe('remote.txt')
+        expect(mockBucket.download).toHaveBeenCalledWith('remote.txt', {})
       } finally {
         await rm(root, { recursive: true, force: true })
       }
@@ -453,6 +454,51 @@ describe('synchronize', () => {
             serverSideEncryption: destinationSse,
           }),
         )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('omits upload settings when provider returns undefined', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sse-up-none-'))
+      try {
+        const filePath = join(root, 'plain.txt')
+        await writeFile(filePath, 'plain')
+
+        const mockBucket = makeMockBucket()
+        const getSettingForUpload = vi.fn(() => undefined)
+        const getSettingForDownload = vi.fn(() => undefined)
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'plain.txt',
+          absolutePath: filePath,
+          modTimeMillis: 2000,
+          size: 5,
+        }
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            encryptionProvider: { getSettingForUpload, getSettingForDownload },
+          },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: 'encrypted/',
+        }
+
+        await collectEvents(config)
+
+        const uploadOptions = mockBucket.upload.mock.calls[0]?.[0] as
+          | Record<string, unknown>
+          | undefined
+        expect(uploadOptions).toMatchObject({ fileName: 'encrypted/plain.txt' })
+        expect(uploadOptions).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
       }
@@ -601,6 +647,42 @@ describe('synchronize', () => {
       })
       expect(copyOptions).not.toHaveProperty('sourceServerSideEncryption')
     })
+
+    it('omits absent destination and non-SSE-C source settings from B2-to-B2 copies', async () => {
+      const mockBucket = makeMockBucket()
+      const getSettingForUpload = vi.fn(() => undefined)
+      const getSettingForDownload = vi.fn(() => destinationSse)
+      const sourceFile = makeB2SyncPath('b2-managed-copy.txt', 1000, 42)
+      const source = makeMemoryFolder([sourceFile], 'b2')
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'no-delete',
+          encryptionProvider: {
+            getSettingForUpload,
+            getSettingForDownload,
+          } satisfies SyncEncryptionProvider,
+        },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      await collectEvents(config)
+
+      const copyOptions = mockBucket.copyFile.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined
+      expect(copyOptions).toMatchObject({
+        sourceFileId: sourceFile.selectedVersion.fileId,
+        fileName: 'b2-managed-copy.txt',
+      })
+      expect(copyOptions).not.toHaveProperty('destinationServerSideEncryption')
+      expect(copyOptions).not.toHaveProperty('sourceServerSideEncryption')
+    })
   })
 
   describe('compare modes', () => {
@@ -738,6 +820,11 @@ describe('synchronize', () => {
       expect(copyEvents).toHaveLength(1)
       expect(copyEvents[0]?.path).toBe('copied.txt')
       expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
+      const copyOptions = mockBucket.copyFile.mock.calls[0]?.[0] as
+        | Record<string, unknown>
+        | undefined
+      expect(copyOptions).not.toHaveProperty('destinationServerSideEncryption')
+      expect(copyOptions).not.toHaveProperty('sourceServerSideEncryption')
     })
 
     it('copies a paired-but-different file in b2-to-b2 mode', async () => {
@@ -1182,8 +1269,9 @@ describe('synchronize', () => {
         const uploads = events.filter((e) => e.type === 'upload-done')
         expect(uploads).toHaveLength(1)
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
-        const args = mockBucket.upload.mock.calls[0]?.[0] as { fileName: string }
-        expect(args.fileName).toBe('pfx/hello.txt')
+        const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+        expect(args).toMatchObject({ fileName: 'pfx/hello.txt' })
+        expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
       }

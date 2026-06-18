@@ -214,14 +214,21 @@ describe('copyLargeFile', () => {
       serverSideEncryption: destinationSse,
       destinationServerSideEncryption: preferredDestination,
     })
+    await bucket.copyFile({
+      sourceFileId: uploaded.fileId,
+      fileName: 'plain-copy.txt',
+    })
 
     const copyFileBodies = captured.filter((c) => c.endpoint === 'b2_copy_file').map((c) => c.body)
-    expect(copyFileBodies).toHaveLength(3)
+    expect(copyFileBodies).toHaveLength(4)
     expect(copyFileBodies[0]?.['destinationServerSideEncryption']).toEqual(destinationSse)
     expect(copyFileBodies[0]?.['sourceServerSideEncryption']).toEqual(sourceSse)
     expect(copyFileBodies[0]?.['serverSideEncryption']).toBeUndefined()
     expect(copyFileBodies[1]?.['destinationServerSideEncryption']).toEqual(destinationSse)
     expect(copyFileBodies[1]?.['serverSideEncryption']).toBeUndefined()
     expect(copyFileBodies[2]?.['destinationServerSideEncryption']).toEqual(preferredDestination)
+    expect(copyFileBodies[3]?.['destinationServerSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[3]?.['sourceServerSideEncryption']).toBeUndefined()
+    expect(copyFileBodies[3]?.['serverSideEncryption']).toBeUndefined()
   })
 })

@@ -746,7 +746,7 @@ export class Bucket {
      * @deprecated Use `destinationServerSideEncryption` for consistency with multipart copy.
      */
     serverSideEncryption?: EncryptionSetting
-    /** Server-side encryption for the destination file. */
+    /** Server-side encryption for the destination file. Preferred over `serverSideEncryption`. */
     destinationServerSideEncryption?: EncryptionSetting
     /** SSE-C settings for the source if it was uploaded with SSE-C. */
     sourceServerSideEncryption?: EncryptionSetting
