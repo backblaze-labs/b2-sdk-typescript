@@ -592,6 +592,7 @@ async function uploadPartsSequentially(
     completed = true
   } finally {
     if (!completed) {
+      /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
       await reader.cancel().catch(() => {})
     }
     // Releasing the lock lets the underlying stream propagate close / error

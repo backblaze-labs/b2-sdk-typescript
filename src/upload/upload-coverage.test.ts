@@ -3842,6 +3842,33 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-extra.bin')).toBeUndefined()
   })
 
+  it('rejects extra forward-only bytes after an exact planned boundary', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-boundary',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+        controller.enqueue(deterministicBytes(partSize).reverse())
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-extra-boundary.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/emitted more bytes than advertised size/)
+  })
+
   it('rejects a streaming-source upload when resume is requested', async () => {
     // StreamSource has no random access, so resume can't replay parts.
     // The engine bails early with a clear message and cancels the

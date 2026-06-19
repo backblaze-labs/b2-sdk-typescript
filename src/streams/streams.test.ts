@@ -459,6 +459,30 @@ describe('toContentSource', () => {
     expect(returned).toBe(true)
   })
 
+  it('returns async iterators when they yield invalid chunks', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            return { done: false, value: 'bad' as unknown as Uint8Array }
+          },
+          async return(): Promise<IteratorResult<Uint8Array>> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'Async iterable content sources must yield Uint8Array chunks.',
+    )
+    expect(returned).toBe(true)
+  })
+
   it('throws when a ReadableStream is provided without a size', () => {
     const rs = new ReadableStream<Uint8Array>({
       start(c) {
@@ -466,6 +490,16 @@ describe('toContentSource', () => {
       },
     })
     expect(() => toContentSource(rs)).toThrow(
+      'size is required when using a forward-only content source as input.',
+    )
+  })
+
+  it('throws when an async iterable is provided without a size', () => {
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array([1])
+    }
+
+    expect(() => toContentSource(chunks())).toThrow(
       'size is required when using a forward-only content source as input.',
     )
   })

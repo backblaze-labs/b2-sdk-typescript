@@ -30,7 +30,7 @@ interface FileHandleLike {
 interface NodeFsSync {
   readonly constants: {
     readonly O_RDONLY: number
-    readonly O_NOFOLLOW: number
+    readonly O_NOFOLLOW?: number
   }
   lstatSync(path: FileSourcePath): FileStatsLike
 }
@@ -65,14 +65,13 @@ function isNodeFsSync(value: unknown): value is NodeFsSync {
     typeof constants === 'object' &&
     constants !== null &&
     typeof (constants as Record<string, unknown>)['O_RDONLY'] === 'number' &&
-    typeof (constants as Record<string, unknown>)['O_NOFOLLOW'] === 'number' &&
     typeof candidate['lstatSync'] === 'function'
   )
 }
 
 function fileOpenFlags(): number {
   const { constants } = getNodeFsSync()
-  return constants.O_RDONLY | constants.O_NOFOLLOW
+  return constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 }
 
 function normalizeSliceOffset(value: number, size: number): number {
@@ -121,12 +120,14 @@ function assertSameIdentity(
   }
 }
 
+/* v8 ignore start -- Requires a file to pass identity checks and still EOF mid-range. */
 function rangeEndedEarlyError(path: FileSourcePath, offset: number, size: number): Error {
   const end = offset + size
   return new Error(
     `FileSource: ${formatFilePath(path)} ended before byte range [${offset}, ${end}) was fully read.`,
   )
 }
+/* v8 ignore stop */
 
 async function openValidatedFile(
   path: FileSourcePath,
@@ -149,6 +150,7 @@ async function openValidatedFile(
     assertSameIdentity(path, identity, stats, 'before read')
     return file
   } catch (err) {
+    /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
     await file.close().catch(() => {})
     throw err
   }
@@ -175,6 +177,7 @@ async function readFileRange(
     assertSameIdentity(path, identity, stats, 'while being read')
     return data
   } finally {
+    /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
     await file.close().catch(() => {})
   }
 }
@@ -196,6 +199,7 @@ function asyncIterableToReadableStream(
         }
         controller.enqueue(value)
       } catch (err) {
+        /* v8 ignore next -- Iterator-return failure must not mask the pull error. */
         await iterator.return?.().catch(() => {})
         throw err
       }

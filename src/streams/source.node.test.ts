@@ -74,6 +74,15 @@ describe('FileSource', () => {
     expect(decoder.decode(bytes)).toBe('body')
   })
 
+  it('streams an empty file', async () => {
+    const path = join(tmpDir, 'empty.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+
+    expect(await readStream(source.stream())).toEqual(new Uint8Array())
+  })
+
   it('rejects non-regular files', () => {
     expect(() => new FileSource(tmpDir)).toThrow(/not a regular file/)
   })
