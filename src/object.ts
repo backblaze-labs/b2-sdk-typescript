@@ -168,7 +168,12 @@ export class B2Object {
     }
 
     // Small-file path doesn't accept resume options.
-    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
+    const {
+      resume: _resume,
+      resumeFileId: _resumeFileId,
+      onResumeCandidateRejected: _onResumeCandidateRejected,
+      ...smallOptions
+    } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.bucket.id,

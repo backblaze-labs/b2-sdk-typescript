@@ -791,6 +791,57 @@ describe('findResumeCandidate', () => {
     expect(listCalls[0]).not.toHaveProperty('namePrefix')
   })
 
+  it('reports the requested name when an explicit resumeFileId is rejected', async () => {
+    const rejected: Array<{ fileId?: LargeFileId; fileName: string; reason: string }> = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'foreign.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called for a metadata rejection')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'wanted.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        resumeFileId: 'target-id' as LargeFileId,
+        onCandidateRejected: (event) => rejected.push(event),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual([
+      {
+        fileId: 'target-id' as LargeFileId,
+        fileName: 'wanted.bin',
+        reason: 'file-name-mismatch',
+      },
+    ])
+  })
+
   it('honors an abort signal before discovery list calls', async () => {
     const controller = new AbortController()
     controller.abort()

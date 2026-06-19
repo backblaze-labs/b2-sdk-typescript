@@ -190,12 +190,12 @@ export async function findResumeCandidate(
     const rejection =
       criteria !== undefined ? candidateMetadataRejectReason(match.file, fileName, criteria) : null
     if (rejection !== null) {
-      notifyCandidateRejected(criteria, match.file, rejection)
+      notifyCandidateRejected(criteria, match.file, fileName, rejection)
       continue
     }
 
     if (partCandidatesInspected >= maxPartCandidates) {
-      notifyCandidateRejected(criteria, match.file, 'candidate-limit')
+      notifyCandidateRejected(criteria, match.file, fileName, 'candidate-limit')
       break
     }
 
@@ -203,7 +203,7 @@ export async function findResumeCandidate(
     const fileId = largeFileIdOf(match.file.fileId)
     const uploadedParts = await collectPartInfo(raw, accountInfo, fileId, criteria?.signal)
     if (criteria !== undefined && !uploadedPartsMatchPlan(uploadedParts, criteria.parts)) {
-      notifyCandidateRejected(criteria, match.file, 'part-length-mismatch')
+      notifyCandidateRejected(criteria, match.file, fileName, 'part-length-mismatch')
       continue
     }
 
@@ -323,11 +323,12 @@ function candidateMetadataRejectReason(
 function notifyCandidateRejected(
   criteria: ResumeCandidateCriteria | undefined,
   candidate: UnfinishedLargeFile,
+  requestedFileName: string,
   reason: ResumeCandidateRejectedReason,
 ): void {
   criteria?.onCandidateRejected?.({
     fileId: largeFileIdOf(candidate.fileId),
-    fileName: candidate.fileName,
+    fileName: requestedFileName,
     reason,
   })
 }

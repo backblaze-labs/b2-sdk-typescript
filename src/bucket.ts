@@ -216,10 +216,14 @@ export class Bucket {
       })
     }
 
-    // Strip resume / resumeFileId from the small-file path: the
-    // signature there doesn't accept them, and they're meaningless for
-    // single-request uploads.
-    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
+    // Strip resume-only options from the small-file path: the signature
+    // there doesn't accept them, and they're meaningless for single-request uploads.
+    const {
+      resume: _resume,
+      resumeFileId: _resumeFileId,
+      onResumeCandidateRejected: _onResumeCandidateRejected,
+      ...smallOptions
+    } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
