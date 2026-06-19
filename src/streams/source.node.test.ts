@@ -1,4 +1,13 @@
-import { mkdtemp, readFile, rename, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import {
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  truncate,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -75,6 +84,8 @@ describe('FileSource', () => {
 
       const source = await FileSource.fromPath(filePath)
       await writeFile(filePath, new TextEncoder().encode('evil'))
+      const changedTime = new Date(Date.now() + 10_000)
+      await utimes(filePath, changedTime, changedTime)
 
       await expect(source.toArrayBuffer()).rejects.toThrow(
         `FileSource file changed after validation: ${filePath}`,

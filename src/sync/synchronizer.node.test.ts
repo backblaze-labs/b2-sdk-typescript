@@ -184,11 +184,12 @@ describe('synchronize download safety', () => {
 
       const bucket = {
         download: vi.fn().mockImplementation(() => {
-          setTimeout(() => controller.abort(), 0)
           return Promise.resolve({
             body: new ReadableStream<Uint8Array>({
-              pull() {
-                return new Promise<void>(() => {})
+              start(streamController) {
+                streamController.enqueue(new TextEncoder().encode('partial'))
+                controller.abort()
+                streamController.close()
               },
             }),
           })
