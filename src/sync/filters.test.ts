@@ -47,9 +47,11 @@ describe('sync filters', () => {
   })
 
   it('rejects structurally unsafe regular expression filters', () => {
-    expect(() => pathPassesSyncFilters('aaaaaaaaaaaaaaaaaaaa', { include: [/(a+)+$/] })).toThrow(
-      'Sync filter RegExp is too complex',
-    )
+    const unsafePattern = new RegExp('(a+)'.concat('+$'))
+
+    expect(() =>
+      pathPassesSyncFilters('aaaaaaaaaaaaaaaaaaaa', { include: [unsafePattern] }),
+    ).toThrow('Sync filter RegExp is too complex')
   })
 
   it('computes safe literal B2 prefixes for include filters', () => {

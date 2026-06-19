@@ -27,9 +27,10 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  * Glob strings use a small SDK-defined dialect against folder-relative paths with forward
  * slashes: `*` and `?` match within one path segment, and a path segment that is exactly `**`
  * matches across directory boundaries. Character classes, brace expansion, extglobs, and
- * backslash escaping are not supported. Slash-less globs match any path segment at any depth,
- * so `readme.md` matches both `readme.md` and `docs/readme.md`, and `node_modules` matches
- * every file under a `node_modules` directory. Exclude filters win over include filters.
+ * backslash escaping are not supported. Slash-less globs use basename-style matching at any
+ * directory depth, so `*.tmp` matches `nested/file.tmp` and `readme.md` matches both `readme.md`
+ * and `docs/readme.md`. They also match ancestor directory names, so `node_modules` matches every
+ * file under a `node_modules` directory. Exclude filters win over include filters.
  *
  * Regular expressions are matched against the full relative path. Global and sticky flags are
  * ignored so matching does not mutate `lastIndex`; regexes that look structurally unsafe for

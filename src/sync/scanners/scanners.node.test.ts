@@ -454,6 +454,23 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
+  it('does not yield leading slashes when prefix omits its trailing slash', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-normalize-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({
+      fileName: 'backup/docs/readme.md',
+      source: new BufferSource(enc.encode('readme')),
+    })
+
+    const folder = new B2Folder(bucket, 'backup')
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+  })
+
   it('pushes down safe include prefixes while filtering listed names', async () => {
     function makeFileVersion(name: string, ts: number): FileVersion {
       return {

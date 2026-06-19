@@ -63,8 +63,7 @@ export class B2Folder implements SyncFolder {
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
         if (this.prefix !== '' && !fv.fileName.startsWith(this.prefix)) continue
-        const relativePath =
-          this.prefix !== '' ? fv.fileName.slice(this.prefix.length) : fv.fileName
+        const relativePath = this.toRelativePath(fv.fileName)
         if (!pathPassesSyncFilters(relativePath, options)) continue
 
         const existing = grouped.get(fv.fileName)
@@ -88,7 +87,7 @@ export class B2Folder implements SyncFolder {
       const selected = versions[0]
       if (!selected || selected.action === FileAction.Hide) continue
 
-      const relativePath = this.prefix !== '' ? fileName.slice(this.prefix.length) : fileName
+      const relativePath = this.toRelativePath(fileName)
 
       const contentSha1 = selectB2ComparableSha1(selected)
       yield {
@@ -101,6 +100,16 @@ export class B2Folder implements SyncFolder {
         allVersions: versions,
       }
     }
+  }
+
+  private toRelativePath(fileName: string): string {
+    if (this.prefix === '') return fileName
+
+    let relativePath = fileName.slice(this.prefix.length)
+    while (relativePath.startsWith('/')) {
+      relativePath = relativePath.slice(1)
+    }
+    return relativePath
   }
 }
 
