@@ -9,12 +9,9 @@ import type { FileId } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
+import { normalizeVerifiableSha1 } from '../util/sha1.ts'
 import { utf8Decoder } from '../util/text-codec.ts'
-import {
-  assertDownloadSha1,
-  assertDownloadSha1HeaderAgreement,
-  isVerifiableSha1,
-} from './checksum.ts'
+import { assertDownloadSha1, assertDownloadSha1HeaderAgreement } from './checksum.ts'
 
 /** Options for downloading a file using concurrent byte-range requests. */
 export interface ParallelDownloadOptions {
@@ -168,7 +165,7 @@ export function createParallelDownloadStream(
         if (result !== undefined) {
           buffer.delete(nextToEmit)
           nextToEmit++
-          const rangeSha1 = normalizeExpectedSha1(result.contentSha1)
+          const rangeSha1 = normalizeVerifiableSha1(result.contentSha1)
           if (expectedSha1 === undefined) {
             expectedSha1 = rangeSha1
           } else {
@@ -274,10 +271,6 @@ async function fetchRangeWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
-}
-
-function normalizeExpectedSha1(contentSha1: string | null): string | null {
-  return isVerifiableSha1(contentSha1) ? contentSha1.toLowerCase() : null
 }
 
 class RangeValidationError extends Error {

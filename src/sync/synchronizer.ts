@@ -16,7 +16,7 @@ import {
   UploadAction,
 } from './actions/index.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
-import { type ComparePreparationResult, preparePairForCompare } from './policies/compare.ts'
+import { preparePairsForCompare, readyComparePair } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type {
@@ -112,17 +112,37 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const results: SyncEvent[] = []
   const errors: Error[] = []
 
-  for await (const pair of zipFolders(source, dest)) {
-    if (options.signal?.aborted) return
-    const prepared =
-      options.compareMode === 'sha1'
-        ? await preparePairForCompare(pair, options.compareMode, {
-            ...(options.signal !== undefined ? { signal: options.signal } : {}),
-          })
-        : readyComparePair(pair)
-    if (prepared.aborted || options.signal?.aborted) return
+  if (options.compareMode === 'sha1') {
+    const pairs: SyncPair[] = []
+    for await (const pair of zipFolders(source, dest)) {
+      if (options.signal?.aborted) return
+      pairs.push(pair)
+    }
 
-    yield {
+    const preparedPairs = await preparePairsForCompare(pairs, options.compareMode, {
+      concurrency,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options.sha1ReadTimeoutMillis !== undefined
+        ? { sha1ReadTimeoutMillis: options.sha1ReadTimeoutMillis }
+        : {}),
+    })
+
+    for (const { originalPair, prepared } of preparedPairs) {
+      if (prepared.aborted || options.signal?.aborted) return
+      yield processPreparedPair(originalPair, prepared)
+    }
+  } else {
+    for await (const pair of zipFolders(source, dest)) {
+      if (options.signal?.aborted) return
+      yield processPreparedPair(pair, readyComparePair(pair))
+    }
+  }
+
+  function processPreparedPair(
+    pair: SyncPair,
+    prepared: ReturnType<typeof readyComparePair>,
+  ): SyncEvent {
+    const event: SyncEvent = {
       type: 'compare',
       path: (pair[0] ?? pair[1])?.relativePath ?? '',
       size: prepared.bytesHashed,
@@ -130,7 +150,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
     results.push(...prepared.events)
     errors.push(...prepared.errors)
-    if (prepared.skipActionGeneration) continue
+    if (prepared.skipActionGeneration) return event
 
     for (const action of generateActions(
       prepared.pair,
@@ -144,6 +164,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     )) {
       actions.push(action)
     }
+
+    return event
   }
 
   const sem = new Semaphore(concurrency)
@@ -181,17 +203,6 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       size: 0,
       message: `${errors.length} sync error(s) occurred`,
     }
-  }
-}
-
-function readyComparePair(pair: SyncPair): ComparePreparationResult {
-  return {
-    pair,
-    events: [],
-    errors: [],
-    bytesHashed: 0,
-    skipActionGeneration: false,
-    aborted: false,
   }
 }
 

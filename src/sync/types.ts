@@ -7,9 +7,9 @@ import type { FileVersion } from '../types/file.ts'
  * The `sha1` mode compares 40-character hexadecimal SHA-1 digests as a practical drift
  * detector. Digest case is normalized before comparison. Missing, null, unavailable, or
  * non-verifiable metadata cannot prove equality: the high-level synchronizer either transfers
- * conservatively for untrusted metadata or reports a per-file error and skips action generation
- * when a B2 file has no server-verifiable digest. This is not a cryptographic integrity or
- * tamper-proofing guarantee, because SHA-1 collisions are possible.
+ * conservatively for untrusted metadata or skips action generation with a surfaced event when a
+ * B2 file has no comparable digest. This is not a cryptographic integrity or tamper-proofing
+ * guarantee, because SHA-1 collisions are possible.
  */
 export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
@@ -31,7 +31,7 @@ export interface SyncPath {
    * SHA-1 checksum state for compare modes that need content hashes.
    *
    * - `undefined`: not computed yet; the synchronizer may hash local files before comparing.
-   * - `null`: known to be unavailable; `sha1` sync reports a per-file error and skips the pair.
+   * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
    * - 40-character hex string: known verifiable digest.
    * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
    *   consumers must not treat it as proof that bytes match, and `sha1` mode treats it as
@@ -159,6 +159,8 @@ export interface SyncOptions {
   readonly compareThreshold?: number
   /** Signal to abort the sync operation, including in-progress local SHA-1 reads. */
   readonly signal?: AbortSignal
+  /** Optional per-file timeout in milliseconds for local SHA-1 reads in `sha1` mode. */
+  readonly sha1ReadTimeoutMillis?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
 }

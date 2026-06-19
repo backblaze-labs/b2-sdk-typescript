@@ -10,9 +10,9 @@
  *   SYNC_CONCURRENCY=N              (default: 4)
  *   SYNC_DRY_RUN=true|false         (default: false)
  *
- * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee. It runs
- * local hashing as a serial comparison pass before transfers; SYNC_CONCURRENCY applies to
- * transfers, not hashing. Dry-runs still hash matching-size local files.
+ * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee. It hashes
+ * matching-size local files before transfers; SYNC_CONCURRENCY bounds both hashing and transfers,
+ * but the two phases do not overlap. Dry-runs still hash matching-size local files.
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'
@@ -45,7 +45,7 @@ async function main() {
     process.exit(1)
   }
 
-  const compareMode = (process.env.SYNC_MODE ?? 'modtime') as CompareMode
+  const compareMode = parseCompareMode(process.env.SYNC_MODE ?? 'modtime')
   const keepMode: KeepMode = process.env.SYNC_DELETE === 'true' ? 'delete' : 'no-delete'
   const concurrency = Number.parseInt(process.env.SYNC_CONCURRENCY ?? '4', 10)
   const dryRun = process.env.SYNC_DRY_RUN === 'true'
@@ -107,3 +107,15 @@ main().catch((err) => {
   console.error(err)
   process.exit(1)
 })
+
+function parseCompareMode(value: string): CompareMode {
+  switch (value) {
+    case 'modtime':
+    case 'size':
+    case 'sha1':
+    case 'none':
+      return value
+    default:
+      throw new Error(`Unsupported SYNC_MODE "${value}". Use modtime, size, sha1, or none.`)
+  }
+}

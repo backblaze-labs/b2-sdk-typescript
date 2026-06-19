@@ -12,8 +12,6 @@ import { ChecksumMismatchError } from '../errors/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { isVerifiableSha1 } from '../util/sha1.ts'
 
-export { isVerifiableSha1 }
-
 /**
  * Builds the typed error used when downloaded bytes fail SHA-1 verification.
  *

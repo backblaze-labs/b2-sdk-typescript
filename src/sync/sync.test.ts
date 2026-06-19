@@ -7,6 +7,7 @@ import { zipFolders } from './pairing.ts'
 import {
   filesAreDifferent,
   preparePairForCompare,
+  preparePairsForCompare,
   selectB2ComparableSha1,
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
@@ -167,7 +168,7 @@ describe('filesAreDifferent', () => {
     expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
   })
 
-  it('honors explicit null contentSha1 over B2 selectedVersion fallback', () => {
+  it('treats a B2 path with explicit null contentSha1 as unavailable', () => {
     const sha1 = 'a'.repeat(40)
     const source = makeSyncPath('file.txt', 1000, 100, sha1)
     const dest = makeB2SyncPath('file.txt', 1000, 100, sha1, {}, null)
@@ -178,15 +179,19 @@ describe('filesAreDifferent', () => {
     const different = makeSyncPath('file.txt', 9999, 999)
     expect(filesAreDifferent(a, different, 'none')).toBe(false)
   })
+
+  it('throws for an unsupported compare mode', () => {
+    expect(() => filesAreDifferent(a, b, 'sha256' as never)).toThrow('Unsupported compare mode')
+  })
 })
 
 describe('selectB2ComparableSha1', () => {
-  it('does not trust fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
+  it('uses fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
     const sha1 = 'a'.repeat(40)
     const file = makeB2SyncPath('large.bin', 1000, 100, null, {
       large_file_sha1: sha1.toUpperCase(),
     })
-    expect(selectB2ComparableSha1(file.selectedVersion)).toBeNull()
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(sha1)
   })
 
   it('preserves unverified sentinels as untrusted metadata', () => {
@@ -278,6 +283,45 @@ describe('preparePairForCompare', () => {
     expect(result.aborted).toBe(true)
     expect(result.events).toEqual([])
     expect(result.pair[1]?.contentSha1).toBe(sha1)
+  })
+})
+
+describe('preparePairsForCompare', () => {
+  it('prepares sha1 pairs with bounded concurrency', async () => {
+    const sha1 = 'a'.repeat(40)
+    const pairs = [1, 2, 3].map((n): [LocalSyncPath, B2SyncPath] => [
+      makeLocalSyncPath(`file-${n}.txt`, 1000, 100),
+      makeB2SyncPath(`file-${n}.txt`, 1000, 100, 'b'.repeat(40)),
+    ])
+    let active = 0
+    let maxActive = 0
+    const releaseQueue: Array<() => void> = []
+
+    const promise = preparePairsForCompare(pairs, 'sha1', {
+      concurrency: 2,
+      readLocalSha1: async () => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise<void>((resolve) => releaseQueue.push(resolve))
+        active -= 1
+        return sha1
+      },
+    })
+
+    while (releaseQueue.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(active).toBe(2)
+    releaseQueue.shift()?.()
+
+    while (releaseQueue.length < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    for (const release of releaseQueue.splice(0)) release()
+
+    const results = await promise
+    expect(results).toHaveLength(3)
+    expect(maxActive).toBe(2)
   })
 })
 
