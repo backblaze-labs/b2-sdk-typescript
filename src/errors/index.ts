@@ -9,11 +9,11 @@
  * Convention: `B2Error` and its subclasses represent failures returned by
  * the B2 API. Programming errors and SDK preconditions (e.g. "not yet
  * authorized", "stream consumed twice", "called before init") use the
- * native `Error` constructor instead. Two outliers extend `Error` directly
+ * native `Error` constructor instead. Three outliers extend `Error` directly
  * rather than `B2Error` because they originate inside the SDK before any
  * B2 request is made: {@link B2InsufficientCapabilityError} (raised by
- * `B2Client.hasCapabilities`) and {@link B2SsrfError} (raised by the
- * default `UrlGuard` before `fetch`).
+ * `B2Client.hasCapabilities`), {@link B2SsrfError} (raised by the
+ * default `UrlGuard` before `fetch`), and {@link NetworkError}.
  *
  * @packageDocumentation
  */
@@ -520,6 +520,19 @@ export class B2SsrfError extends Error {
   ) {
     super(message)
     this.name = 'B2SsrfError'
+  }
+}
+
+/** Thrown when a configured auth realm cannot safely be used for authorization. */
+export class B2RealmConfigurationError extends B2Error {
+  /**
+   * Creates a new B2RealmConfigurationError instance.
+   *
+   * @param message - Human-readable description of the invalid realm setting.
+   */
+  constructor(message: string) {
+    super({ status: 400, code: 'bad_request', message })
+    this.name = 'B2RealmConfigurationError'
   }
 }
 

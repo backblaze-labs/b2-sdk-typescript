@@ -12,8 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`realm: 'staging'` now resolves to the staging authorize endpoint.** It previously
   aliased production (`https://api.backblazeb2.com`), so callers who explicitly
   configured staging silently authorized against production. Existing
-  `FileAccountInfo` auth caches created with the old staging alias should be
-  cleared on upgrade so a stale production authorization response is not reused.
+  `FileAccountInfo` auth caches created with the old staging alias are ignored
+  once bound to the new staging realm so a stale production authorization
+  response is not reused. During a rolling deploy, old and new code resolve
+  `realm: 'staging'` to different hosts; avoid staging-realm traffic during the
+  upgrade window if that split matters for the deployment.
+- **Realm URLs are validated before authorization sends credentials.** Custom
+  realm values must be absolute HTTPS URLs, except loopback HTTP URLs used for
+  local testing. Non-URL strings, unsupported schemes, malformed URLs, and
+  non-loopback plaintext HTTP now throw `B2RealmConfigurationError` before the
+  application key is sent. Accepted custom HTTPS hosts are trusted with the
+  application key, so do not derive `realm` from untrusted input. Loopback HTTP
+  sends application-key credentials unencrypted and is intended only for local
+  simulator or proxy testing.
 - **Downloads now verify whole-file SHA-1 checksums when B2 provides a verifiable digest.** Full-body GET downloads wrap the response stream and throw `ChecksumMismatchError` if the bytes do not match `X-Bz-Content-Sha1`; parallel ranged downloads verify the assembled stream in order and reject cross-range header disagreements. HEAD requests, partial range GETs, and files whose download SHA-1 is unavailable (`none` / `null`) continue to skip verification because no matching whole-body digest exists. Closes #25.
 - **`B2Simulator` `b2_copy_file` now honors `metadataDirective`, `contentType`, `fileInfo`, and `range`.** A `COPY` directive (default) preserves the source's content type and file info; `REPLACE` applies the request's (and is rejected with `400 bad_request` when `contentType` is missing, matching real B2, with the supplied `fileInfo` validated). A byte `range` copies only the requested slice and recomputes its SHA-1, rejecting an unsatisfiable range with `416`. Previously the simulator ignored all four and always did a whole-file COPY.
 - **Retry transient 5xx responses.** `internal_error` / HTTP 500 (and 502 Bad Gateway, 504 Gateway Timeout) are now classified as retryable, so `RetryTransport` retries them with backoff alongside 408/429/503. Previously a transient 500 surfaced as an immediate, non-retryable failure. 501 Not Implemented remains non-retryable (deterministic). Upload endpoints (`b2_upload_file` / `b2_upload_part`) do not retry pod failures in place: they are URL-pinned, so retryable pod failures now bubble to the upload layer for fresh-URL recovery. HTTP 429 upload throttling still backs off on the same upload URL to avoid amplifying account-level rate limits with extra URL fetches.

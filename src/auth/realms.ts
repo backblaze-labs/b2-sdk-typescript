@@ -1,13 +1,17 @@
+import { B2RealmConfigurationError } from '../errors/index.ts'
+
 /**
  * Map of verified realm names to their `b2_authorize_account` base API URLs.
  * The staging URL aligns with Backblaze's official Python SDK realm map.
  * Region-specific API URLs are discovered from the authorize response, so
  * unverified regional aliases are intentionally omitted.
  */
-export const REALM_URLS: Record<string, string> = {
+export const REALM_URLS = {
   production: 'https://api.backblazeb2.com',
   staging: 'https://api.backblaze.net',
-}
+} as const satisfies Record<string, string>
+
+export type RealmName = keyof typeof REALM_URLS
 
 const HTTP_REALM_URL_WITH_HOST = /^https?:\/\/[^/?#]/i
 
@@ -36,29 +40,37 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
     (url.protocol === 'https:' || url.protocol === 'http:') &&
     (!HTTP_REALM_URL_WITH_HOST.test(realmUrl) || url.hostname === '')
   ) {
-    throw new Error(
+    throw new B2RealmConfigurationError(
       `realm URL must be an absolute HTTP(S) URL with a hostname for authorization: ${realmUrl}`,
     )
   }
   if (url.protocol === 'https:') return
   if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) return
   if (url.protocol === 'http:') {
-    throw new Error(`refusing to send credentials over plaintext HTTP realm: ${realmUrl}`)
+    throw new B2RealmConfigurationError(
+      `refusing to send credentials over plaintext HTTP realm: ${realmUrl}`,
+    )
   }
-  throw new Error(`realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrl}`)
+  throw new B2RealmConfigurationError(
+    `realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrl}`,
+  )
 }
 
 /**
- * Reject realm URLs that would send application-key credentials over plaintext
- * to a non-loopback host.
+ * Validate a realm URL before it is used for credential-bearing authorization.
+ * Any accepted custom HTTPS host receives the application key during authorize;
+ * do not derive custom realm URLs from untrusted input.
  *
- * @param realmUrl - The resolved realm URL or custom realm string to validate.
+ * @param realmUrl - The resolved realm URL to validate.
  *
- * @throws Error when the realm URL uses an unsupported scheme or non-loopback plaintext HTTP.
+ * @throws B2RealmConfigurationError when the realm URL is not absolute, uses an
+ * unsupported scheme, or uses non-loopback plaintext HTTP.
  */
 export function assertSecureRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
-  if (url === null) return
+  if (url === null) {
+    throw new B2RealmConfigurationError(`realm URL must be absolute for authorization: ${realmUrl}`)
+  }
 
   assertAuthorizableRealmScheme(realmUrl, url)
 }
@@ -68,31 +80,32 @@ export function assertSecureRealmUrl(realmUrl: string): void {
  *
  * @param realmUrl - The resolved realm URL to validate.
  *
- * @throws Error when the realm URL is not absolute, uses an unsupported scheme,
- * or uses non-loopback plaintext HTTP.
+ * @throws B2RealmConfigurationError when the realm URL is not absolute, uses an
+ * unsupported scheme, or uses non-loopback plaintext HTTP.
  */
 export function assertAuthorizableRealmUrl(realmUrl: string): void {
-  const url = parseAbsoluteRealmUrl(realmUrl)
-  if (url === null) {
-    throw new Error(`realm URL must be absolute for authorization: ${realmUrl}`)
-  }
+  assertSecureRealmUrl(realmUrl)
+}
 
-  assertAuthorizableRealmScheme(realmUrl, url)
+function isRealmName(realm: string): realm is RealmName {
+  return Object.hasOwn(REALM_URLS, realm)
 }
 
 /**
  * Resolve a realm name to its base API URL.
- * If the realm is not a known name, it is returned as-is (assumed to be a URL).
+ * If the realm is not a known name, it must be a direct base URL. Accepted
+ * custom HTTPS hosts receive the application key during authorize; do not
+ * derive custom realm URLs from untrusted input.
  *
  * @param realm - The realm name or direct URL to resolve.
  *
  * @returns The base API URL for the given realm.
  *
- * @throws Error when the resolved realm URL uses an unsupported scheme or
- * non-loopback plaintext HTTP.
+ * @throws B2RealmConfigurationError when the resolved realm URL is not
+ * absolute, uses an unsupported scheme, or uses non-loopback plaintext HTTP.
  */
 export function getRealmUrl(realm: string): string {
-  const url = REALM_URLS[realm] ?? realm
+  const url = isRealmName(realm) ? REALM_URLS[realm] : realm
   assertSecureRealmUrl(url)
   return url
 }

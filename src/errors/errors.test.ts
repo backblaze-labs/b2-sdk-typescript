@@ -9,6 +9,7 @@ import {
 import {
   AccessDeniedError,
   B2Error,
+  B2RealmConfigurationError,
   BadAuthTokenError,
   BadBucketIdError,
   BadJsonError,
@@ -485,6 +486,25 @@ describe.each(newSubclassCases)('$label', ({ label, ctor, response, retryable })
 
     expect(err.requestId).toBe('req-new-subclass')
     expect(err.retryAfter).toBe(9)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B2RealmConfigurationError
+// ---------------------------------------------------------------------------
+
+describe('B2RealmConfigurationError', () => {
+  it('extends B2Error', () => {
+    expect(new B2RealmConfigurationError('bad realm')).toBeInstanceOf(B2Error)
+  })
+
+  it('sets config-error metadata', () => {
+    const err = new B2RealmConfigurationError('bad realm')
+    expect(err.name).toBe('B2RealmConfigurationError')
+    expect(err.status).toBe(400)
+    expect(err.code).toBe('bad_request')
+    expect(err.message).toBe('bad realm')
+    expect(err.retryable).toBe(false)
   })
 })
 

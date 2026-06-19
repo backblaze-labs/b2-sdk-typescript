@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
-import type { HttpTransport } from './http/transport.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
-import { daysFromNow, makeClient, readStream } from './test-utils/index.ts'
+import { daysFromNow, makeClient, readStream, recordingTransport } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
@@ -165,13 +164,7 @@ describe('B2Client with simulator', () => {
 
 describe('B2Client SSRF guard', () => {
   it('rejects non-loopback plaintext realms before transport sees credentials', () => {
-    const seenUrls: string[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenUrls.push(request.url)
-        throw new Error('transport should not be called')
-      },
-    }
+    const { seenUrls, transport } = recordingTransport()
 
     expect(
       () =>

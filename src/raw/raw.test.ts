@@ -1,32 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { HttpTransport } from '../http/transport.ts'
+import { B2RealmConfigurationError } from '../errors/index.ts'
+import { recordingTransport } from '../test-utils/index.ts'
 import { RawClient } from './index.ts'
 
 describe('RawClient authorizeAccount', () => {
   it('rejects non-absolute realm URLs before sending credentials', async () => {
-    const seenUrls: string[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenUrls.push(request.url)
-        throw new Error('transport should not be called')
-      },
-    }
+    const { seenUrls, transport } = recordingTransport()
     const raw = new RawClient({ transport })
 
     await expect(raw.authorizeAccount('key-id', 'key-secret', 'sandbox')).rejects.toThrow(
-      'realm URL must be absolute for authorization',
+      B2RealmConfigurationError,
     )
     expect(seenUrls).toEqual([])
   })
 
   it('rejects unsupported realm URL schemes before sending credentials', async () => {
-    const seenUrls: string[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenUrls.push(request.url)
-        throw new Error('transport should not be called')
-      },
-    }
+    const { seenUrls, transport } = recordingTransport()
     const raw = new RawClient({ transport })
 
     await expect(
@@ -39,13 +28,7 @@ describe('RawClient authorizeAccount', () => {
     'https:example.com',
     'https:///path',
   ])('rejects malformed realm URL %s before sending credentials', async (realmUrl) => {
-    const seenUrls: string[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenUrls.push(request.url)
-        throw new Error('transport should not be called')
-      },
-    }
+    const { seenUrls, transport } = recordingTransport()
     const raw = new RawClient({ transport })
 
     await expect(raw.authorizeAccount('key-id', 'key-secret', realmUrl)).rejects.toThrow(

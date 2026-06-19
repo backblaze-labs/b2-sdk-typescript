@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { B2RealmConfigurationError } from '../errors/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
@@ -388,8 +389,8 @@ describe('getRealmUrl', () => {
     expect(getRealmUrl(customUrl)).toBe(customUrl)
   })
 
-  it('returns an unknown realm name as-is (fallback behavior)', () => {
-    expect(getRealmUrl('sandbox')).toBe('sandbox')
+  it('rejects an unknown non-URL realm name', () => {
+    expect(() => getRealmUrl('sandbox')).toThrow(B2RealmConfigurationError)
   })
 
   it('rejects non-loopback plaintext HTTP realms', () => {

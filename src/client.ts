@@ -40,11 +40,13 @@ export interface B2ClientOptions {
   /** The application key secret. */
   readonly applicationKey: string
   /**
-   * B2 realm to authenticate against. Accepts a known realm-map key, a direct
-   * base URL, or any string to pass through as the raw realm URL. Non-URL
-   * strings will fail during authorize. URL values must use HTTPS, or loopback
-   * HTTP for local testing; unsupported schemes and non-loopback plaintext HTTP
-   * are rejected before credentials are sent. Defaults to `"production"`.
+   * B2 realm to authenticate against. Accepts a known realm-map key or a
+   * direct base URL. Custom HTTPS hosts are trusted with the application key
+   * during authorize, so never derive `realm` from untrusted input. URL values
+   * must use HTTPS, or loopback HTTP for local testing only; application-key
+   * credentials are sent unencrypted over loopback HTTP. Unsupported schemes,
+   * malformed URLs, non-URL strings, and non-loopback plaintext HTTP are
+   * rejected before credentials are sent. Defaults to `"production"`.
    */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */
@@ -107,6 +109,7 @@ export class B2Client {
     this.applicationKey = options.applicationKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
+    bindAccountInfoRealm(this.accountInfo, this.realmUrl)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
     setClientUploadRetryOptions(this, uploadRetryOptions)
@@ -368,4 +371,9 @@ export class B2Client {
     const missing = needed.filter((cap) => !available.has(cap as string))
     return { ok: missing.length === 0, missing }
   }
+}
+
+function bindAccountInfoRealm(accountInfo: AccountInfo, realmUrl: string): void {
+  const bindRealmUrl = (accountInfo as { setRealmUrl?: (realmUrl: string) => void }).setRealmUrl
+  if (typeof bindRealmUrl === 'function') bindRealmUrl.call(accountInfo, realmUrl)
 }

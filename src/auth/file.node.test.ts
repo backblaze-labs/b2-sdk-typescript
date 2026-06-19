@@ -4,8 +4,36 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { FileAccountInfo } from './file.ts'
+
+function makeCachedAuth(apiUrl = 'https://api001.backblazeb2.com'): AuthorizeAccountResponse {
+  return {
+    accountId: 'cached-account' as AuthorizeAccountResponse['accountId'],
+    authorizationToken: 'cached-token' as AuthorizeAccountResponse['authorizationToken'],
+    apiInfo: {
+      storageApi: {
+        apiUrl,
+        bucketId: null,
+        bucketName: null,
+        downloadUrl: 'https://f001.backblazeb2.com',
+        infoType: 'storageApi',
+        namePrefix: null,
+        s3ApiUrl: 'https://s3.us-west-001.backblazeb2.com',
+        absoluteMinimumPartSize: 5_000_000,
+        recommendedPartSize: 100_000_000,
+        allowed: {
+          capabilities: [Capability.ListBuckets],
+          bucketId: null,
+          bucketName: null,
+          namePrefix: null,
+        },
+      },
+    },
+    applicationKeyExpirationTimestamp: null,
+  }
+}
 
 describe('FileAccountInfo', () => {
   let tempDir: string
@@ -115,8 +143,13 @@ describe('FileAccountInfo', () => {
     await client.authorize()
     await accountInfo.flushed()
 
-    const onDisk = JSON.parse(await readFile(storePath, 'utf8')) as { accountId?: string }
-    expect(onDisk.accountId).toBe('sim_account_0001')
+    const onDisk = JSON.parse(await readFile(storePath, 'utf8')) as {
+      accountId?: string
+      auth?: { accountId?: string }
+      realmUrl?: string
+    }
+    expect(onDisk.auth?.accountId ?? onDisk.accountId).toBe('sim_account_0001')
+    expect(onDisk.realmUrl).toBe('https://api.backblazeb2.com')
     expect(await readdir(tempDir)).toEqual(['auth.json'])
 
     if (process.platform !== 'win32') {
@@ -140,6 +173,51 @@ describe('FileAccountInfo', () => {
     const loaded = new FileAccountInfo(storePath)
     await loaded.load()
     expect(loaded.getAuth()).toBeTruthy()
+  })
+
+  it('clears a legacy production cache when bound to the staging realm', async () => {
+    await writeFile(storePath, JSON.stringify(makeCachedAuth()), 'utf8')
+    const accountInfo = new FileAccountInfo(storePath)
+    await accountInfo.load()
+    expect(accountInfo.getAuth()).not.toBeNull()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'staging',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo).toBe(accountInfo)
+    expect(accountInfo.getAuth()).toBeNull()
+    await accountInfo.flushed()
+  })
+
+  it('clears a persisted auth cache when the stored realm differs', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        version: 1,
+        realmUrl: 'https://api.backblazeb2.com',
+        auth: makeCachedAuth(),
+      }),
+      'utf8',
+    )
+    const accountInfo = new FileAccountInfo(storePath)
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'staging',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo).toBe(accountInfo)
+    expect(accountInfo.getAuth()).toBeNull()
+    await accountInfo.flushed()
   })
 
   it('delegates every AccountInfo getter to the in-memory backing', async () => {

@@ -100,6 +100,26 @@ describe('FetchTransport', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('disables automatic redirects so redirected URLs cannot bypass the guard', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { Location: 'http://169.254.169.254/latest/meta-data/' },
+      }),
+    )
+
+    const transport = new FetchTransport()
+    await transport.send({
+      url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: { Authorization: 'Basic secret' },
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.redirect).toBe('error')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('does not override an existing User-Agent header', async () => {
     fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
 

@@ -56,6 +56,8 @@ export interface HttpTransport {
  * Default transport implementation using the global `fetch` API.
  * Automatically sets the User-Agent header on each request and applies the
  * SSRF {@link UrlGuard} (if configured) before opening the connection.
+ * Redirect following is disabled so redirected URLs cannot bypass the guard or
+ * receive credential-bearing headers without an explicit checked request.
  */
 export class FetchTransport implements HttpTransport {
   /** User-Agent string sent with every request. */
@@ -92,6 +94,7 @@ export class FetchTransport implements HttpTransport {
       method: request.method,
       headers,
       body: request.body ?? null,
+      redirect: 'error',
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     })
 

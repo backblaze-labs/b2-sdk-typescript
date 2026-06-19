@@ -5,8 +5,33 @@ import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
+import { REALM_URLS } from './realms.ts'
 
 const PRIVATE_FILE_MODE = 0o600
+const PERSISTED_AUTH_VERSION = 1
+
+interface PersistedAuthState {
+  readonly version?: number
+  readonly realmUrl?: string
+  readonly auth?: AuthorizeAccountResponse
+}
+
+function readPersistedAuthState(value: unknown): {
+  auth: AuthorizeAccountResponse
+  realmUrl: string | null
+} | null {
+  if (value === null || typeof value !== 'object') return null
+
+  const maybeState = value as PersistedAuthState
+  if (maybeState.auth !== undefined) {
+    return {
+      auth: maybeState.auth,
+      realmUrl: typeof maybeState.realmUrl === 'string' ? maybeState.realmUrl : null,
+    }
+  }
+
+  return { auth: value as AuthorizeAccountResponse, realmUrl: null }
+}
 
 /**
  * Node-only {@link AccountInfo} backend that persists the authorization
@@ -25,6 +50,8 @@ const PRIVATE_FILE_MODE = 0o600
 export class FileAccountInfo implements AccountInfo {
   private readonly inner = new InMemoryAccountInfo()
   private writeQueue: Promise<void> = Promise.resolve()
+  private realmUrl: string | undefined
+  private loadedAuthRealmUrl: string | null | undefined
 
   /**
    * Constructs a `FileAccountInfo` bound to a JSON file on disk. The file is
@@ -45,11 +72,34 @@ export class FileAccountInfo implements AccountInfo {
   async load(): Promise<void> {
     try {
       const text = await readFile(this.path, 'utf8')
-      const parsed = JSON.parse(text) as AuthorizeAccountResponse
-      this.inner.setAuth(parsed)
+      const parsed = readPersistedAuthState(JSON.parse(text) as unknown)
+      if (parsed === null) return
+      this.inner.setAuth(parsed.auth)
+      this.loadedAuthRealmUrl = parsed.realmUrl
+      this.discardMismatchedRealmAuth()
     } catch {
       // Missing file, invalid JSON, or permission denied: start empty.
     }
+  }
+
+  /**
+   * Binds this cache to the configured realm URL. `B2Client` calls this when a
+   * FileAccountInfo instance is supplied, so stale auth produced by another
+   * realm is discarded before it can be used.
+   *
+   * @param realmUrl - Resolved authorize-account realm URL for the client.
+   */
+  setRealmUrl(realmUrl: string): void {
+    this.realmUrl = realmUrl
+    this.discardMismatchedRealmAuth()
+  }
+
+  private discardMismatchedRealmAuth(): void {
+    if (this.realmUrl === undefined || this.inner.getAuth() === null) return
+    if (this.loadedAuthRealmUrl === this.realmUrl) return
+    if (this.loadedAuthRealmUrl === null && this.realmUrl === REALM_URLS.production) return
+
+    this.clear()
   }
 
   /**
@@ -69,7 +119,15 @@ export class FileAccountInfo implements AccountInfo {
         }
         return
       }
-      await this.writePrivateFileAtomically(JSON.stringify(auth))
+      const contents =
+        this.realmUrl !== undefined
+          ? JSON.stringify({
+              version: PERSISTED_AUTH_VERSION,
+              realmUrl: this.realmUrl,
+              auth,
+            })
+          : JSON.stringify(auth)
+      await this.writePrivateFileAtomically(contents)
     })
     this.writeQueue = next.catch(() => {})
     return next
@@ -98,6 +156,7 @@ export class FileAccountInfo implements AccountInfo {
    */
   setAuth(auth: AuthorizeAccountResponse): void {
     this.inner.setAuth(auth)
+    this.loadedAuthRealmUrl = this.realmUrl ?? null
     void this.flush()
   }
 
@@ -113,6 +172,7 @@ export class FileAccountInfo implements AccountInfo {
   /** Discards in-memory state and clears the on-disk file. */
   clear(): void {
     this.inner.clear()
+    this.loadedAuthRealmUrl = undefined
     void this.flush()
   }
 
