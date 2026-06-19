@@ -19,6 +19,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { BadBucketIdError } from '../../src/errors/index.ts'
 import type { Bucket } from '../../src/index.ts'
 import { B2Client } from '../../src/index.ts'
@@ -109,6 +110,16 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
   }
 }
 
+async function waitForBucketVisible(client: B2Client, bucketName: string): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const bucket = await client.getBucket(bucketName)
+    if (bucket !== undefined) return
+    await sleep(1_000)
+  }
+  throw new Error(`Bucket "${bucketName}" was not visible after creation`)
+}
+
 async function main(): Promise<void> {
   const keyId = process.env['B2_APPLICATION_KEY_ID']
   const appKey = process.env['B2_APPLICATION_KEY']
@@ -138,9 +149,10 @@ async function main(): Promise<void> {
   }
 
   const bucket = await client.createBucket({ bucketName, bucketType: 'allPrivate' })
+  await waitForBucketVisible(client, bucket.name)
   const workDir = await mkdtemp(join(tmpdir(), 'sdk-examples-'))
 
-  console.log(`\nUsing bucket: ${bucketName}`)
+  console.log(`\nUsing bucket: ${bucket.name}`)
   console.log(`Working dir:  ${workDir}\n`)
 
   try {
@@ -167,12 +179,12 @@ async function main(): Promise<void> {
     await run(['npx', 'tsx', 'examples/node-list-buckets.ts'], env)
 
     // 2. Upload a single file.
-    await run(['npx', 'tsx', 'examples/node-upload.ts', bucketName, samplePath], env)
+    await run(['npx', 'tsx', 'examples/node-upload.ts', bucket.name, samplePath], env)
 
     // 3. Download it back and verify the round-trip.
     const downloadPath = join(workDir, 'downloaded.txt')
     await run(
-      ['npx', 'tsx', 'examples/node-download.ts', bucketName, 'sample.txt', downloadPath],
+      ['npx', 'tsx', 'examples/node-download.ts', bucket.name, 'sample.txt', downloadPath],
       env,
     )
     const downloaded = await readFile(downloadPath, 'utf8')
@@ -185,7 +197,7 @@ async function main(): Promise<void> {
     // 4. Upload with a progress bar (proves the SDK's onProgress wiring works
     //    against real B2; the bar will spin to 100% near-instantly for a tiny
     //    file but the assertion is "the script exits 0", not the bar shape).
-    await run(['npx', 'tsx', 'examples/node-with-progress.ts', bucketName, samplePath], env)
+    await run(['npx', 'tsx', 'examples/node-with-progress.ts', bucket.name, samplePath], env)
 
     // 5. Encrypted backup snapshot.
     await run(
@@ -195,7 +207,7 @@ async function main(): Promise<void> {
         'examples/node-backup-cli/backup.ts',
         'snapshot',
         backupSrc,
-        `b2://${bucketName}/backups`,
+        `b2://${bucket.name}/backups`,
       ],
       env,
     )
@@ -211,7 +223,7 @@ async function main(): Promise<void> {
         'tsx',
         'examples/node-backup-cli/backup.ts',
         'restore',
-        `b2://${bucketName}/backups`,
+        `b2://${bucket.name}/backups`,
         restoreDir,
       ],
       env,
@@ -231,7 +243,7 @@ async function main(): Promise<void> {
 
     console.log('\n✓ All 6 examples completed against real B2; round-trips verified.\n')
   } finally {
-    console.log(`\nTearing down bucket ${bucketName}...`)
+    console.log(`\nTearing down bucket ${bucket.name}...`)
     try {
       await deleteBucketIfPresent(bucket)
     } catch (err) {
