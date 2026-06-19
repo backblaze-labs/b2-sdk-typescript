@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Raw JSON request options bags are public.** `RawRequestOptions` is exported, and `RawClient.getUploadUrl` / `getUploadPartUrl` accept options bags for `signal` and `retry`. The older `JsonPostOptions` export remains as a deprecated alias for source compatibility.
 - **Multipart resume exposes public diagnostics and tuning controls.** `ResumeFileIdMismatchError`, `onResumeCandidateRejected`, `onResumePartReused`, `ResumeCandidateRejectedEvent`, `ResumeCandidateRejectedReason`, `ResumePartReusedEvent`, `ResumePartReusedListener`, and the `resumeMaxListPages` / `resumeMaxPartCandidates` / `resumeMaxPartPages` / `resumeDiscoveryTimeoutMs` options are exported or available on high-level upload APIs.
 - **Public B2 response metadata types are exported.** New response-facing types include `PublicEncryptionSetting`, `SseCPublicSetting`, `NoEncryptionWireSetting`, `ReadableFileRetention`, `ReadableLegalHold`, and `UnfinishedLargeFileMetadata`.
+- **`FileSource` for Node.js uploads from local paths.** `FileSource.fromPath()` exposes a filesystem-backed `ContentSource` that streams and slices local files by byte range, letting large uploads and sync transfers use multipart upload without first reading the entire file into memory.
 
 ### Changed
 

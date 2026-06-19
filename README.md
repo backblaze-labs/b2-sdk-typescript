@@ -85,7 +85,7 @@ await bucket.delete()
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.
 
 ```ts
-import { BufferSource, BlobSource } from '@backblaze-labs/b2-sdk'
+import { BufferSource, BlobSource, FileSource } from '@backblaze-labs/b2-sdk'
 
 // From a Uint8Array
 await bucket.upload({
@@ -98,6 +98,12 @@ await bucket.upload({
   fileName: 'photo.jpg',
   source: new BlobSource(fileInput.files[0]),
   contentType: 'image/jpeg',
+})
+
+// From a local filesystem path (Node.js)
+await bucket.upload({
+  fileName: 'backups/db.tar.gz',
+  source: await FileSource.fromPath('/var/backups/db.tar.gz'),
 })
 
 // Large file with progress tracking

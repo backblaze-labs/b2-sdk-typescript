@@ -1,8 +1,21 @@
+import type { Stats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
+// Keep per-read buffers modest; multipart upload concurrency, not this chunk
+// size, controls throughput and the number of simultaneously open file ranges.
 const FILE_SOURCE_CHUNK_SIZE = 64 * 1024
+
+interface FileIdentity {
+  readonly dev: number
+  readonly ino: number
+  readonly size: number
+  readonly mtimeMs: number
+  readonly ctimeMs: number
+}
+
+const fileSourceIdentities = new WeakMap<FileSource, FileIdentity>()
 
 /**
  * Uniform adapter for upload content. Wraps File, Blob, Buffer, file paths,
@@ -131,7 +144,17 @@ export class BufferSource implements ContentSource {
   }
 }
 
-/** ContentSource backed by a local filesystem path. Node.js only. */
+/**
+ * ContentSource backed by a local filesystem path.
+ *
+ * This class is import-safe in non-Node runtimes so the root and `/streams`
+ * barrels remain isomorphic, but reading methods require Node filesystem APIs
+ * and will reject when invoked where `node:fs` is unavailable. `FileSource`
+ * opens paths with no-follow semantics where Node exposes them and validates
+ * that each slice still points at the same regular-file identity captured by
+ * {@link FileSource.fromPath}. Concurrent part uploads may open one descriptor
+ * per in-flight part; the SDK's upload concurrency bounds that descriptor count.
+ */
 export class FileSource implements ContentSource {
   /** Absolute or relative path to the underlying local file. */
   readonly filePath: string
@@ -156,7 +179,7 @@ export class FileSource implements ContentSource {
   }
 
   /**
-   * Creates a FileSource by statting the given filesystem path.
+   * Creates a FileSource by opening and validating the given filesystem path.
    * @param filePath - Path to the local file.
    *
    * @returns A FileSource sized from the current file metadata.
@@ -164,10 +187,16 @@ export class FileSource implements ContentSource {
    * @throws If the path does not resolve to a regular file.
    */
   static async fromPath(filePath: string): Promise<FileSource> {
-    const { stat } = await import('node:fs/promises')
-    const info = await stat(filePath)
-    if (!info.isFile()) throw new Error(`FileSource path is not a regular file: ${filePath}`)
-    return new FileSource(filePath, info.size)
+    const handle = await openNoFollow(filePath)
+    try {
+      const stats = await handle.stat()
+      assertRegularFile(filePath, stats)
+      const source = new FileSource(filePath, stats.size)
+      fileSourceIdentities.set(source, identityFromStats(stats))
+      return source
+    } finally {
+      await handle.close()
+    }
   }
 
   /**
@@ -180,7 +209,10 @@ export class FileSource implements ContentSource {
   slice(start: number, end: number): ContentSource {
     const sliceStart = clampByteRange(start, this.size)
     const sliceEnd = Math.max(sliceStart, clampByteRange(end, this.size))
-    return new FileSource(this.filePath, sliceEnd - sliceStart, this.offset + sliceStart)
+    const source = new FileSource(this.filePath, sliceEnd - sliceStart, this.offset + sliceStart)
+    const identity = fileSourceIdentities.get(this)
+    if (identity !== undefined) fileSourceIdentities.set(source, identity)
+    return source
   }
 
   /**
@@ -191,6 +223,8 @@ export class FileSource implements ContentSource {
     const filePath = this.filePath
     const offset = this.offset
     const totalSize = this.size
+    const identity = fileSourceIdentities.get(this)
+    const requiredSize = offset + totalSize
     let handle: FileHandle | null = null
     let position = offset
     let remaining = totalSize
@@ -211,16 +245,17 @@ export class FileSource implements ContentSource {
           }
 
           if (handle === null) {
-            const { open } = await import('node:fs/promises')
-            handle = await open(filePath, 'r')
+            handle = await openValidatedHandle(filePath, identity, requiredSize)
           }
 
+          await assertHandleReady(filePath, handle, identity, requiredSize)
           const length = Math.min(FILE_SOURCE_CHUNK_SIZE, remaining)
           const chunk = new Uint8Array(length)
           const { bytesRead } = await handle.read(chunk, 0, length, position)
           if (bytesRead === 0) {
             throw new Error(`FileSource ended before reading ${totalSize} bytes: ${filePath}`)
           }
+          await assertHandleReady(filePath, handle, identity, requiredSize)
 
           position += bytesRead
           remaining -= bytesRead
@@ -247,30 +282,8 @@ export class FileSource implements ContentSource {
    * @returns A promise that resolves with the bytes in this source's range.
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
-    const { open } = await import('node:fs/promises')
-    const handle = await open(this.filePath, 'r')
-    try {
-      const buffer = new Uint8Array(this.size)
-      let filled = 0
-      while (filled < buffer.byteLength) {
-        const { bytesRead } = await handle.read(
-          buffer,
-          filled,
-          buffer.byteLength - filled,
-          this.offset + filled,
-        )
-        if (bytesRead === 0) {
-          throw new Error(`FileSource ended before reading ${this.size} bytes: ${this.filePath}`)
-        }
-        filled += bytesRead
-      }
-      return buffer.buffer.slice(
-        buffer.byteOffset,
-        buffer.byteOffset + buffer.byteLength,
-      ) as ArrayBuffer
-    } finally {
-      await handle.close()
-    }
+    const bytes = await collectStream(this.stream())
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
   }
 }
 
@@ -337,8 +350,72 @@ function assertSafeByteCount(value: number, label: string): void {
 }
 
 function clampByteRange(value: number, size: number): number {
+  // Support Blob/ArrayBuffer-style `slice(start, Infinity)` by clamping to EOF.
   if (!Number.isFinite(value)) return size
   return Math.min(size, Math.max(0, Math.trunc(value)))
+}
+
+async function openNoFollow(filePath: string): Promise<FileHandle> {
+  const { constants } = await import('node:fs')
+  const { open } = await import('node:fs/promises')
+  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
+  return open(filePath, constants.O_RDONLY | noFollow)
+}
+
+async function openValidatedHandle(
+  filePath: string,
+  identity: FileIdentity | undefined,
+  requiredSize: number,
+): Promise<FileHandle> {
+  const handle = await openNoFollow(filePath)
+  try {
+    await assertHandleReady(filePath, handle, identity, requiredSize)
+    return handle
+  } catch (err) {
+    await handle.close()
+    throw err
+  }
+}
+
+async function assertHandleReady(
+  filePath: string,
+  handle: FileHandle,
+  identity: FileIdentity | undefined,
+  requiredSize: number,
+): Promise<void> {
+  const stats = await handle.stat()
+  assertRegularFile(filePath, stats)
+  if (identity !== undefined) {
+    assertSameIdentity(filePath, stats, identity)
+  } else if (stats.size < requiredSize) {
+    throw new Error(`FileSource file is smaller than the requested range: ${filePath}`)
+  }
+}
+
+function assertRegularFile(filePath: string, stats: Stats): void {
+  if (!stats.isFile()) throw new Error(`FileSource path is not a regular file: ${filePath}`)
+}
+
+function assertSameIdentity(filePath: string, stats: Stats, identity: FileIdentity): void {
+  if (
+    stats.dev !== identity.dev ||
+    stats.ino !== identity.ino ||
+    stats.size !== identity.size ||
+    stats.mtimeMs !== identity.mtimeMs ||
+    stats.ctimeMs !== identity.ctimeMs
+  ) {
+    throw new Error(`FileSource file changed after validation: ${filePath}`)
+  }
+}
+
+function identityFromStats(stats: Stats): FileIdentity {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+  }
 }
 
 /**
