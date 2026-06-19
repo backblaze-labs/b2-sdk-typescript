@@ -11,6 +11,10 @@ const PRIVATE_FILE_MODE = 0o600
 const PERSISTED_AUTH_VERSION = 1
 
 interface PersistedAuthState {
+  readonly _b2sdk?: {
+    readonly version?: number
+    readonly realmUrl?: string
+  }
   readonly version?: number
   readonly realmUrl?: string
   readonly auth?: AuthorizeAccountResponse
@@ -30,7 +34,11 @@ function readPersistedAuthState(value: unknown): {
     }
   }
 
-  return { auth: value as AuthorizeAccountResponse, realmUrl: null }
+  const realmUrl =
+    maybeState._b2sdk !== undefined && typeof maybeState._b2sdk.realmUrl === 'string'
+      ? maybeState._b2sdk.realmUrl
+      : null
+  return { auth: value as AuthorizeAccountResponse, realmUrl }
 }
 
 /**
@@ -122,9 +130,11 @@ export class FileAccountInfo implements AccountInfo {
       const contents =
         this.realmUrl !== undefined
           ? JSON.stringify({
-              version: PERSISTED_AUTH_VERSION,
-              realmUrl: this.realmUrl,
-              auth,
+              ...auth,
+              _b2sdk: {
+                version: PERSISTED_AUTH_VERSION,
+                realmUrl: this.realmUrl,
+              },
             })
           : JSON.stringify(auth)
       await this.writePrivateFileAtomically(contents)

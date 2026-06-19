@@ -7,6 +7,7 @@ import { B2Simulator } from '../simulator/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { FileAccountInfo } from './file.ts'
+import { InMemoryAccountInfo } from './in-memory.ts'
 
 function makeCachedAuth(apiUrl = 'https://api001.backblazeb2.com'): AuthorizeAccountResponse {
   return {
@@ -144,17 +145,40 @@ describe('FileAccountInfo', () => {
     await accountInfo.flushed()
 
     const onDisk = JSON.parse(await readFile(storePath, 'utf8')) as {
+      _b2sdk?: { realmUrl?: string }
       accountId?: string
       auth?: { accountId?: string }
       realmUrl?: string
     }
     expect(onDisk.auth?.accountId ?? onDisk.accountId).toBe('sim_account_0001')
-    expect(onDisk.realmUrl).toBe('https://api.backblazeb2.com')
+    expect(onDisk._b2sdk?.realmUrl ?? onDisk.realmUrl).toBe('https://api.backblazeb2.com')
     expect(await readdir(tempDir)).toEqual(['auth.json'])
 
     if (process.platform !== 'win32') {
       expect((await stat(storePath)).mode & 0o777).toBe(0o600)
     }
+  })
+
+  it('writes auth at the top level so older readers can re-use the cache', async () => {
+    const sim = new B2Simulator()
+    const accountInfo = new FileAccountInfo(storePath)
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+      accountInfo,
+    })
+    await client.authorize()
+    await accountInfo.flushed()
+
+    const onDisk = JSON.parse(await readFile(storePath, 'utf8')) as AuthorizeAccountResponse & {
+      _b2sdk?: { realmUrl?: string }
+    }
+    const oldReader = new InMemoryAccountInfo()
+    oldReader.setAuth(onDisk)
+
+    expect(onDisk._b2sdk?.realmUrl).toBe('https://api.backblazeb2.com')
+    expect(oldReader.getApiUrl()).toBe(accountInfo.getApiUrl())
   })
 
   it('persists across multiple setAuth calls', async () => {
