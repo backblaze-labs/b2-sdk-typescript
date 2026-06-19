@@ -161,6 +161,24 @@ describe('LocalFolder', () => {
       await chmod(blockedDir, 0o700).catch(() => {})
     }
   })
+
+  it('applies include and exclude filters to relative paths', async () => {
+    await mkdir(join(tmpDir, 'docs'), { recursive: true })
+    await mkdir(join(tmpDir, 'cache'), { recursive: true })
+    await writeFile(join(tmpDir, 'docs', 'readme.md'), 'readme')
+    await writeFile(join(tmpDir, 'docs', 'draft.tmp'), 'draft')
+    await writeFile(join(tmpDir, 'cache', 'artifact.md'), 'cache')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        include: ['**/*.md'],
+        exclude: ['cache/**'],
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -378,48 +396,15 @@ describe('B2Folder', () => {
     })
 
     // Scan with "photos/" prefix. The simulator does not filter by prefix
-    // server-side, so B2Folder receives all files. It strips the prefix from
-    // file names to compute relativePath. Files that do not start with the
-    // prefix still appear because the simulator returns them, but their
-    // relativePath will be the full fileName with the prefix length sliced off
-    // (a known simulator limitation). To test prefix handling in isolation,
-    // use a bucket that only contains files under the target prefix.
-    const photosBucket = await client.createBucket({
-      bucketName: 'photos-only',
-      bucketType: BucketType.AllPrivate,
-    })
-    await photosBucket.upload({
-      fileName: 'photos/cat.jpg',
-      source: new BufferSource(enc.encode('cat')),
-    })
-    tick()
-    await photosBucket.upload({
-      fileName: 'photos/dog.jpg',
-      source: new BufferSource(enc.encode('dog')),
-    })
-
-    const photosFolder = new B2Folder(photosBucket, 'photos/')
+    // server-side, so B2Folder also guards against out-of-prefix names
+    // client-side before stripping the prefix.
+    const photosFolder = new B2Folder(bucket, 'photos/')
     const photoEntries = await collect<B2SyncPath>(photosFolder.scan())
 
     // The prefix is stripped from the relative paths
     expect(photoEntries.map((e) => e.relativePath)).toEqual(['cat.jpg', 'dog.jpg'])
 
-    // Similarly for docs
-    const docsBucket = await client.createBucket({
-      bucketName: 'docs-only',
-      bucketType: BucketType.AllPrivate,
-    })
-    await docsBucket.upload({
-      fileName: 'docs/guide.md',
-      source: new BufferSource(enc.encode('guide')),
-    })
-    tick()
-    await docsBucket.upload({
-      fileName: 'docs/readme.md',
-      source: new BufferSource(enc.encode('readme')),
-    })
-
-    const docsFolder = new B2Folder(docsBucket, 'docs/')
+    const docsFolder = new B2Folder(bucket, 'docs/')
     const docEntries = await collect<B2SyncPath>(docsFolder.scan())
 
     expect(docEntries.map((e) => e.relativePath)).toEqual(['guide.md', 'readme.md'])
@@ -435,6 +420,38 @@ describe('B2Folder', () => {
       'photos/cat.jpg',
       'photos/dog.jpg',
     ])
+  })
+
+  it('applies include and exclude filters after stripping the prefix', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'filter-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({
+      fileName: 'backup/docs/readme.md',
+      source: new BufferSource(enc.encode('readme')),
+    })
+    tick()
+    await bucket.upload({
+      fileName: 'backup/docs/draft.tmp',
+      source: new BufferSource(enc.encode('draft')),
+    })
+    tick()
+    await bucket.upload({
+      fileName: 'backup/cache/artifact.md',
+      source: new BufferSource(enc.encode('cache')),
+    })
+
+    const folder = new B2Folder(bucket, 'backup/')
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        include: ['**/*.md'],
+        exclude: ['cache/**'],
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
   // Pagination: when listFileVersions returns nextFileName, B2Folder must

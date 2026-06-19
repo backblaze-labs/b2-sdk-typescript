@@ -924,6 +924,57 @@ describe('zipFolders', () => {
     await expect(consume).rejects.toThrow('source scan failed')
     expect(destClosed).toBe(true)
   })
+
+  it('applies include filters to both folder scans before pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('docs/readme.md', 1000, 10),
+      makeSyncPath('tmp/source.tmp', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('docs/readme.md', 1000, 10),
+      makeSyncPath('tmp/dest.tmp', 1000, 30),
+    ])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { include: ['docs/**'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['docs/readme.md', 'docs/readme.md']])
+  })
+
+  it('applies exclude filters to both folder scans before pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('keep.txt', 1000, 10),
+      makeSyncPath('source.tmp', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('keep.txt', 1000, 10),
+      makeSyncPath('nested/dest.tmp', 1000, 30),
+    ])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['*.tmp'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['keep.txt', 'keep.txt']])
+  })
+
+  it('supports regular expression filters', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('photos/cat.jpg', 1000, 10),
+      makeSyncPath('photos/dog.png', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([makeSyncPath('photos/cat.jpg', 1000, 10)])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { include: [/\.jpg$/] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['photos/cat.jpg', 'photos/cat.jpg']])
+  })
 })
 
 describe('generateActions', () => {

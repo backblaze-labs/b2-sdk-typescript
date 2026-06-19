@@ -1,3 +1,4 @@
+import { filterSyncPaths } from './filters.ts'
 import { compareSyncPathNames } from './path-order.ts'
 import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
@@ -11,15 +12,15 @@ export type SyncPair = readonly [SyncPath | null, SyncPath | null]
  *
  * @param source - The source folder to scan.
  * @param dest - The destination folder to scan.
- * @param options - Optional scan controls shared by both folders.
+ * @param options - Optional scan controls and filters shared by both folders.
  */
 export async function* zipFolders(
   source: SyncFolder,
   dest: SyncFolder,
   options: SyncScanOptions = {},
 ): AsyncGenerator<SyncPair> {
-  const sourceIter = source.scan(options)[Symbol.asyncIterator]()
-  const destIter = dest.scan(options)[Symbol.asyncIterator]()
+  const sourceIter = filterSyncPaths(source.scan(options), options)[Symbol.asyncIterator]()
+  const destIter = filterSyncPaths(dest.scan(options), options)[Symbol.asyncIterator]()
 
   try {
     let sourceResult = await sourceIter.next()

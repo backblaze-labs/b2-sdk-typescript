@@ -64,6 +64,8 @@ export type {
   SyncErrorEvent,
   SyncEvent,
   SyncEventType,
+  SyncFilterOptions,
+  SyncFilterPattern,
   SyncFolder,
   SyncOptions,
   SyncPath,

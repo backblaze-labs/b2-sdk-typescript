@@ -354,6 +354,42 @@ describe('synchronize', () => {
 
       await gen.return(undefined)
     })
+
+    it('applies sync include/exclude filters to both sides before comparing', async () => {
+      const source = makeMemoryFolder(
+        [
+          makeLocalSyncPath('docs/keep.txt', 1000, 100),
+          makeLocalSyncPath('docs/ignore.tmp', 1000, 100),
+          makeLocalSyncPath('logs/ignored.txt', 1000, 100),
+        ],
+        'local',
+      )
+      const dest = makeMemoryFolder(
+        [
+          makeB2SyncPath('docs/keep.txt', 1000, 100),
+          makeB2SyncPath('docs/remote.tmp', 1000, 100),
+          makeB2SyncPath('logs/remote.txt', 1000, 100),
+        ],
+        'b2',
+      )
+
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'delete',
+          dryRun: true,
+          include: ['docs/**'],
+          exclude: ['*.tmp'],
+        },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+      expect(events.map((event) => event.path)).toEqual(['docs/keep.txt', 'docs/keep.txt'])
+    })
   })
 
   describe('action execution (upload direction)', () => {

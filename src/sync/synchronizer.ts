@@ -139,6 +139,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   let scanHadError = false
   const runningActions = new Set<Promise<void>>()
   const scanOptions: SyncScanOptions = {
+    ...(options.include !== undefined ? { include: options.include } : {}),
+    ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     onError: (event) => {
       scanHadError = true

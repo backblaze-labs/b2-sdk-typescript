@@ -1,6 +1,7 @@
 import { lstat, readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
+import { pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -73,6 +74,7 @@ export class LocalFolder implements SyncFolder {
             continue
           }
           /* v8 ignore stop */
+          if (!pathPassesSyncFilters(rel, options)) continue
           out.push({
             relativePath: rel,
             absolutePath: fullPath,

@@ -21,6 +21,24 @@ export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
 /** Direction of a sync operation. */
 export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
 
+/** Glob string or regular expression used to include or exclude sync paths. */
+export type SyncFilterPattern = string | RegExp
+
+/** Include/exclude filters applied to sync paths relative to each folder root. */
+export interface SyncFilterOptions {
+  /**
+   * Optional allow-list. When present, only paths matching at least one pattern are scanned.
+   * Glob strings match paths with forward slashes; `*` matches one segment and `**` crosses
+   * directory boundaries.
+   */
+  readonly include?: readonly SyncFilterPattern[]
+  /**
+   * Optional deny-list. Paths matching any exclude pattern are skipped even when they also match
+   * an include pattern.
+   */
+  readonly exclude?: readonly SyncFilterPattern[]
+}
+
 /** Common metadata for a file discovered during a folder scan. */
 export interface SyncPath {
   /** Path relative to the sync folder root, using forward slashes. */
@@ -180,7 +198,7 @@ export interface SyncErrorEvent {
 export type SyncEvent = SyncActionEvent | SyncCompareEvent | SyncSkipEvent | SyncErrorEvent
 
 /** Configuration options for a sync operation. */
-export interface SyncOptions {
+export interface SyncOptions extends SyncFilterOptions {
   /** How to decide whether two files differ. */
   readonly compareMode: CompareMode
   /** What to do with destination files absent from the source. */
@@ -215,7 +233,7 @@ export interface SyncOptions {
 }
 
 /** Options passed to folder scanners by the sync engine. */
-export interface SyncScanOptions {
+export interface SyncScanOptions extends SyncFilterOptions {
   /** Signal used to stop a scan before it runs to completion. */
   readonly signal?: AbortSignal
   /** Receives scan diagnostics before the scanner aborts. */
