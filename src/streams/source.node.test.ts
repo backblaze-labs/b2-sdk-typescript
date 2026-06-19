@@ -26,6 +26,54 @@ describe('FileSource', () => {
     }
   })
 
+  it('clamps slice bounds like built-in slice sources', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-bounds-'))
+    try {
+      const filePath = join(root, 'data.txt')
+      await writeFile(filePath, 'abcd')
+
+      const source = new FileSource(filePath, 4)
+
+      await expect(new Response(source.slice(Number.NaN, 2).stream()).text()).resolves.toBe('ab')
+      await expect(
+        new Response(source.slice(1, Number.POSITIVE_INFINITY).stream()).text(),
+      ).resolves.toBe('bcd')
+      await expect(
+        new Response(source.slice(Number.NEGATIVE_INFINITY, 2).stream()).text(),
+      ).resolves.toBe('ab')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects invalid file source ranges', () => {
+    expect(() => new FileSource('data.bin', -1)).toThrow(
+      'FileSource size must be a non-negative safe integer.',
+    )
+    expect(() => new FileSource('data.bin', Number.POSITIVE_INFINITY)).toThrow(
+      'FileSource size must be a non-negative safe integer.',
+    )
+    expect(() => new FileSource('data.bin', 1, -1)).toThrow(
+      'FileSource offset must be a non-negative safe integer.',
+    )
+  })
+
+  it('rejects direct ranges beyond the current file size', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-range-'))
+    try {
+      const filePath = join(root, 'data.bin')
+      await writeFile(filePath, new Uint8Array([1, 2]))
+
+      const source = new FileSource(filePath, 4)
+
+      await expect(source.toArrayBuffer()).rejects.toThrow(
+        `FileSource file is smaller than the requested range: ${filePath}`,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects when the validated file is truncated before reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-truncate-'))
     try {

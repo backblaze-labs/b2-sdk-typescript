@@ -172,6 +172,76 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it('creates nested destination directories inside the root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-nested-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+
+      const bucket = {
+        download: vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('ok'))
+              controller.close()
+            },
+          }),
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('nested/ok.txt', 2)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'download-done')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(join(destRoot, 'nested', 'ok.txt')))).toBe(
+        'ok',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects destination parents that are not directories', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-file-parent-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      await writeFile(join(destRoot, 'sub'), 'not a directory')
+
+      const bucket = {
+        download: vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('bad'))
+              controller.close()
+            },
+          }),
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('sub/escape.txt', 3)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(join(destRoot, 'sub')))).toBe(
+        'not a directory',
+      )
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial-'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects traversal paths before creating files inside or outside the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-traversal-'))
     try {
