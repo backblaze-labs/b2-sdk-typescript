@@ -202,6 +202,27 @@ describe('selectB2ComparableSha1', () => {
 })
 
 describe('preparePairForCompare', () => {
+  it('returns a ready result for non-sha1 compare modes', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+
+    const result = await preparePairForCompare([source, dest], 'size')
+
+    expect(result.skipActionGeneration).toBe(false)
+    expect(result.pair).toEqual([source, dest])
+    expect(result.bytesHashed).toBe(0)
+  })
+
+  it('returns a ready result for unpaired sha1 files', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+
+    const result = await preparePairForCompare([source, null], 'sha1')
+
+    expect(result.skipActionGeneration).toBe(false)
+    expect(result.pair).toEqual([source, null])
+    expect(result.bytesHashed).toBe(0)
+  })
+
   it('skips local hashing when size already proves a sha1 difference', async () => {
     const source = makeLocalSyncPath('file.txt', 1000, 100)
     const dest = makeB2SyncPath('file.txt', 1000, 200, 'a'.repeat(40))
@@ -268,6 +289,78 @@ describe('preparePairForCompare', () => {
     expect(result.pair[1]?.contentSha1).toBe(sha1)
   })
 
+  it('returns an error event when destination local sha1 hashing fails', async () => {
+    const source = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = makeLocalSyncPath('file.txt', 1000, 100)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('locked file')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: locked file',
+    })
+  })
+
+  it('skips when a prepared local sha1 is unavailable', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => null as unknown as string,
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]).toMatchObject({
+      type: 'skip',
+      path: 'file.txt',
+      message: 'sha1 comparison skipped because a verifiable SHA-1 is unavailable',
+    })
+  })
+
+  it('falls back to the error name when a hash error message contains a path', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const error = new Error("EACCES: open '/tmp/file.txt'")
+    error.name = 'CustomHashError'
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw error
+      },
+    })
+
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: CustomHashError',
+    })
+  })
+
+  it('falls back to a generic label when a hash error has no safe reason', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const error = new Error('/tmp/file.txt')
+    error.name = ''
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw error
+      },
+    })
+
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: Error',
+    })
+  })
+
   it('does not override explicit null B2 sha1 metadata', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeLocalSyncPath('large.bin', 1000, 100)
@@ -319,6 +412,21 @@ describe('preparePairForCompare', () => {
 })
 
 describe('preparePairsForCompare', () => {
+  it('returns ready results for non-sha1 compare modes', async () => {
+    const pairs: [LocalSyncPath, B2SyncPath][] = [
+      [
+        makeLocalSyncPath('file.txt', 1000, 100),
+        makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40)),
+      ],
+    ]
+
+    const results = await preparePairsForCompare(pairs, 'size')
+
+    expect(results).toHaveLength(1)
+    expect(results[0]?.originalPair).toEqual(pairs[0])
+    expect(results[0]?.prepared.skipActionGeneration).toBe(false)
+  })
+
   it('prepares sha1 pairs with bounded concurrency', async () => {
     const sha1 = 'a'.repeat(40)
     const pairs = [1, 2, 3].map((n): [LocalSyncPath, B2SyncPath] => [

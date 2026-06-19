@@ -440,13 +440,7 @@ async function sha1File(
         stream.destroy()
         throw new Error('aborted')
       }
-      if (!(chunk instanceof Uint8Array)) {
-        throw new TypeError('createReadStream yielded a non-byte chunk')
-      }
       bytesRead += chunk.byteLength
-      if (bytesRead > path.size) {
-        throw new Error('file exceeded scanned size during sha1 comparison')
-      }
       await hash.update(chunk)
     }
 
