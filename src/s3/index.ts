@@ -17,6 +17,7 @@ const MAX_PRESIGN_EXPIRES_IN = 604_800
 const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD'
 const SERVICE = 's3'
 const TERMINATOR = 'aws4_request'
+const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 const textEncoder = new TextEncoder()
 
@@ -61,7 +62,7 @@ export interface S3ClientConfig {
   readonly forcePathStyle: boolean
 }
 
-/** Date input accepted by the SDK's request presigner. */
+/** Date input accepted by the internal SigV4 presigner. */
 export type S3PresignDate = Date | number | string
 
 /** Common options for S3-compatible presigned object URLs. */
@@ -130,13 +131,16 @@ export interface PresignPutObjectUrlOptions extends S3PresignObjectUrlOptions {
    */
   readonly contentType?: string
   /**
-   * Optional content length. When supplied, the generated URL signs the
-   * Content-Length header, so upload clients must send the same value.
+   * Optional content length. Must be a non-negative safe integer. When
+   * supplied, the generated URL signs the Content-Length header, so upload
+   * clients must send the same value.
    */
   readonly contentLength?: number
   /**
    * Optional user metadata to attach to the object. The generated URL signs
    * matching `x-amz-meta-*` headers, so upload clients must send the same values.
+   * Metadata keys must be valid HTTP header tokens and must not differ only by
+   * case.
    */
   readonly metadata?: Record<string, string>
 }
@@ -292,11 +296,9 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
     headers.push(['content-type', options.contentType])
   }
   if (options.contentLength !== undefined) {
-    headers.push(['content-length', String(options.contentLength)])
+    headers.push(['content-length', normalizeContentLength(options.contentLength)])
   }
-  for (const [key, value] of Object.entries(options.metadata ?? {})) {
-    headers.push([`x-amz-meta-${key.toLowerCase()}`, value])
-  }
+  headers.push(...normalizeMetadataHeaders(options.metadata))
 
   return await presignS3Request('PUT', options, [['x-id', 'PutObject']], headers)
 }
@@ -398,6 +400,35 @@ function normalizeExpiresIn(expiresIn: number | undefined): number {
     )
   }
   return value
+}
+
+function normalizeContentLength(contentLength: number): string {
+  if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+    throw new RangeError('contentLength must be a non-negative safe integer.')
+  }
+
+  return String(contentLength)
+}
+
+function normalizeMetadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
+  const headers: SignedHeader[] = []
+  const seenKeys = new Set<string>()
+
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    if (!HTTP_HEADER_TOKEN.test(key)) {
+      throw new TypeError('metadata keys must be non-empty valid HTTP header tokens.')
+    }
+
+    const lowerKey = key.toLowerCase()
+    if (seenKeys.has(lowerKey)) {
+      throw new TypeError('metadata keys must not differ only by case.')
+    }
+
+    seenKeys.add(lowerKey)
+    headers.push([`x-amz-meta-${lowerKey}`, value])
+  }
+
+  return headers
 }
 
 function formatSigningDate(input: S3PresignDate | undefined): {

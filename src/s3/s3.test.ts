@@ -312,6 +312,60 @@ describe('presignPutObjectUrl', () => {
 
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;host')
   })
+
+  it('rejects invalid content lengths', async () => {
+    for (const contentLength of [-1, 1.5, Number.NaN]) {
+      await expect(
+        presignPutObjectUrl({
+          ...basePresignOptions(),
+          fileName: 'uploads/photo.jpg',
+          contentLength,
+        }),
+      ).rejects.toThrow('contentLength must be a non-negative safe integer.')
+    }
+  })
+
+  it('signs metadata headers with normalized key casing', async () => {
+    const url = new URL(
+      await presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        metadata: {
+          Album: 'summer',
+          color: 'blue',
+        },
+      }),
+    )
+
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'host;x-amz-meta-album;x-amz-meta-color',
+    )
+  })
+
+  it('rejects metadata keys that differ only by case', async () => {
+    await expect(
+      presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        metadata: {
+          Foo: 'a',
+          foo: 'b',
+        },
+      }),
+    ).rejects.toThrow('metadata keys must not differ only by case.')
+  })
+
+  it('rejects metadata keys that are not HTTP header tokens', async () => {
+    await expect(
+      presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        metadata: {
+          'bad key': 'value',
+        },
+      }),
+    ).rejects.toThrow('metadata keys must be non-empty valid HTTP header tokens.')
+  })
 })
 
 describe('deriveS3RegionFromEndpoint', () => {
