@@ -387,10 +387,28 @@ abstract class FileRangeSource implements ContentSource {
    */
   protected constructor(
     protected readonly path: FileSourcePath,
-    private readonly identity: FileIdentity,
-    private readonly offset: number,
+    protected readonly identity: FileIdentity,
+    protected readonly offset: number,
     readonly size: number,
   ) {}
+
+  /**
+   * Create a concrete file-backed source for a sub-range.
+   * @param path - Local filesystem path or file URL.
+   * @param identity - File identity captured when the root FileSource was constructed.
+   * @param offset - Absolute byte offset where this source starts.
+   * @param size - Number of bytes in this source.
+   *
+   * @returns A ContentSource representing the requested range.
+   */
+  protected createSlice(
+    path: FileSourcePath,
+    identity: FileIdentity,
+    offset: number,
+    size: number,
+  ): ContentSource {
+    return new FileSliceSource(path, identity, offset, size)
+  }
 
   /**
    * Return a new file-backed source covering the specified byte range.
@@ -402,7 +420,7 @@ abstract class FileRangeSource implements ContentSource {
   slice(start: number, end: number): ContentSource {
     const normalizedStart = normalizeSliceOffset(start, this.size)
     const normalizedEnd = normalizeSliceOffset(end, this.size)
-    return new FileSliceSource(
+    return this.createSlice(
       this.path,
       this.identity,
       this.offset + normalizedStart,
@@ -496,13 +514,36 @@ export class FileSource extends FileRangeSource {
    * Internal constructor path used by {@link FileSource.fromPath}.
    * @param path - Local filesystem path or file URL.
    * @param identity - Prevalidated file identity.
+   * @param offset - Absolute byte offset where this source starts.
+   * @param size - Number of bytes in this source.
    *
    * @internal
    */
-  constructor(path: FileSourcePath, identity?: FileIdentity) {
+  constructor(path: FileSourcePath, identity?: FileIdentity, offset = 0, size?: number) {
     const resolvedIdentity =
       identity ?? validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
-    super(path, resolvedIdentity, 0, resolvedIdentity.size)
+    super(path, resolvedIdentity, offset, size ?? resolvedIdentity.size)
+  }
+
+  /**
+   * Create a subclass-preserving file-backed source for a sub-range.
+   * @param path - Local filesystem path or file URL.
+   * @param identity - File identity captured when the root FileSource was constructed.
+   * @param offset - Absolute byte offset where this source starts.
+   * @param size - Number of bytes in this source.
+   *
+   * @returns A ContentSource representing the requested range.
+   */
+  protected override createSlice(
+    path: FileSourcePath,
+    identity: FileIdentity,
+    offset: number,
+    size: number,
+  ): ContentSource {
+    const InternalCtor = this.constructor as unknown as {
+      new (path: FileSourcePath, identity: FileIdentity, offset: number, size: number): FileSource
+    }
+    return new InternalCtor(path, identity, offset, size)
   }
 
   /**
@@ -514,10 +555,14 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  static async fromPath(path: FileSourcePath): Promise<FileSource> {
+  static async fromPath<T extends typeof FileSource>(
+    this: T,
+    path: FileSourcePath,
+  ): Promise<InstanceType<T>> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
-    const InternalCtor = FileSource as unknown as {
-      new (path: FileSourcePath, identity: FileIdentity): FileSource
+    // biome-ignore lint/complexity/noThisInStatic: inherited factory must construct the receiver class.
+    const InternalCtor = this as unknown as {
+      new (path: FileSourcePath, identity: FileIdentity): InstanceType<T>
     }
     return new InternalCtor(path, identity)
   }
