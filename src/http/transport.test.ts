@@ -542,6 +542,45 @@ describe('RetryTransport', () => {
       expect(secondCall?.headers?.['Content-Type']).toBe('application/json')
     })
 
+    it('reauthenticates and retries once even when maxRetries is zero', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+      const onReauth = vi.fn().mockResolvedValue('fresh-token-zero-budget')
+
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not reauthenticate in an infinite loop', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('still-bad-token')
+
+      innerTransport.send.mockResolvedValue(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
     it('throws expired auth token error when no onReauth callback is provided', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
