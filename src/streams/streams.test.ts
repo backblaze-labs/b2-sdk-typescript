@@ -4,10 +4,9 @@ import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
 import {
-  assertFileSourceMatchesIdentity,
+  AsyncIterableSource,
   BlobSource,
   BufferSource,
-  type FileSource,
   StreamSource,
   toContentSource,
 } from './source.ts'
@@ -414,6 +413,19 @@ describe('toContentSource', () => {
     expect(src.size).toBe(1)
   })
 
+  it('converts an async iterable to an AsyncIterableSource', async () => {
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array([1, 2])
+      yield new Uint8Array([3])
+    }
+
+    const src = toContentSource(chunks(), 3)
+
+    expect(src).toBeInstanceOf(AsyncIterableSource)
+    expect(src.size).toBe(3)
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+  })
+
   it('throws when a ReadableStream is provided without a size', () => {
     const rs = new ReadableStream<Uint8Array>({
       start(c) {
@@ -421,7 +433,7 @@ describe('toContentSource', () => {
       },
     })
     expect(() => toContentSource(rs)).toThrow(
-      'size is required when using a ReadableStream as input.',
+      'size is required when using a forward-only content source as input.',
     )
   })
 })

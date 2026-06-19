@@ -55,12 +55,12 @@ export interface UploadLargeFileOptions {
   readonly fileName: string
   /**
    * Content to upload. Sliceable sources ({@link BufferSource},
-   * {@link BlobSource}, {@link FileSource}) use the parallel-parts path. Non-sliceable
-   * sources ({@link StreamSource}) fall back to a sequential read path
-   * — one part at a time, concurrency forced to 1 — so callers can
-   * stream a multi-GB file without buffering the whole payload in
-   * memory. The `resume` / `resumeFileId` options require a sliceable
-   * source; they throw on a `StreamSource`.
+   * {@link BlobSource}, {@link FileSource}) use the parallel-parts path.
+   * Non-sliceable sources ({@link StreamSource}, {@link AsyncIterableSource})
+   * fall back to a sequential read path — one part at a time, concurrency
+   * forced to 1 — so callers can stream a multi-GB file without buffering
+   * the whole payload in memory. The `resume` / `resumeFileId` options
+   * require a sliceable source; they throw on a forward-only source.
    */
   readonly source: ContentSource
   /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
@@ -329,13 +329,24 @@ export async function uploadLargeFile(
   const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
   const sem = new Semaphore(concurrency)
 
-  // Non-sliceable sources (e.g. `StreamSource` wrapping a Node
-  // `Readable.toWeb`) can't be read in parallel — there's only one
-  // forward-only cursor. Resume is also impossible (no seek). Bail to a
-  // sequential read loop instead. Each part is buffered, hashed,
-  // shipped, then dropped before the next read starts, so the peak
-  // memory footprint is ~partSize bytes regardless of total file size.
+  // Non-sliceable sources (e.g. `StreamSource` or `AsyncIterableSource`)
+  // can't be read in parallel — there's only one forward-only cursor.
+  // Resume is also impossible (no seek). Bail to a sequential read loop
+  // instead. Each part is buffered, hashed, shipped, then dropped before
+  // the next read starts, so the peak memory footprint is ~partSize bytes
+  // regardless of total file size.
   if (!options.source.canSlice) {
+    if (options.resume === true || options.resumeFileId !== undefined) {
+      // Cancel the unfinished large file before throwing so the caller
+      // doesn't have to clean it up themselves.
+      await cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        largeFileId,
+        options.signal === undefined ? undefined : { signal: options.signal },
+      )
+      throw new Error('uploadLargeFile: resume is not supported on non-sliceable sources.')
+    }
     const abortScope = createUploadAbortScope(options.signal)
     try {
       await uploadPartsSequentially(
@@ -473,7 +484,8 @@ export async function uploadLargeFile(
 }
 
 /**
- * Sequential upload path for non-sliceable sources (`StreamSource`).
+ * Sequential upload path for non-sliceable sources (`StreamSource`,
+ * `AsyncIterableSource`).
  *
  * Reads the source's `stream()` once and accumulates exactly `partSize`
  * bytes into an in-memory buffer per iteration. Each filled buffer is

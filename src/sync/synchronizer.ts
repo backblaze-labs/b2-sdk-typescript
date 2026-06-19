@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { assertFileSourceMatchesIdentity, FileSource } from '../streams/source.ts'
+import { FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -21,8 +21,10 @@ import {
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
-import { deleteLocalFileInsideRoot, writeLocalStreamInsideRoot } from './local-file-io.ts'
-import { isLocalFilesystemRoot } from './local-filesystem-root.ts'
+import {
+  deleteLocalFileInsideRoot,
+  writeLocalStreamInsideRoot,
+} from './local-file-io.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
@@ -802,14 +804,9 @@ function createActionFactory(
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
               : `${uploadPrefix}${relPath}`
-          if (rootContext !== undefined) {
-            await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: true })
-          }
-          const fileSource = await createContainedScannedFileSource(
-            root,
-            { ...source, absolutePath: absPath },
-            signal,
-          )
+          const targetPath = await resolveContainedLocalPath(root, source.relativePath, absPath)
+          throwIfAborted(signal)
+          const fileSource = new FileSource(targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -1074,93 +1071,6 @@ async function cancelReadableStreamBody(
     await body.cancel(reason)
   } catch {
     // Best-effort response cleanup must not mask the setup or write failure.
-  }
-}
-
-async function createContainedScannedFileSource(
-  root: string | LocalRootContext,
-  path: LocalSyncPath,
-  signal: AbortSignal | undefined,
-): Promise<FileSource> {
-  const targetPath =
-    typeof root === 'string'
-      ? await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
-      : await resolveContainedLocalPath(root.realPath, path.relativePath)
-  throwIfAborted(signal)
-  await assertScannedLocalFileStillCurrent(targetPath, path)
-  throwIfAborted(signal)
-  const fileSource = await FileSource.fromPath(targetPath)
-  if (path.fileIdentity !== undefined) {
-    assertFileSourceMatchesIdentity(fileSource, path.fileIdentity)
-  }
-  if (typeof root === 'string') {
-    await resolveContainedLocalPath(root, path.relativePath, targetPath)
-  } else {
-    await resolveContainedLocalPath(root.realPath, path.relativePath, targetPath)
-  }
-  await assertScannedLocalFileStillCurrent(targetPath, path)
-  throwIfAborted(signal)
-  return fileSource
-}
-
-async function assertScannedLocalFileStillCurrent(
-  targetPath: string,
-  path: LocalSyncPath,
-): Promise<void> {
-  const { lstat } = await import('node:fs/promises')
-  const stats = await lstat(targetPath)
-  if (!stats.isFile()) throw new Error('local file changed before upload: not a regular file')
-  if (stats.size !== path.size) throw new Error('local file changed before upload: size changed')
-
-  const identity = path.fileIdentity
-  if (identity === undefined) return
-  if (
-    stats.dev !== identity.deviceId ||
-    stats.ino !== identity.inode ||
-    stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
-  ) {
-    throw new Error('local file changed before upload')
-  }
-}
-
-async function assertLocalRootContextCurrent(
-  context: LocalRootContext,
-  relativePath: string,
-  options: { readonly allowSymlinkRoot: boolean },
-): Promise<void> {
-  if (context.identity === undefined) return
-
-  const { lstat, realpath, stat } = await import('node:fs/promises')
-  let currentRealPath: string
-  try {
-    const rootLinkStats = await lstat(context.root)
-    if (!options.allowSymlinkRoot && rootLinkStats.isSymbolicLink()) {
-      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
-    }
-    currentRealPath = await realpath(context.root)
-  } catch (err) {
-    if (err instanceof Error && err.message.startsWith('Refusing to access sync root')) throw err
-    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
-  }
-
-  if (currentRealPath !== context.realPath) {
-    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
-  }
-
-  let currentStats: Awaited<ReturnType<typeof stat>>
-  try {
-    currentStats = await stat(context.realPath)
-  } catch {
-    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
-  }
-
-  if (
-    !currentStats.isDirectory() ||
-    currentStats.dev !== context.identity.deviceId ||
-    currentStats.ino !== context.identity.inode
-  ) {
-    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
   }
 }
 

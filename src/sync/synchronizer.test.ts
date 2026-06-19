@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
+import { FileSource } from '../streams/source.ts'
 import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
@@ -3223,7 +3224,8 @@ describe('synchronize', () => {
           relativePath: 'secret.txt',
           absolutePath: filePath,
           modTimeMillis: 2000,
-          size: 6,
+          // Deliberately stale to verify the provider sees the current file size.
+          size: 999,
         }
         const source = makeMemoryFolder([sourceFile], 'local')
         const dest = makeMemoryFolder([], 'b2')
@@ -6449,6 +6451,8 @@ describe('synchronize', () => {
           fileName: 'pfx\\nestedhello.txt',
           signal: controller.signal,
         })
+        expect(args?.['source']).toBeInstanceOf(FileSource)
+        expect((args?.['source'] as FileSource | undefined)?.canSlice).toBe(true)
         expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
