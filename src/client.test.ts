@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
+import type { HttpTransport } from './http/transport.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
@@ -163,6 +164,27 @@ describe('B2Client with simulator', () => {
 // --- SSRF guard integration ---
 
 describe('B2Client SSRF guard', () => {
+  it('rejects non-loopback plaintext realms before transport sees credentials', () => {
+    const seenUrls: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenUrls.push(request.url)
+        throw new Error('transport should not be called')
+      },
+    }
+
+    expect(
+      () =>
+        new B2Client({
+          applicationKeyId: 'test-key-id',
+          applicationKey: 'test-key',
+          realm: 'http://attacker.example',
+          transport,
+        }),
+    ).toThrow('refusing to send credentials over plaintext HTTP realm')
+    expect(seenUrls).toEqual([])
+  })
+
   it('exposes urlGuard=null when a custom transport is supplied (user owns hardening)', () => {
     const sim = new B2Simulator()
     const client = new B2Client({

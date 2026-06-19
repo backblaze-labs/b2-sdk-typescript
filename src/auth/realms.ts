@@ -1,9 +1,38 @@
-/** Map of known realm names to their base API URLs. */
+/**
+ * Map of verified realm names to their `b2_authorize_account` base API URLs.
+ * The staging URL aligns with Backblaze's official Python SDK realm map.
+ * Region-specific API URLs are discovered from the authorize response, so
+ * unverified regional aliases are intentionally omitted.
+ */
 export const REALM_URLS: Record<string, string> = {
-  dev: 'http://api.backblazeb2.xyz:8180',
-  eu: 'https://api003.backblazeb2.com',
   production: 'https://api.backblazeb2.com',
   staging: 'https://api.backblaze.net',
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+}
+
+/**
+ * Reject realm URLs that would send application-key credentials over plaintext
+ * to a non-loopback host.
+ *
+ * @param realmUrl - The resolved realm URL or custom realm string to validate.
+ *
+ * @throws Error when the realm URL uses non-loopback plaintext HTTP.
+ */
+export function assertSecureRealmUrl(realmUrl: string): void {
+  let url: URL
+  try {
+    url = new URL(realmUrl)
+  } catch {
+    return
+  }
+
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error(`refusing to send credentials over plaintext HTTP realm: ${realmUrl}`)
+  }
 }
 
 /**
@@ -13,7 +42,11 @@ export const REALM_URLS: Record<string, string> = {
  * @param realm - The realm name or direct URL to resolve.
  *
  * @returns The base API URL for the given realm.
+ *
+ * @throws Error when the resolved realm URL uses non-loopback plaintext HTTP.
  */
 export function getRealmUrl(realm: string): string {
-  return REALM_URLS[realm] ?? realm
+  const url = REALM_URLS[realm] ?? realm
+  assertSecureRealmUrl(url)
+  return url
 }

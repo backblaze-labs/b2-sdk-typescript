@@ -39,7 +39,11 @@ export interface B2ClientOptions {
   readonly applicationKeyId: string
   /** The application key secret. */
   readonly applicationKey: string
-  /** B2 realm to authenticate against. Defaults to `"production"`. */
+  /**
+   * B2 realm to authenticate against. Accepts a known realm-map key or a direct
+   * base URL. Plain HTTP URLs are rejected unless they target a loopback host.
+   * Defaults to `"production"`.
+   */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */
   readonly accountInfo?: AccountInfo

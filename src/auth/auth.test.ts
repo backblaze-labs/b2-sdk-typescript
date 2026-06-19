@@ -375,8 +375,6 @@ describe('getRealmUrl', () => {
   it.each([
     ['production', 'https://api.backblazeb2.com'],
     ['staging', 'https://api.backblaze.net'],
-    ['dev', 'http://api.backblazeb2.xyz:8180'],
-    ['eu', 'https://api003.backblazeb2.com'],
   ])('returns the well-known URL for the %s realm', (realm, url) => {
     expect(getRealmUrl(realm)).toBe(url)
   })
@@ -394,12 +392,27 @@ describe('getRealmUrl', () => {
     expect(getRealmUrl('sandbox')).toBe('sandbox')
   })
 
+  it('rejects non-loopback plaintext HTTP realms', () => {
+    expect(() => getRealmUrl('http://attacker.example')).toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
+  })
+
+  it.each([
+    'http://localhost:8180',
+    'http://127.0.0.1:8180',
+    'http://[::1]:8180',
+  ])('allows loopback plaintext HTTP realm %s', (realm) => {
+    expect(getRealmUrl(realm)).toBe(realm)
+  })
+
+  it('does not include non-loopback plaintext HTTP built-in realms', () => {
+    for (const url of Object.values(REALM_URLS)) {
+      expect(url.startsWith('http://')).toBe(false)
+    }
+  })
+
   it('REALM_URLS contains the expected known realms', () => {
-    expect(REALM_URLS).toEqual({
-      dev: 'http://api.backblazeb2.xyz:8180',
-      eu: 'https://api003.backblazeb2.com',
-      production: 'https://api.backblazeb2.com',
-      staging: 'https://api.backblaze.net',
-    })
+    expect(Object.keys(REALM_URLS)).toEqual(expect.arrayContaining(['production', 'staging']))
   })
 })
