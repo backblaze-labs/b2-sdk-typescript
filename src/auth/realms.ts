@@ -78,7 +78,8 @@ export function assertAuthorizableRealmUrl(realmUrl: string): void {
  *
  * @returns The base API URL for the given realm.
  *
- * @throws Error when the resolved realm URL uses non-loopback plaintext HTTP.
+ * @throws Error when the resolved realm URL uses an unsupported scheme or
+ * non-loopback plaintext HTTP.
  */
 export function getRealmUrl(realm: string): string {
   const url = REALM_URLS[realm] ?? realm
