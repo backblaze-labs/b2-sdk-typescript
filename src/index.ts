@@ -120,6 +120,11 @@ export {
 export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 export { EventType } from './types/notifications.ts'
+export type {
+  ResumeCandidateRejectedEvent,
+  ResumeCandidateRejectedListener,
+  ResumeCandidateRejectedReason,
+} from './upload/resume.ts'
 export type { UploadRetryEvent, UploadRetryListener } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'

@@ -343,6 +343,60 @@ describe('findResumeCandidate', () => {
     expect(result?.uploadedPartSha1s.get(1)).toBe('new-p1')
   })
 
+  it('prefers the later listed compatible candidate when timestamps tie', async () => {
+    const fileInfo = { owner: 'unit' }
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'first-match',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'second-match',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('second-match')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'second-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('second-match' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('second-p1')
+  })
+
   it('skips newer same-name candidates whose upload options do not match', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: string[] = []
@@ -400,6 +454,52 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['content-type-mismatch'])
   })
 
+  it('reports the candidate limit before listing more compatible candidates', async () => {
+    const fileInfo = { owner: 'unit' }
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called after the candidate limit')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        maxPartCandidates: 0,
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['candidate-limit'])
+  })
+
   it('compares caller fileInfo separately from legacy SDK resume metadata', async () => {
     const fileInfo = { owner: 'unit' }
     const raw = {
@@ -447,6 +547,75 @@ describe('findResumeCandidate', () => {
     )
 
     expect(result?.fileId).toBe('legacy-match' as LargeFileId)
+  })
+
+  it('rejects legacy SDK resume metadata size mismatches', async () => {
+    const fileInfo = { owner: 'unit' }
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'wrong-part-size',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {
+                ...fileInfo,
+                [RESUME_PART_SIZE_INFO_KEY]: '99',
+              },
+              uploadTimestamp: 2000,
+            },
+            {
+              fileId: 'wrong-source-size',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {
+                ...fileInfo,
+                [RESUME_SOURCE_SIZE_INFO_KEY]: '199',
+              },
+              uploadTimestamp: 3000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'legacy-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
+    expect(rejected).toEqual(['source-size-mismatch', 'part-size-mismatch'])
   })
 
   it('requires encryption, retention, and legal hold to match', async () => {
@@ -572,6 +741,55 @@ describe('findResumeCandidate', () => {
     )
 
     expect(result?.fileId).toBe('compatible' as LargeFileId)
+  })
+
+  it('rejects SSE-C candidates when no encryption option was requested', async () => {
+    const fileInfo = { owner: 'unit' }
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'sse-c-candidate',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseC,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called for an encryption rejection')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['sse-c-unsupported'])
   })
 
   it('rejects present but unrecognized encryption when none was requested', async () => {
