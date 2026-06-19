@@ -78,6 +78,39 @@ function makeB2MemoryFolder(paths: readonly B2SyncPath[]): B2SyncFolder {
   }
 }
 
+interface Deferred {
+  readonly promise: Promise<void>
+  resolve(): void
+  reject(reason?: unknown): void
+}
+
+function deferred(): Deferred {
+  let resolve!: () => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+function delayedBody(
+  text: string,
+  ready: Deferred,
+  release: Promise<void>,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text))
+      ready.resolve()
+      release.then(
+        () => controller.close(),
+        (err: unknown) => controller.error(err),
+      )
+    },
+  })
+}
+
 describe('synchronize large local files', () => {
   it('routes large sync uploads through multipart and round-trips downloads', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-large-'))
@@ -282,6 +315,59 @@ describe('synchronize download safety', () => {
       const events = await collectEvents(config)
       expect(events.some((event) => event.type === 'error')).toBe(true)
       expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses independent temp files for overlapping downloads to the same destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-overlap-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+
+      const firstReady = deferred()
+      const secondReady = deferred()
+      const firstRelease = deferred()
+      const secondRelease = deferred()
+
+      const firstBucket = {
+        download: vi.fn().mockResolvedValue({
+          body: delayedBody('first', firstReady, firstRelease.promise),
+        }),
+      } as unknown as Bucket
+      const secondBucket = {
+        download: vi.fn().mockResolvedValue({
+          body: delayedBody('other', secondReady, secondRelease.promise),
+        }),
+      } as unknown as Bucket
+
+      const source = makeB2MemoryFolder([makeB2Path('same.txt', 5)])
+      const baseConfig = {
+        source,
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+      } satisfies Omit<SynchronizerDownConfig, 'bucket'>
+
+      const firstConfig: SynchronizerDownConfig = { ...baseConfig, bucket: firstBucket }
+      const secondConfig: SynchronizerDownConfig = { ...baseConfig, bucket: secondBucket }
+
+      const firstEventsPromise = collectEvents(firstConfig)
+      await firstReady.promise
+      const secondEventsPromise = collectEvents(secondConfig)
+      await secondReady.promise
+
+      secondRelease.resolve()
+      const secondEvents = await secondEventsPromise
+      firstRelease.resolve()
+      const firstEvents = await firstEventsPromise
+
+      expect(firstEvents.some((event) => event.type === 'error')).toBe(false)
+      expect(secondEvents.some((event) => event.type === 'error')).toBe(false)
+      expect(['first', 'other']).toContain(
+        new TextDecoder().decode(await readFile(join(destRoot, 'same.txt'))),
+      )
       expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })

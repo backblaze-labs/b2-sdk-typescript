@@ -282,7 +282,9 @@ describe('LocalFolder', () => {
 
   it('skips SDK partial download files while scanning', async () => {
     const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
+    const previousTempPath = join(tmpDir, '.b2sdk-abandoned.partial.previous')
     await writeFile(tempPath, 'partial')
+    await writeFile(previousTempPath, 'backup')
     await writeFile(join(tmpDir, 'keep.txt'), 'keep')
 
     const folder = new LocalFolder(tmpDir)
@@ -290,6 +292,7 @@ describe('LocalFolder', () => {
 
     expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
     await expect(access(tempPath)).resolves.toBeFalsy()
+    await expect(access(previousTempPath)).resolves.toBeFalsy()
   })
 
   it.skipIf(process.platform === 'win32')(

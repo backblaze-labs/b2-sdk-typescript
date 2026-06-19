@@ -38,7 +38,11 @@ interface FileStats {
  * @returns True when the name matches the SDK partial-download pattern.
  */
 export function isSyncDownloadTempName(name: string): boolean {
-  return name.startsWith(SYNC_DOWNLOAD_TEMP_PREFIX) && name.endsWith(SYNC_DOWNLOAD_TEMP_SUFFIX)
+  return (
+    name.startsWith(SYNC_DOWNLOAD_TEMP_PREFIX) &&
+    (name.endsWith(SYNC_DOWNLOAD_TEMP_SUFFIX) ||
+      name.endsWith(`${SYNC_DOWNLOAD_TEMP_SUFFIX}.previous`))
+  )
 }
 
 /**
