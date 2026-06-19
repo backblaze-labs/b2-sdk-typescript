@@ -204,10 +204,12 @@ async function preparePathSha1(
 }
 
 function comparableSha1(path: SyncPath): Sha1State {
-  if (isUntrustedSha1(path.contentSha1)) return { kind: 'untrusted' }
+  const candidate = path.contentSha1
+  if (candidate === null || candidate === undefined) return { kind: 'unavailable' }
+  if (isUntrustedSha1(candidate)) return { kind: 'untrusted' }
 
-  const sha1 = normalizeVerifiableSha1(path.contentSha1)
-  if (sha1 === null) return { kind: 'unavailable' }
+  const sha1 = normalizeVerifiableSha1(candidate)
+  if (sha1 === null) return { kind: 'untrusted' }
   return { kind: 'verified', value: sha1 }
 }
 

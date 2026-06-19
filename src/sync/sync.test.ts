@@ -161,6 +161,12 @@ describe('filesAreDifferent', () => {
     expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
   })
 
+  it('returns true in sha1 mode for present but invalid checksum metadata', () => {
+    const source = makeSyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = makeSyncPath('file.txt', 1000, 100, 'not-a-sha1')
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
+  })
+
   it('honors explicit null contentSha1 over B2 selectedVersion fallback', () => {
     const sha1 = 'a'.repeat(40)
     const source = makeSyncPath('file.txt', 1000, 100, sha1)
@@ -237,6 +243,20 @@ describe('preparePairForCompare', () => {
 
     expect(result.skipActionGeneration).toBe(true)
     expect(result.pair[1]?.contentSha1).toBe(sha1)
+  })
+
+  it('does not skip action generation for invalid B2 checksum metadata', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'not-a-sha1')
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('should not hash')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(false)
+    expect(result.events).toEqual([])
   })
 
   it('returns aborted when local sha1 hashing observes an abort signal', async () => {
