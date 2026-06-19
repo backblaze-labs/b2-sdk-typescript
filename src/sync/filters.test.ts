@@ -38,6 +38,15 @@ describe('sync filters', () => {
     expect(performance.now() - start).toBeLessThan(1000)
   })
 
+  it('evaluates accepted regex filters within a bounded time', () => {
+    const start = performance.now()
+
+    expect(pathPassesSyncFilters(`x${'a'.repeat(1023)}`, { include: [/^x.*y$/] })).toBe(false)
+    expect(pathPassesSyncFilters('a'.repeat(1025), { include: [/^a+$/] })).toBe(false)
+
+    expect(performance.now() - start).toBeLessThan(100)
+  })
+
   it('does not retain state when matching regular expression filters', () => {
     const globalPattern = /\.txt$/g
     globalPattern.lastIndex = 3
@@ -65,7 +74,9 @@ describe('sync filters', () => {
     const numberedBackreference = new RegExp('(a)'.concat('\\1'))
     const quantifiedAlternation = /(a|b)+/
     const tooLongPattern = new RegExp('a'.repeat(513))
-    const tooManyUnboundedQuantifiers = new RegExp('^'.concat('a{1,}'.repeat(9), 'b$'))
+    const repeatedWildcards = /x.*.*.*.*.*.*.*.*y/
+    const repeatedStars = new RegExp('^'.concat('a*'.repeat(8), 'b$'))
+    const tooManyUnboundedQuantifiers = new RegExp('^'.concat('a{1,}'.repeat(2), 'b$'))
 
     expect(() =>
       pathPassesSyncFilters('aaaaaaaaaaaaaaaaaaaa', { include: [unsafePattern] }),
@@ -81,6 +92,12 @@ describe('sync filters', () => {
     )
     expect(() => pathPassesSyncFilters('a', { include: [tooLongPattern] })).toThrow(
       'Sync filter RegExp is too long',
+    )
+    expect(() =>
+      pathPassesSyncFilters(`x${'a'.repeat(80)}`, { include: [repeatedWildcards] }),
+    ).toThrow('Sync filter RegExp is too complex')
+    expect(() => pathPassesSyncFilters(`${'a'.repeat(80)}`, { include: [repeatedStars] })).toThrow(
+      'Sync filter RegExp is too complex',
     )
     expect(() =>
       pathPassesSyncFilters(`${'a'.repeat(9)}b`, { include: [tooManyUnboundedQuantifiers] }),

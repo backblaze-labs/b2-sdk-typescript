@@ -1,5 +1,6 @@
 import { filterSyncPaths } from './filters.ts'
 import { compareSyncPathNames } from './path-order.ts'
+import { validateSyncFilters } from './regexp-safety.ts'
 import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
@@ -19,6 +20,10 @@ export async function* zipFolders(
   dest: SyncFolder,
   options: SyncScanOptions = {},
 ): AsyncGenerator<SyncPair> {
+  validateSyncFilters(options)
+  // Built-in folders apply filters during scan so expensive walks/listings can be pruned.
+  // The wrapper pass is intentional: third-party SyncFolder implementations may ignore
+  // scan-time filters, so pairing still enforces the public synchronize() filter contract.
   const sourceIter = filterSyncPaths(source.scan(options), options)[Symbol.asyncIterator]()
   const destIter = filterSyncPaths(dest.scan(options), options)[Symbol.asyncIterator]()
 

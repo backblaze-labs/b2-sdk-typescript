@@ -1,8 +1,9 @@
+import {
+  pathExceedsSafeRegExpInput,
+  regexpMatchesSyncPath,
+  validateSyncFilters,
+} from './regexp-safety.ts'
 import type { SyncFilterOptions, SyncFilterPattern, SyncPath } from './types.ts'
-
-const MAX_REGEXP_SOURCE_LENGTH = 512
-const MAX_REGEXP_UNBOUNDED_QUANTIFIERS = 8
-const safeRegExpCache = new WeakMap<RegExp, RegExp>()
 
 /**
  * Tests whether a relative sync path is included by the configured include/exclude filters.
@@ -17,7 +18,10 @@ export function pathPassesSyncFilters(
   relativePath: string,
   filters: SyncFilterOptions | undefined,
 ): boolean {
+  validateSyncFilters(filters)
   const path = normalizePath(relativePath)
+  if (pathExceedsSafeRegExpInput(path) && filtersContainRegExp(filters)) return false
+
   const include = filters?.include ?? []
   const exclude = filters?.exclude ?? []
 
@@ -40,6 +44,7 @@ export function directoryMayContainSyncPaths(
   relativePath: string,
   filters: SyncFilterOptions | undefined,
 ): boolean {
+  validateSyncFilters(filters)
   const path = normalizePath(relativePath)
   if (path === '') return true
 
@@ -61,6 +66,7 @@ export function directoryMayContainSyncPaths(
  * @returns A folder-relative literal prefix, or an empty string when no safe narrowing exists.
  */
 export function literalPrefixForSyncFilters(filters: SyncFilterOptions | undefined): string {
+  validateSyncFilters(filters)
   const include = filters?.include ?? []
   let commonPrefix: string | undefined
 
@@ -101,7 +107,7 @@ export async function* filterSyncPaths<T extends SyncPath>(
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {
   if (typeof pattern !== 'string') {
-    return regexpWithoutState(pattern).test(relativePath)
+    return regexpMatchesSyncPath(relativePath, pattern)
   }
 
   const glob = normalizePath(pattern)
@@ -117,6 +123,13 @@ function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boole
 
 function stringPatternMatches(relativePath: string, pattern: SyncFilterPattern): boolean {
   return typeof pattern === 'string' && matchesPattern(relativePath, pattern)
+}
+
+function filtersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
+  return (
+    filters?.include?.some((pattern) => typeof pattern !== 'string') === true ||
+    filters?.exclude?.some((pattern) => typeof pattern !== 'string') === true
+  )
 }
 
 function patternMayMatchDescendant(relativePath: string, pattern: SyncFilterPattern): boolean {
@@ -198,132 +211,6 @@ function matchSegmentGlob(segment: string, glob: string): boolean {
 
   while (glob[globIndex] === '*') globIndex++
   return globIndex === glob.length
-}
-
-function regexpWithoutState(pattern: RegExp): RegExp {
-  const cached = safeRegExpCache.get(pattern)
-  if (cached !== undefined) return cached
-
-  assertSafeRegExp(pattern)
-  const compiled = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''))
-  safeRegExpCache.set(pattern, compiled)
-  return compiled
-}
-
-function assertSafeRegExp(pattern: RegExp): void {
-  const source = pattern.source
-  if (source.length > MAX_REGEXP_SOURCE_LENGTH) {
-    throw new Error('Sync filter RegExp is too long')
-  }
-
-  if (!regexpSourceLooksSafe(source)) {
-    throw new Error('Sync filter RegExp is too complex')
-  }
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the regex safety scan linear.
-function regexpSourceLooksSafe(source: string): boolean {
-  let escaped = false
-  let inClass = false
-  let unboundedQuantifiers = 0
-  const groups: Array<{ hasQuantifier: boolean; hasAlternation: boolean }> = []
-  let lastToken:
-    | { type: 'atom' }
-    | { type: 'group'; hasQuantifier: boolean; hasAlternation: boolean }
-    | null = null
-
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i] ?? ''
-
-    if (escaped) {
-      if (!inClass && char === 'k' && source[i + 1] === '<') return false
-      if (!inClass && /[1-9]/.test(char)) return false
-      escaped = false
-      lastToken = { type: 'atom' }
-      continue
-    }
-
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-
-    if (inClass) {
-      if (char === ']') inClass = false
-      continue
-    }
-
-    if (char === '[') {
-      inClass = true
-      lastToken = { type: 'atom' }
-      continue
-    }
-
-    if (char === '(') {
-      groups.push({ hasQuantifier: false, hasAlternation: false })
-      lastToken = null
-      continue
-    }
-
-    if (char === ')') {
-      const group = groups.pop()
-      if (!group) return false
-      lastToken = { type: 'group', ...group }
-      continue
-    }
-
-    if (char === '|') {
-      const group = groups.at(-1)
-      if (group) group.hasAlternation = true
-      lastToken = null
-      continue
-    }
-
-    if (lastToken !== null && isQuantifierStart(source, i)) {
-      if (lastToken?.type === 'group' && (lastToken.hasQuantifier || lastToken.hasAlternation)) {
-        return false
-      }
-
-      if (isUnboundedQuantifier(source, i)) {
-        unboundedQuantifiers++
-        if (unboundedQuantifiers > MAX_REGEXP_UNBOUNDED_QUANTIFIERS) return false
-      }
-
-      const group = groups.at(-1)
-      if (group) group.hasQuantifier = true
-
-      if (char === '{') {
-        const end = source.indexOf('}', i + 1)
-        if (end === -1) return false
-        i = end
-      }
-
-      lastToken = null
-      continue
-    }
-
-    lastToken = { type: 'atom' }
-  }
-
-  return !escaped && !inClass && groups.length === 0
-}
-
-function isQuantifierStart(source: string, index: number): boolean {
-  const char = source[index]
-  if (char === '*' || char === '+' || char === '?') return true
-  if (char !== '{') return false
-
-  const end = source.indexOf('}', index + 1)
-  return end !== -1 && /^\d+(?:,\d*)?$/.test(source.slice(index + 1, end))
-}
-
-function isUnboundedQuantifier(source: string, index: number): boolean {
-  const char = source[index]
-  if (char === '*' || char === '+') return true
-  if (char !== '{') return false
-
-  const end = source.indexOf('}', index + 1)
-  return end !== -1 && source.slice(index + 1, end).endsWith(',')
 }
 
 function literalPrefixForGlob(glob: string): string {

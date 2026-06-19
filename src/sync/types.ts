@@ -34,7 +34,8 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  *
  * Regular expressions are matched against the full relative path. Global and sticky flags are
  * ignored so matching does not mutate `lastIndex`; regexes that look structurally unsafe for
- * synchronous matching are rejected.
+ * synchronous matching are rejected. When a RegExp filter is configured, paths longer than 1024
+ * code units are skipped instead of being fed to the JavaScript RegExp engine.
  */
 export type SyncFilterPattern = string | RegExp
 

@@ -3,6 +3,7 @@ import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { directoryMayContainSyncPaths, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
+import { validateSyncFilters } from '../regexp-safety.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
@@ -29,6 +30,7 @@ export class LocalFolder implements SyncFolder {
    * @param options - Optional scan controls.
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
+    validateSyncFilters(options)
     const collected: LocalSyncPath[] = []
     await this.walk(this.root, collected, options)
     collected.sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
