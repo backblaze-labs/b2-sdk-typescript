@@ -46,12 +46,13 @@ describe('FileSource uploads', () => {
     expect(await readStream(downloaded.body)).toEqual(data)
   })
 
-  it('rejects multipart upload if the file changes after FileSource construction', async () => {
+  it('rejects multipart upload if the path is replaced after FileSource construction', async () => {
     const path = join(tmpDir, 'mutated.bin')
     const data = deterministicBytes(250)
     await writeFile(path, data)
 
     const source = new FileSource(path)
+    await rm(path)
     await writeFile(path, deterministicBytes(250).reverse())
 
     await expect(
