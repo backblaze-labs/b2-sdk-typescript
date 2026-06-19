@@ -53,10 +53,14 @@ describe('sync filters', () => {
 
   it('rejects structurally unsafe regular expression filters', () => {
     const unsafePattern = new RegExp('(a+)'.concat('+$'))
+    const namedBackreference = new RegExp('(?<word>a+)'.concat('\\k<word>'))
 
     expect(() =>
       pathPassesSyncFilters('aaaaaaaaaaaaaaaaaaaa', { include: [unsafePattern] }),
     ).toThrow('Sync filter RegExp is too complex')
+    expect(() => pathPassesSyncFilters('aaaa', { include: [namedBackreference] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
   })
 
   it('computes safe literal B2 prefixes for include filters', () => {
@@ -64,6 +68,11 @@ describe('sync filters', () => {
     expect(literalPrefixForSyncFilters({ include: ['active/a.txt', 'active/b.txt'] })).toBe(
       'active/',
     )
+    expect(
+      literalPrefixForSyncFilters({
+        include: ['emoji/\u{1f600}.txt', 'emoji/\u{1f603}.txt'],
+      }),
+    ).toBe('emoji/')
     expect(literalPrefixForSyncFilters({ include: ['readme.md'] })).toBe('')
     expect(literalPrefixForSyncFilters({ include: [/^active\//] })).toBe('')
   })

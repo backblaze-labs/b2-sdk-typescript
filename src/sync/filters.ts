@@ -236,6 +236,7 @@ function regexpSourceLooksSafe(source: string): boolean {
     const char = source[i] ?? ''
 
     if (escaped) {
+      if (!inClass && char === 'k' && source[i + 1] === '<') return false
       if (!inClass && /[1-9]/.test(char)) return false
       escaped = false
       lastToken = { type: 'atom' }
@@ -343,7 +344,12 @@ function commonLiteralPrefix(a: string, b: string): string {
   let end = 0
   const max = Math.min(a.length, b.length)
   while (end < max && a[end] === b[end]) end++
-  return a.slice(0, end)
+  return trimTrailingHighSurrogate(a.slice(0, end))
+}
+
+function trimTrailingHighSurrogate(value: string): string {
+  const lastCodeUnit = value.charCodeAt(value.length - 1)
+  return lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? value.slice(0, -1) : value
 }
 
 function hasGlobWildcard(glob: string): boolean {
