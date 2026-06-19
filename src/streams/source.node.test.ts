@@ -41,6 +41,10 @@ describe('FileSource', () => {
       await expect(
         new Response(source.slice(Number.NEGATIVE_INFINITY, 2).stream()).text(),
       ).resolves.toBe('ab')
+      await expect(new Response(source.slice(-3, -1).stream()).text()).resolves.toBe('bc')
+      await expect(
+        new Response(source.slice(-2, Number.POSITIVE_INFINITY).stream()).text(),
+      ).resolves.toBe('cd')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

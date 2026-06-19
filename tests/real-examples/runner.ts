@@ -114,7 +114,7 @@ async function waitForBucketVisible(client: B2Client, bucketName: string): Promi
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     const bucket = await client.getBucket(bucketName)
-    if (bucket !== undefined) return
+    if (bucket !== null) return
     await sleep(1_000)
   }
   throw new Error(`Bucket "${bucketName}" was not visible after creation`)

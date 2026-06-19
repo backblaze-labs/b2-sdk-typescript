@@ -371,7 +371,9 @@ function clampByteRange(value: number, size: number): number {
   // Support Blob/ArrayBuffer-style `slice(start, Infinity)` while keeping
   // negative infinity pinned to the start of the file range.
   if (!Number.isFinite(value)) return value < 0 ? 0 : size
-  return Math.min(size, Math.max(0, Math.trunc(value)))
+  const offset = Math.trunc(value)
+  const relativeOffset = offset < 0 ? size + offset : offset
+  return Math.min(size, Math.max(0, relativeOffset))
 }
 
 async function openNoFollow(filePath: string): Promise<FileHandleLike> {
