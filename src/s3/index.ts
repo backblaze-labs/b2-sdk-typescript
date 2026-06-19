@@ -11,15 +11,25 @@
 
 import type { AccountInfo } from '../auth/account-info.ts'
 import { encodeFileName } from '../raw/encoding.ts'
+import { hasHttpHeaderControlCharacter } from '../util/http.ts'
+import {
+  awsPercentEncode,
+  DEFAULT_PRESIGN_EXPIRES_IN,
+  presignS3Request,
+  type QueryParam,
+  type S3PresignDate,
+  type SignedHeader,
+  type SigV4PresignRequestOptions,
+} from './sigv4.ts'
 
-const DEFAULT_PRESIGN_EXPIRES_IN = 3600
-const MAX_PRESIGN_EXPIRES_IN = 604_800
-const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD'
-const SERVICE = 's3'
-const TERMINATOR = 'aws4_request'
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+const DANGEROUS_RESPONSE_CONTENT_TYPES = new Set([
+  'text/html',
+  'application/xhtml+xml',
+  'image/svg+xml',
+])
 
-const textEncoder = new TextEncoder()
+export type { S3PresignDate } from './sigv4.ts'
 
 /**
  * Configuration for deriving S3-compatible client settings from B2 auth state.
@@ -62,9 +72,6 @@ export interface S3ClientConfig {
   readonly forcePathStyle: boolean
 }
 
-/** Date input accepted by the internal SigV4 presigner. */
-export type S3PresignDate = Date | number | string
-
 /** Common options for S3-compatible presigned object URLs. */
 export interface S3PresignObjectUrlOptions extends B2S3Config {
   /** Bucket containing the object. */
@@ -82,7 +89,10 @@ export interface S3PresignObjectUrlOptions extends B2S3Config {
    * this as short as the calling workflow allows.
    */
   readonly expiresIn?: number
-  /** Optional signing clock override, primarily useful for deterministic tests. */
+  /**
+   * Optional signing clock override for clock-skew correction. Do not populate
+   * this from untrusted request input; it shifts the bearer URL validity window.
+   */
   readonly signingDate?: S3PresignDate
 }
 
@@ -98,7 +108,9 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   readonly responseCacheControl?: string
   /**
    * Override the response Content-Disposition header. Prefer a safe
-   * attachment disposition when this value can be influenced by users.
+   * attachment disposition when this value can be influenced by users. The
+   * helper rejects `inline` response dispositions by default because they can
+   * make stored bytes render from the storage origin.
    */
   readonly responseContentDisposition?: string
   /**
@@ -114,7 +126,8 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Override the response Content-Type header. If attacker-controlled, this
    * can make stored bytes render as HTML/script from the storage origin.
-   * Restrict it to known-safe values before signing.
+   * Restrict it to known-safe values before signing. The helper rejects known
+   * browser-executable content types by default.
    */
   readonly responseContentType?: string
   /**
@@ -224,25 +237,30 @@ export async function presignS3GetObjectUrl(
   const query: QueryParam[] = [['x-id', 'GetObject']]
   if (options.versionId !== undefined) query.push(['versionId', options.versionId])
   if (options.responseCacheControl !== undefined) {
+    assertSafeResponseOverride('responseCacheControl', options.responseCacheControl)
     query.push(['response-cache-control', options.responseCacheControl])
   }
   if (options.responseContentDisposition !== undefined) {
+    assertSafeResponseContentDisposition(options.responseContentDisposition)
     query.push(['response-content-disposition', options.responseContentDisposition])
   }
   if (options.responseContentEncoding !== undefined) {
+    assertSafeResponseOverride('responseContentEncoding', options.responseContentEncoding)
     query.push(['response-content-encoding', options.responseContentEncoding])
   }
   if (options.responseContentLanguage !== undefined) {
+    assertSafeResponseOverride('responseContentLanguage', options.responseContentLanguage)
     query.push(['response-content-language', options.responseContentLanguage])
   }
   if (options.responseContentType !== undefined) {
+    assertSafeResponseContentType(options.responseContentType)
     query.push(['response-content-type', options.responseContentType])
   }
   if (options.responseExpires !== undefined) {
     query.push(['response-expires', options.responseExpires.toUTCString()])
   }
 
-  return await presignS3Request('GET', options, query, [])
+  return await presignS3Request('GET', createSigV4PresignOptions(options), query, [])
 }
 
 /**
@@ -301,7 +319,12 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
   }
   headers.push(...normalizeMetadataHeaders(options.metadata))
 
-  return await presignS3Request('PUT', options, [['x-id', 'PutObject']], headers)
+  return await presignS3Request(
+    'PUT',
+    createSigV4PresignOptions(options),
+    [['x-id', 'PutObject']],
+    headers,
+  )
 }
 
 /**
@@ -332,59 +355,6 @@ export function createNativeDownloadAuthorizationUrl(
   return `${downloadUrl}/file/${awsPercentEncode(bucketName)}/${encodeFileName(fileName)}?Authorization=${awsPercentEncode(authorizationToken)}&expires=${expires}`
 }
 
-type QueryParam = readonly [name: string, value: string]
-type SignedHeader = readonly [name: string, value: string]
-
-async function presignS3Request(
-  method: 'GET' | 'PUT',
-  options: S3PresignObjectUrlOptions,
-  extraQuery: QueryParam[],
-  extraHeaders: SignedHeader[],
-): Promise<string> {
-  const clientConfig = createS3ClientConfig(options)
-  const endpoint = new URL(clientConfig.endpoint)
-  const region = clientConfig.region
-  const expiresIn = normalizeExpiresIn(options.expiresIn)
-  const { shortDate, longDate } = formatSigningDate(options.signingDate)
-  const credentialScope = `${shortDate}/${region}/${SERVICE}/${TERMINATOR}`
-  const credential = `${options.applicationKeyId}/${credentialScope}`
-  assertNoDotOnlyObjectKeySegments(options.fileName)
-  const canonicalUri = buildCanonicalUri(endpoint.pathname, options.bucketName, options.fileName)
-  const headers = normalizeSignedHeaders([['host', endpoint.host], ...extraHeaders])
-  const signedHeaders = headers.map(([name]) => name).join(';')
-
-  const query: QueryParam[] = [
-    ['X-Amz-Algorithm', 'AWS4-HMAC-SHA256'],
-    ['X-Amz-Content-Sha256', UNSIGNED_PAYLOAD],
-    ['X-Amz-Credential', credential],
-    ['X-Amz-Date', longDate],
-    ['X-Amz-Expires', String(expiresIn)],
-    ['X-Amz-SignedHeaders', signedHeaders],
-    ...extraQuery,
-  ]
-  const canonicalQuery = canonicalQueryString(query)
-  const canonicalHeaders = headers.map(([name, value]) => `${name}:${value}\n`).join('')
-  const canonicalRequest = [
-    method,
-    canonicalUri,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    UNSIGNED_PAYLOAD,
-  ].join('\n')
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    longDate,
-    credentialScope,
-    await sha256Hex(canonicalRequest),
-  ].join('\n')
-  const signingKey = await deriveSigningKey(options.applicationKey, shortDate, region)
-  const signature = toHex(await hmacSha256(signingKey, stringToSign))
-  const finalQuery = canonicalQueryString([...query, ['X-Amz-Signature', signature]])
-
-  return `${endpoint.origin}${canonicalUri}?${finalQuery}`
-}
-
 function deriveRequiredS3Region(endpoint: string): string {
   const region = deriveS3RegionFromEndpoint(endpoint)
   if (region !== null) return region
@@ -394,14 +364,18 @@ function deriveRequiredS3Region(endpoint: string): string {
   )
 }
 
-function normalizeExpiresIn(expiresIn: number | undefined): number {
-  const value = expiresIn ?? DEFAULT_PRESIGN_EXPIRES_IN
-  if (!Number.isInteger(value) || value < 1 || value > MAX_PRESIGN_EXPIRES_IN) {
-    throw new RangeError(
-      `expiresIn must be an integer from 1 to ${MAX_PRESIGN_EXPIRES_IN} seconds.`,
-    )
+function createSigV4PresignOptions(options: S3PresignObjectUrlOptions): SigV4PresignRequestOptions {
+  const clientConfig = createS3ClientConfig(options)
+  return {
+    endpoint: clientConfig.endpoint,
+    region: clientConfig.region,
+    accessKeyId: clientConfig.credentials.accessKeyId,
+    secretAccessKey: clientConfig.credentials.secretAccessKey,
+    bucketName: options.bucketName,
+    fileName: options.fileName,
+    ...(options.expiresIn !== undefined ? { expiresIn: options.expiresIn } : {}),
+    ...(options.signingDate !== undefined ? { signingDate: options.signingDate } : {}),
   }
-  return value
 }
 
 function normalizeContentLength(contentLength: number): string {
@@ -433,134 +407,32 @@ function normalizeMetadataHeaders(metadata: Record<string, string> | undefined):
   return headers
 }
 
-function formatSigningDate(input: S3PresignDate | undefined): {
-  readonly shortDate: string
-  readonly longDate: string
-} {
-  const date = input === undefined ? new Date() : new Date(input)
-  if (!Number.isFinite(date.getTime())) {
-    throw new RangeError('signingDate must be a valid Date, timestamp, or date string.')
-  }
-
-  const year = String(date.getUTCFullYear()).padStart(4, '0')
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  const hour = String(date.getUTCHours()).padStart(2, '0')
-  const minute = String(date.getUTCMinutes()).padStart(2, '0')
-  const second = String(date.getUTCSeconds()).padStart(2, '0')
-  const shortDate = `${year}${month}${day}`
-  return {
-    shortDate,
-    longDate: `${shortDate}T${hour}${minute}${second}Z`,
-  }
-}
-
-function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: string): string {
-  const basePath =
-    endpointPath === '' || endpointPath === '/' ? '' : endpointPath.replace(/\/+$/, '')
-  return `${basePath}/${encodePathSegment(bucketName)}/${encodePath(fileName)}`
-}
-
-function assertNoDotOnlyObjectKeySegments(fileName: string): void {
-  if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
+function assertSafeResponseOverride(name: string, value: string): void {
+  if (hasHttpHeaderControlCharacter(value)) {
     throw new TypeError(
-      'fileName must not contain dot-only path segments because URL parsers can normalize presigned S3 paths.',
+      `${name} must not contain control characters because it becomes a response header value.`,
     )
   }
 }
 
-function encodePath(path: string): string {
-  return path.split('/').map(encodePathSegment).join('/')
-}
+function assertSafeResponseContentType(contentType: string): void {
+  assertSafeResponseOverride('responseContentType', contentType)
 
-function encodePathSegment(segment: string): string {
-  return awsPercentEncode(segment)
-}
-
-function canonicalQueryString(query: readonly QueryParam[]): string {
-  return query
-    .map(([name, value]) => [awsPercentEncode(name), awsPercentEncode(value)] as const)
-    .sort(([aName, aValue], [bName, bValue]) => {
-      if (aName < bName) return -1
-      if (aName > bName) return 1
-      if (aValue < bValue) return -1
-      if (aValue > bValue) return 1
-      return 0
-    })
-    .map(([name, value]) => `${name}=${value}`)
-    .join('&')
-}
-
-function awsPercentEncode(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  )
-}
-
-function normalizeSignedHeaders(headers: readonly SignedHeader[]): SignedHeader[] {
-  return headers
-    .map(([name, value]) => [name.toLowerCase(), normalizeHeaderValue(value)] as const)
-    .sort(([a], [b]) => {
-      if (a < b) return -1
-      if (a > b) return 1
-      return 0
-    })
-}
-
-function normalizeHeaderValue(value: string): string {
-  return value.trim().replace(/\s+/g, ' ')
-}
-
-async function deriveSigningKey(
-  secretAccessKey: string,
-  shortDate: string,
-  region: string,
-): Promise<Uint8Array> {
-  const dateKey = await hmacSha256(textEncoder.encode(`AWS4${secretAccessKey}`), shortDate)
-  const dateRegionKey = await hmacSha256(dateKey, region)
-  const dateRegionServiceKey = await hmacSha256(dateRegionKey, SERVICE)
-  return await hmacSha256(dateRegionServiceKey, TERMINATOR)
-}
-
-async function sha256Hex(data: string): Promise<string> {
-  if (globalThis.crypto?.subtle) {
-    const digest = await globalThis.crypto.subtle.digest(
-      'SHA-256',
-      arrayBufferFor(textEncoder.encode(data)),
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+  if (mediaType && DANGEROUS_RESPONSE_CONTENT_TYPES.has(mediaType)) {
+    throw new TypeError(
+      `responseContentType "${mediaType}" can execute in browsers; allow-list a safe content type before signing response overrides.`,
     )
-    return toHex(new Uint8Array(digest))
   }
-
-  const { createHash } = await import('node:crypto')
-  return createHash('sha256').update(data).digest('hex')
 }
 
-async function hmacSha256(key: Uint8Array, data: string): Promise<Uint8Array> {
-  if (globalThis.crypto?.subtle) {
-    const cryptoKey = await globalThis.crypto.subtle.importKey(
-      'raw',
-      arrayBufferFor(key),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
+function assertSafeResponseContentDisposition(contentDisposition: string): void {
+  assertSafeResponseOverride('responseContentDisposition', contentDisposition)
+
+  const disposition = contentDisposition.split(';', 1)[0]?.trim().toLowerCase()
+  if (disposition === 'inline') {
+    throw new TypeError(
+      'responseContentDisposition must not force inline rendering; use an attachment disposition for response overrides.',
     )
-    const signature = await globalThis.crypto.subtle.sign(
-      'HMAC',
-      cryptoKey,
-      arrayBufferFor(textEncoder.encode(data)),
-    )
-    return new Uint8Array(signature)
   }
-
-  const { createHmac } = await import('node:crypto')
-  return new Uint8Array(createHmac('sha256', key).update(data).digest())
-}
-
-function toHex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
-function arrayBufferFor(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
 }

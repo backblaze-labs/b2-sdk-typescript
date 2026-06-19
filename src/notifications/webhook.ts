@@ -1,4 +1,5 @@
 import type { EventType } from '../types/notifications.ts'
+import { hmacSha256 } from '../util/crypto.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 
 /**
@@ -193,41 +194,6 @@ function bytes(s: string): Uint8Array {
  */
 function bodyBytes(body: string | Uint8Array): Uint8Array {
   return typeof body === 'string' ? bytes(body) : body
-}
-
-/**
- * Compute the HMAC-SHA256 of `body` under `secret` using the isomorphic Web
- * Crypto API. Works in Node 22+, browsers, Bun, Deno, and Cloudflare Workers
- * without any platform-specific code.
- *
- * @param secret - The HMAC signing secret.
- * @param body - The bytes to sign.
- *
- * @returns The 32-byte HMAC-SHA256 digest.
- */
-async function hmacSha256(secret: string, body: Uint8Array): Promise<Uint8Array> {
-  // The explicit `slice(byteOffset, byteOffset + byteLength)` defends against
-  // a Uint8Array view that points at a subset of a larger buffer. Casting to
-  // `ArrayBuffer` is needed because TS 5.7+ types Uint8Array's buffer as
-  // `ArrayBufferLike`, which includes `SharedArrayBuffer`. Web Crypto's
-  // signatures only accept the plain `ArrayBuffer` variant.
-  const secretBytes = bytes(secret)
-  const key = await globalThis.crypto.subtle.importKey(
-    'raw',
-    secretBytes.buffer.slice(
-      secretBytes.byteOffset,
-      secretBytes.byteOffset + secretBytes.byteLength,
-    ) as ArrayBuffer,
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await globalThis.crypto.subtle.sign(
-    'HMAC',
-    key,
-    body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer,
-  )
-  return new Uint8Array(sig)
 }
 
 /**

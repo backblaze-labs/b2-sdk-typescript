@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import type { AccountInfo } from '../auth/account-info.ts'
 import {
@@ -11,14 +11,6 @@ import {
 } from './index.ts'
 
 const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
-const isNodeRuntime =
-  typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined' &&
-  typeof (globalThis as Record<string, unknown>)['document'] === 'undefined'
-const canMockPeerModules =
-  isNodeRuntime &&
-  typeof vi.resetModules === 'function' &&
-  typeof vi.doMock === 'function' &&
-  typeof vi.doUnmock === 'function'
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(
@@ -178,7 +170,7 @@ describe('presignS3GetObjectUrl', () => {
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/path/to/file.txt')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
-    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
+    expect(url.searchParams.has('X-Amz-Content-Sha256')).toBe(false)
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
@@ -190,7 +182,7 @@ describe('presignS3GetObjectUrl', () => {
     expect(url.toString()).not.toContain('key-secret')
 
     const signature = url.searchParams.get('X-Amz-Signature')
-    expect(signature).toMatch(/^[a-f0-9]{64}$/)
+    expect(signature).toBe('1661a8f3dce3f4c3acc5ab65779c2c414879bcf33b103afb63c77364f92d04de')
 
     const urlWithDifferentSecret = new URL(
       await presignS3GetObjectUrl({
@@ -253,24 +245,29 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds')
   })
 
-  it.skipIf(!canMockPeerModules)('does not expose secrets to AWS SDK peer modules', async () => {
-    vi.resetModules()
-    vi.doMock('@aws-sdk/client-s3', () => {
-      throw new Error('malicious client peer loaded')
-    })
-    vi.doMock('@aws-sdk/s3-request-presigner', () => {
-      throw new Error('malicious presigner peer loaded')
-    })
+  it('does not expose secrets or require AWS presigner peer modules', async () => {
+    const s3 = await import('./index.ts')
+    const url = await s3.presignS3GetObjectUrl(basePresignOptions())
 
-    try {
-      const s3 = await import('./index.ts')
-      const url = await s3.presignS3GetObjectUrl(basePresignOptions())
-      expect(url).not.toContain('key-secret')
-    } finally {
-      vi.doUnmock('@aws-sdk/client-s3')
-      vi.doUnmock('@aws-sdk/s3-request-presigner')
-      vi.resetModules()
-    }
+    expect(url).not.toContain('key-secret')
+  })
+
+  it('rejects browser-executable response content type overrides', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseContentType: 'text/html; charset=utf-8',
+      }),
+    ).rejects.toThrow('responseContentType "text/html" can execute in browsers')
+  })
+
+  it('rejects inline response content disposition overrides', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseContentDisposition: 'inline; filename="preview.html"',
+      }),
+    ).rejects.toThrow('responseContentDisposition must not force inline rendering')
   })
 })
 
@@ -303,7 +300,7 @@ describe('presignPutObjectUrl', () => {
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/uploads/photo.jpg')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
-    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
+    expect(url.searchParams.has('X-Amz-Content-Sha256')).toBe(false)
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
@@ -312,7 +309,9 @@ describe('presignPutObjectUrl', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host')
     expect(url.searchParams.get('x-id')).toBe('PutObject')
     expect(url.toString()).not.toContain('key-secret')
-    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(
+      '95824355640aee3368f99fac75ef7d85f5f379ee8696c3d9de3ed81eb56d9fee',
+    )
   })
 
   it('makes content type affect the signed URL', async () => {
@@ -355,6 +354,16 @@ describe('presignPutObjectUrl', () => {
     }
   })
 
+  it('rejects content type values with control characters', async () => {
+    await expect(
+      presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        contentType: 'image/jpeg\nx-amz-meta-evil: yes',
+      }),
+    ).rejects.toThrow('signed header values must not contain control characters')
+  })
+
   it('signs metadata headers with normalized key casing', async () => {
     const url = new URL(
       await presignPutObjectUrl({
@@ -395,6 +404,18 @@ describe('presignPutObjectUrl', () => {
         },
       }),
     ).rejects.toThrow('metadata keys must be non-empty valid HTTP header tokens.')
+  })
+
+  it('rejects metadata values with control characters', async () => {
+    await expect(
+      presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        metadata: {
+          safe: 'a\nx-amz-meta-evil:b',
+        },
+      }),
+    ).rejects.toThrow('signed header values must not contain control characters')
   })
 })
 

@@ -1,3 +1,5 @@
+import { hexEncode } from '../util/crypto.ts'
+
 /** Internal wrapper around a Node.js Hash instance. */
 type NodeHasher = { update(data: Uint8Array): void; digest(encoding: string): string }
 
@@ -241,22 +243,6 @@ function rotateLeft(value: number, bits: number): number {
 
 function wordToHex(word: number): string {
   return word.toString(16).padStart(8, '0')
-}
-/* v8 ignore stop */
-
-/* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable (browser/edge runtimes) */
-/**
- * Convert a byte array to a lowercase hex string.
- * @param bytes - The raw bytes to encode as hexadecimal characters.
- *
- * @returns The lowercase hex-encoded string representation of the input bytes.
- */
-function hexEncode(bytes: Uint8Array): string {
-  const hex: string[] = []
-  for (const b of bytes) {
-    hex.push(b.toString(16).padStart(2, '0'))
-  }
-  return hex.join('')
 }
 /* v8 ignore stop */
 
