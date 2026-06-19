@@ -7,10 +7,13 @@ import { B2RealmConfigurationError } from '../errors/index.ts'
  * unverified regional aliases are intentionally omitted.
  */
 export const REALM_URLS = {
+  /** Public production B2 Native API authorize endpoint. */
   production: 'https://api.backblazeb2.com',
+  /** Backblaze staging authorize endpoint from the official Python SDK realm map. */
   staging: 'https://api.backblaze.net',
 } as const satisfies Record<string, string>
 
+/** Name of a verified built-in auth realm alias. */
 export type RealmName = keyof typeof REALM_URLS
 
 const HTTP_REALM_URL_WITH_HOST = /^https?:\/\/[^/?#]/i
