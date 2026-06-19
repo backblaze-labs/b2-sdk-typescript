@@ -3,13 +3,7 @@ import { EncryptionKey } from '../types/encryption.ts'
 import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
-import {
-  AsyncIterableSource,
-  BlobSource,
-  BufferSource,
-  StreamSource,
-  toContentSource,
-} from './source.ts'
+import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
@@ -413,7 +407,7 @@ describe('toContentSource', () => {
     expect(src.size).toBe(1)
   })
 
-  it('converts an async iterable to an AsyncIterableSource', async () => {
+  it('converts an async iterable to a StreamSource', async () => {
     async function* chunks(): AsyncGenerator<Uint8Array> {
       yield new Uint8Array([1, 2])
       yield new Uint8Array([3])
@@ -421,7 +415,7 @@ describe('toContentSource', () => {
 
     const src = toContentSource(chunks(), 3)
 
-    expect(src).toBeInstanceOf(AsyncIterableSource)
+    expect(src).toBeInstanceOf(StreamSource)
     expect(src.size).toBe(3)
     expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })

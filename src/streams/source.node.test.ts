@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -37,9 +37,20 @@ describe('FileSource', () => {
     const source = new FileSource(path)
     const slice = source.slice(2, 7)
 
-    expect(slice).toBeInstanceOf(FileSource)
+    expect(slice.canSlice).toBe(true)
     expect(slice.size).toBe(5)
     expect(decoder.decode(await slice.toArrayBuffer())).toBe('23456')
+  })
+
+  it('bounds slices to the captured file size', async () => {
+    const path = join(tmpDir, 'bounded.txt')
+    await writeFile(path, '0123456789')
+
+    const source = new FileSource(path)
+    const slice = source.slice(8, 99)
+
+    expect(slice.size).toBe(2)
+    expect(decoder.decode(await slice.toArrayBuffer())).toBe('89')
   })
 
   it('streams only the selected byte range', async () => {
@@ -50,6 +61,33 @@ describe('FileSource', () => {
     const bytes = await readStream(source.stream())
 
     expect(decoder.decode(bytes)).toBe('body')
+  })
+
+  it('rejects non-regular files', () => {
+    expect(() => new FileSource(tmpDir)).toThrow(/not a regular file/)
+  })
+
+  it('rejects if the file is truncated after construction', async () => {
+    const path = join(tmpDir, 'truncate.txt')
+    await writeFile(path, 'original payload')
+
+    const source = new FileSource(path)
+    await writeFile(path, 'short')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a path replaced by a symlink', async () => {
+    const path = join(tmpDir, 'payload.txt')
+    const secretPath = join(tmpDir, 'secret.txt')
+    await writeFile(path, 'safe payload')
+    await writeFile(secretPath, 'secret payload')
+
+    const source = new FileSource(path)
+    await rm(path)
+    await symlink(secretPath, path)
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
 })
 

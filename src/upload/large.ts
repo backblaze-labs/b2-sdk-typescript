@@ -56,11 +56,11 @@ export interface UploadLargeFileOptions {
   /**
    * Content to upload. Sliceable sources ({@link BufferSource},
    * {@link BlobSource}, {@link FileSource}) use the parallel-parts path.
-   * Non-sliceable sources ({@link StreamSource}, {@link AsyncIterableSource})
-   * fall back to a sequential read path — one part at a time, concurrency
-   * forced to 1 — so callers can stream a multi-GB file without buffering
-   * the whole payload in memory. The `resume` / `resumeFileId` options
-   * require a sliceable source; they throw on a forward-only source.
+   * Non-sliceable streams and async iterables fall back to a sequential read
+   * path — one part at a time, concurrency forced to 1 — so callers can stream
+   * a multi-GB file without buffering the whole payload in memory. The
+   * `resume` / `resumeFileId` options require a sliceable source; they throw
+   * on a forward-only source.
    */
   readonly source: ContentSource
   /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
@@ -329,12 +329,11 @@ export async function uploadLargeFile(
   const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
   const sem = new Semaphore(concurrency)
 
-  // Non-sliceable sources (e.g. `StreamSource` or `AsyncIterableSource`)
-  // can't be read in parallel — there's only one forward-only cursor.
-  // Resume is also impossible (no seek). Bail to a sequential read loop
-  // instead. Each part is buffered, hashed, shipped, then dropped before
-  // the next read starts, so the peak memory footprint is ~partSize bytes
-  // regardless of total file size.
+  // Non-sliceable sources can't be read in parallel — there's only one
+  // forward-only cursor. Resume is also impossible (no seek). Bail to a
+  // sequential read loop instead. Each part is buffered, hashed, shipped,
+  // then dropped before the next read starts, so the peak memory footprint is
+  // ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
     if (options.resume === true || options.resumeFileId !== undefined) {
       // Cancel the unfinished large file before throwing so the caller
@@ -484,8 +483,7 @@ export async function uploadLargeFile(
 }
 
 /**
- * Sequential upload path for non-sliceable sources (`StreamSource`,
- * `AsyncIterableSource`).
+ * Sequential upload path for non-sliceable sources.
  *
  * Reads the source's `stream()` once and accumulates exactly `partSize`
  * bytes into an in-memory buffer per iteration. Each filled buffer is
@@ -517,7 +515,8 @@ async function uploadPartsSequentially(
   tracker: ProgressTracker,
 ): Promise<void> {
   const reader = options.source.stream().getReader()
-  let bytesRead = 0
+  let partNumber = 1
+  let completed = false
   // Carry-over bytes from a previous read when the read returned more
   // than we needed to fill one part. Kept as an array to avoid an
   // allocation per loop iteration on a typical multi-part upload.
@@ -583,26 +582,13 @@ async function uploadPartsSequentially(
       tracker.addBytes(data.byteLength)
       tracker.completePart()
     }
-
-    if (carry !== null && carry.byteLength > 0) {
-      throw new Error(
-        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
-      )
-    }
-
-    const extra = await readNextNonEmptyChunk(reader, signal)
-    if (!extra.done) {
-      bytesRead += extra.value.byteLength
-      throw new Error(
-        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
-      )
-    }
-  } catch (err) {
-    await reader.cancel(err).catch(() => {})
-    throw err
+    completed = true
   } finally {
-    // Releasing the lock lets the underlying stream propagate close /
-    // error events to any upstream producer (e.g. a Node `Readable`).
+    if (!completed) {
+      await reader.cancel().catch(() => {})
+    }
+    // Releasing the lock lets the underlying stream propagate close / error
+    // events to any upstream producer (e.g. a Node `Readable`).
     reader.releaseLock()
   }
 }

@@ -13,7 +13,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, type ContentSource, StreamSource } from '../streams/source.ts'
+import { BufferSource, StreamSource, toContentSource } from '../streams/source.ts'
 import {
   daysFromNow,
   deterministicBytes,
@@ -3760,7 +3760,61 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
   })
 
-  it('ignores resume true for fresh stream uploads without discovery', async () => {
+  it('cancels an async iterable source when sequential multipart upload fails', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated async iterable upload_part failure',
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'async-iterable-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const chunk = deterministicBytes(25_000)
+    const totalSize = partSize * 2
+    let returned = false
+    const iterable: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: chunk }
+          },
+          async return() {
+            returned = true
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    }
+
+    await expect(
+      bucket.upload({
+        fileName: 'async-iterable-boom.bin',
+        source: toContentSource(iterable, totalSize),
+        partSize,
+      }),
+    ).rejects.toThrow(/simulated async iterable upload_part failure/)
+
+    expect(returned).toBe(true)
+  })
+
+  it('rejects a streaming-source upload when resume is requested', async () => {
+    // StreamSource has no random access, so resume can't replay parts.
+    // The engine bails early with a clear message and cancels the
+    // started large file rather than silently buffering the whole
+    // payload. The `resume` option lives on `uploadLargeFile` rather
+    // than the high-level `bucket.upload`, so we call it directly.
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -3778,17 +3832,16 @@ describe('uploadSmallFile cleanup path', () => {
     })
 
     const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
-    const result = await uploadLargeFile(client.raw, client.accountInfo, {
-      bucketId: bucket.id,
-      fileName: 'resume-stream.bin',
-      source: new StreamSource(readable, payload.byteLength),
-      partSize,
-      concurrency: 1,
-      resume: true,
-    })
-
-    expect(result.fileName).toBe('resume-stream.bin')
-    expect(result.contentLength).toBe(payload.byteLength)
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-stream.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+        concurrency: 1,
+        resume: true,
+      }),
+    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
     expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
   })
 

@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { FileSource } from '../streams/source.ts'
-import { daysFromNow } from '../test-utils/index.ts'
+import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
@@ -6492,6 +6493,60 @@ describe('synchronize', () => {
 
         const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
         expect(args).toMatchObject({ fileName: 'backup/docs/readme.md' })
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('does not publish success if a local file mutates mid-upload', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-mutated-up-'))
+      try {
+        const filePath = join(root, 'payload.bin')
+        const original = deterministicBytes(250)
+        await writeFile(filePath, original)
+
+        const { client } = makeClient({ minimumPartSize: 100, recommendedPartSize: 100 })
+        await client.authorize()
+        const realBucket = await client.createBucket({
+          bucketName: 'sync-mutated-upload',
+          bucketType: BucketType.AllPrivate,
+        })
+        const bucket = {
+          info: realBucket.info,
+          upload: vi.fn(async (options: Parameters<Bucket['upload']>[0]) => {
+            await writeFile(filePath, deterministicBytes(250).reverse())
+            return realBucket.upload(options)
+          }),
+        } as unknown as Bucket
+
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'payload.bin',
+          absolutePath: filePath,
+          modTimeMillis: 2000,
+          size: original.byteLength,
+        }
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'upload-done')).toBe(false)
+        expect(
+          events.some((event) => event.type === 'error' && event.message.includes(filePath)),
+        ).toBe(true)
+        const listing = await realBucket.listFileNames()
+        expect(listing.files.find((file) => file.fileName === 'payload.bin')).toBeUndefined()
       } finally {
         await rm(root, { recursive: true, force: true })
       }

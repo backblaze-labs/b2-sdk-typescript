@@ -45,4 +45,25 @@ describe('FileSource uploads', () => {
     const downloaded = await bucket.download('payload.bin')
     expect(await readStream(downloaded.body)).toEqual(data)
   })
+
+  it('rejects multipart upload if the file changes after FileSource construction', async () => {
+    const path = join(tmpDir, 'mutated.bin')
+    const data = deterministicBytes(250)
+    await writeFile(path, data)
+
+    const source = new FileSource(path)
+    await writeFile(path, deterministicBytes(250).reverse())
+
+    await expect(
+      bucket.upload({
+        fileName: 'mutated.bin',
+        source,
+        partSize: 100,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow(path)
+
+    const listing = await bucket.listFileNames()
+    expect(listing.files.find((file) => file.fileName === 'mutated.bin')).toBeUndefined()
+  })
 })

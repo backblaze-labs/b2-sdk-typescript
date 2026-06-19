@@ -8,9 +8,8 @@
 export { EncryptionKey } from '../types/encryption.ts'
 export { IncrementalSha1, sha1Hex } from './hash.ts'
 export type { ProgressEvent, ProgressListener } from './progress.ts'
-export type { ContentSource, FileSourceOptions, FileSourcePath } from './source.ts'
+export type { ContentSource, FileSourcePath } from './source.ts'
 export {
-  AsyncIterableSource,
   BlobSource,
   BufferSource,
   FileSource,

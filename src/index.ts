@@ -85,9 +85,8 @@ export {
 } from './raw/index.ts'
 export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
 export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
-export type { ContentSource, FileSourceOptions, FileSourcePath } from './streams/source.ts'
+export type { ContentSource, FileSourcePath } from './streams/source.ts'
 export {
-  AsyncIterableSource,
   BlobSource,
   BufferSource,
   FileSource,

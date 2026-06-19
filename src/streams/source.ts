@@ -6,39 +6,42 @@ const FILE_READ_CHUNK_SIZE = 64 * 1024
 /** Filesystem path accepted by {@link FileSource}. */
 export type FileSourcePath = string | URL
 
-/** Optional range override used by {@link FileSource}. */
-export interface FileSourceOptions {
-  /** Absolute byte offset where this source begins. Defaults to `0`. */
-  readonly offset?: number
-  /**
-   * Number of bytes exposed by this source. When omitted, `FileSource`
-   * synchronously stats the file and uses the remaining bytes after
-   * {@link FileSourceOptions.offset}.
-   */
-  readonly size?: number
-}
-
-interface NodeFileStat {
+interface FileStatsLike {
+  readonly dev: number
+  readonly ino: number
+  readonly mode: number
   readonly size: number
+  readonly mtimeMs: number
+  readonly ctimeMs: number
   isFile(): boolean
 }
 
-interface NodeFsSync {
-  statSync(path: FileSourcePath): NodeFileStat
-}
-
-interface NodeFileHandle {
+interface FileHandleLike {
   read(
     buffer: Uint8Array,
     offset: number,
     length: number,
     position: number,
-  ): Promise<{ readonly bytesRead: number }>
+  ): Promise<{ bytesRead: number }>
+  stat(): Promise<FileStatsLike>
   close(): Promise<void>
 }
 
-interface NodeFsPromises {
-  open(path: FileSourcePath, flags: 'r'): Promise<NodeFileHandle>
+interface NodeFsSync {
+  readonly constants: {
+    readonly O_RDONLY: number
+    readonly O_NOFOLLOW: number
+  }
+  lstatSync(path: FileSourcePath): FileStatsLike
+}
+
+interface FileIdentity {
+  readonly dev: number
+  readonly ino: number
+  readonly mode: number
+  readonly size: number
+  readonly mtimeMs: number
+  readonly ctimeMs: number
 }
 
 function getNodeFsSync(): NodeFsSync {
@@ -47,22 +50,29 @@ function getNodeFsSync(): NodeFsSync {
       process?: { getBuiltinModule?: (id: string) => unknown }
     }
   ).process
-  const fs = processLike?.getBuiltinModule?.('node:fs') as NodeFsSync | undefined
-  if (fs === undefined) {
+  const fs = processLike?.getBuiltinModule?.('node:fs')
+  if (!isNodeFsSync(fs)) {
     throw new Error('FileSource is only available in Node.js-compatible runtimes.')
   }
   return fs
 }
 
-async function openNodeFile(path: FileSourcePath): Promise<NodeFileHandle> {
-  const fs = (await import('node:fs/promises')) as NodeFsPromises
-  return fs.open(path, 'r')
+function isNodeFsSync(value: unknown): value is NodeFsSync {
+  if (typeof value !== 'object' || value === null) return false
+  const candidate = value as Record<string, unknown>
+  const constants = candidate['constants']
+  return (
+    typeof candidate['lstatSync'] === 'function' &&
+    typeof constants === 'object' &&
+    constants !== null &&
+    typeof (constants as Record<string, unknown>)['O_RDONLY'] === 'number' &&
+    typeof (constants as Record<string, unknown>)['O_NOFOLLOW'] === 'number'
+  )
 }
 
-function validateByteCount(name: string, value: number): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a non-negative safe integer.`)
-  }
+function fileOpenFlags(): number {
+  const { constants } = getNodeFsSync()
+  return constants.O_RDONLY | constants.O_NOFOLLOW
 }
 
 function normalizeSliceOffset(value: number, size: number): number {
@@ -71,8 +81,101 @@ function normalizeSliceOffset(value: number, size: number): number {
   return Math.min(Math.max(offset, 0), size)
 }
 
-function rangeEndedEarlyError(): Error {
-  return new Error('FileSource: file ended before the requested byte range was fully read.')
+function formatFilePath(path: FileSourcePath): string {
+  return path instanceof URL ? path.href : path
+}
+
+function identityFromStats(stats: FileStatsLike): FileIdentity {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    mode: stats.mode,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+  }
+}
+
+function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
+  if (!stats.isFile()) {
+    throw new Error(`FileSource: ${formatFilePath(path)} is not a regular file.`)
+  }
+}
+
+function assertSameIdentity(
+  path: FileSourcePath,
+  expected: FileIdentity,
+  actual: FileStatsLike,
+  when: string,
+): void {
+  if (actual.dev !== expected.dev || actual.ino !== expected.ino || actual.mode !== expected.mode) {
+    throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
+  }
+  if (
+    actual.size !== expected.size ||
+    actual.mtimeMs !== expected.mtimeMs ||
+    actual.ctimeMs !== expected.ctimeMs
+  ) {
+    throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
+  }
+}
+
+function rangeEndedEarlyError(path: FileSourcePath, offset: number, size: number): Error {
+  const end = offset + size
+  return new Error(
+    `FileSource: ${formatFilePath(path)} ended before byte range ${offset}-${end} was fully read.`,
+  )
+}
+
+async function openValidatedFile(
+  path: FileSourcePath,
+  identity: FileIdentity,
+): Promise<FileHandleLike> {
+  const { open } = (await import('node:fs/promises')) as {
+    open(path: FileSourcePath, flags: number): Promise<FileHandleLike>
+  }
+  let file: FileHandleLike
+  try {
+    file = await open(path, fileOpenFlags())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`FileSource: ${formatFilePath(path)} could not be opened: ${message}`)
+  }
+
+  try {
+    const stats = await file.stat()
+    assertRegularFile(path, stats)
+    assertSameIdentity(path, identity, stats, 'before read')
+    return file
+  } catch (err) {
+    await file.close().catch(() => {})
+    throw err
+  }
+}
+
+async function readFileRange(
+  path: FileSourcePath,
+  identity: FileIdentity,
+  offset: number,
+  size: number,
+): Promise<Uint8Array> {
+  if (size === 0) return new Uint8Array(0)
+
+  const file = await openValidatedFile(path, identity)
+  const data = new Uint8Array(size)
+  let filled = 0
+  try {
+    while (filled < data.byteLength) {
+      const { bytesRead } = await file.read(data, filled, data.byteLength - filled, offset + filled)
+      if (bytesRead === 0) throw rangeEndedEarlyError(path, offset, size)
+      filled += bytesRead
+    }
+    const stats = await file.stat()
+    assertSameIdentity(path, identity, stats, 'while being read')
+    return data
+  } finally {
+    await file.close()
+  }
 }
 
 function asyncIterableToReadableStream(
@@ -122,10 +225,10 @@ export interface ContentSource {
    * `true` for in-memory / random-access sources (`BufferSource`,
    * `BlobSource`, `FileSource`) — the multipart upload engine can dispatch
    * part reads in parallel by slicing the source into disjoint ranges.
-   * `false` for forward-only sources (`StreamSource`, `AsyncIterableSource`)
-   * — the engine must read sequentially, one `partSize` chunk at a time.
-   * Callers that branch on this flag are expected to fall back to the
-   * sequential path rather than call `slice()` and catch the throw.
+   * `false` for forward-only streams and async iterables — the engine must
+   * read sequentially, one `partSize` chunk at a time. Callers that branch on
+   * this flag are expected to fall back to the sequential path rather than call
+   * `slice()` and catch the throw.
    */
   readonly canSlice: boolean
   /** Return a sub-range of this source as a new ContentSource. */
@@ -230,64 +333,30 @@ export class BufferSource implements ContentSource {
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
-    options.signal?.throwIfAborted()
-    return Promise.resolve(
-      this.buffer.buffer.slice(
-        this.buffer.byteOffset,
-        this.buffer.byteOffset + this.buffer.byteLength,
-      ) as ArrayBuffer,
-    )
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    return Promise.resolve(arrayBufferFor(this.buffer))
   }
 }
 
-/**
- * ContentSource backed by a local filesystem path.
- *
- * `FileSource` is Node-only but safe to import in browser builds: it touches
- * Node filesystem APIs only when constructed or read. Slices preserve the same
- * path with an adjusted byte range, so multipart uploads can read disjoint file
- * ranges without materialising the whole file in memory.
- */
-export class FileSource implements ContentSource {
-  /** Filesystem path backing this source. */
-  readonly path: FileSourcePath
-  /** Absolute byte offset in the file where this source starts. */
-  readonly offset: number
-  /** {@inheritDoc} */
-  readonly size: number
+abstract class FileRangeSource implements ContentSource {
   /** Random-access: file ranges are read by absolute byte offset. */
   readonly canSlice = true
 
   /**
-   * Create a FileSource for a local file path.
    * @param path - Local filesystem path or file URL.
-   * @param options - Optional offset/size range override.
-   *
-   * @throws If the runtime has no Node-compatible filesystem API.
-   * @throws If the path does not reference a regular file when `size` is omitted.
+   * @param identity - File identity captured when the root FileSource was constructed.
+   * @param offset - Absolute byte offset where this source starts.
+   * @param size - Number of bytes in this source.
    */
-  constructor(path: FileSourcePath, options: FileSourceOptions = {}) {
-    const offset = options.offset ?? 0
-    validateByteCount('FileSource offset', offset)
-
-    let size: number
-    if (options.size !== undefined) {
-      size = options.size
-      validateByteCount('FileSource size', size)
-    } else {
-      const stat = getNodeFsSync().statSync(path)
-      if (!stat.isFile()) throw new Error('FileSource path must reference a regular file.')
-      size = Math.max(stat.size - offset, 0)
-    }
-
-    this.path = path
-    this.offset = offset
-    this.size = size
-  }
+  protected constructor(
+    readonly path: FileSourcePath,
+    private readonly identity: FileIdentity,
+    readonly offset: number,
+    readonly size: number,
+  ) {}
 
   /**
-   * Return a new FileSource covering the specified byte range.
+   * Return a new file-backed source covering the specified byte range.
    * @param start - The zero-based byte offset to begin the slice.
    * @param end - The exclusive byte offset where the slice ends.
    *
@@ -296,10 +365,12 @@ export class FileSource implements ContentSource {
   slice(start: number, end: number): ContentSource {
     const normalizedStart = normalizeSliceOffset(start, this.size)
     const normalizedEnd = normalizeSliceOffset(end, this.size)
-    return new FileSource(this.path, {
-      offset: this.offset + normalizedStart,
-      size: Math.max(normalizedEnd - normalizedStart, 0),
-    })
+    return new FileSliceSource(
+      this.path,
+      this.identity,
+      this.offset + normalizedStart,
+      Math.max(normalizedEnd - normalizedStart, 0),
+    )
   }
 
   /**
@@ -308,48 +379,24 @@ export class FileSource implements ContentSource {
    */
   stream(): ReadableStream<Uint8Array> {
     const path = this.path
+    const identity = this.identity
     let position = this.offset
     let remaining = this.size
-    let file: NodeFileHandle | undefined
-
-    const closeFile = async (): Promise<void> => {
-      if (file === undefined) return
-      const current = file
-      file = undefined
-      await current.close()
-    }
 
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        try {
-          if (remaining === 0) {
-            await closeFile()
-            controller.close()
-            return
-          }
-
-          file ??= await openNodeFile(path)
-          const buffer = new Uint8Array(Math.min(FILE_READ_CHUNK_SIZE, remaining))
-          const { bytesRead } = await file.read(buffer, 0, buffer.byteLength, position)
-          if (bytesRead === 0) throw rangeEndedEarlyError()
-
-          position += bytesRead
-          remaining -= bytesRead
-          controller.enqueue(
-            bytesRead === buffer.byteLength ? buffer : buffer.subarray(0, bytesRead),
-          )
-
-          if (remaining === 0) {
-            await closeFile()
-            controller.close()
-          }
-        } catch (err) {
-          await closeFile().catch(() => {})
-          throw err
+        if (remaining === 0) {
+          controller.close()
+          return
         }
-      },
-      async cancel() {
-        await closeFile()
+
+        const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
+        const data = await readFileRange(path, identity, position, length)
+
+        position += data.byteLength
+        remaining -= data.byteLength
+        controller.enqueue(data)
+        if (remaining === 0) controller.close()
       },
     })
   }
@@ -359,26 +406,36 @@ export class FileSource implements ContentSource {
    * @returns A promise resolving with exactly this source's byte range.
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
-    if (this.size === 0) return new ArrayBuffer(0)
+    const data = await readFileRange(this.path, this.identity, this.offset, this.size)
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+  }
+}
 
-    const file = await openNodeFile(this.path)
-    const data = new Uint8Array(this.size)
-    let filled = 0
-    try {
-      while (filled < data.byteLength) {
-        const { bytesRead } = await file.read(
-          data,
-          filled,
-          data.byteLength - filled,
-          this.offset + filled,
-        )
-        if (bytesRead === 0) throw rangeEndedEarlyError()
-        filled += bytesRead
-      }
-      return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
-    } finally {
-      await file.close()
-    }
+class FileSliceSource extends FileRangeSource {}
+
+/**
+ * ContentSource backed by a local filesystem path.
+ *
+ * `FileSource` is Node-only but safe to import in browser builds: it touches
+ * Node filesystem APIs only when constructed or read. Construction validates a
+ * regular, non-symlink file identity; reads reject if the path is replaced or
+ * the file is modified before the configured byte range is read. Slices preserve
+ * that captured identity, so multipart uploads can read disjoint ranges without
+ * materialising the whole file in memory or following later path swaps.
+ */
+export class FileSource extends FileRangeSource {
+  /**
+   * Create a FileSource for a local file path.
+   * @param path - Local filesystem path or file URL.
+   *
+   * @throws If the runtime has no Node-compatible filesystem API.
+   * @throws If the path does not reference a regular non-symlink file.
+   */
+  constructor(path: FileSourcePath) {
+    const stat = getNodeFsSync().lstatSync(path)
+    assertRegularFile(path, stat)
+    const identity = identityFromStats(stat)
+    super(path, identity, 0, identity.size)
   }
 }
 
@@ -441,7 +498,7 @@ export class StreamSource implements ContentSource {
 }
 
 /** ContentSource backed by a forward-only async iterable of Uint8Array chunks. */
-export class AsyncIterableSource extends StreamSource {
+class AsyncIterableSource extends StreamSource {
   /**
    * Create an AsyncIterableSource from a known-size async iterable.
    * @param iterable - Async iterable that yields Uint8Array chunks.
