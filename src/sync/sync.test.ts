@@ -9,8 +9,18 @@ import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
 
-function makeSyncPath(relativePath: string, modTimeMillis: number, size: number): SyncPath {
-  return { relativePath, modTimeMillis, size }
+function makeSyncPath(
+  relativePath: string,
+  modTimeMillis: number,
+  size: number,
+  contentSha1?: string | null,
+): SyncPath {
+  return {
+    relativePath,
+    modTimeMillis,
+    size,
+    ...(contentSha1 !== undefined ? { contentSha1 } : {}),
+  }
 }
 
 function makeLocalSyncPath(
@@ -89,6 +99,25 @@ describe('filesAreDifferent', () => {
   it('returns true when size differs', () => {
     const bigger = makeSyncPath('file.txt', 1000, 200)
     expect(filesAreDifferent(a, bigger, 'size')).toBe(true)
+  })
+
+  it('returns false when sha1 values match', () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeSyncPath('file.txt', 1000, 100, sha1)
+    const dest = makeSyncPath('file.txt', 2000, 100, sha1.toUpperCase())
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(false)
+  })
+
+  it('returns true when sha1 values differ', () => {
+    const source = makeSyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = makeSyncPath('file.txt', 1000, 100, 'b'.repeat(40))
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
+  })
+
+  it('returns true in sha1 mode when either hash is unavailable', () => {
+    const source = makeSyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = makeSyncPath('file.txt', 1000, 100, null)
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
   })
 
   it('returns false in none mode', () => {

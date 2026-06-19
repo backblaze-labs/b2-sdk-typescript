@@ -1,5 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
+import { IncrementalSha1 } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
@@ -15,16 +16,19 @@ import {
   HideAction,
   UploadAction,
 } from './actions/index.ts'
+import type { SyncPair } from './pairing.ts'
 import { zipFolders } from './pairing.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type {
   B2SyncPath,
+  CompareMode,
   LocalSyncPath,
   SyncDirection,
   SyncEvent,
   SyncFolder,
   SyncOptions,
+  SyncPath,
 } from './types.ts'
 
 /** Base configuration for a sync operation. */
@@ -111,9 +115,10 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   for await (const pair of zipFolders(source, dest)) {
     if (options.signal?.aborted) return
+    const comparablePair = await prepareComparePair(pair, options.compareMode)
 
     for (const action of generateActions(
-      pair,
+      comparablePair,
       direction,
       options.compareMode,
       options.keepMode,
@@ -166,6 +171,31 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       message: `${errors.length} action(s) failed`,
     }
   }
+}
+
+async function prepareComparePair(pair: SyncPair, compareMode: CompareMode): Promise<SyncPair> {
+  if (compareMode !== 'sha1') return pair
+  const [source, dest] = pair
+  if (source === null || dest === null) return pair
+  return [await withLocalContentSha1(source), await withLocalContentSha1(dest)]
+}
+
+async function withLocalContentSha1(path: SyncPath): Promise<SyncPath> {
+  if (!isLocalSyncPath(path) || path.contentSha1 !== undefined) return path
+  return { ...path, contentSha1: await sha1File(path.absolutePath) }
+}
+
+function isLocalSyncPath(path: SyncPath): path is LocalSyncPath {
+  return 'absolutePath' in path
+}
+
+async function sha1File(absolutePath: string): Promise<string> {
+  const { createReadStream } = await import('node:fs')
+  const hash = new IncrementalSha1()
+  for await (const chunk of createReadStream(absolutePath)) {
+    await hash.update(chunk instanceof Uint8Array ? chunk : new TextEncoder().encode(String(chunk)))
+  }
+  return hash.digest()
 }
 
 /**

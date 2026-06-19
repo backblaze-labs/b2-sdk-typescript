@@ -72,7 +72,7 @@ npx tsx examples/node-download.ts my-bucket photo.jpg [output-path]
 
 ### Sync a directory
 
-Sync a local directory to a B2 bucket prefix. Supports modtime/size comparison, delete mode, dry-run, and configurable concurrency.
+Sync a local directory to a B2 bucket prefix. Supports modtime/size/SHA-1 comparison, delete mode, dry-run, and configurable concurrency.
 
 ```bash
 npx tsx examples/node-sync-cli.ts ./local-dir my-bucket backup/
@@ -84,7 +84,7 @@ SYNC_MODE=size SYNC_DELETE=true SYNC_CONCURRENCY=8 SYNC_DRY_RUN=true \
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `SYNC_MODE` | `modtime` | Compare mode: `modtime`, `size`, or `none` |
+| `SYNC_MODE` | `modtime` | Compare mode: `modtime`, `size`, `sha1`, or `none` |
 | `SYNC_DELETE` | `false` | Delete remote files not present locally |
 | `SYNC_CONCURRENCY` | `4` | Parallel upload/download workers |
 | `SYNC_DRY_RUN` | `false` | Print actions without executing them |

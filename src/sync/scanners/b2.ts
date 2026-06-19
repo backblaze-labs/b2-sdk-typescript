@@ -64,6 +64,7 @@ export class B2Folder implements SyncFolder {
         relativePath,
         modTimeMillis: selected.uploadTimestamp,
         size: selected.contentLength,
+        contentSha1: selected.contentSha1,
         selectedVersion: selected,
         allVersions: versions,
       }

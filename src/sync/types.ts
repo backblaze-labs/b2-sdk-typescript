@@ -1,8 +1,8 @@
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 
-/** Strategy for comparing source and destination files: by modification time, size, or skip comparison. */
-export type CompareMode = 'modtime' | 'size' | 'none'
+/** Strategy for comparing source and destination files. */
+export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
 /** Strategy for handling destination files not present in the source. */
 export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
@@ -18,6 +18,8 @@ export interface SyncPath {
   readonly modTimeMillis: number
   /** File size in bytes. */
   readonly size: number
+  /** SHA-1 checksum when known or already computed; null when unavailable. */
+  readonly contentSha1?: string | null
 }
 
 /** A file on the local filesystem discovered during a scan. */

@@ -5,7 +5,7 @@
  *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/node-sync-cli.ts <local-dir> <bucket-name> [prefix]
  *
  * Options via env:
- *   SYNC_MODE=modtime|size|none     (default: modtime)
+ *   SYNC_MODE=modtime|size|sha1|none     (default: modtime)
  *   SYNC_DELETE=true|false           (default: false, no-delete)
  *   SYNC_CONCURRENCY=N              (default: 4)
  *   SYNC_DRY_RUN=true|false         (default: false)
