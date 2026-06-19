@@ -55,6 +55,11 @@ export interface UploadLargeFileOptions {
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
   /**
+   * Retry when an upload response body cannot be read after B2 may have stored
+   * the part. Defaults to true; set false to avoid re-sending the part.
+   */
+  readonly retryResponseBodyFailures?: boolean
+  /**
    * If true, look for an unfinished large file with the same bucket and file name
    * and skip parts whose locally-recomputed SHA-1 matches the server's.
    */
@@ -217,6 +222,7 @@ export async function uploadLargeFile(
           retry: options.retry,
           signal: options.signal,
           onUploadRetry: options.onUploadRetry,
+          retryResponseBodyFailures: options.retryResponseBodyFailures,
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),
@@ -334,6 +340,7 @@ async function uploadPartsSequentially(
         retry: options.retry,
         signal: options.signal,
         onUploadRetry: options.onUploadRetry,
+        retryResponseBodyFailures: options.retryResponseBodyFailures,
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }
           : {}),

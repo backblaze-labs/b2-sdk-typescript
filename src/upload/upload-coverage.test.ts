@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
+import { B2SsrfError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
@@ -405,6 +406,56 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'duplicate.txt')).toBe(maxRetries + 1)
   })
 
+  it('shares the retry budget with fresh upload URL fetch failures', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const maxRetries = 2
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          if (getUploadUrlCalls <= maxRetries) {
+            return jsonErrorResponse(500, 'internal_error', 'fresh URL fetch failed')
+          }
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&budget=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          return jsonErrorResponse(500, 'internal_error', 'upload pod failed')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'fresh-url-budget',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'budget.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toThrow(/upload pod failed/)
+
+    expect(getUploadUrlCalls).toBe(maxRetries + 1)
+    expect(uploadAttempts).toBe(1)
+  })
+
   it('stops sending payloads immediately when aborted from the upload retry callback', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
@@ -493,6 +544,185 @@ describe('upload fresh-URL retry', () => {
     expect(uploadAttempts).toBe(2)
     expect(getUploadUrlCalls).toBe(2)
     expect(await countFileVersions(bucket, 'lost-body.txt')).toBe(2)
+  })
+
+  it('can disable retry after a lost 2xx upload response body', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          const response = await inner.send(req)
+          return {
+            ...response,
+            json: () => Promise.reject(new TypeError('response body lost')),
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'lost-body-disabled',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'lost-body-disabled.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        retryResponseBodyFailures: false,
+      }),
+    ).rejects.toThrow(/response body lost/)
+
+    expect(uploadAttempts).toBe(1)
+    expect(await countFileVersions(bucket, 'lost-body-disabled.txt')).toBe(1)
+  })
+
+  it('does not retry upload URLs rejected by the SSRF guard', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let guardedUploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: 'http://169.254.169.254/latest/meta-data/b2_upload_file',
+          })
+        }
+        if (req.url.includes('169.254.169.254')) {
+          guardedUploadAttempts += 1
+          throw new B2SsrfError('literal IP host not allowed by SSRF guard', req.url)
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'ssrf-upload-url',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'ssrf.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toBeInstanceOf(B2SsrfError)
+
+    expect(getUploadUrlCalls).toBe(1)
+    expect(guardedUploadAttempts).toBe(1)
+  })
+
+  it('refreshes a stale pooled upload URL reported as bad_request', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&fresh=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          if (req.url.includes('pooled=stale')) {
+            return jsonErrorResponse(400, 'bad_request', 'Upload URL expired')
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stale-upload-url',
+      bucketType: BucketType.AllPrivate,
+    })
+    const pooled = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    client.accountInfo.returnUploadUrl(bucket.id, {
+      uploadUrl: `${pooled.uploadUrl}&pooled=stale`,
+      authorizationToken: pooled.authorizationToken,
+    })
+    getUploadUrlCalls = 0
+
+    const result = await bucket.upload({
+      fileName: 'stale-url.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('stale-url.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(1)
+  })
+
+  it('does not retry deterministic bad_request upload failures', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          return jsonErrorResponse(400, 'bad_request', 'Sha1 did not match data received')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'checksum-bad-request',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'bad-request.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toThrow(/Sha1 did not match/)
+
+    expect(uploadAttempts).toBe(1)
   })
 
   it('passes the abort signal to fresh upload URL fetches', async () => {

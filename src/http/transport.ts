@@ -1,4 +1,10 @@
-import { B2Error, classifyError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import {
+  B2Error,
+  B2SsrfError,
+  classifyError,
+  ExpiredAuthTokenError,
+  NetworkError,
+} from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
@@ -16,6 +22,8 @@ export interface HttpRequest {
   readonly body?: BodyInit | null
   /** Optional abort signal for request cancellation. */
   readonly signal?: AbortSignal
+  /** Optional per-request retry override. */
+  readonly retry?: Partial<RetryOptions>
 }
 
 /** Represents a parsed HTTP response from the B2 API. */
@@ -163,6 +171,15 @@ function shouldRetryInPlace(error: B2Error, url: string): boolean {
   return true
 }
 
+function isTerminalTransportError(err: unknown): boolean {
+  return (
+    err instanceof B2Error ||
+    err instanceof NetworkError ||
+    err instanceof B2SsrfError ||
+    (err instanceof DOMException && err.name === 'AbortError')
+  )
+}
+
 /**
  * Transport wrapper that adds automatic retry with exponential backoff.
  * Handles transient errors (408, 429, and the transient 5xx set 500/502/503/504),
@@ -208,12 +225,13 @@ export class RetryTransport implements HttpTransport {
     // fresh Authorization header, so the caller's `originalRequest`
     // stays untouched.
     let request: HttpRequest = originalRequest
+    const retryOptions = { ...this.options, ...originalRequest.retry }
     let lastError: B2Error | NetworkError | undefined
 
-    for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
       if (attempt > 0 && lastError) {
         const retryAfter = lastError instanceof NetworkError ? undefined : lastError.retryAfter
-        const delay = computeBackoff(attempt - 1, this.options, retryAfter)
+        const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
         await this.sleepImpl(delay, request.signal)
       }
 
@@ -264,17 +282,13 @@ export class RetryTransport implements HttpTransport {
           continue
         }
 
-        if (!shouldRetryInPlace(error, request.url) || attempt === this.options.maxRetries) {
+        if (!shouldRetryInPlace(error, request.url) || attempt === retryOptions.maxRetries) {
           throw error
         }
 
         lastError = error
       } catch (err) {
-        if (err instanceof B2Error || err instanceof NetworkError) {
-          throw err
-        }
-
-        if (err instanceof DOMException && err.name === 'AbortError') {
+        if (isTerminalTransportError(err)) {
           throw err
         }
 
@@ -283,7 +297,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isUploadEndpoint(request.url) || attempt === this.options.maxRetries) {
+        if (isUploadEndpoint(request.url) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 

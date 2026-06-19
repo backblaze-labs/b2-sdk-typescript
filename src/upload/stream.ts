@@ -41,6 +41,11 @@ export interface CreateWriteStreamOptions {
   readonly retry?: Partial<RetryOptions>
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
+  /**
+   * Retry when an upload response body cannot be read after B2 may have stored
+   * the part. Defaults to true; set false to avoid re-sending the part.
+   */
+  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -149,6 +154,7 @@ export function createWriteStream(
       retry: options.retry,
       signal: options.signal,
       onUploadRetry: options.onUploadRetry,
+      retryResponseBodyFailures: options.retryResponseBodyFailures,
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
         : {}),

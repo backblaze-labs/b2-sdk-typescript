@@ -39,6 +39,11 @@ export interface UploadFileOptions {
   readonly retry?: Partial<RetryOptions>
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
+  /**
+   * Retry when an upload response body cannot be read after B2 may have stored
+   * the file. Defaults to true; set false to avoid possible duplicate versions.
+   */
+  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -81,6 +86,7 @@ export async function uploadSmallFile(
     retry: options.retry,
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
+    retryResponseBodyFailures: options.retryResponseBodyFailures,
     checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
     fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
     returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),

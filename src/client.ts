@@ -6,6 +6,7 @@ import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
 import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
+import { setClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
@@ -80,8 +81,6 @@ export class B2Client {
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
   readonly accountInfo: AccountInfo
-  /** Resolved retry settings used by upload-layer fresh-URL retry. */
-  readonly uploadRetryOptions: RetryOptions
   /**
    * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
    * a custom transport was supplied — in that case the SDK does not own the
@@ -103,7 +102,8 @@ export class B2Client {
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     this.userAllowedSuffixes = options.allowedHostSuffixes
-    this.uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    setClientUploadRetryOptions(this, uploadRetryOptions)
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -120,7 +120,7 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      retry: this.uploadRetryOptions,
+      retry: uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 

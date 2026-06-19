@@ -1,5 +1,11 @@
 import type { AccountInfo, UploadUrlEntry } from '../auth/account-info.ts'
-import { B2Error, NetworkError } from '../errors/index.ts'
+import {
+  B2Error,
+  B2SsrfError,
+  BadRequestError,
+  BadUploadUrlError,
+  NetworkError,
+} from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
@@ -26,13 +32,19 @@ export interface UploadRetryEvent {
 export type UploadRetryListener = (event: UploadRetryEvent) => void
 
 /** Internal options for upload-layer fresh-URL retries. */
-export interface UploadLayerRetryOptions {
+interface UploadLayerRetryOptions {
   /** Retry settings shared with the main transport retry configuration. */
   readonly retry?: Partial<RetryOptions> | undefined
   /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
   readonly signal?: AbortSignal | undefined
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
+  /**
+   * Whether response-body read failures after an upload POST should be retried.
+   * Defaults to true. Set false to avoid re-sending a payload when B2 may have
+   * stored it but the success response was lost.
+   */
+  readonly retryResponseBodyFailures?: boolean | undefined
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
@@ -44,6 +56,8 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
   readonly evictEntry: (entry: UploadUrlEntry) => void
   readonly upload: (entry: UploadUrlEntry) => Promise<T>
 }
+
+const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
  * Fetches a small-file upload URL, bypassing the pool.
@@ -68,6 +82,7 @@ export async function fetchFreshUploadUrl(
       bucketId,
     },
     signal,
+    freshUrlRetryOverride,
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
@@ -95,6 +110,7 @@ export async function fetchFreshPartUploadUrl(
       fileId,
     },
     signal,
+    freshUrlRetryOverride,
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
@@ -136,6 +152,7 @@ export function uploadPartWithFreshUrl(
     retry: options.retry,
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
+    retryResponseBodyFailures: options.retryResponseBodyFailures,
     checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
     returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
@@ -174,23 +191,27 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
   const retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
-    options.signal?.throwIfAborted()
-    const uploadEntry =
-      attempt === 0
-        ? (options.checkout() ?? (await options.fetchFresh()))
-        : await options.fetchFresh()
+    let uploadEntry: UploadUrlEntry | undefined
 
     try {
+      options.signal?.throwIfAborted()
+      uploadEntry =
+        attempt === 0
+          ? (options.checkout() ?? (await options.fetchFresh()))
+          : await options.fetchFresh()
+
       const result = await options.upload(uploadEntry)
       options.returnEntry(uploadEntry)
       return result
     } catch (err) {
-      options.evictEntry(uploadEntry)
+      if (uploadEntry !== undefined) {
+        options.evictEntry(uploadEntry)
+      }
       if (options.signal?.aborted) {
         throw err
       }
 
-      const retryError = normalizeUploadRetryError(err)
+      const retryError = normalizeUploadRetryError(err, options)
       if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
@@ -210,20 +231,29 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
     }
   }
 
+  // Unreachable at runtime: the loop returns on success or throws from the
+  // final failed attempt. This satisfies TypeScript's return-path analysis.
   throw new NetworkError('Upload retry budget exhausted')
 }
 
 function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
-  if (err instanceof NetworkError) return true
+  if (err instanceof NetworkError) return !(err.cause instanceof B2SsrfError)
+  if (isUploadUrlInvalidationError(err)) return true
   return err instanceof B2Error && err.retryable
 }
 
-function normalizeUploadRetryError(err: unknown): unknown {
+function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof DOMException) {
+    if (options.retryResponseBodyFailures === false) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }
   return err
+}
+
+function isUploadUrlInvalidationError(err: unknown): boolean {
+  if (err instanceof BadUploadUrlError) return true
+  return err instanceof BadRequestError && /upload url/i.test(err.message)
 }

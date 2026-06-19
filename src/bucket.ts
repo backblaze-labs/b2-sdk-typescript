@@ -6,6 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -175,6 +176,11 @@ export class Bucket {
     onProgress?: ProgressListener
     /** Callback invoked before retrying with a fresh upload URL. */
     onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the file. Defaults to true; set false to avoid possible duplicate versions.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
@@ -199,7 +205,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: this.client.uploadRetryOptions,
+        retry: getClientUploadRetryOptions(this.client),
       })
     }
 
@@ -210,7 +216,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: this.client.uploadRetryOptions,
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 

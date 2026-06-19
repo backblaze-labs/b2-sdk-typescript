@@ -9,6 +9,7 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -129,6 +130,11 @@ export class B2Object {
     onProgress?: ProgressListener
     /** Callback invoked before retrying with a fresh upload URL. */
     onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the file. Defaults to true; set false to avoid possible duplicate versions.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
@@ -151,7 +157,7 @@ export class B2Object {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
-        retry: this.client.uploadRetryOptions,
+        retry: getClientUploadRetryOptions(this.client),
       })
     }
 
@@ -161,7 +167,7 @@ export class B2Object {
       ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: this.client.uploadRetryOptions,
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 
@@ -287,6 +293,11 @@ export class B2Object {
     onProgress?: ProgressListener
     /** Callback invoked before retrying with a fresh upload URL. */
     onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the part. Defaults to true; set false to avoid re-sending the part.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */
     signal?: AbortSignal
   }): UploadWriteHandle {
@@ -294,7 +305,7 @@ export class B2Object {
       ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: this.client.uploadRetryOptions,
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 
