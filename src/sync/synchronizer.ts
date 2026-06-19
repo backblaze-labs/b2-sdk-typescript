@@ -15,8 +15,8 @@ import {
   HideAction,
   UploadAction,
 } from './actions/index.ts'
-import { zipFolders } from './pairing.ts'
-import { preparePairForCompare } from './policies/compare.ts'
+import { type SyncPair, zipFolders } from './pairing.ts'
+import { type ComparePreparationResult, preparePairForCompare } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type {
@@ -114,9 +114,12 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   for await (const pair of zipFolders(source, dest)) {
     if (options.signal?.aborted) return
-    const prepared = await preparePairForCompare(pair, options.compareMode, {
-      ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    })
+    const prepared =
+      options.compareMode === 'sha1'
+        ? await preparePairForCompare(pair, options.compareMode, {
+            ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          })
+        : readyComparePair(pair)
     if (prepared.aborted || options.signal?.aborted) return
 
     yield {
@@ -178,6 +181,17 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       size: 0,
       message: `${errors.length} sync error(s) occurred`,
     }
+  }
+}
+
+function readyComparePair(pair: SyncPair): ComparePreparationResult {
+  return {
+    pair,
+    events: [],
+    errors: [],
+    bytesHashed: 0,
+    skipActionGeneration: false,
+    aborted: false,
   }
 }
 
