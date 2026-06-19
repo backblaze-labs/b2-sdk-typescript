@@ -3695,7 +3695,7 @@ describe('synchronize', () => {
           dest: { ...dest, type: 'b2' },
           options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
           bucket: mockBucket as unknown as Bucket,
-          prefix: 'pfx/',
+          prefix: 'pfx',
         }
 
         const events = await collectEvents(config)
@@ -3774,7 +3774,7 @@ describe('synchronize', () => {
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'delete', signal: controller.signal },
         bucket: lockedBucket as unknown as Bucket,
-        prefix: 'backup/',
+        prefix: 'backup',
       }
 
       const events = await collectEvents(config)

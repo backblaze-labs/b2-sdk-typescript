@@ -33,6 +33,7 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
+import { normalizeB2FolderPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
@@ -79,7 +80,10 @@ export interface SynchronizerUpConfig extends SynchronizerConfig {
   readonly dest: B2SyncFolder
   /** The target B2 bucket. */
   readonly bucket: Bucket
-  /** Key prefix for uploaded files in the bucket. */
+  /**
+   * Folder-style key prefix for uploaded files in the bucket.
+   * Non-empty values are normalized with a trailing slash.
+   */
   readonly prefix: string
 }
 
@@ -484,7 +488,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const factory: ActionFactory = {
     upload(source: LocalSyncPath): SyncAction {
       const bucket = upConfig.bucket
-      const prefix = upConfig.prefix ?? ''
+      const prefix = normalizeB2FolderPrefix(upConfig.prefix ?? '')
       assertBucket(bucket, 'upload')
 
       return new UploadAction(
@@ -560,7 +564,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'hide')
 
       return new HideAction(path, async (relPath) => {
-        const prefix = upConfig.prefix ?? ''
+        const prefix = normalizeB2FolderPrefix(upConfig.prefix ?? '')
         const fileName = `${prefix}${relPath}`
         if (config.options.signal !== undefined) {
           await bucket.hideFile(fileName, { signal: config.options.signal })

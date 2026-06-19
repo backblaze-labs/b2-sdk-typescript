@@ -4,6 +4,7 @@ import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { isAbortError } from '../local-sha1.ts'
 import { literalPrefixForSyncFilters, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
+import { normalizeB2FolderPrefix, stripLeadingSlashes } from '../prefix.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -21,10 +22,11 @@ export class B2Folder implements SyncFolder {
    * Creates a new B2Folder for the given bucket and optional prefix.
    * @param bucket - The B2 bucket to scan.
    * @param prefix - Optional folder prefix to restrict the scan scope.
+   * Non-empty values are normalized with a trailing slash.
    */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
-    this.prefix = normalizeFolderPrefix(prefix)
+    this.prefix = normalizeB2FolderPrefix(prefix)
   }
 
   /**
@@ -103,13 +105,7 @@ export class B2Folder implements SyncFolder {
   }
 
   private toRelativePath(fileName: string): string {
-    if (this.prefix === '') return fileName
-
-    let relativePath = fileName.slice(this.prefix.length)
-    while (relativePath.startsWith('/')) {
-      relativePath = relativePath.slice(1)
-    }
-    return relativePath
+    return stripLeadingSlashes(this.prefix === '' ? fileName : fileName.slice(this.prefix.length))
   }
 }
 
@@ -122,9 +118,4 @@ function emitScanError(options: SyncScanOptions, message: string, err: unknown):
   }
   options.onError?.(event)
   return new Error(event.message)
-}
-
-function normalizeFolderPrefix(prefix: string): string {
-  if (prefix === '' || prefix.endsWith('/')) return prefix
-  return `${prefix}/`
 }

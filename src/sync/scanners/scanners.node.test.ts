@@ -471,6 +471,40 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
+  it('does not yield leading slashes when no prefix is configured', async () => {
+    const fileVersion: FileVersion = {
+      accountId: 'acc' as unknown as AccountId,
+      action: FileAction.Upload,
+      bucketId: 'b' as unknown as BucketId,
+      contentLength: 1,
+      contentMd5: null,
+      contentSha1: 'sha1',
+      contentType: 'application/octet-stream',
+      fileId: 'fid' as unknown as FileId,
+      fileInfo: {},
+      fileName: '/docs/readme.md',
+      fileRetention: { isClientAuthorizedToRead: true, value: null },
+      legalHold: { isClientAuthorizedToRead: true, value: null },
+      replicationStatus: null,
+      serverSideEncryption: { mode: EncryptionMode.None },
+      uploadTimestamp: 1,
+    }
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [fileVersion],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+  })
+
   it('pushes down safe include prefixes while filtering listed names', async () => {
     function makeFileVersion(name: string, ts: number): FileVersion {
       return {
