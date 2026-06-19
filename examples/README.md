@@ -32,7 +32,7 @@ export B2_APPLICATION_KEY=your-application-key
 Run from the SDK root directory. Examples use `npx tsx` for direct TypeScript execution, but thanks to the SDK's [source-level isomorphism](../README.md#source-isomorphism), the `node-*` scripts also run unchanged in Bun and Deno:
 
 ```bash
-# Node 22+ (with tsx)
+# Node 22.3+ (with tsx)
 npx tsx examples/node-list-buckets.ts
 
 # Bun

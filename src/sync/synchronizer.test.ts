@@ -6602,6 +6602,56 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode)(
+      'does not publish success if a local file changes after upload',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-post-upload-change-'))
+        try {
+          const filePath = join(root, 'payload.bin')
+          const original = deterministicBytes(64)
+          await writeFile(filePath, original)
+
+          const mockBucket = makeMockBucket()
+          mockBucket.upload.mockImplementationOnce(
+            async (options: Parameters<Bucket['upload']>[0]) => {
+              await options.source.toArrayBuffer()
+              await writeFile(filePath, deterministicBytes(65))
+              return undefined as never
+            },
+          )
+
+          const sourceFile: LocalSyncPath = {
+            relativePath: 'payload.bin',
+            absolutePath: filePath,
+            modTimeMillis: 2000,
+            size: original.byteLength,
+          }
+          const source = makeMemoryFolder([sourceFile], 'local')
+          const dest = makeMemoryFolder([], 'b2')
+
+          const config: SynchronizerUpConfig = {
+            source: { ...source, type: 'local', root },
+            dest: { ...dest, type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events.some((event) => event.type === 'upload-done')).toBe(false)
+          expect(
+            events.some((event) => event.type === 'error' && event.message.includes(filePath)),
+          ).toBe(true)
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('upload prefix + orphan removal', () => {

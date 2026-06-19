@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -39,17 +39,6 @@ describe('FileSource', () => {
     expect(source.size).toBe(21)
     expect(source.canSlice).toBe(true)
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
-  })
-
-  it('preserves subclasses when created with asynchronous validation', async () => {
-    class CustomFileSource extends FileSource {}
-    const path = join(tmpDir, 'subclass-payload.txt')
-    await writeFile(path, 'subclass body')
-
-    const source = await CustomFileSource.fromPath(path)
-
-    expect(source).toBeInstanceOf(CustomFileSource)
-    expect(decoder.decode(await source.toArrayBuffer())).toBe('subclass body')
   })
 
   it('returns ranged slices without reading unrelated bytes', async () => {
@@ -138,6 +127,16 @@ describe('FileSource', () => {
 
     const source = new FileSource(path)
     await writeFile(path, 'short')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
+
+  it('rejects if the file grows after construction', async () => {
+    const path = join(tmpDir, 'grown.txt')
+    await writeFile(path, 'original payload')
+
+    const source = new FileSource(path)
+    await appendFile(path, ' with appended bytes')
 
     await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })

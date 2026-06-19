@@ -45,7 +45,8 @@ export interface ResumePartReusedEvent {
 /** Callback invoked when explicit resume accepts a pre-existing server part. */
 export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
-const MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS = 1024
+const STREAM_EMITTED_TOO_MANY_BYTES_ERROR =
+  'uploadLargeFile: source stream emitted more bytes than advertised size.'
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -583,14 +584,14 @@ async function uploadPartsSequentially(
       tracker.completePart()
     }
     if (carry !== null) {
-      throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
+      throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
     let extra = await reader.read()
     while (!extra.done && extra.value.byteLength === 0) {
       extra = await reader.read()
     }
     if (!extra.done) {
-      throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
+      throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
     completed = true
   } finally {

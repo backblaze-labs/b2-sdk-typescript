@@ -2,6 +2,8 @@ import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
 const FILE_READ_CHUNK_SIZE = 64 * 1024
+const FORWARD_ONLY_SIZE_REQUIRED_ERROR =
+  'size is required when using a forward-only content source as input.'
 
 /** Filesystem path accepted by {@link FileSource}. */
 export type FileSourcePath = string | URL
@@ -409,7 +411,23 @@ abstract class FileRangeSource implements ContentSource {
   }
 
   /**
+   * Verify that the file range still points at the captured file identity.
+   * @param when - Context included in any thrown error message.
+   */
+  protected async verifyUnchanged(when: string): Promise<void> {
+    const stats = await lstatNodeFile(this.path)
+    assertRegularFile(this.path, stats)
+    assertSameIdentity(this.path, this.identity, stats, when)
+  }
+
+  /**
    * Open this file range as a Web ReadableStream.
+   *
+   * The stream opens and closes the file for each chunk so callers that abandon
+   * a partially consumed public stream do not leave a descriptor open. For very
+   * large local-file uploads, pass `FileSource` directly to `bucket.upload()` so
+   * the multipart engine can use ranged `toArrayBuffer()` reads instead.
+   *
    * @returns A ReadableStream that reads the configured file range lazily.
    */
   stream(): ReadableStream<Uint8Array> {
@@ -447,20 +465,22 @@ abstract class FileRangeSource implements ContentSource {
   }
 }
 
+// Concrete range source returned by FileRangeSource.slice().
 class FileSliceSource extends FileRangeSource {}
 
 /**
  * ContentSource backed by a local filesystem path.
  *
  * `FileSource` is Node-only but safe to import in browser builds: it touches
- * Node filesystem APIs only when constructed or read. The constructor validates
- * the path synchronously so `size` is immediately available; async code paths
- * that construct many sources should use {@link FileSource.fromPath}. Both paths
- * validate a regular, non-symlink file identity; reads reject if the path is
- * replaced, if the filesystem cannot report stable identity, or if the file is
- * modified before the configured byte range is read. Slices preserve that
- * captured identity, so multipart uploads can read disjoint ranges without
- * materialising the whole file in memory or following later path swaps.
+ * Node filesystem APIs only when constructed or read. The constructor performs
+ * synchronous filesystem validation so `size` is immediately available; request
+ * handlers, sync loops, and other latency-sensitive code should use
+ * {@link FileSource.fromPath}. Both paths validate a regular, non-symlink file
+ * identity; reads reject if the path is replaced, if the filesystem cannot
+ * report stable identity, or if the file is modified before the configured byte
+ * range is read. Slices preserve that captured identity, so multipart uploads
+ * can read disjoint ranges without materialising the whole file in memory or
+ * following later path swaps.
  */
 export class FileSource extends FileRangeSource {
   /**
@@ -494,16 +514,24 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  static async fromPath<T extends typeof FileSource>(
-    this: T,
-    path: FileSourcePath,
-  ): Promise<InstanceType<T>> {
+  static async fromPath(path: FileSourcePath): Promise<FileSource> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
-    // biome-ignore lint/complexity/noThisInStatic: inherited factory must construct the receiver class.
-    const InternalCtor = this as unknown as {
-      new (path: FileSourcePath, identity: FileIdentity): InstanceType<T>
+    const InternalCtor = FileSource as unknown as {
+      new (path: FileSourcePath, identity: FileIdentity): FileSource
     }
     return new InternalCtor(path, identity)
+  }
+
+  /**
+   * Verify that the backing file still matches the captured file identity.
+   * @param when - Context included in any thrown error message.
+   *
+   * @returns A promise that resolves when the file still matches.
+   *
+   * @throws If the path no longer references the captured regular file.
+   */
+  assertUnchanged(when = 'after read'): Promise<void> {
+    return this.verifyUnchanged(when)
   }
 }
 
@@ -599,13 +627,13 @@ export function toContentSource(
   }
   if (isReadableStream(input)) {
     if (size === undefined) {
-      throw new Error('size is required when using a forward-only content source as input.')
+      throw new Error(FORWARD_ONLY_SIZE_REQUIRED_ERROR)
     }
     return new StreamSource(input, size)
   }
   if (isAsyncIterable(input)) {
     if (size === undefined) {
-      throw new Error('size is required when using a forward-only content source as input.')
+      throw new Error(FORWARD_ONLY_SIZE_REQUIRED_ERROR)
     }
     return new AsyncIterableSource(input, size)
   }
