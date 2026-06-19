@@ -73,7 +73,23 @@ function isUnparseableRealExampleBucket(name: string): boolean {
  *
  * @returns A promise that resolves when the child exits cleanly.
  */
-function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await runOnce(argv, env)
+      return
+    } catch (err) {
+      if (attempt === maxAttempts) throw err
+      console.warn(
+        `${argv.join(' ')} failed on attempt ${attempt}/${maxAttempts}; retrying in ${attempt}s`,
+      )
+      await sleep(attempt * 1_000)
+    }
+  }
+}
+
+function runOnce(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const [cmd, ...args] = argv
     if (!cmd) {
