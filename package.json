@@ -146,8 +146,6 @@
     "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test && pnpm run build && pnpm run docs && pnpm run verify:metadata && pnpm run verify:exports"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1072.0",
-    "@aws-sdk/s3-request-presigner": "^3.1072.0",
     "@biomejs/biome": "^2.4.16",
     "@eslint/js": "^10.0.1",
     "@microsoft/tsdoc-config": "^0.18.1",
@@ -168,14 +166,10 @@
     "vitest": "^4.1.8"
   },
   "peerDependencies": {
-    "@aws-sdk/client-s3": "^3.0.0",
-    "@aws-sdk/s3-request-presigner": "^3.0.0"
+    "@aws-sdk/client-s3": "^3.0.0"
   },
   "peerDependenciesMeta": {
     "@aws-sdk/client-s3": {
-      "optional": true
-    },
-    "@aws-sdk/s3-request-presigner": {
       "optional": true
     }
   },

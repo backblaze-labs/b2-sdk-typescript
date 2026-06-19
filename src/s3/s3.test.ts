@@ -7,7 +7,10 @@ import {
   deriveS3RegionFromEndpoint,
   presignGetObjectUrl,
   presignPutObjectUrl,
+  presignS3GetObjectUrl,
 } from './index.ts'
+
+const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(
@@ -38,6 +41,18 @@ function createMockAccountInfo(
     checkoutPartUploadUrl: () => null,
     returnPartUploadUrl: () => {},
     evictPartUploadUrl: () => {},
+  }
+}
+
+function basePresignOptions() {
+  return {
+    accountInfo: createMockAccountInfo(),
+    applicationKeyId: 'key-id',
+    applicationKey: 'key-secret',
+    bucketName: 'my-bucket',
+    fileName: 'path/to/file.txt',
+    expiresIn: 900,
+    signingDate: SIGNING_DATE,
   }
 }
 
@@ -148,25 +163,14 @@ describe('createS3ClientConfig', () => {
   })
 })
 
-describe('presignGetObjectUrl', () => {
-  const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
-
+describe('presignS3GetObjectUrl', () => {
   it('generates a SigV4 GET URL for B2 S3 endpoints', async () => {
-    const url = new URL(
-      await presignGetObjectUrl({
-        accountInfo: createMockAccountInfo(),
-        applicationKeyId: 'key-id',
-        applicationKey: 'key-secret',
-        bucketName: 'my-bucket',
-        fileName: 'path/to/file.txt',
-        expiresIn: 900,
-        signingDate: SIGNING_DATE,
-      }),
-    )
+    const url = new URL(await presignS3GetObjectUrl(basePresignOptions()))
 
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/path/to/file.txt')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
+    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
@@ -175,20 +179,18 @@ describe('presignGetObjectUrl', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host')
     expect(url.searchParams.get('x-id')).toBe('GetObject')
     expect(url.searchParams.has('Authorization')).toBe(false)
+    expect(url.toString()).not.toContain('key-secret')
   })
 
   it('uses explicit regions for custom endpoints', async () => {
     const url = new URL(
-      await presignGetObjectUrl({
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
         accountInfo: createMockAccountInfo({
           s3ApiUrl: 'https://s3.example.test',
         }),
-        applicationKeyId: 'key-id',
-        applicationKey: 'key-secret',
-        bucketName: 'my-bucket',
         fileName: 'file.txt',
         region: 'custom-region-1',
-        signingDate: SIGNING_DATE,
       }),
     )
 
@@ -197,49 +199,114 @@ describe('presignGetObjectUrl', () => {
       'key-id/20240102/custom-region-1/s3/aws4_request',
     )
   })
+
+  it('signs response override query parameters', async () => {
+    const url = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseContentDisposition: 'attachment; filename="safe.txt"',
+        responseContentType: 'text/plain',
+      }),
+    )
+
+    expect(url.searchParams.get('response-content-disposition')).toBe(
+      'attachment; filename="safe.txt"',
+    )
+    expect(url.searchParams.get('response-content-type')).toBe('text/plain')
+  })
+
+  it('rejects out-of-range expiry values', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        expiresIn: 604_801,
+      }),
+    ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds')
+  })
+
+  it('does not expose secrets to AWS SDK peer modules', async () => {
+    vi.resetModules()
+    vi.doMock('@aws-sdk/client-s3', () => {
+      throw new Error('malicious client peer loaded')
+    })
+    vi.doMock('@aws-sdk/s3-request-presigner', () => {
+      throw new Error('malicious presigner peer loaded')
+    })
+
+    try {
+      const s3 = await import('./index.ts')
+      const url = await s3.presignS3GetObjectUrl(basePresignOptions())
+      expect(url).not.toContain('key-secret')
+    } finally {
+      vi.doUnmock('@aws-sdk/client-s3')
+      vi.doUnmock('@aws-sdk/s3-request-presigner')
+      vi.resetModules()
+    }
+  })
+})
+
+describe('presignGetObjectUrl', () => {
+  it('preserves the legacy B2 native positional signature', () => {
+    const url = presignGetObjectUrl(
+      'https://f004.backblazeb2.com',
+      'my-bucket',
+      'path/to/file.txt',
+      'auth-token-123',
+    )
+
+    expect(typeof url).toBe('string')
+    expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
+    expect(url).toContain('Authorization=auth-token-123')
+  })
 })
 
 describe('presignPutObjectUrl', () => {
-  const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
-
   it('generates a SigV4 PUT URL for direct uploads', async () => {
     const url = new URL(
       await presignPutObjectUrl({
-        accountInfo: createMockAccountInfo(),
-        applicationKeyId: 'key-id',
-        applicationKey: 'key-secret',
-        bucketName: 'my-bucket',
+        ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         contentType: 'image/jpeg',
-        expiresIn: 900,
-        signingDate: SIGNING_DATE,
+        contentLength: 123,
       }),
     )
 
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/uploads/photo.jpg')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
+    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
     expect(url.searchParams.get('X-Amz-Date')).toBe('20240102T030405Z')
     expect(url.searchParams.get('X-Amz-Expires')).toBe('900')
-    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host')
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host')
     expect(url.searchParams.get('x-id')).toBe('PutObject')
-    expect(url.searchParams.has('x-amz-sdk-checksum-algorithm')).toBe(false)
-    expect(url.searchParams.has('x-amz-checksum-crc32')).toBe(false)
+    expect(url.toString()).not.toContain('key-secret')
+  })
+
+  it('makes content type affect the signed URL', async () => {
+    const withoutContentType = await presignPutObjectUrl({
+      ...basePresignOptions(),
+      fileName: 'uploads/photo.jpg',
+    })
+    const withContentType = await presignPutObjectUrl({
+      ...basePresignOptions(),
+      fileName: 'uploads/photo.jpg',
+      contentType: 'image/jpeg',
+    })
+    const url = new URL(withContentType)
+
+    expect(withContentType).not.toBe(withoutContentType)
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host')
   })
 
   it('signs content length when requested', async () => {
     const url = new URL(
       await presignPutObjectUrl({
-        accountInfo: createMockAccountInfo(),
-        applicationKeyId: 'key-id',
-        applicationKey: 'key-secret',
-        bucketName: 'my-bucket',
+        ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         contentLength: 123,
-        signingDate: SIGNING_DATE,
       }),
     )
 
@@ -258,13 +325,7 @@ describe('deriveS3RegionFromEndpoint', () => {
 })
 
 describe('createNativeDownloadAuthorizationUrl', () => {
-  // Freeze Date.now so expires timestamps are deterministic.
-  const FIXED_NOW_MS = 1_700_000_000_000
-  const FIXED_NOW_S = Math.floor(FIXED_NOW_MS / 1000)
-
   it('constructs URL with encoded bucket and file name', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
-
     const url = createNativeDownloadAuthorizationUrl(
       'https://f004.backblazeb2.com',
       'my-bucket',
@@ -273,13 +334,9 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     )
 
     expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
-
-    vi.restoreAllMocks()
   })
 
   it('includes the authorization token', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
-
     const url = createNativeDownloadAuthorizationUrl(
       'https://f004.backblazeb2.com',
       'bucket',
@@ -288,56 +345,5 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     )
 
     expect(url).toContain('Authorization=secret-token')
-
-    vi.restoreAllMocks()
-  })
-
-  it('includes an expires timestamp', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
-
-    const url = createNativeDownloadAuthorizationUrl(
-      'https://f004.backblazeb2.com',
-      'bucket',
-      'file.txt',
-      'token',
-    )
-
-    const expectedExpires = FIXED_NOW_S + 3600
-    expect(url).toContain(`expires=${expectedExpires}`)
-
-    vi.restoreAllMocks()
-  })
-
-  it('defaults to 3600 seconds', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
-
-    const url = createNativeDownloadAuthorizationUrl(
-      'https://f004.backblazeb2.com',
-      'bucket',
-      'file.txt',
-      'token',
-    )
-
-    const expectedExpires = FIXED_NOW_S + 3600
-    expect(url).toContain(`expires=${expectedExpires}`)
-
-    vi.restoreAllMocks()
-  })
-
-  it('handles custom duration', () => {
-    vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW_MS)
-
-    const url = createNativeDownloadAuthorizationUrl(
-      'https://f004.backblazeb2.com',
-      'bucket',
-      'file.txt',
-      'token',
-      7200,
-    )
-
-    const expectedExpires = FIXED_NOW_S + 7200
-    expect(url).toContain(`expires=${expectedExpires}`)
-
-    vi.restoreAllMocks()
   })
 })

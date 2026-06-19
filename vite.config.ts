@@ -47,7 +47,7 @@ export default defineConfig({
       formats: ['es', 'cjs'],
     },
     rollupOptions: {
-      external: [/^node:/, '@aws-sdk/client-s3', '@aws-sdk/s3-request-presigner'],
+      external: [/^node:/, '@aws-sdk/client-s3'],
       output: {
         preserveModules: true,
         preserveModulesRoot: 'src',

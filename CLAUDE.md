@@ -49,7 +49,7 @@ Single npm package with subpath exports:
 | `@backblaze-labs/b2-sdk/sync` | `src/sync/index.ts` | Local/B2 sync engine: LocalFolder, B2Folder, synchronize() |
 | `@backblaze-labs/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
 | `@backblaze-labs/b2-sdk/notifications` | `src/notifications/index.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
-| `@backblaze-labs/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignGetObjectUrl, presignPutObjectUrl |
+| `@backblaze-labs/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignS3GetObjectUrl, presignPutObjectUrl |
 
 ## Source layout
 
@@ -65,7 +65,7 @@ src/
   download/      downloadById/ByName, parallel ranged downloads with per-range retry
   copy/          copyLargeFile orchestrator (server-side multipart copy via b2_copy_part)
   sync/          synchronize() async generator + LocalFolder + B2Folder scanners
-  s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl, presignPutObjectUrl)
+  s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignPutObjectUrl)
   simulator/     B2Simulator + SimulatorTransport for testing
   client.ts      B2Client high-level facade + hasCapabilities + CapabilityCheckResult
   bucket.ts      Bucket: upload/download/head/list/copy/copyLargeFile/deleteMany/deleteAll/unhideFile/...
