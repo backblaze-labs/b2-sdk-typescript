@@ -4,7 +4,7 @@ We welcome contributions. This document covers setup, conventions, and the PR wo
 
 ## Prerequisites
 
-- **Node.js 22.3+** (check with `node --version`)
+- **Node.js 22+** (check with `node --version`)
 - **pnpm 11+** (installed via corepack: `corepack enable && corepack prepare pnpm@11.1.0 --activate`)
 
 ## Development setup

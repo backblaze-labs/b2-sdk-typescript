@@ -28,7 +28,7 @@ async function main() {
   }
 
   const fileName = basename(filePath)
-  const source = new FileSource(filePath)
+  const source = await FileSource.fromPath(filePath)
 
   console.log(`Uploading ${fileName} (${source.size} bytes) to ${bucketName}...`)
 

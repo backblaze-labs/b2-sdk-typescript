@@ -2,9 +2,9 @@ import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readStream } from '../test-utils/index.ts'
-import { FileSource, StreamSource, toContentSource } from './source.ts'
+import { FileSource, toContentSource } from './source.ts'
 
 const decoder = new TextDecoder()
 
@@ -28,6 +28,17 @@ describe('FileSource', () => {
     expect(source.size).toBe(15)
     expect(source.canSlice).toBe(true)
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from disk')
+  })
+
+  it('can be created with asynchronous filesystem validation', async () => {
+    const path = join(tmpDir, 'async-payload.txt')
+    await writeFile(path, 'hello from async disk')
+
+    const source = await FileSource.fromPath(path)
+
+    expect(source.size).toBe(21)
+    expect(source.canSlice).toBe(true)
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
   })
 
   it('returns ranged slices without reading unrelated bytes', async () => {
@@ -87,6 +98,29 @@ describe('FileSource', () => {
     expect(() => new FileSource(tmpDir)).toThrow(/not a regular file/)
   })
 
+  it('rejects filesystems without stable file identity', () => {
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockReturnValue({
+      constants: { O_RDONLY: 0 },
+      lstatSync() {
+        return {
+          dev: 0,
+          ino: 0,
+          mode: 0,
+          size: 1,
+          mtimeMs: 1,
+          ctimeMs: 1,
+          isFile: () => true,
+        }
+      },
+    })
+
+    try {
+      expect(() => new FileSource('/unstable')).toThrow(/stable file identity/)
+    } finally {
+      getBuiltinModule.mockRestore()
+    }
+  })
+
   it('rejects if the file is truncated after construction', async () => {
     const path = join(tmpDir, 'truncate.txt')
     await writeFile(path, 'original payload')
@@ -109,6 +143,17 @@ describe('FileSource', () => {
 
     await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
+
+  it('rejects a path replaced by another file', async () => {
+    const path = join(tmpDir, 'replaced.txt')
+    await writeFile(path, 'safe payload')
+
+    const source = new FileSource(path)
+    await rm(path)
+    await writeFile(path, 'other payload')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
 })
 
 describe('Node Readable content sources', () => {
@@ -117,7 +162,8 @@ describe('Node Readable content sources', () => {
 
     const source = toContentSource(readable, 3)
 
-    expect(source).toBeInstanceOf(StreamSource)
+    expect(source.canSlice).toBe(false)
+    expect(source.size).toBe(3)
     expect(await readStream(source.stream())).toEqual(new Uint8Array([1, 2, 3]))
   })
 })

@@ -3,7 +3,7 @@ import { EncryptionKey } from '../types/encryption.ts'
 import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
-import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
+import { BlobSource, BufferSource, FileSource, StreamSource, toContentSource } from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
@@ -251,6 +251,12 @@ describe('BufferSource', () => {
     const ab = await src.toArrayBuffer()
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(data)
+  })
+})
+
+describe('FileSource export', () => {
+  it('is importable from the shared streams module without touching the filesystem', () => {
+    expect(FileSource).toBeTypeOf('function')
   })
 })
 

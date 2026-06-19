@@ -4,7 +4,7 @@ Instructions for AI assistants working on `@backblaze-labs/b2-sdk`.
 
 ## Project overview
 
-Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (Node 22.3+, browsers, Bun, Deno, Cloudflare Workers, Vercel Edge). Zero runtime dependencies in core. Built with Vite library mode + Vitest.
+Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (Node 22+, browsers, Bun, Deno, Cloudflare Workers, Vercel Edge). Zero runtime dependencies in core. Built with Vite library mode + Vitest.
 
 ## Commands
 

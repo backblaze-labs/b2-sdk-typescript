@@ -28,10 +28,6 @@ interface FileHandleLike {
 }
 
 interface NodeFsSync {
-  readonly constants: {
-    readonly O_RDONLY: number
-    readonly O_NOFOLLOW?: number
-  }
   lstatSync(path: FileSourcePath): FileStatsLike
 }
 
@@ -45,6 +41,9 @@ interface FileIdentity {
 }
 
 function getNodeFsSync(): NodeFsSync {
+  // FileSource exposes `size` synchronously, so the constructor cannot use the
+  // repo's usual `await import('node:...')` pattern for Node-only APIs. Keep the
+  // synchronous lookup here; async callers should prefer `FileSource.fromPath()`.
   const processLike = (
     globalThis as {
       process?: { getBuiltinModule?: (id: string) => unknown }
@@ -52,7 +51,9 @@ function getNodeFsSync(): NodeFsSync {
   ).process
   const fs = processLike?.getBuiltinModule?.('node:fs')
   if (!isNodeFsSync(fs)) {
-    throw new Error('FileSource requires Node.js 22.3+ filesystem APIs.')
+    throw new Error(
+      'FileSource constructor requires Node.js 22.3+ synchronous filesystem APIs; use FileSource.fromPath() in older Node 22 runtimes.',
+    )
   }
   return fs
 }
@@ -60,17 +61,11 @@ function getNodeFsSync(): NodeFsSync {
 function isNodeFsSync(value: unknown): value is NodeFsSync {
   if (typeof value !== 'object' || value === null) return false
   const candidate = value as Record<string, unknown>
-  const constants = candidate['constants']
-  return (
-    typeof constants === 'object' &&
-    constants !== null &&
-    typeof (constants as Record<string, unknown>)['O_RDONLY'] === 'number' &&
-    typeof candidate['lstatSync'] === 'function'
-  )
+  return typeof candidate['lstatSync'] === 'function'
 }
 
-function fileOpenFlags(): number {
-  const { constants } = getNodeFsSync()
+async function fileOpenFlags(): Promise<number> {
+  const { constants } = await import('node:fs')
   return constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 }
 
@@ -96,10 +91,24 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
   }
 }
 
+function assertStableIdentity(path: FileSourcePath, stats: FileStatsLike): void {
+  if (stats.dev === 0 && stats.ino === 0) {
+    throw new Error(
+      `FileSource: ${formatFilePath(path)} is on a filesystem that does not expose stable file identity.`,
+    )
+  }
+}
+
 function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
   if (!stats.isFile()) {
     throw new Error(`FileSource: ${formatFilePath(path)} is not a regular file.`)
   }
+}
+
+function validatedIdentityFromStats(path: FileSourcePath, stats: FileStatsLike): FileIdentity {
+  assertRegularFile(path, stats)
+  assertStableIdentity(path, stats)
+  return identityFromStats(stats)
 }
 
 function assertSameIdentity(
@@ -108,6 +117,7 @@ function assertSameIdentity(
   actual: FileStatsLike,
   when: string,
 ): void {
+  assertStableIdentity(path, actual)
   if (actual.dev !== expected.dev || actual.ino !== expected.ino || actual.mode !== expected.mode) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
@@ -138,7 +148,7 @@ async function openValidatedFile(
   }
   let file: FileHandleLike
   try {
-    file = await open(path, fileOpenFlags())
+    file = await open(path, await fileOpenFlags())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`FileSource: ${formatFilePath(path)} could not be opened: ${message}`)
@@ -154,6 +164,13 @@ async function openValidatedFile(
     await file.close().catch(() => {})
     throw err
   }
+}
+
+async function lstatNodeFile(path: FileSourcePath): Promise<FileStatsLike> {
+  const { lstat } = (await import('node:fs/promises')) as {
+    lstat(path: FileSourcePath): Promise<FileStatsLike>
+  }
+  return lstat(path)
 }
 
 async function readFileRange(
@@ -367,9 +384,9 @@ abstract class FileRangeSource implements ContentSource {
    * @param size - Number of bytes in this source.
    */
   protected constructor(
-    readonly path: FileSourcePath,
+    protected readonly path: FileSourcePath,
     private readonly identity: FileIdentity,
-    readonly offset: number,
+    private readonly offset: number,
     readonly size: number,
   ) {}
 
@@ -436,10 +453,13 @@ class FileSliceSource extends FileRangeSource {}
  * ContentSource backed by a local filesystem path.
  *
  * `FileSource` is Node-only but safe to import in browser builds: it touches
- * Node filesystem APIs only when constructed or read. Construction validates a
- * regular, non-symlink file identity; reads reject if the path is replaced or
- * the file is modified before the configured byte range is read. Slices preserve
- * that captured identity, so multipart uploads can read disjoint ranges without
+ * Node filesystem APIs only when constructed or read. The constructor validates
+ * the path synchronously so `size` is immediately available; async code paths
+ * that construct many sources should use {@link FileSource.fromPath}. Both paths
+ * validate a regular, non-symlink file identity; reads reject if the path is
+ * replaced, if the filesystem cannot report stable identity, or if the file is
+ * modified before the configured byte range is read. Slices preserve that
+ * captured identity, so multipart uploads can read disjoint ranges without
  * materialising the whole file in memory or following later path swaps.
  */
 export class FileSource extends FileRangeSource {
@@ -449,12 +469,37 @@ export class FileSource extends FileRangeSource {
    *
    * @throws If the runtime has no Node-compatible filesystem API.
    * @throws If the path does not reference a regular non-symlink file.
+   * @throws If the filesystem cannot report stable file identity.
    */
-  constructor(path: FileSourcePath) {
-    const stat = getNodeFsSync().lstatSync(path)
-    assertRegularFile(path, stat)
-    const identity = identityFromStats(stat)
-    super(path, identity, 0, identity.size)
+  constructor(path: FileSourcePath)
+  /**
+   * Internal constructor path used by {@link FileSource.fromPath}.
+   * @param path - Local filesystem path or file URL.
+   * @param identity - Prevalidated file identity.
+   *
+   * @internal
+   */
+  constructor(path: FileSourcePath, identity?: FileIdentity) {
+    const resolvedIdentity =
+      identity ?? validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
+    super(path, resolvedIdentity, 0, resolvedIdentity.size)
+  }
+
+  /**
+   * Create a FileSource using asynchronous filesystem validation.
+   * @param path - Local filesystem path or file URL.
+   *
+   * @returns A FileSource bound to the validated file identity.
+   *
+   * @throws If the path does not reference a regular non-symlink file.
+   * @throws If the filesystem cannot report stable file identity.
+   */
+  static async fromPath(path: FileSourcePath): Promise<FileSource> {
+    const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
+    const InternalCtor = FileSource as unknown as {
+      new (path: FileSourcePath, identity: FileIdentity): FileSource
+    }
+    return new InternalCtor(path, identity)
   }
 }
 

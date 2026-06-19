@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { FileSource } from '../streams/source.ts'
+import type { ContentSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
@@ -6452,8 +6452,10 @@ describe('synchronize', () => {
           fileName: 'pfx\\nestedhello.txt',
           signal: controller.signal,
         })
-        expect(args?.['source']).toBeInstanceOf(FileSource)
-        expect((args?.['source'] as FileSource | undefined)?.canSlice).toBe(true)
+        const uploadSource = args?.['source'] as ContentSource | undefined
+        expect(uploadSource?.canSlice).toBe(true)
+        expect(uploadSource?.size).toBe(11)
+        expect(new TextDecoder().decode(await uploadSource?.toArrayBuffer())).toBe('hello world')
         expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })

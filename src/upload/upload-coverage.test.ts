@@ -3869,6 +3869,42 @@ describe('uploadSmallFile cleanup path', () => {
     ).rejects.toThrow(/emitted more bytes than advertised size/)
   })
 
+  it('accepts trailing empty forward-only chunks after advertised bytes', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-trailing-empty',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const first = deterministicBytes(partSize)
+    const second = deterministicBytes(partSize).reverse()
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(first)
+        controller.enqueue(second)
+        controller.enqueue(new Uint8Array(0))
+        controller.enqueue(new Uint8Array(0))
+        controller.close()
+      },
+    })
+
+    const result = await bucket.upload({
+      fileName: 'stream-trailing-empty.bin',
+      source: new StreamSource(readable, partSize * 2),
+      partSize,
+    })
+
+    expect(result.contentLength).toBe(partSize * 2)
+    const downloaded = await bucket.download('stream-trailing-empty.bin')
+    const bytes = await readStream(downloaded.body)
+    const expected = new Uint8Array(partSize * 2)
+    expected.set(first)
+    expected.set(second, partSize)
+    expect(bytes).toEqual(expected)
+  })
+
   it('rejects a streaming-source upload when resume is requested', async () => {
     // StreamSource has no random access, so resume can't replay parts.
     // The engine bails early with a clear message and cancels the

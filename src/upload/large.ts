@@ -585,7 +585,10 @@ async function uploadPartsSequentially(
     if (carry !== null) {
       throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
     }
-    const extra = await reader.read()
+    let extra = await reader.read()
+    while (!extra.done && extra.value.byteLength === 0) {
+      extra = await reader.read()
+    }
     if (!extra.done) {
       throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
     }

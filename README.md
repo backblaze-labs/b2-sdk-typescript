@@ -5,12 +5,12 @@
 [![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.3-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 
 A Backblaze-maintained TypeScript and JavaScript SDK for Backblaze B2 Cloud Storage, currently incubating in [Backblaze Labs](https://github.com/backblaze-labs).
 
-**Isomorphic at the source level.** One source tree runs unmodified in Node.js 22.3+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
+**Isomorphic at the source level.** One source tree runs unmodified in Node.js 22+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
 
 **Async-first.** Built on Web Streams, `AbortSignal`, and `crypto.subtle`. No callbacks, no legacy APIs.
 
@@ -85,7 +85,7 @@ await bucket.delete()
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.
 
 ```ts
-import { BufferSource, BlobSource, FileSource } from '@backblaze-labs/b2-sdk'
+import { BufferSource, BlobSource, FileSource, toContentSource } from '@backblaze-labs/b2-sdk'
 
 // From a Uint8Array
 await bucket.upload({
@@ -103,13 +103,19 @@ await bucket.upload({
 // From a local file path (Node)
 await bucket.upload({
   fileName: 'backups/db.dump',
-  source: new FileSource('/var/backups/db.dump'),
+  source: await FileSource.fromPath('/var/backups/db.dump'),
+})
+
+// From a forward-only stream or async iterable (size required)
+await bucket.upload({
+  fileName: 'exports/report.ndjson',
+  source: toContentSource(nodeReadable, knownByteLength),
 })
 
 // Large file with progress tracking (Node)
 await bucket.upload({
   fileName: 'backup.tar.gz',
-  source: new FileSource('/path/to/backup.tar.gz'),
+  source: await FileSource.fromPath('/path/to/backup.tar.gz'),
   concurrency: 8,
   partSize: 64 * 1024 * 1024,
   onProgress: (event) => {

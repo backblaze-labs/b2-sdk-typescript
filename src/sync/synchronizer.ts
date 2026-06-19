@@ -806,7 +806,7 @@ function createActionFactory(
               : `${uploadPrefix}${relPath}`
           const targetPath = await resolveContainedLocalPath(root, source.relativePath, absPath)
           throwIfAborted(signal)
-          const fileSource = new FileSource(targetPath)
+          const fileSource = await FileSource.fromPath(targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
