@@ -437,6 +437,28 @@ describe('toContentSource', () => {
     expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 
+  it('returns async iterators when pull throws', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          async return(): Promise<IteratorResult<Uint8Array>> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
   it('throws when a ReadableStream is provided without a size', () => {
     const rs = new ReadableStream<Uint8Array>({
       start(c) {

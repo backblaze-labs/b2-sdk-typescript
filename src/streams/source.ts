@@ -184,15 +184,20 @@ function asyncIterableToReadableStream(
   const iterator = iterable[Symbol.asyncIterator]()
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await iterator.next()
-      if (done === true) {
-        controller.close()
-        return
+      try {
+        const { done, value } = await iterator.next()
+        if (done === true) {
+          controller.close()
+          return
+        }
+        if (!(value instanceof Uint8Array)) {
+          throw new TypeError('Async iterable content sources must yield Uint8Array chunks.')
+        }
+        controller.enqueue(value)
+      } catch (err) {
+        await iterator.return?.().catch(() => {})
+        throw err
       }
-      if (!(value instanceof Uint8Array)) {
-        throw new TypeError('Async iterable content sources must yield Uint8Array chunks.')
-      }
-      controller.enqueue(value)
     },
     async cancel(reason) {
       await iterator.return?.(reason)
