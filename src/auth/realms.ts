@@ -9,6 +9,8 @@ export const REALM_URLS: Record<string, string> = {
   staging: 'https://api.backblaze.net',
 }
 
+const HTTP_REALM_URL_WITH_HOST = /^https?:\/\/[^/?#]/i
+
 function parseAbsoluteRealmUrl(realmUrl: string): URL | null {
   try {
     return new URL(realmUrl)
@@ -30,6 +32,14 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
+  if (
+    (url.protocol === 'https:' || url.protocol === 'http:') &&
+    (!HTTP_REALM_URL_WITH_HOST.test(realmUrl) || url.hostname === '')
+  ) {
+    throw new Error(
+      `realm URL must be an absolute HTTP(S) URL with a hostname for authorization: ${realmUrl}`,
+    )
+  }
   if (url.protocol === 'https:') return
   if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) return
   if (url.protocol === 'http:') {

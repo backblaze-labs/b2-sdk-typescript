@@ -404,6 +404,12 @@ describe('getRealmUrl', () => {
     )
   })
 
+  it.each(['https:example.com', 'https:///path'])('rejects malformed realm URL %s', (realm) => {
+    expect(() => getRealmUrl(realm)).toThrow(
+      'realm URL must be an absolute HTTP(S) URL with a hostname for authorization',
+    )
+  })
+
   it.each([
     'http://localhost:8180',
     'http://127.0.0.1:8180',

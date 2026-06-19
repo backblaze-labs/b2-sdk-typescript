@@ -155,7 +155,9 @@ export interface AuthorizeAccountRequest {
   /**
    * Optional realm override. Accepts a known realm-map key, a direct base URL,
    * or any string to pass through as the raw realm URL. Non-URL strings will
-   * fail during authorize. Defaults to production.
+   * fail during authorize. URL values must use HTTPS, or loopback HTTP for local
+   * testing; unsupported schemes and non-loopback plaintext HTTP are rejected
+   * before credentials are sent. Defaults to production.
    */
   readonly realm?: string
 }

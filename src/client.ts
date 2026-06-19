@@ -42,8 +42,9 @@ export interface B2ClientOptions {
   /**
    * B2 realm to authenticate against. Accepts a known realm-map key, a direct
    * base URL, or any string to pass through as the raw realm URL. Non-URL
-   * strings will fail during authorize. Plain HTTP URLs are rejected unless
-   * they target a loopback host. Defaults to `"production"`.
+   * strings will fail during authorize. URL values must use HTTPS, or loopback
+   * HTTP for local testing; unsupported schemes and non-loopback plaintext HTTP
+   * are rejected before credentials are sent. Defaults to `"production"`.
    */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */
