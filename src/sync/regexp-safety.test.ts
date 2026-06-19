@@ -4,12 +4,33 @@ import {
   regexpMatchesSyncPath,
   validateSyncFilters,
 } from './regexp-safety.ts'
+import type { SyncFilterOptions } from './types.ts'
 
 describe('sync regexp safety', () => {
   it('reports the include or exclude filter that failed validation', () => {
     expect(() => validateSyncFilters({ exclude: [/x.*.*y/] })).toThrow(
       'Sync filter RegExp is too complex (exclude:',
     )
+  })
+
+  it('memoizes validation per filter object identity', () => {
+    let reads = 0
+    const filters = new Proxy(
+      { include: [/\.txt$/], exclude: ['*.tmp'] } satisfies SyncFilterOptions,
+      {
+        get(target, property, receiver) {
+          if (property === 'include' || property === 'exclude') reads++
+          return Reflect.get(target, property, receiver)
+        },
+      },
+    )
+
+    validateSyncFilters(filters)
+    const readsAfterFirstValidation = reads
+    validateSyncFilters(filters)
+
+    expect(readsAfterFirstValidation).toBeGreaterThan(0)
+    expect(reads).toBe(readsAfterFirstValidation)
   })
 
   it('strips stateful flags when matching paths', () => {

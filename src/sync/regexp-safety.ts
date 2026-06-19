@@ -4,6 +4,7 @@ const MAX_REGEXP_SOURCE_LENGTH = 512
 const MAX_REGEXP_INPUT_LENGTH = 1024
 const MAX_REGEXP_UNBOUNDED_QUANTIFIERS = 1
 const safeRegExpCache = new WeakMap<RegExp, RegExp>()
+const validatedFilterCache = new WeakSet<SyncFilterOptions>()
 
 /**
  * Validates every RegExp filter in an include/exclude filter set.
@@ -13,8 +14,12 @@ const safeRegExpCache = new WeakMap<RegExp, RegExp>()
  * @throws When a RegExp filter is too large or structurally unsafe.
  */
 export function validateSyncFilters(filters: SyncFilterOptions | undefined): void {
-  validateSyncFilterList('include', filters?.include)
-  validateSyncFilterList('exclude', filters?.exclude)
+  if (filters === undefined) return
+  if (validatedFilterCache.has(filters)) return
+
+  validateSyncFilterList('include', filters.include)
+  validateSyncFilterList('exclude', filters.exclude)
+  validatedFilterCache.add(filters)
 }
 
 /**
