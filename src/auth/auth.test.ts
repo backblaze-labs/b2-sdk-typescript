@@ -401,6 +401,7 @@ describe('getRealmUrl', () => {
   it.each([
     'http://localhost:8180',
     'http://127.0.0.1:8180',
+    'http://127.0.0.2:8180',
     'http://[::1]:8180',
   ])('allows loopback plaintext HTTP realm %s', (realm) => {
     expect(getRealmUrl(realm)).toBe(realm)

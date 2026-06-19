@@ -40,9 +40,10 @@ export interface B2ClientOptions {
   /** The application key secret. */
   readonly applicationKey: string
   /**
-   * B2 realm to authenticate against. Accepts a known realm-map key or a direct
-   * base URL. Plain HTTP URLs are rejected unless they target a loopback host.
-   * Defaults to `"production"`.
+   * B2 realm to authenticate against. Accepts a known realm-map key, a direct
+   * base URL, or any string to pass through as the raw realm URL. Non-URL
+   * strings will fail during authorize. Plain HTTP URLs are rejected unless
+   * they target a loopback host. Defaults to `"production"`.
    */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */

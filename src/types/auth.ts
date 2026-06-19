@@ -153,8 +153,9 @@ export interface AuthorizeAccountRequest {
   /** The application key secret. */
   readonly applicationKey: string
   /**
-   * Optional realm override. Accepts a known realm-map key or a direct base URL.
-   * Defaults to production.
+   * Optional realm override. Accepts a known realm-map key, a direct base URL,
+   * or any string to pass through as the raw realm URL. Non-URL strings will
+   * fail during authorize. Defaults to production.
    */
   readonly realm?: string
 }

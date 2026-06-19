@@ -11,7 +11,14 @@ export const REALM_URLS: Record<string, string> = {
 
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
-  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+  if (host === 'localhost' || host === '[::1]' || host === '::1') return true
+
+  const parts = host.split('.')
+  return (
+    parts.length === 4 &&
+    parts[0] === '127' &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  )
 }
 
 /**
