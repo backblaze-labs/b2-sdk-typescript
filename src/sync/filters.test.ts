@@ -46,6 +46,11 @@ describe('sync filters', () => {
     expect(pathPassesSyncFilters('c.bin', { include: [/\.txt$/] })).toBe(false)
   })
 
+  it('accepts safe non-capturing regular expression filters', () => {
+    expect(pathPassesSyncFilters('abab', { include: [/(?:ab)+/] })).toBe(true)
+    expect(pathPassesSyncFilters('aba', { include: [/^(?:ab)+$/] })).toBe(false)
+  })
+
   it('rejects structurally unsafe regular expression filters', () => {
     const unsafePattern = new RegExp('(a+)'.concat('+$'))
 

@@ -2,6 +2,7 @@ import type { SyncFilterOptions, SyncFilterPattern, SyncPath } from './types.ts'
 
 const MAX_REGEXP_SOURCE_LENGTH = 512
 const MAX_REGEXP_UNBOUNDED_QUANTIFIERS = 8
+const safeRegExpCache = new WeakMap<RegExp, RegExp>()
 
 /**
  * Tests whether a relative sync path is included by the configured include/exclude filters.
@@ -200,8 +201,13 @@ function matchSegmentGlob(segment: string, glob: string): boolean {
 }
 
 function regexpWithoutState(pattern: RegExp): RegExp {
+  const cached = safeRegExpCache.get(pattern)
+  if (cached !== undefined) return cached
+
   assertSafeRegExp(pattern)
-  return new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''))
+  const compiled = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''))
+  safeRegExpCache.set(pattern, compiled)
+  return compiled
 }
 
 function assertSafeRegExp(pattern: RegExp): void {
@@ -272,7 +278,7 @@ function regexpSourceLooksSafe(source: string): boolean {
       continue
     }
 
-    if (isQuantifierStart(source, i)) {
+    if (lastToken !== null && isQuantifierStart(source, i)) {
       if (lastToken?.type === 'group' && (lastToken.hasQuantifier || lastToken.hasAlternation)) {
         return false
       }
