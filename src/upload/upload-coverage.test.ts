@@ -11,12 +11,14 @@ import {
   jsonErrorResponse,
   jsonResponse,
   makeClient,
+  readStream,
 } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
+import { ResumeFileIdMismatchError } from './resume.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 /**
@@ -1226,17 +1228,18 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
 
 describe('uploadLargeFile fresh multipart metadata', () => {
   let client: B2Client
+  let bucket: Bucket
   let bucketId: string
 
   beforeEach(async () => {
     const { client: c } = makeSmallPartClient()
     client = c
     await client.authorize()
-    const b = await client.createBucket({
+    bucket = await client.createBucket({
       bucketName: 'resume-no-candidate',
       bucketType: BucketType.AllPrivate,
     })
-    bucketId = b.id
+    bucketId = bucket.id
   })
 
   it('forwards serverSideEncryption when starting a large file', async () => {
@@ -1300,6 +1303,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       partSize,
       concurrency: 1,
       resume: true,
+      onResumeCandidateRejected: () => {},
     })
 
     expect(result.fileInfo).toEqual(fileInfo)
@@ -1379,6 +1383,57 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(unfinishedIds).not.toContain(matching.fileId)
   })
 
+  it('reuploads a same-length tampered resume part when SHA-1 differs', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const tampered = data.slice(0, partSize)
+    tampered[0] = (tampered[0] ?? 0) ^ 0xff
+    const contentType = 'application/octet-stream'
+    const fileInfo = { origin: 'match' }
+    const candidate = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'tampered-resume.bin',
+        contentType,
+        fileInfo,
+      },
+    )
+
+    const { sha1Hex } = await import('../streams/hash.ts')
+    const partUrl = await client.raw.getUploadPartUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: candidate.fileId },
+    )
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: tampered.byteLength,
+        contentSha1: await sha1Hex(tampered),
+      },
+      tampered,
+    )
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'tampered-resume.bin',
+      source: new BufferSource(data),
+      contentType,
+      fileInfo,
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('tampered-resume.bin')
+    const downloaded = await bucket.download('tampered-resume.bin')
+    expect(await readStream(downloaded.body)).toEqual(data)
+  })
+
   it('starts a new upload instead of auto-resuming SSE-C candidates', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
@@ -1436,6 +1491,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       concurrency: 1,
       resume: true,
       serverSideEncryption: sseCustomer('key-c', 'md5-c'),
+      onResumeCandidateRejected: () => {},
     })
 
     expect(result.fileName).toBe('sse-c.bin')
@@ -1515,8 +1571,9 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         partSize,
         concurrency: 1,
         resumeFileId: foreign.fileId,
+        onResumeCandidateRejected: () => {},
       }),
-    ).rejects.toThrow(/resumeFileId/)
+    ).rejects.toThrow(ResumeFileIdMismatchError)
 
     const parts = await client.raw.listParts(
       client.accountInfo.getApiUrl(),

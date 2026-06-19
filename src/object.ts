@@ -148,8 +148,10 @@ export class B2Object {
      */
     resume?: boolean
     /**
-     * Resume into a specific large-file ID. Matching parts are skipped after
-     * their local SHA-1 is recomputed and matches the server-reported part SHA-1.
+     * Resume into a specific large-file ID, bypassing discovery.
+     * Overrides the `resume` discovery path after verifying bucket, file name,
+     * upload options, encryption, retention, legal hold, and uploaded part
+     * lengths. Mismatches throw `ResumeFileIdMismatchError`.
      */
     resumeFileId?: LargeFileId
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */

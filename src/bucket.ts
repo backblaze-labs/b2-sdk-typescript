@@ -189,7 +189,7 @@ export class Bucket {
      * Resume an unfinished multipart upload for this file name when one
      * exists. Only consulted on the large-file path (source size
      * greater than `recommendedPartSize`). On the small-file path this
-     * option is silently ignored. Sliceable sources only — `StreamSource`
+     * option is silently ignored. Sliceable sources only: `StreamSource`
      * rejects resume because it can't replay parts. Discovery reuses only
      * unfinished files whose upload options and uploaded part lengths
      * match the current call, and should only be used when bucket writers
@@ -198,8 +198,9 @@ export class Bucket {
     resume?: boolean
     /**
      * Resume into a specific large-file ID. Overrides the `resume`
-     * discovery path. The local `partSize` must match the server-side
-     * plan.
+     * discovery path after verifying bucket, file name, upload options,
+     * encryption, retention, legal hold, and uploaded part lengths.
+     * Mismatches throw `ResumeFileIdMismatchError`.
      */
     resumeFileId?: LargeFileId
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -471,6 +472,7 @@ export class Bucket {
           pageSize: options?.pageSize ?? 100,
           ...(cursor !== undefined ? { startFileId: cursor } : {}),
           ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
         })
         return { page: resp, nextCursor: resp.nextFileId ?? undefined }
       },
@@ -503,6 +505,7 @@ export class Bucket {
             maxPartCount: options?.pageSize ?? DEFAULT_PAGE_SIZE,
             ...(cursor !== undefined ? { startPartNumber: cursor } : {}),
           },
+          options?.signal !== undefined ? { signal: options.signal } : undefined,
         )
         return { page: resp, nextCursor: resp.nextPartNumber ?? undefined }
       },
@@ -633,6 +636,8 @@ export class Bucket {
      * to the raw API's `maxFileCount` parameter.
      */
     pageSize?: number
+    /** Abort signal for cancelling the list request. */
+    signal?: AbortSignal
   }) {
     return this.client.raw.listUnfinishedLargeFiles(
       this.client.accountInfo.getApiUrl(),
@@ -643,6 +648,7 @@ export class Bucket {
         ...(options?.startFileId !== undefined ? { startFileId: options.startFileId } : {}),
         ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
       },
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
   }
 

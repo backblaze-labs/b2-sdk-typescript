@@ -17,6 +17,7 @@ import {
   findResumeCandidate,
   type ResumeCandidateCriteria,
   type ResumeCandidateRejectedListener,
+  ResumeFileIdMismatchError,
 } from './resume.ts'
 import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
@@ -80,7 +81,8 @@ export interface UploadLargeFileOptions {
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
    * after verifying that the ID belongs to the requested bucket/file name and
    * matches the current upload options and already-uploaded part lengths. This
-   * is the only supported way to resume SSE-C large files.
+   * is the only supported way to resume SSE-C large files. A mismatch throws
+   * {@link ResumeFileIdMismatchError}.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -180,9 +182,7 @@ export async function uploadLargeFile(
       },
     )
     if (candidate === null) {
-      throw new Error(
-        'uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.',
-      )
+      throw new ResumeFileIdMismatchError(options.resumeFileId, options.fileName)
     }
     largeFileId = candidate.fileId
     preUploaded = candidate.uploadedPartSha1s
@@ -262,7 +262,8 @@ export async function uploadLargeFile(
         await partSha1.update(data)
         const sha1Hex = await partSha1.digest()
 
-        // Resume short-circuit: server already has this part with matching SHA-1
+        // Security-critical resume gate: metadata and lengths are not enough.
+        // Reuse only when the server part SHA-1 matches the local bytes.
         const serverSha1 = preUploaded.get(part.partNumber)
         if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
           partSha1s[part.partNumber - 1] = serverSha1

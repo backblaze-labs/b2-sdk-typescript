@@ -18,6 +18,27 @@ export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
+const RESUME_DIAGNOSTIC_LOG_PREFIX = '[b2-sdk] upload resume candidate rejected'
+
+/** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
+export class ResumeFileIdMismatchError extends Error {
+  /** Caller-supplied unfinished large file ID that failed verification. */
+  readonly fileId: LargeFileId
+  /** Requested destination file name. */
+  readonly fileName: string
+
+  /**
+   * Creates a new resume-file ID mismatch error.
+   * @param fileId - Caller-supplied unfinished large file ID that failed verification.
+   * @param fileName - Requested destination file name.
+   */
+  constructor(fileId: LargeFileId, fileName: string) {
+    super('uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.')
+    this.name = 'ResumeFileIdMismatchError'
+    this.fileId = fileId
+    this.fileName = fileName
+  }
+}
 
 /** One planned part from the local upload source. */
 export interface ResumePartPlan {
@@ -75,7 +96,7 @@ export interface ResumeCandidateCriteria {
   readonly legalHold?: LegalHoldValue
   /** Explicit unfinished large-file ID to verify before reuse. */
   readonly resumeFileId?: LargeFileId
-  /** Abort signal checked between B2 list pages. */
+  /** Abort signal used for B2 list requests and checked between pages. */
   readonly signal?: AbortSignal
   /** Optional diagnostic callback for candidates that are found but not reused. */
   readonly onCandidateRejected?: ResumeCandidateRejectedListener
@@ -158,6 +179,7 @@ export async function findResumeCandidate(
         ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
+      criteria?.signal !== undefined ? { signal: criteria.signal } : undefined,
     )
     pageCount++
 
@@ -179,7 +201,7 @@ export async function findResumeCandidate(
   }
 
   if (truncated) {
-    criteria?.onCandidateRejected?.({ fileName, reason: 'search-truncated' })
+    emitCandidateRejected(criteria, { fileName, reason: 'search-truncated' })
   }
 
   matches.sort(compareNewestFirst)
@@ -219,7 +241,7 @@ export async function findResumeCandidate(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param fileId - ID of the large file to inspect.
- * @param signal - Optional abort signal checked between list pages.
+ * @param signal - Optional abort signal used for B2 list requests and checked between pages.
  *
  * @returns A map from 1-based part number to its server-stored SHA-1.
  */
@@ -239,7 +261,7 @@ export async function collectPartSha1s(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param fileId - ID of the large file to inspect.
- * @param signal - Optional abort signal checked between list pages.
+ * @param signal - Optional abort signal used for B2 list requests and checked between pages.
  *
  * @returns A map from 1-based part number to part resume metadata.
  */
@@ -254,10 +276,15 @@ export async function collectPartInfo(
 
   while (true) {
     signal?.throwIfAborted()
-    const page = await raw.listParts(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      fileId,
-      ...(startPartNumber !== undefined ? { startPartNumber } : {}),
-    })
+    const page = await raw.listParts(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        fileId,
+        ...(startPartNumber !== undefined ? { startPartNumber } : {}),
+      },
+      signal !== undefined ? { signal } : undefined,
+    )
     for (const part of page.parts) {
       parts.set(part.partNumber, {
         contentSha1: part.contentSha1,
@@ -326,11 +353,23 @@ function notifyCandidateRejected(
   requestedFileName: string,
   reason: ResumeCandidateRejectedReason,
 ): void {
-  criteria?.onCandidateRejected?.({
+  emitCandidateRejected(criteria, {
     fileId: largeFileIdOf(candidate.fileId),
     fileName: requestedFileName,
     reason,
   })
+}
+
+function emitCandidateRejected(
+  criteria: ResumeCandidateCriteria | undefined,
+  event: ResumeCandidateRejectedEvent,
+): void {
+  if (criteria === undefined) return
+  if (criteria.onCandidateRejected !== undefined) {
+    criteria.onCandidateRejected(event)
+    return
+  }
+  globalThis.console?.debug?.(RESUME_DIAGNOSTIC_LOG_PREFIX, event)
 }
 
 function uploadedPartsMatchPlan(
@@ -440,11 +479,7 @@ function legalHoldMatches(
   return candidate.value === expected
 }
 
-type ListedEncryption =
-  | PublicEncryptionSetting
-  | { readonly mode: null; readonly algorithm?: null }
-  | { readonly mode?: string | null; readonly algorithm?: string | null }
-  | undefined
+type ListedEncryption = PublicEncryptionSetting | undefined
 
 function serverSideEncryptionRejectReason(
   candidate: ListedEncryption,
@@ -457,7 +492,7 @@ function serverSideEncryptionRejectReason(
   if (expected === undefined) {
     if (candidate === undefined) return null
     if (actual === undefined) return 'encryption-mismatch'
-    if (actual.mode === EncryptionMode.None || actual.mode === EncryptionMode.SseB2) return null
+    if (actual.mode === EncryptionMode.None) return null
     return actual.mode === EncryptionMode.SseC && !allowSseCResume
       ? 'sse-c-unsupported'
       : 'encryption-mismatch'
@@ -467,23 +502,20 @@ function serverSideEncryptionRejectReason(
   if (actual === undefined || normalizedExpected === undefined) return 'encryption-mismatch'
   if (actual.mode !== normalizedExpected.mode) return 'encryption-mismatch'
   if (actual.mode === EncryptionMode.None) return null
+  // B2 does not expose a non-secret SSE-C key identity for unfinished files.
+  // Explicit resumeFileId callers must supply the same key used at start time.
   return actual.algorithm === normalizedExpected.algorithm ? null : 'encryption-mismatch'
 }
 
 function normalizeEncryption(
-  encryption: ListedEncryption,
+  encryption: EncryptionSetting | ListedEncryption,
 ): { readonly mode: EncryptionMode; readonly algorithm?: string } | undefined {
   if (encryption === undefined) return undefined
-  if (encryption.mode === null || encryption.mode === undefined || encryption.mode === 'none') {
+  if (encryption.mode === EncryptionMode.None) {
     return { mode: EncryptionMode.None }
   }
-  if (encryption.mode === EncryptionMode.SseB2 || encryption.mode === EncryptionMode.SseC) {
-    return {
-      mode: encryption.mode,
-      ...(encryption.algorithm !== undefined && encryption.algorithm !== null
-        ? { algorithm: encryption.algorithm }
-        : {}),
-    }
+  return {
+    mode: encryption.mode,
+    algorithm: encryption.algorithm,
   }
-  return undefined
 }
