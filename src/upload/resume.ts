@@ -1,6 +1,10 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
-import { EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
+import {
+  EncryptionMode,
+  type EncryptionSetting,
+  type PublicEncryptionSetting,
+} from '../types/encryption.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { largeFileId as largeFileIdOf } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
@@ -139,7 +143,8 @@ export async function findResumeCandidate(
       : (criteria.maxPartCandidates ?? DEFAULT_MAX_RESUME_PART_CANDIDATES)
   let sequence = 0
   let pageCount = 0
-  let startFileId: LargeFileId | undefined
+  const explicitResumeFileId = criteria?.resumeFileId
+  let startFileId: LargeFileId | undefined = explicitResumeFileId
   let truncated = false
 
   while (pageCount < maxListPages) {
@@ -149,8 +154,8 @@ export async function findResumeCandidate(
       accountInfo.getAuthToken(),
       {
         bucketId,
-        maxFileCount: 100,
-        ...(criteria?.resumeFileId === undefined ? { namePrefix: fileName } : {}),
+        maxFileCount: explicitResumeFileId === undefined ? 100 : 1,
+        ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
     )
@@ -158,8 +163,8 @@ export async function findResumeCandidate(
 
     for (const file of unfinished.files) {
       const isMatch =
-        criteria?.resumeFileId !== undefined
-          ? file.fileId === criteria.resumeFileId
+        explicitResumeFileId !== undefined
+          ? file.fileId === explicitResumeFileId
           : file.fileName === fileName
       if (isMatch) {
         matches.push({ file, sequence })
@@ -167,6 +172,7 @@ export async function findResumeCandidate(
       sequence++
     }
 
+    if (explicitResumeFileId !== undefined) break
     if (unfinished.nextFileId === null) break
     startFileId = unfinished.nextFileId
     truncated = pageCount >= maxListPages
@@ -301,6 +307,7 @@ function candidateMetadataRejectReason(
   const encryptionRejectReason = serverSideEncryptionRejectReason(
     candidate.serverSideEncryption,
     criteria.serverSideEncryption,
+    criteria.resumeFileId !== undefined,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
   if (!fileRetentionMatches(candidate.fileRetention, criteria.fileRetention)) {
@@ -433,7 +440,7 @@ function legalHoldMatches(
 }
 
 type ListedEncryption =
-  | EncryptionSetting
+  | PublicEncryptionSetting
   | { readonly mode: null; readonly algorithm?: null }
   | { readonly mode?: string | null; readonly algorithm?: string | null }
   | undefined
@@ -441,8 +448,9 @@ type ListedEncryption =
 function serverSideEncryptionRejectReason(
   candidate: ListedEncryption,
   expected: EncryptionSetting | undefined,
+  allowSseCResume: boolean,
 ): 'encryption-mismatch' | 'sse-c-unsupported' | null {
-  if (expected?.mode === EncryptionMode.SseC) return 'sse-c-unsupported'
+  if (expected?.mode === EncryptionMode.SseC && !allowSseCResume) return 'sse-c-unsupported'
 
   const actual = normalizeEncryption(candidate)
   if (expected === undefined) {
@@ -453,7 +461,9 @@ function serverSideEncryptionRejectReason(
     ) {
       return null
     }
-    return actual.mode === EncryptionMode.SseC ? 'sse-c-unsupported' : 'encryption-mismatch'
+    return actual.mode === EncryptionMode.SseC && !allowSseCResume
+      ? 'sse-c-unsupported'
+      : 'encryption-mismatch'
   }
 
   const normalizedExpected = normalizeEncryption(expected)

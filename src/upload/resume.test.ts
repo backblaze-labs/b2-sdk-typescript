@@ -675,6 +675,65 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['search-truncated'])
   })
 
+  it('jumps directly to an explicit resumeFileId and stops after that page', async () => {
+    const listCalls: Array<{ maxFileCount?: number; namePrefix?: string; startFileId?: string }> =
+      []
+    const raw = {
+      async listUnfinishedLargeFiles(
+        _apiUrl: string,
+        _authToken: string,
+        req: { maxFileCount?: number; namePrefix?: string; startFileId?: string },
+      ) {
+        listCalls.push(req)
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: 'next-id',
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('target-id')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        resumeFileId: 'target-id' as LargeFileId,
+      },
+    )
+
+    expect(result?.fileId).toBe('target-id' as LargeFileId)
+    expect(listCalls).toHaveLength(1)
+    expect(listCalls[0]).toMatchObject({
+      maxFileCount: 1,
+      startFileId: 'target-id',
+    })
+    expect(listCalls[0]).not.toHaveProperty('namePrefix')
+  })
+
   it('honors an abort signal before discovery list calls', async () => {
     const controller = new AbortController()
     controller.abort()

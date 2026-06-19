@@ -48,6 +48,14 @@ export interface SseCCustomerSetting {
   readonly customerKeyMd5: string
 }
 
+/** Server-side encryption using customer-provided keys as returned by B2 responses. */
+export interface SseCPublicSetting {
+  /** Encryption mode discriminator. Always `'SSE-C'`. */
+  readonly mode: 'SSE-C'
+  /** Encryption algorithm. Always `'AES256'`. */
+  readonly algorithm: EncryptionAlgorithm
+}
+
 /** Indicates no server-side encryption is applied. */
 export interface NoEncryption {
   /** Encryption mode discriminator. Always `'none'`. */
@@ -56,6 +64,9 @@ export interface NoEncryption {
 
 /** Union of all server-side encryption settings: B2-managed, customer-provided, or none. */
 export type EncryptionSetting = SseB2Setting | SseCCustomerSetting | NoEncryption
+
+/** Server-side encryption setting returned by B2 response objects. */
+export type PublicEncryptionSetting = SseB2Setting | SseCPublicSetting | NoEncryption
 
 /** Pre-built SSE-B2 encryption setting using AES-256. */
 export const SSE_B2: SseB2Setting = { mode: 'SSE-B2', algorithm: 'AES256' }

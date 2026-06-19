@@ -1,4 +1,4 @@
-import type { EncryptionSetting } from './encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
 import type { FileAction } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
@@ -111,7 +111,7 @@ export interface StartLargeFileResponse {
     readonly value: LegalHoldValue | null
   }
   /** Server-side encryption applied to this unfinished file. */
-  readonly serverSideEncryption?: EncryptionSetting
+  readonly serverSideEncryption?: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this unfinished upload was started. */
   readonly uploadTimestamp?: number
 }
@@ -160,7 +160,7 @@ export interface UploadPartResponse {
   /** SHA-1 checksum of the uploaded part content. */
   readonly contentSha1: string
   /** Server-side encryption applied to this part. */
-  readonly serverSideEncryption: EncryptionSetting
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
   readonly uploadTimestamp: number
 }
@@ -243,7 +243,7 @@ export interface UnfinishedLargeFile {
     readonly value: LegalHoldValue | null
   }
   /** Server-side encryption applied to this unfinished file. */
-  readonly serverSideEncryption?: EncryptionSetting
+  readonly serverSideEncryption?: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this unfinished upload was started. */
   readonly uploadTimestamp?: number
 }

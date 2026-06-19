@@ -14,7 +14,11 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
-import { EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
+import {
+  EncryptionMode,
+  type EncryptionSetting,
+  type PublicEncryptionSetting,
+} from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
@@ -174,9 +178,9 @@ interface StoredKey {
   readonly expirationTimestamp: number | null
 }
 
-function publicServerSideEncryption(encryption: EncryptionSetting): EncryptionSetting {
+function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
   if (encryption.mode === EncryptionMode.SseC) {
-    return { mode: encryption.mode, algorithm: encryption.algorithm } as EncryptionSetting
+    return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
   return encryption
 }

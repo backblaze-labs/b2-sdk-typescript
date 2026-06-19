@@ -1453,6 +1453,46 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(unfinished.files[0]?.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
   })
 
+  it('resumes SSE-C uploads when a trusted resumeFileId is provided', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const contentType = 'application/octet-stream'
+    const encryption = sseCustomer('key-a', 'md5-a')
+    const start = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'explicit-sse-c.bin',
+        contentType,
+        serverSideEncryption: encryption,
+      },
+    )
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'explicit-sse-c.bin',
+      source: new BufferSource(data),
+      contentType,
+      partSize,
+      concurrency: 1,
+      resumeFileId: start.fileId,
+      serverSideEncryption: encryption,
+    })
+
+    expect(result.fileName).toBe('explicit-sse-c.bin')
+    expect(result.serverSideEncryption).toEqual({
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+    })
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucketId as never },
+    )
+    expect(unfinished.files.map((file) => file.fileId)).not.toContain(start.fileId)
+  })
+
   it('rejects an explicit resumeFileId that targets a different file name', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)

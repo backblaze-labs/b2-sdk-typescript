@@ -40,8 +40,10 @@ export type {
 export type {
   EncryptionSetting,
   NoEncryption,
+  PublicEncryptionSetting,
   SseB2Setting,
   SseCCustomerSetting,
+  SseCPublicSetting,
 } from './encryption.ts'
 // `EncryptionAlgorithm` and `EncryptionMode` are forwarded as both type and value.
 export {
