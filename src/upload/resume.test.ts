@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
@@ -26,16 +26,6 @@ function makeAccountInfo(): AccountInfo {
     getAuthToken: () => 'mock-token',
   } as unknown as AccountInfo
 }
-
-let consoleDebug: ReturnType<typeof vi.spyOn>
-
-beforeEach(() => {
-  consoleDebug = vi.spyOn(console, 'debug').mockImplementation(() => {})
-})
-
-afterEach(() => {
-  consoleDebug.mockRestore()
-})
 
 describe('collectPartSha1s', () => {
   it('returns an empty map when listParts has no entries and no next page', async () => {
@@ -1257,51 +1247,6 @@ describe('findResumeCandidate', () => {
     expect(result).toBeNull()
     expect(calls).toBe(3)
     expect(rejected).toEqual(['search-truncated'])
-  })
-
-  it('emits a default diagnostic when no rejection callback is configured', async () => {
-    const raw = {
-      async listUnfinishedLargeFiles() {
-        return {
-          files: [
-            {
-              fileId: 'wrong-type',
-              fileName: 'target.bin',
-              contentType: 'text/plain',
-              fileInfo: {},
-            },
-          ],
-          nextFileId: null,
-        }
-      },
-      async listParts() {
-        throw new Error('listParts should not be called for a metadata rejection')
-      },
-    } as unknown as RawClient
-
-    const result = await findResumeCandidate(
-      raw,
-      makeAccountInfo(),
-      bucketId('bucket1'),
-      'target.bin',
-      {
-        contentType: 'application/octet-stream',
-        fileInfo: {},
-        sourceSize: 200,
-        partSize: 100,
-        parts: [
-          { partNumber: 1, length: 100 },
-          { partNumber: 2, length: 100 },
-        ],
-      },
-    )
-
-    expect(result).toBeNull()
-    expect(consoleDebug).toHaveBeenCalledWith('[b2-sdk] upload resume candidate rejected', {
-      fileId: 'wrong-type',
-      fileName: 'target.bin',
-      reason: 'content-type-mismatch',
-    })
   })
 
   it('passes the abort signal to discovery list requests and part listings', async () => {

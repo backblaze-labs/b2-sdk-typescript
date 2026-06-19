@@ -127,7 +127,7 @@ Automatic resume discovery trusts all writers with access to the bucket because 
 
 SSE-C uploads are not auto-resumed because B2 does not expose a non-secret customer-key identity in unfinished-file listings. Resume SSE-C uploads only with a trusted `resumeFileId`, which is still verified against bucket, name, metadata, options, and uploaded part lengths before upload continues. For SSE-C `resumeFileId` use, the caller must provide the same customer key that started the unfinished file.
 
-Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. If no callback is supplied, the SDK emits the same structured event through `console.debug`. If a supplied `resumeFileId` is incompatible, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
+Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. If a supplied `resumeFileId` is incompatible, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100

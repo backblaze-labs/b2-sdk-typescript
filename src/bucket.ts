@@ -629,7 +629,7 @@ export class Bucket {
   async listUnfinishedLargeFiles(options?: {
     /** Restrict results to files whose name starts with this prefix. */
     namePrefix?: string
-    /** Start listing after this file ID (for pagination). */
+    /** Start listing at this file ID, inclusive (for pagination). */
     startFileId?: LargeFileId
     /**
      * Maximum number of files to return per request (1-100). Forwarded

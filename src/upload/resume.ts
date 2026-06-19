@@ -18,7 +18,6 @@ export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
-const RESUME_DIAGNOSTIC_LOG_PREFIX = '[b2-sdk] upload resume candidate rejected'
 
 /** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
 export class ResumeFileIdMismatchError extends Error {
@@ -364,12 +363,7 @@ function emitCandidateRejected(
   criteria: ResumeCandidateCriteria | undefined,
   event: ResumeCandidateRejectedEvent,
 ): void {
-  if (criteria === undefined) return
-  if (criteria.onCandidateRejected !== undefined) {
-    criteria.onCandidateRejected(event)
-    return
-  }
-  globalThis.console?.debug?.(RESUME_DIAGNOSTIC_LOG_PREFIX, event)
+  criteria?.onCandidateRejected?.(event)
 }
 
 function uploadedPartsMatchPlan(
