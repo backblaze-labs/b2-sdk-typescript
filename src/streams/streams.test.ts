@@ -407,6 +407,23 @@ describe('toContentSource', () => {
     expect(src.size).toBe(1)
   })
 
+  it('converts ReadableStream-like inputs across realms', async () => {
+    const rs = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([7]))
+        c.close()
+      },
+    })
+    const crossRealmLike = { getReader: rs.getReader.bind(rs) } as ReadableStream<Uint8Array>
+
+    expect(crossRealmLike instanceof ReadableStream).toBe(false)
+
+    const src = toContentSource(crossRealmLike, 1)
+
+    expect(src).toBeInstanceOf(StreamSource)
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([7]))
+  })
+
   it('converts an async iterable to a StreamSource', async () => {
     async function* chunks(): AsyncGenerator<Uint8Array> {
       yield new Uint8Array([1, 2])

@@ -52,7 +52,7 @@ function getNodeFsSync(): NodeFsSync {
   ).process
   const fs = processLike?.getBuiltinModule?.('node:fs')
   if (!isNodeFsSync(fs)) {
-    throw new Error('FileSource is only available in Node.js-compatible runtimes.')
+    throw new Error('FileSource requires Node.js 22.3+ filesystem APIs.')
   }
   return fs
 }
@@ -174,7 +174,7 @@ async function readFileRange(
     assertSameIdentity(path, identity, stats, 'while being read')
     return data
   } finally {
-    await file.close()
+    await file.close().catch(() => {})
   }
 }
 
@@ -206,6 +206,14 @@ function isAsyncIterable(input: unknown): input is AsyncIterable<Uint8Array> {
     input !== null &&
     Symbol.asyncIterator in input &&
     typeof input[Symbol.asyncIterator] === 'function'
+  )
+}
+
+function isReadableStream(input: unknown): input is ReadableStream<Uint8Array> {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    typeof (input as { getReader?: unknown }).getReader === 'function'
   )
 }
 
@@ -391,6 +399,7 @@ abstract class FileRangeSource implements ContentSource {
         }
 
         const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
+        // Open per pull so an abandoned public stream cannot strand a file descriptor.
         const data = await readFileRange(path, identity, position, length)
 
         position += data.byteLength
@@ -532,7 +541,7 @@ export function toContentSource(
   if (size === undefined) {
     throw new Error('size is required when using a forward-only content source as input.')
   }
-  if (input instanceof ReadableStream) {
+  if (isReadableStream(input)) {
     return new StreamSource(input, size)
   }
   if (isAsyncIterable(input)) {
