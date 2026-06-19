@@ -300,6 +300,9 @@ export class FileSource implements ContentSource {
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
     const bytes = await collectStream(this.stream())
+    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+      return bytes.buffer as ArrayBuffer
+    }
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
   }
 }
