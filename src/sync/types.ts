@@ -29,7 +29,9 @@ export interface SyncPath {
    *
    * - `undefined`: not computed yet; the synchronizer may hash local files before comparing.
    * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
-   * - 40-character hex string: known digest.
+   * - 40-character hex string: known verifiable digest.
+   * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
+   *   consumers must not treat it as proof that bytes match.
    */
   readonly contentSha1?: string | null
 }

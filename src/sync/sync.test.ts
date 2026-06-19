@@ -70,6 +70,16 @@ function makeB2SyncPath(
   }
 }
 
+function withoutPathContentSha1(path: B2SyncPath): B2SyncPath {
+  return {
+    relativePath: path.relativePath,
+    modTimeMillis: path.modTimeMillis,
+    size: path.size,
+    selectedVersion: path.selectedVersion,
+    allVersions: path.allVersions,
+  }
+}
+
 function makeMemoryFolder(files: SyncPath[]): SyncFolder {
   return {
     type: 'local',
@@ -212,10 +222,30 @@ describe('preparePairForCompare', () => {
     expect(result.errors).toHaveLength(1)
   })
 
+  it('keeps prepared B2 sha1 metadata when local hashing fails', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeLocalSyncPath('large.bin', 1000, 100)
+    const dest = withoutPathContentSha1(
+      makeB2SyncPath('large.bin', 1000, 100, null, { large_file_sha1: sha1 }),
+    )
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('read failed')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.pair[1]?.contentSha1).toBe(sha1)
+  })
+
   it('returns aborted when local sha1 hashing observes an abort signal', async () => {
     const controller = new AbortController()
+    const sha1 = 'a'.repeat(40)
     const source = makeLocalSyncPath('file.txt', 1000, 100)
-    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = withoutPathContentSha1(
+      makeB2SyncPath('file.txt', 1000, 100, null, { large_file_sha1: sha1 }),
+    )
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
       signal: controller.signal,
@@ -227,6 +257,7 @@ describe('preparePairForCompare', () => {
 
     expect(result.aborted).toBe(true)
     expect(result.events).toEqual([])
+    expect(result.pair[1]?.contentSha1).toBe(sha1)
   })
 })
 

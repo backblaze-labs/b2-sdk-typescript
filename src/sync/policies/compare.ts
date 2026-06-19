@@ -108,11 +108,13 @@ export async function preparePairForCompare(
   if (metadataSource === null || metadataDest === null) return ready(metadataPair)
 
   const sourceResult = await preparePathSha1(metadataSource, options)
-  if (sourceResult.aborted) return aborted(pair)
-  if (sourceResult.event) return skipped(pair, sourceResult.event, sourceResult.error)
+  if (sourceResult.aborted) return aborted(metadataPair)
+  if (sourceResult.event) {
+    return skipped(metadataPair, sourceResult.event, sourceResult.error, sourceResult.bytesHashed)
+  }
 
   const destResult = await preparePathSha1(metadataDest, options)
-  if (destResult.aborted) return aborted(pair)
+  if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
   if (destResult.event) {
     return skipped(
       [sourceResult.path, destResult.path],
