@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
@@ -8,6 +9,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
+import { fetchFreshUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {
@@ -33,6 +35,8 @@ export interface UploadFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. */
   readonly signal?: AbortSignal
+  /** Retry settings for upload-layer fresh-URL retries. */
+  readonly retry?: Partial<RetryOptions>
 }
 
 /**
@@ -56,15 +60,6 @@ export async function uploadSmallFile(
   accountInfo: AccountInfo,
   options: UploadFileOptions,
 ): Promise<FileVersion> {
-  let uploadEntry = accountInfo.checkoutUploadUrl(options.bucketId)
-
-  if (!uploadEntry) {
-    const resp = await raw.getUploadUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      bucketId: options.bucketId,
-    })
-    uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
-  }
-
   const data = new Uint8Array(await options.source.toArrayBuffer())
   const sha1 = new IncrementalSha1()
   await sha1.update(data)
@@ -78,35 +73,38 @@ export async function uploadSmallFile(
   // totalParts, elapsedMs} shape they get from `uploadLargeFile`.
   const tracker = new ProgressTracker(options.onProgress, data.byteLength, 1)
 
-  try {
-    const result = await raw.uploadFile(
-      uploadEntry.uploadUrl,
-      {
-        authorization: uploadEntry.authorizationToken,
-        fileName: options.fileName,
-        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-        contentLength: data.byteLength,
-        contentSha1: sha1Hex,
-        ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-        ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-        ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
-        ...(options.lastModifiedMillis !== undefined
-          ? { lastModifiedMillis: options.lastModifiedMillis }
-          : {}),
-      },
-      data,
-      options.signal,
-    )
+  const result = await withFreshUploadUrlRetry({
+    retry: options.retry,
+    signal: options.signal,
+    checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
+    fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId),
+    returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
+    evictEntry: (entry) => accountInfo.evictUploadUrl(options.bucketId, entry),
+    upload: (entry) =>
+      raw.uploadFile(
+        entry.uploadUrl,
+        {
+          authorization: entry.authorizationToken,
+          fileName: options.fileName,
+          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+          contentLength: data.byteLength,
+          contentSha1: sha1Hex,
+          ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+          ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+          ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+          ...(options.lastModifiedMillis !== undefined
+            ? { lastModifiedMillis: options.lastModifiedMillis }
+            : {}),
+        },
+        data,
+        options.signal,
+      ),
+  })
 
-    tracker.addBytes(data.byteLength)
-    tracker.completePart()
-    accountInfo.returnUploadUrl(options.bucketId, uploadEntry)
-    return result
-  } catch (err) {
-    accountInfo.evictUploadUrl(options.bucketId, uploadEntry)
-    throw err
-  }
+  tracker.addBytes(data.byteLength)
+  tracker.completePart()
+  return result
 }

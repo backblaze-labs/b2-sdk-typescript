@@ -1,8 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
-import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
+import {
+  daysFromNow,
+  deterministicBytes,
+  jsonErrorResponse,
+  jsonResponse,
+  makeClient,
+} from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
@@ -28,6 +35,74 @@ import { uploadLargeFile } from './large.ts'
 
 function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
   return makeClient({ minimumPartSize: 100_000 })
+}
+
+interface FreshUrlRetryHarness {
+  readonly transport: HttpTransport
+  readonly uploadFileUrls: string[]
+  readonly uploadPartUrls: string[]
+  getUploadUrlCalls: number
+  getUploadPartUrlCalls: number
+  uploadFileAttempts: number
+  uploadPartAttempts: number
+}
+
+type UploadUrlBody = { uploadUrl: string; authorizationToken: string } & Record<string, unknown>
+
+function freshUrlRetryHarness(
+  inner: HttpTransport,
+  failFirst: 'file' | 'part',
+): FreshUrlRetryHarness {
+  const stats: FreshUrlRetryHarness = {
+    uploadFileUrls: [],
+    uploadPartUrls: [],
+    getUploadUrlCalls: 0,
+    getUploadPartUrlCalls: 0,
+    uploadFileAttempts: 0,
+    uploadPartAttempts: 0,
+    transport: {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          stats.getUploadUrlCalls += 1
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&freshSmall=${stats.getUploadUrlCalls}`,
+          })
+        }
+
+        if (req.url.includes('b2_get_upload_part_url')) {
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          stats.getUploadPartUrlCalls += 1
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&freshPart=${stats.getUploadPartUrlCalls}`,
+          })
+        }
+
+        if (req.url.includes('b2_upload_file?')) {
+          stats.uploadFileAttempts += 1
+          stats.uploadFileUrls.push(req.url)
+          if (failFirst === 'file' && stats.uploadFileAttempts === 1) {
+            return jsonErrorResponse(500, 'internal_error', 'first upload URL failed')
+          }
+        }
+
+        if (req.url.includes('b2_upload_part?')) {
+          stats.uploadPartAttempts += 1
+          stats.uploadPartUrls.push(req.url)
+          if (failFirst === 'part' && stats.uploadPartAttempts === 1) {
+            return jsonErrorResponse(500, 'internal_error', 'first part upload URL failed')
+          }
+        }
+
+        return inner.send(req)
+      },
+    },
+  }
+  return stats
 }
 
 describe('uploadLargeFile cleanup paths', () => {
@@ -123,6 +198,135 @@ describe('uploadLargeFile cleanup paths', () => {
         concurrency: 1,
       }),
     ).rejects.toThrow(/upload_part failure/)
+  })
+})
+
+describe('upload fresh-URL retry', () => {
+  it('retries a transient small-file upload failure with a fresh upload URL', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-fresh-url',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'fresh-small.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('fresh-small.txt')
+    expect(harness.getUploadUrlCalls).toBe(2)
+    expect(harness.uploadFileAttempts).toBe(2)
+    expect(harness.uploadFileUrls).toHaveLength(2)
+    expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
+  })
+
+  it('retries a transient multipart part failure with a fresh part URL', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const harness = freshUrlRetryHarness(sim.transport(), 'part')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'part-fresh-url',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const result = await bucket.upload({
+      fileName: 'fresh-part.bin',
+      source: new BufferSource(payload),
+      partSize,
+      concurrency: 1,
+    })
+
+    expect(result.fileName).toBe('fresh-part.bin')
+    expect(harness.getUploadPartUrlCalls).toBe(2)
+    expect(harness.uploadPartAttempts).toBe(3)
+    expect(harness.uploadPartUrls).toHaveLength(3)
+    expect(harness.uploadPartUrls[0]).not.toBe(harness.uploadPartUrls[1])
+  })
+
+  it('retries a transient streaming-source part failure with a fresh part URL', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const harness = freshUrlRetryHarness(sim.transport(), 'part')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-source-fresh-url',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    const result = await bucket.upload({
+      fileName: 'fresh-stream-source.bin',
+      source: new StreamSource(readable, payload.byteLength),
+      partSize,
+      concurrency: 1,
+    })
+
+    expect(result.fileName).toBe('fresh-stream-source.bin')
+    expect(harness.getUploadPartUrlCalls).toBe(2)
+    expect(harness.uploadPartAttempts).toBe(3)
+    expect(harness.uploadPartUrls[0]).not.toBe(harness.uploadPartUrls[1])
+  })
+
+  it('retries a transient write-stream part failure with a fresh part URL', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const harness = freshUrlRetryHarness(sim.transport(), 'part')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'write-stream-fresh-url',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const { writable, done } = bucket.file('fresh-write-stream.bin').createWriteStream({
+      partSize,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(payload)
+    await writer.close()
+    const result = await done
+
+    expect(result.fileName).toBe('fresh-write-stream.bin')
+    expect(harness.getUploadPartUrlCalls).toBe(2)
+    expect(harness.uploadPartAttempts).toBe(3)
+    expect(harness.uploadPartUrls[0]).not.toBe(harness.uploadPartUrls[1])
   })
 })
 

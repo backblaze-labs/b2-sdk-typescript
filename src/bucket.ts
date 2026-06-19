@@ -196,6 +196,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         bucketId: this.id,
         ...options,
+        retry: this.client.getUploadRetryOptions(),
       })
     }
 
@@ -206,6 +207,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       bucketId: this.id,
       ...smallOptions,
+      retry: this.client.getUploadRetryOptions(),
     })
   }
 

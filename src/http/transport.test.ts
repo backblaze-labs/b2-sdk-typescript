@@ -311,19 +311,25 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    // No transient 5xx is retried in place for upload endpoints (URL-pinned;
-    // a 5xx may mean a bad pod, so it must bubble for fresh-URL retry, #57).
+    // Retryable upload failures are not retried in place. Upload endpoints are
+    // URL-pinned, so failures bubble to the upload layer for fresh-URL retry.
     it.each([
+      ['b2_upload_file', 408],
+      ['b2_upload_file', 429],
       ['b2_upload_file', 500],
       ['b2_upload_file', 502],
       ['b2_upload_file', 503],
       ['b2_upload_file', 504],
+      ['b2_upload_part', 408],
+      ['b2_upload_part', 429],
       ['b2_upload_part', 500],
       ['b2_upload_part', 502],
       ['b2_upload_part', 503],
       ['b2_upload_part', 504],
     ] as const)('does not retry %s on HTTP %i in place', async (endpoint, status) => {
-      const errorBody = { status, code: 'internal_error', message: `HTTP ${status}` }
+      const code =
+        status === 408 ? 'request_timeout' : status === 429 ? 'too_many_requests' : 'internal_error'
+      const errorBody = { status, code, message: `HTTP ${status}` }
       // Second response would be 200 if it (wrongly) retried — assert it doesn't.
       innerTransport.send
         .mockResolvedValueOnce(mockResponse(status, errorBody))
@@ -381,28 +387,6 @@ describe('RetryTransport', () => {
         method: 'GET',
         headers: { Authorization: 'token' },
       })
-      expect(result.status).toBe(200)
-      expect(innerTransport.send).toHaveBeenCalledTimes(2)
-    })
-
-    it('still retries 429 in place for upload endpoints (throttle, not pod health)', async () => {
-      // 408/429 are timeout/throttle signals, not pod-health 5xx, so they stay
-      // retryable in place for uploads.
-      const errorBody = { status: 429, code: 'too_many_requests', message: 'Slow down' }
-      innerTransport.send
-        .mockResolvedValueOnce(mockResponse(429, errorBody))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
-
-      const transport = makeRetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
-      })
-      const uploadRequest: HttpRequest = {
-        url: 'https://pod-000.backblaze.com/b2api/v3/b2_upload_file',
-        method: 'POST',
-        headers: { Authorization: 'upload-token' },
-      }
-      const result = await transport.send(uploadRequest)
       expect(result.status).toBe(200)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })

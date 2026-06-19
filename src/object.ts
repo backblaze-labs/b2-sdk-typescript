@@ -148,6 +148,7 @@ export class B2Object {
         bucketId: this.bucket.id,
         fileName: this.fileName,
         ...options,
+        retry: this.client.getUploadRetryOptions(),
       })
     }
 
@@ -157,6 +158,7 @@ export class B2Object {
       bucketId: this.bucket.id,
       fileName: this.fileName,
       ...smallOptions,
+      retry: this.client.getUploadRetryOptions(),
     })
   }
 
@@ -287,6 +289,7 @@ export class B2Object {
       bucketId: this.bucket.id,
       fileName: this.fileName,
       ...(options ?? {}),
+      retry: this.client.getUploadRetryOptions(),
     })
   }
 

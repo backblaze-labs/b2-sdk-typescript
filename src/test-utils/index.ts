@@ -143,7 +143,19 @@ export function daysFromNow(n: number): number {
  * @returns An `HttpResponse` ready to return from `transport.send`.
  */
 export function jsonErrorResponse(status: number, code: string, message: string): HttpResponse {
-  const body = JSON.stringify({ status, code, message })
+  return jsonResponse({ status, code, message }, status)
+}
+
+/**
+ * Builds an `HttpResponse` containing a JSON body.
+ *
+ * @param data - Value to serialize as JSON.
+ * @param status - HTTP status code. Defaults to 200.
+ *
+ * @returns An `HttpResponse` ready to return from `transport.send`.
+ */
+export function jsonResponse<T>(data: T, status = 200): HttpResponse {
+  const body = JSON.stringify(data)
   return {
     status,
     headers: new Headers({ 'Content-Type': 'application/json' }),
@@ -153,7 +165,7 @@ export function jsonErrorResponse(status: number, code: string, message: string)
         controller.close()
       },
     }),
-    json: <T>() => Promise.resolve(JSON.parse(body) as T),
+    json: <U>() => Promise.resolve(JSON.parse(body) as U),
     text: () => Promise.resolve(body),
     arrayBuffer: () => Promise.resolve(utf8Encoder.encode(body).buffer as ArrayBuffer),
   }

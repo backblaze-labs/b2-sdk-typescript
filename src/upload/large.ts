@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
@@ -13,6 +14,7 @@ import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
+import { fetchFreshPartUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -48,6 +50,8 @@ export interface UploadLargeFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. Triggers cancellation of the large file. */
   readonly signal?: AbortSignal
+  /** Retry settings for upload-layer fresh-URL retries. */
+  readonly retry?: Partial<RetryOptions>
   /**
    * If true, look for an unfinished large file with the same bucket and file name
    * and skip parts whose locally-recomputed SHA-1 matches the server's.
@@ -202,40 +206,33 @@ export async function uploadLargeFile(
           return
         }
 
-        let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId)
-        if (!uploadEntry) {
-          const resp = await raw.getUploadPartUrl(
-            accountInfo.getApiUrl(),
-            accountInfo.getAuthToken(),
-            { fileId: largeFileId },
-          )
-          uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
-        }
+        const result = await withFreshUploadUrlRetry({
+          retry: options.retry,
+          signal: options.signal,
+          checkout: () => accountInfo.checkoutPartUploadUrl(largeFileId),
+          fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, largeFileId),
+          returnEntry: (entry) => accountInfo.returnPartUploadUrl(largeFileId, entry),
+          evictEntry: (entry) => accountInfo.evictPartUploadUrl(largeFileId, entry),
+          upload: (entry) =>
+            raw.uploadPart(
+              entry.uploadUrl,
+              {
+                authorization: entry.authorizationToken,
+                partNumber: part.partNumber,
+                contentLength: data.byteLength,
+                contentSha1: sha1Hex,
+                ...(options.serverSideEncryption !== undefined
+                  ? { serverSideEncryption: options.serverSideEncryption }
+                  : {}),
+              },
+              data,
+              options.signal,
+            ),
+        })
 
-        try {
-          const result = await raw.uploadPart(
-            uploadEntry.uploadUrl,
-            {
-              authorization: uploadEntry.authorizationToken,
-              partNumber: part.partNumber,
-              contentLength: data.byteLength,
-              contentSha1: sha1Hex,
-              ...(options.serverSideEncryption !== undefined
-                ? { serverSideEncryption: options.serverSideEncryption }
-                : {}),
-            },
-            data,
-            options.signal,
-          )
-
-          accountInfo.returnPartUploadUrl(largeFileId, uploadEntry)
-          partSha1s[part.partNumber - 1] = result.contentSha1
-          tracker.addBytes(data.byteLength)
-          tracker.completePart()
-        } catch (err) {
-          accountInfo.evictPartUploadUrl(largeFileId, uploadEntry)
-          throw err
-        }
+        partSha1s[part.partNumber - 1] = result.contentSha1
+        tracker.addBytes(data.byteLength)
+        tracker.completePart()
       } finally {
         sem.release()
       }
@@ -336,40 +333,33 @@ async function uploadPartsSequentially(
       await partSha1.update(data)
       const sha1Hex = await partSha1.digest()
 
-      let uploadEntry = accountInfo.checkoutPartUploadUrl(largeFileId)
-      if (!uploadEntry) {
-        const resp = await raw.getUploadPartUrl(
-          accountInfo.getApiUrl(),
-          accountInfo.getAuthToken(),
-          { fileId: largeFileId },
-        )
-        uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
-      }
+      const result = await withFreshUploadUrlRetry({
+        retry: options.retry,
+        signal: options.signal,
+        checkout: () => accountInfo.checkoutPartUploadUrl(largeFileId),
+        fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, largeFileId),
+        returnEntry: (entry) => accountInfo.returnPartUploadUrl(largeFileId, entry),
+        evictEntry: (entry) => accountInfo.evictPartUploadUrl(largeFileId, entry),
+        upload: (entry) =>
+          raw.uploadPart(
+            entry.uploadUrl,
+            {
+              authorization: entry.authorizationToken,
+              partNumber: planned.partNumber,
+              contentLength: data.byteLength,
+              contentSha1: sha1Hex,
+              ...(options.serverSideEncryption !== undefined
+                ? { serverSideEncryption: options.serverSideEncryption }
+                : {}),
+            },
+            data,
+            options.signal,
+          ),
+      })
 
-      try {
-        const result = await raw.uploadPart(
-          uploadEntry.uploadUrl,
-          {
-            authorization: uploadEntry.authorizationToken,
-            partNumber: planned.partNumber,
-            contentLength: data.byteLength,
-            contentSha1: sha1Hex,
-            ...(options.serverSideEncryption !== undefined
-              ? { serverSideEncryption: options.serverSideEncryption }
-              : {}),
-          },
-          data,
-          options.signal,
-        )
-
-        accountInfo.returnPartUploadUrl(largeFileId, uploadEntry)
-        partSha1s[planned.partNumber - 1] = result.contentSha1
-        tracker.addBytes(data.byteLength)
-        tracker.completePart()
-      } catch (err) {
-        accountInfo.evictPartUploadUrl(largeFileId, uploadEntry)
-        throw err
-      }
+      partSha1s[planned.partNumber - 1] = result.contentSha1
+      tracker.addBytes(data.byteLength)
+      tracker.completePart()
 
       partNumber++
     }

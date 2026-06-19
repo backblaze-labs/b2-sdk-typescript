@@ -2,7 +2,7 @@ import type { AccountInfo } from './auth/account-info.ts'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { getRealmUrl } from './auth/realms.ts'
 import { Bucket } from './bucket.ts'
-import type { RetryOptions } from './http/retry.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
 import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
@@ -90,6 +90,7 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -101,6 +102,7 @@ export class B2Client {
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     this.userAllowedSuffixes = options.allowedHostSuffixes
+    this.uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -117,11 +119,22 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      ...(options.retry !== undefined ? { retry: options.retry } : {}),
+      retry: this.uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 
     this.raw = new RawClient({ transport: retryTransport })
+  }
+
+  /**
+   * Returns the retry settings used by upload-layer fresh-URL retry.
+   *
+   * @returns The resolved retry settings for upload requests.
+   *
+   * @internal
+   */
+  getUploadRetryOptions(): RetryOptions {
+    return this.uploadRetryOptions
   }
 
   /**

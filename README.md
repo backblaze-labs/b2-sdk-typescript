@@ -113,6 +113,8 @@ await bucket.upload({
 })
 ```
 
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version; use returned file IDs or version listing when your workflow needs to reconcile that case.
+
 #### Resume a failed multipart upload
 
 Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`, checks which parts are already on the server, and only re-uploads the missing ones. Parts whose locally-recomputed SHA-1 matches the server's are skipped.

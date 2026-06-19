@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
@@ -10,6 +11,7 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { toError } from '../util/to-error.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
+import { fetchFreshPartUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
 export interface CreateWriteStreamOptions {
@@ -35,6 +37,8 @@ export interface CreateWriteStreamOptions {
   readonly onProgress?: ProgressListener
   /** Aborts the upload and cancels the unfinished large file. */
   readonly signal?: AbortSignal
+  /** Retry settings for upload-layer fresh-URL retries. */
+  readonly retry?: Partial<RetryOptions>
 }
 
 /**
@@ -134,37 +138,32 @@ export function createWriteStream(
     await sha1.update(data)
     const sha1Hex = await sha1.digest()
 
-    let uploadEntry = accountInfo.checkoutPartUploadUrl(fileId)
-    if (!uploadEntry) {
-      const resp = await raw.getUploadPartUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        fileId,
-      })
-      uploadEntry = { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
-    }
-
-    try {
-      const result = await raw.uploadPart(
-        uploadEntry.uploadUrl,
-        {
-          authorization: uploadEntry.authorizationToken,
-          partNumber,
-          contentLength: data.byteLength,
-          contentSha1: sha1Hex,
-          ...(options.serverSideEncryption !== undefined
-            ? { serverSideEncryption: options.serverSideEncryption }
-            : {}),
-        },
-        data as BodyInit,
-        options.signal,
-      )
-      accountInfo.returnPartUploadUrl(fileId, uploadEntry)
-      partSha1s[partNumber - 1] = result.contentSha1
-      tracker.addBytes(data.byteLength)
-      tracker.completePart()
-    } catch (err) {
-      accountInfo.evictPartUploadUrl(fileId, uploadEntry)
-      throw err
-    }
+    const result = await withFreshUploadUrlRetry({
+      retry: options.retry,
+      signal: options.signal,
+      checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
+      fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId),
+      returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
+      evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
+      upload: (entry) =>
+        raw.uploadPart(
+          entry.uploadUrl,
+          {
+            authorization: entry.authorizationToken,
+            partNumber,
+            contentLength: data.byteLength,
+            contentSha1: sha1Hex,
+            ...(options.serverSideEncryption !== undefined
+              ? { serverSideEncryption: options.serverSideEncryption }
+              : {}),
+          },
+          data as BodyInit,
+          options.signal,
+        ),
+    })
+    partSha1s[partNumber - 1] = result.contentSha1
+    tracker.addBytes(data.byteLength)
+    tracker.completePart()
   }
 
   function dispatchPart(): void {
