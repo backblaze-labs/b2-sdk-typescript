@@ -124,9 +124,6 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   readonly responseExpires?: Date
 }
 
-/** Backward-compatible alias for the S3 SigV4 GET helper options. */
-export type PresignGetObjectUrlOptions = PresignS3GetObjectUrlOptions
-
 /** Options for {@link presignPutObjectUrl}. */
 export interface PresignPutObjectUrlOptions extends S3PresignObjectUrlOptions {
   /**
