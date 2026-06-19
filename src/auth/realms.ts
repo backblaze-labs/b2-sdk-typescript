@@ -29,10 +29,13 @@ function isLoopbackHost(hostname: string): boolean {
   )
 }
 
-function assertNoPlaintextNonLoopbackRealmUrl(realmUrl: string, url: URL): void {
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
+  if (url.protocol === 'https:') return
+  if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) return
+  if (url.protocol === 'http:') {
     throw new Error(`refusing to send credentials over plaintext HTTP realm: ${realmUrl}`)
   }
+  throw new Error(`realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrl}`)
 }
 
 /**
@@ -41,13 +44,13 @@ function assertNoPlaintextNonLoopbackRealmUrl(realmUrl: string, url: URL): void 
  *
  * @param realmUrl - The resolved realm URL or custom realm string to validate.
  *
- * @throws Error when the realm URL uses non-loopback plaintext HTTP.
+ * @throws Error when the realm URL uses an unsupported scheme or non-loopback plaintext HTTP.
  */
 export function assertSecureRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
   if (url === null) return
 
-  assertNoPlaintextNonLoopbackRealmUrl(realmUrl, url)
+  assertAuthorizableRealmScheme(realmUrl, url)
 }
 
 /**
@@ -55,7 +58,8 @@ export function assertSecureRealmUrl(realmUrl: string): void {
  *
  * @param realmUrl - The resolved realm URL to validate.
  *
- * @throws Error when the realm URL is not absolute or uses non-loopback plaintext HTTP.
+ * @throws Error when the realm URL is not absolute, uses an unsupported scheme,
+ * or uses non-loopback plaintext HTTP.
  */
 export function assertAuthorizableRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
@@ -63,7 +67,7 @@ export function assertAuthorizableRealmUrl(realmUrl: string): void {
     throw new Error(`realm URL must be absolute for authorization: ${realmUrl}`)
   }
 
-  assertNoPlaintextNonLoopbackRealmUrl(realmUrl, url)
+  assertAuthorizableRealmScheme(realmUrl, url)
 }
 
 /**

@@ -398,6 +398,12 @@ describe('getRealmUrl', () => {
     )
   })
 
+  it('rejects unsupported realm URL schemes', () => {
+    expect(() => getRealmUrl('ftp://attacker.example')).toThrow(
+      'realm URL must use HTTPS or loopback HTTP for authorization',
+    )
+  })
+
   it.each([
     'http://localhost:8180',
     'http://127.0.0.1:8180',
