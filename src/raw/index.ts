@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 
-import { assertSecureRealmUrl } from '../auth/realms.ts'
+import { assertAuthorizableRealmUrl } from '../auth/realms.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
@@ -111,7 +111,7 @@ export class RawClient {
     applicationKey: string,
     realmUrl = 'https://api.backblazeb2.com',
   ): Promise<AuthorizeAccountResponse> {
-    assertSecureRealmUrl(realmUrl)
+    assertAuthorizableRealmUrl(realmUrl)
     const response = await this.transport.send({
       url: `${realmUrl}/b2api/v3/b2_authorize_account`,
       method: 'GET',

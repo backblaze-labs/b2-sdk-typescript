@@ -9,6 +9,14 @@ export const REALM_URLS: Record<string, string> = {
   staging: 'https://api.backblaze.net',
 }
 
+function parseAbsoluteRealmUrl(realmUrl: string): URL | null {
+  try {
+    return new URL(realmUrl)
+  } catch {
+    return null
+  }
+}
+
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   if (host === 'localhost' || host === '[::1]' || host === '::1') return true
@@ -21,6 +29,12 @@ function isLoopbackHost(hostname: string): boolean {
   )
 }
 
+function assertNoPlaintextNonLoopbackRealmUrl(realmUrl: string, url: URL): void {
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error(`refusing to send credentials over plaintext HTTP realm: ${realmUrl}`)
+  }
+}
+
 /**
  * Reject realm URLs that would send application-key credentials over plaintext
  * to a non-loopback host.
@@ -30,16 +44,26 @@ function isLoopbackHost(hostname: string): boolean {
  * @throws Error when the realm URL uses non-loopback plaintext HTTP.
  */
 export function assertSecureRealmUrl(realmUrl: string): void {
-  let url: URL
-  try {
-    url = new URL(realmUrl)
-  } catch {
-    return
+  const url = parseAbsoluteRealmUrl(realmUrl)
+  if (url === null) return
+
+  assertNoPlaintextNonLoopbackRealmUrl(realmUrl, url)
+}
+
+/**
+ * Validate a realm URL before using it for credential-bearing authorization.
+ *
+ * @param realmUrl - The resolved realm URL to validate.
+ *
+ * @throws Error when the realm URL is not absolute or uses non-loopback plaintext HTTP.
+ */
+export function assertAuthorizableRealmUrl(realmUrl: string): void {
+  const url = parseAbsoluteRealmUrl(realmUrl)
+  if (url === null) {
+    throw new Error(`realm URL must be absolute for authorization: ${realmUrl}`)
   }
 
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
-    throw new Error(`refusing to send credentials over plaintext HTTP realm: ${realmUrl}`)
-  }
+  assertNoPlaintextNonLoopbackRealmUrl(realmUrl, url)
 }
 
 /**
