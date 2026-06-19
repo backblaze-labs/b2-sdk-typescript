@@ -57,6 +57,10 @@ function isStaleRealExampleBucket(name: string, now = Date.now()): boolean {
   return createdAt !== null && now - createdAt > staleBucketAgeMs
 }
 
+function isUnparseableRealExampleBucket(name: string): boolean {
+  return isRealExampleBucketName(name) && bucketTimestamp(name) === null
+}
+
 /**
  * Run a child process inheriting stdout/stderr. Resolves on exit code 0,
  * rejects otherwise. Used to invoke each example.
@@ -103,6 +107,10 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
   }
 }
 
+function isUnparseableExampleBucket(bucketName: string): boolean {
+  return SDK_EXAMPLE_BUCKET_PREFIX_RE.test(bucketName) && !SDK_EXAMPLE_BUCKET_RE.test(bucketName)
+}
+
 async function main(): Promise<void> {
   const keyId = process.env['B2_APPLICATION_KEY_ID']
   const appKey = process.env['B2_APPLICATION_KEY']
@@ -118,7 +126,12 @@ async function main(): Promise<void> {
   // Sweep only stale buckets from crashed runs. Other branches and older
   // workflow attempts may still be using the same B2 account concurrently.
   for (const b of await client.listBuckets()) {
-    if (!isStaleRealExampleBucket(b.name)) continue
+    if (!isStaleRealExampleBucket(b.name)) {
+      if (isUnparseableRealExampleBucket(b.name)) {
+        console.warn(`skipping example bucket with unparseable timestamp: ${b.name}`)
+      }
+      continue
+    }
     try {
       await deleteBucketIfPresent(b)
     } catch (err) {
