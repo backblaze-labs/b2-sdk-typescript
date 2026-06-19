@@ -2,6 +2,7 @@ import type { AccountInfo, UploadUrlEntry } from '../auth/account-info.ts'
 import {
   B2Error,
   B2SsrfError,
+  BadAuthTokenError,
   BadRequestError,
   BadUploadUrlError,
   NetworkError,
@@ -204,14 +205,20 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       options.returnEntry(uploadEntry)
       return result
     } catch (err) {
+      const retryError = normalizeUploadRetryError(err, options)
       if (uploadEntry !== undefined) {
-        options.evictEntry(uploadEntry)
+        if (isUploadRateLimitError(retryError)) {
+          options.returnEntry(uploadEntry)
+        } else {
+          options.evictEntry(uploadEntry)
+        }
       }
       if (options.signal?.aborted) {
         throw err
       }
-
-      const retryError = normalizeUploadRetryError(err, options)
+      if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
+        throw retryError
+      }
       if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
@@ -238,8 +245,13 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
 function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
   if (err instanceof NetworkError) return !(err.cause instanceof B2SsrfError)
+  if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
   return err instanceof B2Error && err.retryable
+}
+
+function isUploadRateLimitError(err: unknown): err is B2Error {
+  return err instanceof B2Error && err.status === 429
 }
 
 function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {

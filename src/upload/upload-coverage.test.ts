@@ -774,19 +774,19 @@ describe('upload fresh-URL retry', () => {
     expect(uploadAttempts).toBe(1)
   })
 
-  it('retries 429 upload failures and emits increasing retry backoff events', async () => {
+  it('retries 429 upload failures in place without fetching a fresh URL', async () => {
     const sim = new B2Simulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file', {
       status: 429,
       code: 'too_many_requests',
       message: 'slow down',
-      count: 2,
+      count: 1,
     })
     const client = new B2Client({
       applicationKeyId: 'k',
       applicationKey: 'k',
       transport: harness.transport,
-      retry: { maxRetries: 2, initialRetryDelayMs: 1, maxRetryDelayMs: 10 },
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
     })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -802,11 +802,10 @@ describe('upload fresh-URL retry', () => {
     })
 
     expect(result.fileName).toBe('retry-429.txt')
-    expect(harness.uploadFileAttempts).toBe(3)
-    expect(retryEvents.map((event) => event.attempt)).toEqual([1, 2])
-    expect(retryEvents[0]?.delayMs).toBeGreaterThanOrEqual(1)
-    expect(retryEvents[1]?.delayMs).toBeGreaterThanOrEqual(2)
-    expect(retryEvents[1]?.delayMs).toBeGreaterThan(retryEvents[0]?.delayMs ?? 0)
+    expect(harness.getUploadUrlCalls).toBe(1)
+    expect(harness.uploadFileAttempts).toBe(2)
+    expect(harness.uploadFileUrls[0]).toBe(harness.uploadFileUrls[1])
+    expect(retryEvents).toEqual([])
   })
 
   it('retries upload network failures with a fresh URL', async () => {
@@ -885,6 +884,106 @@ describe('upload fresh-URL retry', () => {
     expect(harness.authorizeCalls).toBe(1)
     expect(harness.getUploadUrlCalls).toBe(2)
     expect(harness.uploadFileAttempts).toBe(2)
+  })
+
+  it('recovers bad upload tokens through fresh URL retry for small files', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file', {
+      status: 401,
+      code: 'bad_auth_token',
+      message: 'bad upload token',
+      count: 1,
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bad-upload-token-small',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'bad-token-small.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('bad-token-small.txt')
+    expect(harness.getUploadUrlCalls).toBe(2)
+    expect(harness.uploadFileAttempts).toBe(2)
+    expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
+  })
+
+  it('recovers bad upload tokens through fresh URL retry for multipart parts', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const harness = freshUrlRetryHarness(sim.transport(), 'part', {
+      status: 401,
+      code: 'bad_auth_token',
+      message: 'bad part upload token',
+      count: 1,
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bad-upload-token-part',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'bad-token-part.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+
+    expect(result.fileName).toBe('bad-token-part.bin')
+    expect(harness.getUploadPartUrlCalls).toBe(2)
+    expect(harness.uploadPartAttempts).toBe(3)
+    expect(harness.uploadPartUrls[0]).not.toBe(harness.uploadPartUrls[1])
+  })
+
+  it('retries 429 part upload failures in place without fetching a fresh part URL', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const harness = freshUrlRetryHarness(sim.transport(), 'part', {
+      status: 429,
+      code: 'too_many_requests',
+      message: 'slow down',
+      count: 1,
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'retry-429-part',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const retryEvents: UploadRetryEvent[] = []
+    const result = await bucket.upload({
+      fileName: 'retry-429-part.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
+
+    expect(result.fileName).toBe('retry-429-part.bin')
+    expect(harness.getUploadPartUrlCalls).toBe(1)
+    expect(harness.uploadPartAttempts).toBe(3)
+    expect(harness.uploadPartUrls[0]).toBe(harness.uploadPartUrls[1])
+    expect(retryEvents).toEqual([])
   })
 })
 

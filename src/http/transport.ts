@@ -157,8 +157,9 @@ function isUploadEndpoint(url: string): boolean {
 
 /**
  * Decide whether a classified error should be retried in place for `url`.
- * Transient errors normally retry; upload endpoints always bubble to the
- * upload layer for fresh-URL retry.
+ * Transient errors normally retry; upload endpoints bubble to the upload layer
+ * for fresh-URL retry except account-level 429 throttling, where fetching a new
+ * upload URL only amplifies the rate limit.
  *
  * @param error - The classified, retryability-tagged error.
  * @param url - The request URL (used to detect upload endpoints).
@@ -167,6 +168,7 @@ function isUploadEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
   return true
 }
@@ -187,8 +189,9 @@ function isTerminalTransportError(err: unknown): boolean {
  * {@link HttpTransport}.
  *
  * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned. Their
- * retryable failures bubble to the upload layer, which evicts the failed URL,
- * fetches a fresh one, and retries there.
+ * retryable pod failures bubble to the upload layer, which evicts the failed
+ * URL, fetches a fresh one, and retries there. HTTP 429 remains an in-place
+ * retry so account-level throttling does not trigger extra upload URL fetches.
  */
 export class RetryTransport implements HttpTransport {
   /** The wrapped transport that performs actual HTTP requests. */
