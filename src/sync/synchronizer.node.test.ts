@@ -209,6 +209,43 @@ describe('synchronize download safety', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('rejects destination directory symlinks that resolve outside the root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-symlink-'))
+    try {
+      const destRoot = join(root, 'dest')
+      const outsideRoot = join(root, 'outside')
+      await mkdir(destRoot)
+      await mkdir(outsideRoot)
+      await symlink(outsideRoot, join(destRoot, 'sub'), 'dir')
+
+      const bucket = {
+        download: vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('bad'))
+              controller.close()
+            },
+          }),
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('sub/escape.txt', 3)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(await readdir(outsideRoot)).toEqual([])
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial-'))).toEqual([])
+      await expect(readFile(join(outsideRoot, 'escape.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('synchronize upload safety', () => {
