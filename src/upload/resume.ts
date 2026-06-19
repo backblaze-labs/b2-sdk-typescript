@@ -18,6 +18,7 @@ export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
+const DEFAULT_MAX_RESUME_PART_PAGES = 10
 
 /** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
 export class ResumeFileIdMismatchError extends Error {
@@ -103,6 +104,8 @@ export interface ResumeCandidateCriteria {
   readonly maxListPages?: number
   /** Maximum metadata-compatible candidates whose parts may be listed. */
   readonly maxPartCandidates?: number
+  /** Maximum `b2_list_parts` pages to inspect for each metadata-compatible candidate. */
+  readonly maxPartPages?: number
 }
 
 /** Uploaded part metadata used by the resume planner. */
@@ -201,6 +204,7 @@ export async function findResumeCandidate(
 
   if (truncated) {
     emitCandidateRejected(criteria, { fileName, reason: 'search-truncated' })
+    return null
   }
 
   matches.sort(compareNewestFirst)
@@ -222,8 +226,22 @@ export async function findResumeCandidate(
 
     partCandidatesInspected++
     const fileId = largeFileIdOf(match.file.fileId)
-    const uploadedParts = await collectPartInfo(raw, accountInfo, fileId, criteria?.signal)
-    if (criteria !== undefined && !uploadedPartsMatchPlan(uploadedParts, criteria.parts)) {
+    const uploadedPartsResult =
+      criteria === undefined
+        ? {
+            parts: await collectPartInfo(raw, accountInfo, fileId),
+            truncated: false,
+          }
+        : await collectResumePartInfo(raw, accountInfo, fileId, {
+            maxPages: criteria.maxPartPages ?? DEFAULT_MAX_RESUME_PART_PAGES,
+            maxParts: criteria.parts.length,
+            ...(criteria.signal !== undefined ? { signal: criteria.signal } : {}),
+          })
+    const uploadedParts = uploadedPartsResult.parts
+    if (
+      criteria !== undefined &&
+      (uploadedPartsResult.truncated || !uploadedPartsMatchPlan(uploadedParts, criteria.parts))
+    ) {
       notifyCandidateRejected(criteria, match.file, fileName, 'part-length-mismatch')
       continue
     }
@@ -270,31 +288,62 @@ export async function collectPartInfo(
   fileId: LargeFileId,
   signal?: AbortSignal,
 ): Promise<Map<number, ResumePartInfo>> {
-  const parts = new Map<number, ResumePartInfo>()
-  let startPartNumber: number | undefined
+  const result = await collectResumePartInfo(
+    raw,
+    accountInfo,
+    fileId,
+    signal !== undefined ? { signal } : {},
+  )
+  return result.parts
+}
 
-  while (true) {
-    signal?.throwIfAborted()
+interface CollectResumePartInfoOptions {
+  readonly signal?: AbortSignal
+  readonly maxPages?: number
+  readonly maxParts?: number
+}
+
+async function collectResumePartInfo(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  fileId: LargeFileId,
+  options: CollectResumePartInfoOptions,
+): Promise<{ readonly parts: Map<number, ResumePartInfo>; readonly truncated: boolean }> {
+  const parts = new Map<number, ResumePartInfo>()
+  const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY
+  const maxParts = options.maxParts ?? Number.POSITIVE_INFINITY
+  let startPartNumber: number | undefined
+  let pageCount = 0
+
+  while (pageCount < maxPages) {
+    options.signal?.throwIfAborted()
+    const remainingParts =
+      maxParts === Number.POSITIVE_INFINITY
+        ? undefined
+        : Math.max(1, Math.min(1000, maxParts - parts.size + 1))
     const page = await raw.listParts(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       {
         fileId,
         ...(startPartNumber !== undefined ? { startPartNumber } : {}),
+        ...(remainingParts !== undefined ? { maxPartCount: remainingParts } : {}),
       },
-      signal !== undefined ? { signal } : undefined,
+      options.signal !== undefined ? { signal: options.signal } : undefined,
     )
+    pageCount++
     for (const part of page.parts) {
       parts.set(part.partNumber, {
         contentSha1: part.contentSha1,
         contentLength: part.contentLength,
       })
+      if (parts.size > maxParts) return { parts, truncated: true }
     }
-    if (page.nextPartNumber === null) break
+    if (page.nextPartNumber === null) return { parts, truncated: false }
     startPartNumber = page.nextPartNumber
   }
 
-  return parts
+  return { parts, truncated: true }
 }
 
 function compareNewestFirst(
@@ -333,7 +382,6 @@ function candidateMetadataRejectReason(
   const encryptionRejectReason = serverSideEncryptionRejectReason(
     candidate.serverSideEncryption,
     criteria.serverSideEncryption,
-    criteria.resumeFileId !== undefined,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
   if (!fileRetentionMatches(candidate.fileRetention, criteria.fileRetention)) {
@@ -363,7 +411,11 @@ function emitCandidateRejected(
   criteria: ResumeCandidateCriteria | undefined,
   event: ResumeCandidateRejectedEvent,
 ): void {
-  criteria?.onCandidateRejected?.(event)
+  try {
+    criteria?.onCandidateRejected?.(event)
+  } catch {
+    // Diagnostic listeners should not make an otherwise valid upload fail.
+  }
 }
 
 function uploadedPartsMatchPlan(
@@ -474,38 +526,38 @@ function legalHoldMatches(
 }
 
 type ListedEncryption = PublicEncryptionSetting | undefined
+type B2NoEncryptionWireSetting = {
+  readonly mode: null
+  readonly algorithm?: null
+}
 
 function serverSideEncryptionRejectReason(
-  candidate: ListedEncryption,
+  candidate: ListedEncryption | B2NoEncryptionWireSetting,
   expected: EncryptionSetting | undefined,
-  allowSseCResume: boolean,
 ): 'encryption-mismatch' | 'sse-c-unsupported' | null {
-  if (expected?.mode === EncryptionMode.SseC && !allowSseCResume) return 'sse-c-unsupported'
+  if (expected?.mode === EncryptionMode.SseC) return 'sse-c-unsupported'
 
   const actual = normalizeEncryption(candidate)
   if (expected === undefined) {
     if (candidate === undefined) return null
     if (actual === undefined) return 'encryption-mismatch'
     if (actual.mode === EncryptionMode.None) return null
-    return actual.mode === EncryptionMode.SseC && !allowSseCResume
-      ? 'sse-c-unsupported'
-      : 'encryption-mismatch'
+    return actual.mode === EncryptionMode.SseC ? 'sse-c-unsupported' : 'encryption-mismatch'
   }
 
   const normalizedExpected = normalizeEncryption(expected)
   if (actual === undefined || normalizedExpected === undefined) return 'encryption-mismatch'
   if (actual.mode !== normalizedExpected.mode) return 'encryption-mismatch'
   if (actual.mode === EncryptionMode.None) return null
-  // B2 does not expose a non-secret SSE-C key identity for unfinished files.
-  // Explicit resumeFileId callers must supply the same key used at start time.
   return actual.algorithm === normalizedExpected.algorithm ? null : 'encryption-mismatch'
 }
 
 function normalizeEncryption(
-  encryption: EncryptionSetting | ListedEncryption,
+  encryption: EncryptionSetting | ListedEncryption | B2NoEncryptionWireSetting,
 ): { readonly mode: EncryptionMode; readonly algorithm?: string } | undefined {
   if (encryption === undefined) return undefined
-  if (encryption.mode === EncryptionMode.None) {
+  // Real B2 responses may spell no encryption as `{ mode: null, algorithm: null }`.
+  if (encryption.mode === null || encryption.mode === EncryptionMode.None) {
     return { mode: EncryptionMode.None }
   }
   return {

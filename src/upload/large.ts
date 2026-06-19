@@ -73,15 +73,16 @@ export interface UploadLargeFileOptions {
    * Auto-discovery trusts unfinished large files created by any writer with
    * access to the bucket. Use it only when bucket writers are mutually trusted.
    * SSE-C uploads are never auto-resumed because B2 does not expose the
-   * customer key identity in unfinished-file listings. Pass a trusted
-   * {@link resumeFileId} to resume an SSE-C large file.
+   * customer key identity needed to verify a compatible unfinished file.
    */
   readonly resume?: boolean
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
    * after verifying that the ID belongs to the requested bucket/file name and
    * matches the current upload options and already-uploaded part lengths. This
-   * is the only supported way to resume SSE-C large files. A mismatch throws
+   * verification also rejects SSE-C uploads because B2 does not expose
+   * customer key identity for unfinished files. A mismatch, or a file ID that
+   * cannot be verified through B2's unfinished-large-file listing, throws
    * {@link ResumeFileIdMismatchError}.
    */
   readonly resumeFileId?: LargeFileId

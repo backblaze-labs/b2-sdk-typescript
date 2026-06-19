@@ -943,6 +943,52 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('none-candidate' as LargeFileId)
   })
 
+  it('accepts the B2 null no-encryption wire shape when none was requested', async () => {
+    const fileInfo = { owner: 'unit' }
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'null-none-candidate',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+              serverSideEncryption: { mode: null, algorithm: null },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('null-none-candidate' as LargeFileId)
+  })
+
   it('rejects missing encryption metadata when encryption was requested', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: string[] = []
@@ -992,7 +1038,7 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['encryption-mismatch'])
   })
 
-  it('rejects explicit SSE-C resumeFileId candidates with a different algorithm', async () => {
+  it('rejects explicit SSE-C resumeFileId candidates before listing parts', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: string[] = []
     const raw = {
@@ -1045,7 +1091,7 @@ describe('findResumeCandidate', () => {
     )
 
     expect(result).toBeNull()
-    expect(rejected).toEqual(['encryption-mismatch'])
+    expect(rejected).toEqual(['sse-c-unsupported'])
   })
 
   it('rejects present but unrecognized encryption when none was requested', async () => {
@@ -1206,6 +1252,51 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['search-truncated'])
   })
 
+  it('does not reuse a scanned candidate when a newer page is truncated away', async () => {
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'older-compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: 'newer-compatible',
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called after a truncated scan')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        maxListPages: 1,
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['search-truncated'])
+  })
+
   it('bounds same-prefix junk scans and reports truncation', async () => {
     let calls = 0
     const rejected: string[] = []
@@ -1308,6 +1399,164 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('target-id' as LargeFileId)
     expect(listSignal).toBe(controller.signal)
     expect(partSignal).toBe(controller.signal)
+  })
+
+  it('honors an abort signal between listParts pages', async () => {
+    const controller = new AbortController()
+    let listPartCalls = 0
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        listPartCalls++
+        controller.abort()
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: 2,
+        }
+      },
+    } as unknown as RawClient
+
+    await expect(
+      findResumeCandidate(raw, makeAccountInfo(), bucketId('bucket1'), 'target.bin', {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow()
+    expect(listPartCalls).toBe(1)
+  })
+
+  it('bounds part listing for candidates with more parts than the local plan', async () => {
+    const listPartRequests: Array<{ maxPartCount?: number; startPartNumber?: number }> = []
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'too-many-parts',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(
+        _apiUrl: string,
+        _authToken: string,
+        req: { maxPartCount?: number; startPartNumber?: number },
+      ) {
+        listPartRequests.push({
+          ...(req.maxPartCount !== undefined ? { maxPartCount: req.maxPartCount } : {}),
+          ...(req.startPartNumber !== undefined ? { startPartNumber: req.startPartNumber } : {}),
+        })
+        return {
+          parts: [
+            { partNumber: 1, contentSha1: 'p1', contentLength: 100 },
+            { partNumber: 2, contentSha1: 'p2', contentLength: 100 },
+            { partNumber: 3, contentSha1: 'p3', contentLength: 100 },
+          ],
+          nextPartNumber: 4,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(listPartRequests).toEqual([{ maxPartCount: 3 }])
+    expect(rejected).toEqual(['part-length-mismatch'])
+  })
+
+  it('continues resume discovery when a diagnostic callback throws', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'wrong-info',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: { owner: 'other' },
+              uploadTimestamp: 2000,
+            },
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        onCandidateRejected: () => {
+          throw new Error('diagnostic sink failed')
+        },
+      },
+    )
+
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
   it('jumps directly to an explicit resumeFileId and stops after that page', async () => {

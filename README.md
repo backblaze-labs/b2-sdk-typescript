@@ -125,9 +125,11 @@ Resume discovery is intentionally conservative. The SDK reuses only the newest u
 
 Automatic resume discovery trusts all writers with access to the bucket because B2 unfinished-large-file records do not identify the writer that started them. Use `resume: true` only when bucket writers are mutually trusted. The discovery scan is bounded to avoid unbounded prefix-flood work in shared buckets; when the scan is truncated before a compatible candidate is found, the SDK reports `search-truncated` and starts a new large file.
 
-SSE-C uploads are not auto-resumed because B2 does not expose a non-secret customer-key identity in unfinished-file listings. Resume SSE-C uploads only with a trusted `resumeFileId`, which is still verified against bucket, name, metadata, options, and uploaded part lengths before upload continues. For SSE-C `resumeFileId` use, the caller must provide the same customer key that started the unfinished file.
+Rejected candidates are left unfinished. B2 stores uploaded parts for unfinished large files until they are finished, cancelled, or removed by a lifecycle rule, so applications with strict resume matching should configure lifecycle cleanup or periodically cancel stale unfinished uploads.
 
-Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. If a supplied `resumeFileId` is incompatible, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
+SSE-C uploads are not resumed automatically or with `resumeFileId` because B2 does not expose a non-secret customer-key identity for unfinished files. With `resume: true`, an SSE-C retry starts a new large file. With `resumeFileId`, SSE-C fails with `ResumeFileIdMismatchError` rather than risking a finish under an unverified key.
+
+Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. If a supplied `resumeFileId` is incompatible or cannot be verified through B2's unfinished-large-file listing, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100

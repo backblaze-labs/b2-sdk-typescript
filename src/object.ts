@@ -144,14 +144,17 @@ export class B2Object {
      * exists. Only meaningful on the large-file path. Ignored on the
      * small-file path. Discovery reuses only unfinished files whose resume
      * options and uploaded part lengths match the current call, and should
-     * only be used when bucket writers are mutually trusted.
+     * only be used when bucket writers are mutually trusted. SSE-C uploads
+     * are not resumed because B2 does not expose customer key identity for
+     * unfinished files.
      */
     resume?: boolean
     /**
      * Resume into a specific large-file ID, bypassing discovery.
      * Overrides the `resume` discovery path after verifying bucket, file name,
      * upload options, encryption, retention, legal hold, and uploaded part
-     * lengths. Mismatches throw `ResumeFileIdMismatchError`.
+     * lengths. Mismatches, including SSE-C uploads whose customer key identity
+     * cannot be verified, throw `ResumeFileIdMismatchError`.
      */
     resumeFileId?: LargeFileId
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */

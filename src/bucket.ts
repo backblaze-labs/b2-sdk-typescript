@@ -193,14 +193,16 @@ export class Bucket {
      * rejects resume because it can't replay parts. Discovery reuses only
      * unfinished files whose upload options and uploaded part lengths
      * match the current call, and should only be used when bucket writers
-     * are mutually trusted.
+     * are mutually trusted. SSE-C uploads are not resumed because B2 does
+     * not expose customer key identity for unfinished files.
      */
     resume?: boolean
     /**
      * Resume into a specific large-file ID. Overrides the `resume`
      * discovery path after verifying bucket, file name, upload options,
      * encryption, retention, legal hold, and uploaded part lengths.
-     * Mismatches throw `ResumeFileIdMismatchError`.
+     * Mismatches, including SSE-C uploads whose customer key identity cannot
+     * be verified, throw `ResumeFileIdMismatchError`.
      */
     resumeFileId?: LargeFileId
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */
