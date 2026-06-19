@@ -17,6 +17,7 @@ import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
+import { withResumeIdentityFileInfo } from './resume.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 /**
@@ -1283,6 +1284,84 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
+  })
+
+  it('skips a same-name unfinished upload with conflicting resume identity', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2 + 7)
+    const conflictData = deterministicBytes(partSize * 2 + 9)
+    const contentType = 'application/octet-stream'
+
+    const conflict = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'same-name.bin',
+        contentType,
+        fileInfo: withResumeIdentityFileInfo(
+          { origin: 'conflict' },
+          conflictData.byteLength,
+          partSize,
+        ),
+      },
+    )
+    const matching = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'same-name.bin',
+        contentType,
+        fileInfo: withResumeIdentityFileInfo({ origin: 'match' }, data.byteLength, partSize),
+      },
+    )
+
+    const { sha1Hex } = await import('../streams/hash.ts')
+    for (const [fileId, bytes] of [
+      [conflict.fileId, conflictData],
+      [matching.fileId, data],
+    ] as const) {
+      const partUrl = await client.raw.getUploadPartUrl(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { fileId },
+      )
+      const part1 = bytes.slice(0, partSize)
+      await client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: part1.byteLength,
+          contentSha1: await sha1Hex(part1),
+        },
+        part1,
+      )
+    }
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'same-name.bin',
+      source: new BufferSource(data),
+      contentType,
+      fileInfo: { origin: 'match' },
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('same-name.bin')
+    expect(result.contentLength).toBe(data.byteLength)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucketId as never },
+    )
+    const unfinishedIds = unfinished.files.map((file) => file.fileId)
+    expect(unfinishedIds).toContain(conflict.fileId)
+    expect(unfinishedIds).not.toContain(matching.fileId)
   })
 })
 

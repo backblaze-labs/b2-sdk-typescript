@@ -1,4 +1,5 @@
 import type { EncryptionSetting } from './encryption.ts'
+import type { FileAction } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
@@ -87,6 +88,32 @@ export interface StartLargeFileResponse {
   readonly contentType: string
   /** User-defined key-value metadata stored with the file. */
   readonly fileInfo: Record<string, string>
+  /** Action that created this unfinished file version. */
+  readonly action?: FileAction
+  /** Always 0 for unfinished large files. */
+  readonly contentLength?: number
+  /** Always `'none'` for unfinished large files. */
+  readonly contentSha1?: string
+  /** Always null for unfinished large files. */
+  readonly contentMd5?: string | null
+  /** Object Lock retention settings for this unfinished file, when readable. */
+  readonly fileRetention?: {
+    /** Whether the caller is authorized to read retention settings. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Retention settings, or null when none are set or unreadable. */
+    readonly value: FileRetentionValue | null
+  }
+  /** Legal hold status for this unfinished file, when readable. */
+  readonly legalHold?: {
+    /** Whether the caller is authorized to read legal hold status. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Legal hold value, or null when none is set or unreadable. */
+    readonly value: LegalHoldValue | null
+  }
+  /** Server-side encryption applied to this unfinished file. */
+  readonly serverSideEncryption?: EncryptionSetting
+  /** UTC timestamp (milliseconds) when this unfinished upload was started. */
+  readonly uploadTimestamp?: number
 }
 
 /** Request parameters for the `b2_get_upload_part_url` API call. */
@@ -181,6 +208,8 @@ export interface ListUnfinishedLargeFilesRequest {
 
 /** Metadata for an in-progress large file upload that has not yet been finished or cancelled. */
 export interface UnfinishedLargeFile {
+  /** Action that created this unfinished file version. */
+  readonly action?: FileAction
   /** ID of the large file. */
   readonly fileId: LargeFileId
   /** Name of the file. */
@@ -191,8 +220,32 @@ export interface UnfinishedLargeFile {
   readonly bucketId: BucketId
   /** MIME type of the file. */
   readonly contentType: string
+  /** Always 0 for unfinished large files. */
+  readonly contentLength?: number
+  /** Always `'none'` for unfinished large files. */
+  readonly contentSha1?: string
+  /** Always null for unfinished large files. */
+  readonly contentMd5?: string | null
   /** User-defined key-value metadata stored with the file. */
   readonly fileInfo: Record<string, string>
+  /** Object Lock retention settings for this unfinished file, when readable. */
+  readonly fileRetention?: {
+    /** Whether the caller is authorized to read retention settings. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Retention settings, or null when none are set or unreadable. */
+    readonly value: FileRetentionValue | null
+  }
+  /** Legal hold status for this unfinished file, when readable. */
+  readonly legalHold?: {
+    /** Whether the caller is authorized to read legal hold status. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Legal hold value, or null when none is set or unreadable. */
+    readonly value: LegalHoldValue | null
+  }
+  /** Server-side encryption applied to this unfinished file. */
+  readonly serverSideEncryption?: EncryptionSetting
+  /** UTC timestamp (milliseconds) when this unfinished upload was started. */
+  readonly uploadTimestamp?: number
 }
 
 /** Response from the `b2_list_unfinished_large_files` API call. */

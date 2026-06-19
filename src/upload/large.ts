@@ -13,7 +13,7 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { collectPartSha1s } from './resume.ts'
+import { collectPartSha1s, findResumeCandidate, withResumeIdentityFileInfo } from './resume.ts'
 import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
@@ -60,8 +60,10 @@ export interface UploadLargeFileOptions {
    */
   readonly retryResponseBodyFailures?: boolean
   /**
-   * Deprecated compatibility flag. Automatic same-name resume is disabled.
-   * Without {@link resumeFileId}, this flag is ignored and a fresh upload is started.
+   * If true, look for an unfinished large file with the same bucket and file name
+   * and skip parts whose locally-recomputed SHA-1 matches the server's. Automatic
+   * discovery only reuses unfinished files whose resume identity metadata and
+   * upload options match; otherwise a new large file is started.
    */
   readonly resume?: boolean
   /**
@@ -99,10 +101,15 @@ export async function uploadLargeFile(
   const totalSize = options.source.size
 
   const parts = planRanges(totalSize, partSize)
-  const fileInfo: Record<string, string> = { ...options.fileInfo }
+  const baseFileInfo: Record<string, string> = { ...options.fileInfo }
+  const fileInfo =
+    options.resume === true
+      ? withResumeIdentityFileInfo(baseFileInfo, totalSize, partSize)
+      : baseFileInfo
 
-  // Construct the `b2_start_large_file` request body once so the fresh
-  // upload branch can dispatch without re-spelling the conditional spreads.
+  // Construct the `b2_start_large_file` request body once so the two
+  // non-resume branches below (no `resume`, resume-but-no-candidate)
+  // can dispatch without re-spelling the conditional spreads.
   const startLargeFileRequest = {
     bucketId: options.bucketId,
     fileName: options.fileName,
@@ -115,8 +122,8 @@ export async function uploadLargeFile(
     ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
   }
 
-  // --- Explicit resume file reuse (M11.1) ---
-  if (!options.source.canSlice && options.resumeFileId !== undefined) {
+  // --- Resume discovery (M11.1) ---
+  if (!options.source.canSlice && (options.resumeFileId !== undefined || options.resume === true)) {
     throw new Error(
       'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
     )
@@ -128,6 +135,38 @@ export async function uploadLargeFile(
   if (options.resumeFileId !== undefined) {
     largeFileId = options.resumeFileId
     preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
+  } else if (options.resume === true) {
+    const candidate = await findResumeCandidate(
+      raw,
+      accountInfo,
+      options.bucketId,
+      options.fileName,
+      {
+        contentType: startLargeFileRequest.contentType,
+        fileInfo,
+        sourceSize: totalSize,
+        partSize,
+        parts,
+        ...(options.serverSideEncryption !== undefined
+          ? { serverSideEncryption: options.serverSideEncryption }
+          : {}),
+        ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+        ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+      },
+    )
+    if (candidate) {
+      largeFileId = candidate.fileId
+      preUploaded = candidate.uploadedPartSha1s
+    } else {
+      const startResp = await raw.startLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        startLargeFileRequest,
+      )
+      largeFileId = startResp.fileId
+      preUploaded = new Map<number, string>()
+      createdLargeFile = true
+    }
   } else {
     const startResp = await raw.startLargeFile(
       accountInfo.getApiUrl(),

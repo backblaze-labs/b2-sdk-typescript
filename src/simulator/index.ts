@@ -14,7 +14,7 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
-import { EncryptionMode } from '../types/encryption.ts'
+import { EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
@@ -23,7 +23,7 @@ import {
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
-import type { RetentionMode } from '../types/lock.ts'
+import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
@@ -156,6 +156,10 @@ interface LargeFileInProgress {
   readonly fileName: string
   readonly contentType: string
   readonly fileInfo: Record<string, string>
+  readonly fileRetention: FileRetentionValue | null
+  readonly legalHold: LegalHoldValue | null
+  readonly serverSideEncryption: EncryptionSetting
+  readonly uploadTimestamp: number
   readonly parts: Map<number, { data: Uint8Array; sha1: string }>
 }
 
@@ -806,6 +810,9 @@ export class B2Simulator {
             fileName: string
             contentType: string
             fileInfo?: Record<string, string>
+            fileRetention?: FileRetentionValue
+            legalHold?: LegalHoldValue
+            serverSideEncryption?: EncryptionSetting
           },
         )
       case 'b2_get_upload_part_url':
@@ -1150,7 +1157,7 @@ export class B2Simulator {
         partNumber,
         contentLength: partData.byteLength,
         contentSha1: sha1,
-        serverSideEncryption: { mode: EncryptionMode.None },
+        serverSideEncryption: large.serverSideEncryption,
         uploadTimestamp: Date.now(),
       },
     }
@@ -1750,6 +1757,9 @@ export class B2Simulator {
     fileName: string
     contentType: string
     fileInfo?: Record<string, string>
+    fileRetention?: FileRetentionValue
+    legalHold?: LegalHoldValue
+    serverSideEncryption?: EncryptionSetting
   }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -1767,6 +1777,10 @@ export class B2Simulator {
       fileName: req.fileName,
       contentType: req.contentType,
       fileInfo: req.fileInfo ?? {},
+      fileRetention: req.fileRetention ?? null,
+      legalHold: req.legalHold ?? null,
+      serverSideEncryption: req.serverSideEncryption ?? { mode: EncryptionMode.None },
+      uploadTimestamp: this.monotonicTimestamp(),
       parts: new Map(),
     }
     this.largeFiles.set(fid, large)
@@ -1780,6 +1794,20 @@ export class B2Simulator {
         bucketId: req.bucketId,
         contentType: req.contentType,
         fileInfo: large.fileInfo,
+        action: FileAction.Start,
+        contentLength: 0,
+        contentSha1: 'none',
+        contentMd5: null,
+        fileRetention: {
+          isClientAuthorizedToRead: true,
+          value: large.fileRetention,
+        },
+        legalHold: {
+          isClientAuthorizedToRead: true,
+          value: large.legalHold,
+        },
+        serverSideEncryption: large.serverSideEncryption,
+        uploadTimestamp: large.uploadTimestamp,
       },
     }
   }
@@ -1889,6 +1917,9 @@ export class B2Simulator {
       contentSha1: 'none',
       fileInfo: large.fileInfo,
       action: FileAction.Upload,
+      fileRetention: large.fileRetention,
+      legalHold: large.legalHold,
+      serverSideEncryption: large.serverSideEncryption,
     })
     const stored: StoredFile = { fileVersion, data: combined }
     const existing = bucket.files.get(large.fileName)
@@ -1929,12 +1960,11 @@ export class B2Simulator {
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
-    // Real B2 orders unfinished large files by fileName ascending. Sort
-    // here so pagination (via startFileId) is deterministic.
+    // Real B2 orders unfinished large files by start time, oldest first.
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+      .sort((a, b) => a.uploadTimestamp - b.uploadTimestamp)
 
     // `startFileId` is the cursor returned from a prior page. Skip past
     // (and including) the entry with that fileId.
@@ -1951,7 +1981,21 @@ export class B2Simulator {
       accountId: this.accountId,
       bucketId: f.bucketId,
       contentType: f.contentType,
+      action: FileAction.Start,
+      contentLength: 0,
+      contentSha1: 'none',
+      contentMd5: null,
       fileInfo: f.fileInfo,
+      fileRetention: {
+        isClientAuthorizedToRead: true,
+        value: f.fileRetention,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: true,
+        value: f.legalHold,
+      },
+      serverSideEncryption: f.serverSideEncryption,
+      uploadTimestamp: f.uploadTimestamp,
     }))
     const hasMore = startIndex + max < candidates.length
     const nextFileId = hasMore ? (candidates[startIndex + max]?.fileId ?? null) : null
@@ -2274,6 +2318,9 @@ export class B2Simulator {
     readonly contentSha1: string
     readonly action: FileAction
     readonly fileInfo?: Record<string, string>
+    readonly fileRetention?: FileRetentionValue | null
+    readonly legalHold?: LegalHoldValue | null
+    readonly serverSideEncryption?: EncryptionSetting
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -2286,10 +2333,10 @@ export class B2Simulator {
       fileId: fileIdOf(this.genId('4_z')),
       fileInfo: params.fileInfo ?? {},
       fileName: params.fileName,
-      fileRetention: { isClientAuthorizedToRead: true, value: null },
-      legalHold: { isClientAuthorizedToRead: true, value: null },
+      fileRetention: { isClientAuthorizedToRead: true, value: params.fileRetention ?? null },
+      legalHold: { isClientAuthorizedToRead: true, value: params.legalHold ?? null },
       replicationStatus: null,
-      serverSideEncryption: { mode: EncryptionMode.None },
+      serverSideEncryption: params.serverSideEncryption ?? { mode: EncryptionMode.None },
       uploadTimestamp: this.monotonicTimestamp(),
     }
   }

@@ -139,8 +139,10 @@ export class B2Object {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled.
-     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
+     * Resume an unfinished multipart upload for this file name when one
+     * exists. Only meaningful on the large-file path. Ignored on the
+     * small-file path. Discovery reuses only unfinished files whose resume
+     * identity metadata and upload options match the current call.
      */
     resume?: boolean
     /**

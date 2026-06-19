@@ -121,6 +121,8 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 Resume requires the exact unfinished large-file ID returned by B2 when the multipart upload was started. The SDK does not auto-attach to same-name unfinished files because another bucket writer can create those with different metadata or retention settings. Passing the deprecated `resume: true` flag without `resumeFileId` starts a fresh upload. With `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
 
+Resume discovery is intentionally conservative. For SDK-started resumable uploads, the SDK stores the source size and effective part size in file info, then reuses only the newest unfinished large file whose file name, content type, file info, encryption, Object Lock retention, legal hold, and uploaded part lengths match the current call. If those identity checks fail, a new large file is started instead. Caller-provided file info such as `large_file_sha1` or `src_last_modified_millis` is part of that identity, so keep it stable across retries. Use `resumeFileId` when you intentionally want to target a specific unfinished large file.
+
 ```ts
 // Restart the upload that crashed at part 47 of 100
 await bucket.upload({

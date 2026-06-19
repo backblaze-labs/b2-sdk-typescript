@@ -185,8 +185,13 @@ export class Bucket {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled.
-     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
+     * Resume an unfinished multipart upload for this file name when one
+     * exists. Only consulted on the large-file path (source size
+     * greater than `recommendedPartSize`). On the small-file path this
+     * option is silently ignored. Sliceable sources only — `StreamSource`
+     * rejects resume because it can't replay parts. Discovery reuses only
+     * unfinished files whose resume identity metadata and upload options
+     * match the current call.
      */
     resume?: boolean
     /**

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { bucketId, type LargeFileId } from '../types/ids.ts'
-import { collectPartSha1s, findResumeCandidate } from './resume.ts'
+import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
+import { collectPartSha1s, findResumeCandidate, withResumeIdentityFileInfo } from './resume.ts'
 
 /**
  * Unit tests targeting `collectPartSha1s` pagination and `findResumeCandidate`
@@ -280,5 +282,299 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('lf-match' as LargeFileId)
     expect(result?.uploadedPartSha1s.get(1)).toBe('p1')
     expect(result?.uploadedPartSha1s.get(2)).toBe('p2')
+  })
+
+  it('prefers the newest compatible same-name candidate', async () => {
+    const fileInfo = withResumeIdentityFileInfo({ owner: 'unit' }, 200, 100)
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'older-match',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'newer-match',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('newer-match')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'new-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('newer-match' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('new-p1')
+  })
+
+  it('skips newer same-name candidates whose upload options do not match', async () => {
+    const fileInfo = withResumeIdentityFileInfo({ owner: 'unit' }, 200, 100)
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'older-compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'newer-conflict',
+              fileName: 'target.bin',
+              contentType: 'text/plain',
+              fileInfo,
+              uploadTimestamp: 2000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('older-compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'old-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('older-compatible' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('old-p1')
+  })
+
+  it('requires encryption, retention, and legal hold to match', async () => {
+    const fileInfo = withResumeIdentityFileInfo({ owner: 'unit' }, 200, 100)
+    const expectedRetention = {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: 1_800_000_000_000,
+    }
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseB2,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: expectedRetention,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: LegalHoldValue.On,
+              },
+            },
+            {
+              fileId: 'wrong-encryption',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseC,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: expectedRetention,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: LegalHoldValue.On,
+              },
+            },
+            {
+              fileId: 'wrong-retention',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 3000,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseB2,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: LegalHoldValue.On,
+              },
+            },
+            {
+              fileId: 'wrong-hold',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 4000,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseB2,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: expectedRetention,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: LegalHoldValue.Off,
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        serverSideEncryption: {
+          mode: EncryptionMode.SseB2,
+          algorithm: EncryptionAlgorithm.Aes256,
+        },
+        fileRetention: expectedRetention,
+        legalHold: LegalHoldValue.On,
+      },
+    )
+
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
+  })
+
+  it('skips same-name candidates whose uploaded part lengths do not match the local plan', async () => {
+    const fileInfo = withResumeIdentityFileInfo({ owner: 'unit' }, 200, 100)
+    const seen: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'wrong-part-size',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        seen.push(req.fileId)
+        if (req.fileId === 'wrong-part-size') {
+          return {
+            parts: [{ partNumber: 1, contentSha1: 'bad-p1', contentLength: 50 }],
+            nextPartNumber: null,
+          }
+        }
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(seen).toEqual(['wrong-part-size', 'compatible'])
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 })
