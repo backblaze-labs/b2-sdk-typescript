@@ -454,13 +454,9 @@ function serverSideEncryptionRejectReason(
 
   const actual = normalizeEncryption(candidate)
   if (expected === undefined) {
-    if (
-      actual === undefined ||
-      actual.mode === EncryptionMode.None ||
-      actual.mode === EncryptionMode.SseB2
-    ) {
-      return null
-    }
+    if (candidate === undefined) return null
+    if (actual === undefined) return 'encryption-mismatch'
+    if (actual.mode === EncryptionMode.None || actual.mode === EncryptionMode.SseB2) return null
     return actual.mode === EncryptionMode.SseC && !allowSseCResume
       ? 'sse-c-unsupported'
       : 'encryption-mismatch'

@@ -574,6 +574,63 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
+  it('rejects present but unrecognized encryption when none was requested', async () => {
+    const fileInfo = { owner: 'unit' }
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+            {
+              fileId: 'unknown-encryption',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+              serverSideEncryption: { mode: 'SSE-FUTURE', algorithm: 'AES512' },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
+    expect(rejected).toEqual(['encryption-mismatch'])
+  })
+
   it('skips same-name candidates whose uploaded part lengths do not match the local plan', async () => {
     const fileInfo = { owner: 'unit' }
     const seen: string[] = []
