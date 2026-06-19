@@ -26,6 +26,14 @@ function parseAbsoluteRealmUrl(realmUrl: string): URL | null {
   }
 }
 
+function realmUrlForError(realmUrl: string, url = parseAbsoluteRealmUrl(realmUrl)): string {
+  if (url === null) return '<invalid realm URL>'
+  const redacted = new URL(url)
+  redacted.username = ''
+  redacted.password = ''
+  return redacted.toString()
+}
+
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   if (host === 'localhost' || host === '[::1]' || host === '::1') return true
@@ -44,18 +52,18 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
     (!HTTP_REALM_URL_WITH_HOST.test(realmUrl) || url.hostname === '')
   ) {
     throw new B2RealmConfigurationError(
-      `realm URL must be an absolute HTTP(S) URL with a hostname for authorization: ${realmUrl}`,
+      `realm URL must be an absolute HTTP(S) URL with a hostname for authorization: ${realmUrlForError(realmUrl, url)}`,
     )
   }
   if (url.protocol === 'https:') return
   if (url.protocol === 'http:' && isLoopbackHost(url.hostname)) return
   if (url.protocol === 'http:') {
     throw new B2RealmConfigurationError(
-      `refusing to send credentials over plaintext HTTP realm: ${realmUrl}`,
+      `refusing to send credentials over plaintext HTTP realm: ${realmUrlForError(realmUrl, url)}`,
     )
   }
   throw new B2RealmConfigurationError(
-    `realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrl}`,
+    `realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrlForError(realmUrl, url)}`,
   )
 }
 
@@ -72,7 +80,9 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
 export function assertSecureRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
   if (url === null) {
-    throw new B2RealmConfigurationError(`realm URL must be absolute for authorization: ${realmUrl}`)
+    throw new B2RealmConfigurationError(
+      `realm URL must be absolute for authorization: ${realmUrlForError(realmUrl, url)}`,
+    )
   }
 
   assertAuthorizableRealmScheme(realmUrl, url)

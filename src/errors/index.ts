@@ -1,19 +1,23 @@
 /**
  * Typed error hierarchy for B2 API failures.
  *
- * Every B2 error response is mapped to a specific {@link B2Error} subclass
- * (e.g. {@link ExpiredAuthTokenError}, {@link CapExceededError}) with pre-computed
- * {@link B2Error.retryable | retryable} flags. Use {@link classifyError} to convert
- * a raw error response into the appropriate subclass.
+ * Every B2 error response maps to a specific {@link B2Error} subclass.
+ * Retry behavior is exposed through {@link B2Error.retryable}.
+ * Examples include {@link ExpiredAuthTokenError}.
+ * Examples also include {@link CapExceededError}.
+ * Use {@link classifyError} to convert a raw error response into the
+ * appropriate subclass.
  *
- * Convention: `B2Error` and its subclasses represent failures returned by
- * the B2 API. Programming errors and SDK preconditions (e.g. "not yet
- * authorized", "stream consumed twice", "called before init") use the
- * native `Error` constructor instead. Three outliers extend `Error` directly
- * rather than `B2Error` because they originate inside the SDK before any
- * B2 request is made: {@link B2InsufficientCapabilityError} (raised by
- * `B2Client.hasCapabilities`), {@link B2SsrfError} (raised by the
- * default `UrlGuard` before `fetch`), and {@link NetworkError}.
+ * Convention: most `B2Error` subclasses represent failures returned by the B2
+ * API. The client-side exception is {@link B2RealmConfigurationError}; it
+ * extends `B2Error` so realm-validation failures can be handled with the SDK
+ * error hierarchy before credentials are sent.
+ *
+ * Other programming errors and SDK preconditions, such as "not yet authorized",
+ * "stream consumed twice", or "called before init", use the native `Error`
+ * constructor instead. The direct `Error` outliers are
+ * {@link B2InsufficientCapabilityError}, {@link B2SsrfError}, and
+ * {@link NetworkError}.
  *
  * @packageDocumentation
  */

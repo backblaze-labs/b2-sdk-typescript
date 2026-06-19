@@ -399,6 +399,19 @@ describe('getRealmUrl', () => {
     )
   })
 
+  it('redacts URL userinfo from realm validation errors', () => {
+    let thrown: unknown
+    try {
+      getRealmUrl('http://user:secret@attacker.example')
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
+    expect((thrown as Error).message).toContain('http://attacker.example/')
+    expect((thrown as Error).message).not.toContain('secret')
+    expect((thrown as Error).message).not.toContain('user')
+  })
+
   it('rejects unsupported realm URL schemes', () => {
     expect(() => getRealmUrl('ftp://attacker.example')).toThrow(
       'realm URL must use HTTPS or loopback HTTP for authorization',
