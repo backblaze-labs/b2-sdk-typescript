@@ -9,6 +9,8 @@
  *   SYNC_DELETE=true|false           (default: false, no-delete)
  *   SYNC_CONCURRENCY=N              (default: 4)
  *   SYNC_DRY_RUN=true|false         (default: false)
+ *
+ * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee.
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'

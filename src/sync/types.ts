@@ -1,7 +1,13 @@
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 
-/** Strategy for comparing source and destination files. */
+/**
+ * Strategy for comparing source and destination files.
+ *
+ * The `sha1` mode compares verifiable SHA-1 digests as a practical drift detector. It is
+ * not a cryptographic integrity or tamper-proofing guarantee, because SHA-1 collisions are
+ * possible and B2 can expose unavailable or untrusted checksum metadata for some objects.
+ */
 export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
 /** Strategy for handling destination files not present in the source. */
@@ -18,7 +24,13 @@ export interface SyncPath {
   readonly modTimeMillis: number
   /** File size in bytes. */
   readonly size: number
-  /** SHA-1 checksum when known or already computed; null when unavailable. */
+  /**
+   * SHA-1 checksum state for compare modes that need content hashes.
+   *
+   * - `undefined`: not computed yet; the synchronizer may hash local files before comparing.
+   * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
+   * - 40-character hex string: known digest.
+   */
   readonly contentSha1?: string | null
 }
 
@@ -78,7 +90,10 @@ export interface SyncActionEvent {
   readonly type: SyncActionEventType
   /** Relative path of the file this event concerns. */
   readonly path: string
-  /** Size in bytes of the file involved, or 0 for metadata-only events. */
+  /**
+   * Size in bytes of the file involved, or local bytes hashed for `compare` events in
+   * `sha1` mode.
+   */
   readonly size: number
 }
 

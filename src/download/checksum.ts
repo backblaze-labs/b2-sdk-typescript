@@ -10,19 +10,9 @@
 
 import { ChecksumMismatchError } from '../errors/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { isVerifiableSha1 } from '../util/sha1.ts'
 
-const sha1HexPattern = /^[0-9a-f]{40}$/i
-
-/**
- * Returns whether a normalized `X-Bz-Content-Sha1` value can be verified.
- *
- * @param sha1 - Normalized SHA-1 header value, or null when unavailable.
- *
- * @returns True when the value is a 40-character hexadecimal SHA-1 digest.
- */
-export function isVerifiableSha1(sha1: string | null | undefined): sha1 is string {
-  return sha1 !== null && sha1 !== undefined && sha1HexPattern.test(sha1)
-}
+export { isVerifiableSha1 } from '../util/sha1.ts'
 
 /**
  * Builds the typed error used when downloaded bytes fail SHA-1 verification.

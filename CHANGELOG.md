@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **New `sha1` sync compare mode.** `CompareMode` now accepts `'sha1'`, and `SyncPath` exposes an optional `contentSha1` field so custom scanners can supply known content hashes. The synchronizer hashes local files only when cheaper metadata cannot already prove drift, compares against verifiable B2 SHA-1 metadata, and uses `fileInfo.large_file_sha1` for multipart objects. Files whose SHA-1 is genuinely unavailable are skipped with a surfaced event rather than being transferred repeatedly; untrusted `unverified:<hex>` metadata never proves equality. This is an accidental drift detector, not a cryptographic tamper guarantee. Closes #29.
+
 ### Fixed
 
 - **`realm: 'staging'` now resolves to the staging authorize endpoint.** It previously

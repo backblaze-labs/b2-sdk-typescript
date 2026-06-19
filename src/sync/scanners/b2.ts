@@ -1,5 +1,6 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
+import { selectB2ComparableSha1 } from '../policies/compare.ts'
 import type { B2SyncPath, SyncFolder } from '../types.ts'
 
 /**
@@ -64,7 +65,7 @@ export class B2Folder implements SyncFolder {
         relativePath,
         modTimeMillis: selected.uploadTimestamp,
         size: selected.contentLength,
-        contentSha1: selected.contentSha1,
+        contentSha1: selectB2ComparableSha1(selected),
         selectedVersion: selected,
         allVersions: versions,
       }

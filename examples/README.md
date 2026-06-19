@@ -89,6 +89,11 @@ SYNC_MODE=size SYNC_DELETE=true SYNC_CONCURRENCY=8 SYNC_DRY_RUN=true \
 | `SYNC_CONCURRENCY` | `4` | Parallel upload/download workers |
 | `SYNC_DRY_RUN` | `false` | Print actions without executing them |
 
+`SYNC_MODE=sha1` hashes local files and compares them with verifiable B2 SHA-1 metadata,
+including `fileInfo.large_file_sha1` for multipart files. It is useful for accidental drift
+detection, not as a cryptographic tamper guarantee. Files without a verifiable remote SHA-1 are
+skipped with a surfaced event instead of being transferred repeatedly.
+
 ### Upload with a progress bar
 
 Throttled CLI progress bar (10 Hz, ETA, throughput) wired into the SDK's `onProgress` callback. Useful as a starting point for any TTY UI or web progress widget.

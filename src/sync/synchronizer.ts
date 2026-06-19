@@ -1,6 +1,5 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { IncrementalSha1 } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
@@ -16,19 +15,17 @@ import {
   HideAction,
   UploadAction,
 } from './actions/index.ts'
-import type { SyncPair } from './pairing.ts'
 import { zipFolders } from './pairing.ts'
+import { preparePairForCompare } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type {
   B2SyncPath,
-  CompareMode,
   LocalSyncPath,
   SyncDirection,
   SyncEvent,
   SyncFolder,
   SyncOptions,
-  SyncPath,
 } from './types.ts'
 
 /** Base configuration for a sync operation. */
@@ -112,13 +109,28 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const factory = createActionFactory(config)
 
   const actions: SyncAction[] = []
+  const results: SyncEvent[] = []
+  const errors: Error[] = []
 
   for await (const pair of zipFolders(source, dest)) {
     if (options.signal?.aborted) return
-    const comparablePair = await prepareComparePair(pair, options.compareMode)
+    const prepared = await preparePairForCompare(pair, options.compareMode, {
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    })
+    if (prepared.aborted || options.signal?.aborted) return
+
+    yield {
+      type: 'compare',
+      path: (pair[0] ?? pair[1])?.relativePath ?? '',
+      size: prepared.bytesHashed,
+    }
+
+    results.push(...prepared.events)
+    errors.push(...prepared.errors)
+    if (prepared.skipActionGeneration) continue
 
     for (const action of generateActions(
-      comparablePair,
+      prepared.pair,
       direction,
       options.compareMode,
       options.keepMode,
@@ -129,13 +141,9 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     )) {
       actions.push(action)
     }
-
-    yield { type: 'compare', path: (pair[0] ?? pair[1])?.relativePath ?? '', size: 0 }
   }
 
   const sem = new Semaphore(concurrency)
-  const results: SyncEvent[] = []
-  const errors: Error[] = []
 
   const promises = actions.map(async (action) => {
     await sem.acquire()
@@ -171,31 +179,6 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       message: `${errors.length} action(s) failed`,
     }
   }
-}
-
-async function prepareComparePair(pair: SyncPair, compareMode: CompareMode): Promise<SyncPair> {
-  if (compareMode !== 'sha1') return pair
-  const [source, dest] = pair
-  if (source === null || dest === null) return pair
-  return [await withLocalContentSha1(source), await withLocalContentSha1(dest)]
-}
-
-async function withLocalContentSha1(path: SyncPath): Promise<SyncPath> {
-  if (!isLocalSyncPath(path) || path.contentSha1 !== undefined) return path
-  return { ...path, contentSha1: await sha1File(path.absolutePath) }
-}
-
-function isLocalSyncPath(path: SyncPath): path is LocalSyncPath {
-  return 'absolutePath' in path
-}
-
-async function sha1File(absolutePath: string): Promise<string> {
-  const { createReadStream } = await import('node:fs')
-  const hash = new IncrementalSha1()
-  for await (const chunk of createReadStream(absolutePath)) {
-    await hash.update(chunk instanceof Uint8Array ? chunk : new TextEncoder().encode(String(chunk)))
-  }
-  return hash.digest()
 }
 
 /**

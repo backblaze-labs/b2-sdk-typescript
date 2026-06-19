@@ -39,6 +39,8 @@ export interface ActionFactory {
 /**
  * Converts a paired source/dest tuple into zero or more sync actions based on the
  * sync direction, compare mode, and keep policy.
+ * For `compareMode: 'sha1'`, low-level callers should pass a pair prepared by
+ * `preparePairForCompare()` so local file hashes and B2 multipart hash fallbacks are populated.
  *
  * @param pair - The source/dest file pair from {@link zipFolders}.
  * @param direction - The sync direction.

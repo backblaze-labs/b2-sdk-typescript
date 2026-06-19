@@ -4,7 +4,11 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
-import { filesAreDifferent } from './policies/compare.ts'
+import {
+  filesAreDifferent,
+  preparePairForCompare,
+  selectB2ComparableSha1,
+} from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
@@ -31,17 +35,24 @@ function makeLocalSyncPath(
   return { relativePath, modTimeMillis, size, absolutePath: `/tmp/${relativePath}` }
 }
 
-function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: number): B2SyncPath {
+function makeB2SyncPath(
+  relativePath: string,
+  modTimeMillis: number,
+  size: number,
+  contentSha1: string | null = 'sha1',
+  fileInfo: Record<string, string> = {},
+  pathContentSha1: string | null | undefined = contentSha1,
+): B2SyncPath {
   const fv: FileVersion = {
     accountId: 'acc' as unknown as AccountId,
     action: FileAction.Upload,
     bucketId: 'bucket' as unknown as BucketId,
     contentLength: size,
     contentMd5: null,
-    contentSha1: 'sha1',
+    contentSha1,
     contentType: 'application/octet-stream',
     fileId: `fid_${relativePath}` as unknown as FileId,
-    fileInfo: {},
+    fileInfo,
     fileName: relativePath,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
@@ -49,7 +60,14 @@ function makeB2SyncPath(relativePath: string, modTimeMillis: number, size: numbe
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: modTimeMillis,
   }
-  return { relativePath, modTimeMillis, size, selectedVersion: fv, allVersions: [fv] }
+  return {
+    relativePath,
+    modTimeMillis,
+    size,
+    ...(pathContentSha1 !== undefined ? { contentSha1: pathContentSha1 } : {}),
+    selectedVersion: fv,
+    allVersions: [fv],
+  }
 }
 
 function makeMemoryFolder(files: SyncPath[]): SyncFolder {
@@ -114,15 +132,101 @@ describe('filesAreDifferent', () => {
     expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
   })
 
+  it('returns true when size differs in sha1 mode', () => {
+    const source = makeSyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const dest = makeSyncPath('file.txt', 1000, 200, 'a'.repeat(40))
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
+  })
+
   it('returns true in sha1 mode when either hash is unavailable', () => {
     const source = makeSyncPath('file.txt', 1000, 100, 'a'.repeat(40))
     const dest = makeSyncPath('file.txt', 1000, 100, null)
     expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
   })
 
+  it('returns true in sha1 mode for unverified B2 checksum sentinels', () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeSyncPath('file.txt', 1000, 100, sha1)
+    const dest = makeSyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
+  })
+
+  it('honors explicit null contentSha1 over B2 selectedVersion fallback', () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeSyncPath('file.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1, {}, null)
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(true)
+  })
+
   it('returns false in none mode', () => {
     const different = makeSyncPath('file.txt', 9999, 999)
     expect(filesAreDifferent(a, different, 'none')).toBe(false)
+  })
+})
+
+describe('selectB2ComparableSha1', () => {
+  it('uses fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
+    const sha1 = 'a'.repeat(40)
+    const file = makeB2SyncPath('large.bin', 1000, 100, null, {
+      large_file_sha1: sha1.toUpperCase(),
+    })
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(sha1)
+  })
+
+  it('preserves unverified sentinels as untrusted metadata', () => {
+    const sha1 = 'a'.repeat(40)
+    const file = makeB2SyncPath('untrusted.txt', 1000, 100, `unverified:${sha1}`)
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(`unverified:${sha1}`)
+  })
+})
+
+describe('preparePairForCompare', () => {
+  it('skips local hashing when size already proves a sha1 difference', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 200, 'a'.repeat(40))
+    const readLocalSha1 = async () => {
+      throw new Error('should not hash')
+    }
+
+    const result = await preparePairForCompare([source, dest], 'sha1', { readLocalSha1 })
+
+    expect(result.bytesHashed).toBe(0)
+    expect(result.skipActionGeneration).toBe(false)
+  })
+
+  it('returns an error event when local sha1 hashing fails', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('read failed')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: expect.stringContaining('read failed'),
+    })
+    expect(result.errors).toHaveLength(1)
+  })
+
+  it('returns aborted when local sha1 hashing observes an abort signal', async () => {
+    const controller = new AbortController()
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readLocalSha1: async () => {
+        controller.abort()
+        throw new DOMException('aborted', 'AbortError')
+      },
+    })
+
+    expect(result.aborted).toBe(true)
+    expect(result.events).toEqual([])
   })
 })
 
