@@ -304,6 +304,7 @@ describe('presignPutObjectUrl', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;content-type;host')
     expect(url.searchParams.get('x-id')).toBe('PutObject')
     expect(url.toString()).not.toContain('key-secret')
+    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('makes content type affect the signed URL', async () => {
