@@ -1973,8 +1973,8 @@ export class B2Simulator {
       .filter((f) => f.fileName.startsWith(prefix))
       .sort((a, b) => a.uploadTimestamp - b.uploadTimestamp)
 
-    // `startFileId` is the cursor returned from a prior page. Skip past
-    // (and including) the entry with that fileId.
+    // `startFileId` is the inclusive cursor returned from a prior page.
+    // When present in the current listing, that entry is returned first.
     let startIndex = 0
     if (req.startFileId !== undefined) {
       const found = candidates.findIndex((f) => f.fileId === req.startFileId)

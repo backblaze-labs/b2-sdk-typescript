@@ -200,7 +200,7 @@ export interface ListUnfinishedLargeFilesRequest {
   readonly bucketId: BucketId
   /** Only return files whose names start with this prefix. */
   readonly namePrefix?: string
-  /** File ID to start listing from (exclusive). Used for pagination. */
+  /** File ID to start listing from (inclusive). Used for pagination. */
   readonly startFileId?: LargeFileId
   /** Maximum number of files to return. */
   readonly maxFileCount?: number
