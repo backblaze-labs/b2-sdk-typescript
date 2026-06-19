@@ -129,7 +129,7 @@ src/
   download/      Single + parallel ranged download (with per-range retry)
   copy/          copyLargeFile orchestrator (server-side multipart copy)
   sync/          synchronize() async generator, LocalFolder + B2Folder scanners, policies, actions
-  s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl)
+  s3/            S3-compatible helpers (createS3ClientConfig, presignGetObjectUrl, presignPutObjectUrl)
   simulator/     In-memory B2 server for testing
   client.ts      B2Client: high-level facade over RawClient + hasCapabilities
   bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhideFile)

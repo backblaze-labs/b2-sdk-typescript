@@ -438,8 +438,12 @@ import {
 // Sync engine (local <-> B2)
 import { synchronize, LocalFolder, B2Folder } from '@backblaze-labs/b2-sdk/sync'
 
-// S3-compatible helpers (requires @aws-sdk/client-s3 peer dependency)
-import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze-labs/b2-sdk/s3'
+// S3-compatible helpers (requires @aws-sdk/client-s3 and @aws-sdk/s3-request-presigner)
+import {
+  createS3ClientConfig,
+  presignGetObjectUrl,
+  presignPutObjectUrl,
+} from '@backblaze-labs/b2-sdk/s3'
 
 // In-memory B2 server for tests (no network required)
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
@@ -625,7 +629,7 @@ The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct acces
 - **Event notification rules** via `bucket.getNotificationRules()` and `bucket.setNotificationRules()`.
 - **Application key restrictions** (per-bucket, per-prefix, per-capability) via `client.createKey()`.
 
-When you want S3 compatibility instead — for tooling that already speaks S3, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()` and `presignGetObjectUrl()` so the same SDK covers both surfaces.
+When you want S3 compatibility instead — for tooling that already speaks S3, browser direct uploads, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()`, `presignGetObjectUrl()`, and `presignPutObjectUrl()` so the same SDK covers both surfaces.
 
 ## Source isomorphism
 
