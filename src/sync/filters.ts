@@ -1,6 +1,7 @@
 import type { SyncFilterOptions, SyncFilterPattern, SyncPath } from './types.ts'
 
-const globCache = new Map<string, RegExp>()
+const MAX_REGEXP_SOURCE_LENGTH = 512
+const MAX_REGEXP_UNBOUNDED_QUANTIFIERS = 8
 
 /**
  * Tests whether a relative sync path is included by the configured include/exclude filters.
@@ -27,6 +28,56 @@ export function pathPassesSyncFilters(
 }
 
 /**
+ * Tests whether a directory may contain paths admitted by the configured filters.
+ *
+ * @param relativePath - Folder-relative directory path using forward slashes.
+ * @param filters - Optional include and exclude filters.
+ *
+ * @returns True when the scanner should descend into the directory.
+ */
+export function directoryMayContainSyncPaths(
+  relativePath: string,
+  filters: SyncFilterOptions | undefined,
+): boolean {
+  const path = normalizePath(relativePath)
+  if (path === '') return true
+
+  const exclude = filters?.exclude ?? []
+  if (exclude.some((pattern) => stringPatternMatches(path, pattern))) {
+    return false
+  }
+
+  const include = filters?.include ?? []
+  return include.length === 0 || include.some((pattern) => patternMayMatchDescendant(path, pattern))
+}
+
+/**
+ * Returns the safe literal prefix that B2 listing can use for include filters.
+ * Exclude filters are not considered because they cannot narrow a B2 prefix.
+ *
+ * @param filters - Optional include and exclude filters.
+ *
+ * @returns A folder-relative literal prefix, or an empty string when no safe narrowing exists.
+ */
+export function literalPrefixForSyncFilters(filters: SyncFilterOptions | undefined): string {
+  const include = filters?.include ?? []
+  let commonPrefix: string | undefined
+
+  for (const pattern of include) {
+    if (typeof pattern !== 'string') return ''
+
+    const glob = normalizePath(pattern)
+    if (!glob.includes('/')) return ''
+
+    const prefix = literalPrefixForGlob(glob)
+    if (prefix === '') return ''
+    commonPrefix = commonPrefix === undefined ? prefix : commonLiteralPrefix(commonPrefix, prefix)
+  }
+
+  return commonPrefix ?? ''
+}
+
+/**
  * Filters an async iterable of sync paths while preserving the original item type.
  *
  * @typeParam T - Concrete sync path shape yielded by the source folder.
@@ -49,71 +100,261 @@ export async function* filterSyncPaths<T extends SyncPath>(
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {
   if (typeof pattern !== 'string') {
-    pattern.lastIndex = 0
-    const matched = pattern.test(relativePath)
-    pattern.lastIndex = 0
-    return matched
+    return regexpWithoutState(pattern).test(relativePath)
   }
 
   const glob = normalizePath(pattern)
-  const regex = regexForGlob(glob)
-  if (regex.test(relativePath)) return true
+  if (glob === '') return relativePath === ''
 
+  const segments = splitPath(relativePath)
   if (!glob.includes('/')) {
-    const basename = relativePath.slice(relativePath.lastIndexOf('/') + 1)
-    return regex.test(basename)
+    return segments.some((segment) => matchSegmentGlob(segment, glob))
   }
 
-  return false
+  return matchPathGlob(segments, splitPath(glob))
 }
 
-function regexForGlob(glob: string): RegExp {
-  const cached = globCache.get(glob)
-  if (cached) return cached
-
-  const regex = new RegExp(`^${globToRegexSource(glob)}$`)
-  globCache.set(glob, regex)
-  return regex
+function stringPatternMatches(relativePath: string, pattern: SyncFilterPattern): boolean {
+  return typeof pattern === 'string' && matchesPattern(relativePath, pattern)
 }
 
-function globToRegexSource(glob: string): string {
-  let source = ''
+function patternMayMatchDescendant(relativePath: string, pattern: SyncFilterPattern): boolean {
+  if (typeof pattern !== 'string') return true
 
-  for (let i = 0; i < glob.length; i++) {
-    const char = glob[i]
-    if (char === '*') {
-      let starEnd = i + 1
-      while (glob[starEnd] === '*') starEnd++
+  const glob = normalizePath(pattern)
+  if (glob === '' || !glob.includes('/')) return true
 
-      if (starEnd - i > 1) {
-        if (glob[starEnd] === '/') {
-          source += '(?:.*/)?'
-          i = starEnd
-        } else {
-          source += '.*'
-          i = starEnd - 1
-        }
-      } else {
-        source += '[^/]*'
-      }
-    } else if (char === '?') {
-      source += '[^/]'
-    } else {
-      source += escapeRegexChar(char)
+  const pathSegments = splitPath(relativePath)
+  const globSegments = splitPath(glob)
+  const length = Math.min(pathSegments.length, globSegments.length)
+
+  for (let i = 0; i < length; i++) {
+    const globSegment = globSegments[i]
+    if (globSegment === '**' || globSegment === undefined || hasGlobWildcard(globSegment)) {
+      return true
+    }
+    if (globSegment !== pathSegments[i]) {
+      return false
     }
   }
 
-  return source
+  return true
 }
 
-function escapeRegexChar(char: string | undefined): string {
-  if (char === undefined) return ''
-  return /[\\^$+?.()|[\]{}]/.test(char) ? `\\${char}` : char
+function matchPathGlob(pathSegments: readonly string[], globSegments: readonly string[]): boolean {
+  let reachable = new Array<boolean>(pathSegments.length + 1).fill(false)
+  reachable[0] = true
+
+  for (const globSegment of globSegments) {
+    const next = new Array<boolean>(pathSegments.length + 1).fill(false)
+
+    if (globSegment === '**') {
+      // A whole-segment `**` consumes zero or more complete path segments.
+      let canReach = false
+      for (let i = 0; i <= pathSegments.length; i++) {
+        canReach = canReach || reachable[i] === true
+        next[i] = canReach
+      }
+    } else {
+      for (let i = 0; i < pathSegments.length; i++) {
+        if (reachable[i] === true && matchSegmentGlob(pathSegments[i] ?? '', globSegment)) {
+          next[i + 1] = true
+        }
+      }
+    }
+
+    reachable = next
+  }
+
+  return reachable[pathSegments.length] === true
+}
+
+function matchSegmentGlob(segment: string, glob: string): boolean {
+  let segmentIndex = 0
+  let globIndex = 0
+  let starIndex = -1
+  let starMatchIndex = 0
+
+  while (segmentIndex < segment.length) {
+    const globChar = glob[globIndex]
+    if (globChar === '?' || globChar === segment[segmentIndex]) {
+      globIndex++
+      segmentIndex++
+    } else if (globChar === '*') {
+      // Repeated `*` in one segment is still one segment-local wildcard.
+      while (glob[globIndex + 1] === '*') globIndex++
+      starIndex = globIndex
+      starMatchIndex = segmentIndex
+      globIndex++
+    } else if (starIndex !== -1) {
+      globIndex = starIndex + 1
+      starMatchIndex++
+      segmentIndex = starMatchIndex
+    } else {
+      return false
+    }
+  }
+
+  while (glob[globIndex] === '*') globIndex++
+  return globIndex === glob.length
+}
+
+function regexpWithoutState(pattern: RegExp): RegExp {
+  assertSafeRegExp(pattern)
+  return new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ''))
+}
+
+function assertSafeRegExp(pattern: RegExp): void {
+  const source = pattern.source
+  if (source.length > MAX_REGEXP_SOURCE_LENGTH) {
+    throw new Error('Sync filter RegExp is too long')
+  }
+
+  if (!regexpSourceLooksSafe(source)) {
+    throw new Error('Sync filter RegExp is too complex')
+  }
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the regex safety scan linear.
+function regexpSourceLooksSafe(source: string): boolean {
+  let escaped = false
+  let inClass = false
+  let unboundedQuantifiers = 0
+  const groups: Array<{ hasQuantifier: boolean; hasAlternation: boolean }> = []
+  let lastToken:
+    | { type: 'atom' }
+    | { type: 'group'; hasQuantifier: boolean; hasAlternation: boolean }
+    | null = null
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i] ?? ''
+
+    if (escaped) {
+      if (!inClass && /[1-9]/.test(char)) return false
+      escaped = false
+      lastToken = { type: 'atom' }
+      continue
+    }
+
+    if (char === '\\') {
+      escaped = true
+      continue
+    }
+
+    if (inClass) {
+      if (char === ']') inClass = false
+      continue
+    }
+
+    if (char === '[') {
+      inClass = true
+      lastToken = { type: 'atom' }
+      continue
+    }
+
+    if (char === '(') {
+      groups.push({ hasQuantifier: false, hasAlternation: false })
+      lastToken = null
+      continue
+    }
+
+    if (char === ')') {
+      const group = groups.pop()
+      if (!group) return false
+      lastToken = { type: 'group', ...group }
+      continue
+    }
+
+    if (char === '|') {
+      const group = groups.at(-1)
+      if (group) group.hasAlternation = true
+      lastToken = null
+      continue
+    }
+
+    if (isQuantifierStart(source, i)) {
+      if (lastToken?.type === 'group' && (lastToken.hasQuantifier || lastToken.hasAlternation)) {
+        return false
+      }
+
+      if (isUnboundedQuantifier(source, i)) {
+        unboundedQuantifiers++
+        if (unboundedQuantifiers > MAX_REGEXP_UNBOUNDED_QUANTIFIERS) return false
+      }
+
+      const group = groups.at(-1)
+      if (group) group.hasQuantifier = true
+
+      if (char === '{') {
+        const end = source.indexOf('}', i + 1)
+        if (end === -1) return false
+        i = end
+      }
+
+      lastToken = null
+      continue
+    }
+
+    lastToken = { type: 'atom' }
+  }
+
+  return !escaped && !inClass && groups.length === 0
+}
+
+function isQuantifierStart(source: string, index: number): boolean {
+  const char = source[index]
+  if (char === '*' || char === '+' || char === '?') return true
+  if (char !== '{') return false
+
+  const end = source.indexOf('}', index + 1)
+  return end !== -1 && /^\d+(?:,\d*)?$/.test(source.slice(index + 1, end))
+}
+
+function isUnboundedQuantifier(source: string, index: number): boolean {
+  const char = source[index]
+  if (char === '*' || char === '+') return true
+  if (char !== '{') return false
+
+  const end = source.indexOf('}', index + 1)
+  return end !== -1 && source.slice(index + 1, end).endsWith(',')
+}
+
+function literalPrefixForGlob(glob: string): string {
+  const segments = splitPath(glob)
+  const literalSegments: string[] = []
+
+  for (const segment of segments) {
+    if (segment === '**' || hasGlobWildcard(segment)) break
+    literalSegments.push(segment)
+  }
+
+  if (literalSegments.length === 0) return ''
+  const prefix = literalSegments.join('/')
+  return literalSegments.length < segments.length ? `${prefix}/` : prefix
+}
+
+function commonLiteralPrefix(a: string, b: string): string {
+  let end = 0
+  const max = Math.min(a.length, b.length)
+  while (end < max && a[end] === b[end]) end++
+  return a.slice(0, end)
+}
+
+function hasGlobWildcard(glob: string): boolean {
+  return glob.includes('*') || glob.includes('?')
+}
+
+function splitPath(path: string): string[] {
+  if (path === '') return []
+  return path.split('/').filter((segment) => segment !== '')
 }
 
 function normalizePath(path: string): string {
   let normalized = path.split('\\').join('/')
   while (normalized.startsWith('./')) normalized = normalized.slice(2)
   while (normalized.startsWith('/')) normalized = normalized.slice(1)
+  while (normalized.endsWith('/') && normalized.length > 1) {
+    normalized = normalized.slice(0, -1)
+  }
   return normalized
 }

@@ -2,7 +2,7 @@ import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { isAbortError } from '../local-sha1.ts'
-import { pathPassesSyncFilters } from '../filters.ts'
+import { literalPrefixForSyncFilters, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
@@ -33,6 +33,7 @@ export class B2Folder implements SyncFolder {
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
     const grouped = new Map<string, FileVersion[]>()
+    const listPrefix = `${this.prefix}${literalPrefixForSyncFilters(options)}`
 
     let startFileName: string | undefined
     let startFileId: string | undefined
@@ -43,7 +44,7 @@ export class B2Folder implements SyncFolder {
       let listing: Awaited<ReturnType<Bucket['listFileVersions']>>
       try {
         listing = await this.bucket.listFileVersions({
-          ...(this.prefix !== '' ? { prefix: this.prefix } : {}),
+          ...(listPrefix !== '' ? { prefix: listPrefix } : {}),
           ...(startFileName !== undefined ? { startFileName } : {}),
           ...(startFileId !== undefined
             ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
@@ -57,6 +58,14 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (options.signal?.aborted) return
+
+        // Real B2 honors the prefix in listFileVersions, but custom
+        // transports and the simulator can over-return. Guard before
+        // stripping this.prefix so relativePath is never corrupted.
+        if (this.prefix !== '' && !fv.fileName.startsWith(this.prefix)) continue
+        const relativePath =
+          this.prefix !== '' ? fv.fileName.slice(this.prefix.length) : fv.fileName
+        if (!pathPassesSyncFilters(relativePath, options)) continue
 
         const existing = grouped.get(fv.fileName)
         if (existing) {
@@ -75,15 +84,11 @@ export class B2Folder implements SyncFolder {
 
     for (const [fileName, versions] of sorted) {
       if (options.signal?.aborted) return
-
-      if (this.prefix !== '' && !fileName.startsWith(this.prefix)) continue
-
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const selected = versions[0]
       if (!selected || selected.action === FileAction.Hide) continue
 
       const relativePath = this.prefix !== '' ? fileName.slice(this.prefix.length) : fileName
-      if (!pathPassesSyncFilters(relativePath, options)) continue
 
       const contentSha1 = selectB2ComparableSha1(selected)
       yield {

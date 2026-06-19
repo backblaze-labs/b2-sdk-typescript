@@ -21,20 +21,40 @@ export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
 /** Direction of a sync operation. */
 export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
 
-/** Glob string or regular expression used to include or exclude sync paths. */
+/**
+ * Glob string or regular expression used to include or exclude sync paths.
+ *
+ * Glob strings use a small SDK-defined dialect against folder-relative paths with forward
+ * slashes: `*` and `?` match within one path segment, and a path segment that is exactly `**`
+ * matches across directory boundaries. Character classes, brace expansion, extglobs, and
+ * backslash escaping are not supported. Slash-less globs match any path segment at any depth,
+ * so `readme.md` matches both `readme.md` and `docs/readme.md`, and `node_modules` matches
+ * every file under a `node_modules` directory. Exclude filters win over include filters.
+ *
+ * Regular expressions are matched against the full relative path. Global and sticky flags are
+ * ignored so matching does not mutate `lastIndex`; regexes that look structurally unsafe for
+ * synchronous matching are rejected.
+ */
 export type SyncFilterPattern = string | RegExp
 
-/** Include/exclude filters applied to sync paths relative to each folder root. */
+/**
+ * Include/exclude filters applied to sync paths relative to each folder root.
+ *
+ * `SyncOptions.include` and `SyncOptions.exclude` are the canonical filters for
+ * {@link synchronize}; they are passed down into folder scans and then enforced again during
+ * pairing for custom folders that do not implement scan-time filtering. Calling
+ * {@link SyncFolder.scan} directly can pass the same filter object for standalone scans.
+ */
 export interface SyncFilterOptions {
   /**
    * Optional allow-list. When present, only paths matching at least one pattern are scanned.
-   * Glob strings match paths with forward slashes; `*` matches one segment and `**` crosses
-   * directory boundaries.
+   * B2 scans can push down only the safe literal prefix from slash-containing glob includes;
+   * other include filtering is client-side.
    */
   readonly include?: readonly SyncFilterPattern[]
   /**
    * Optional deny-list. Paths matching any exclude pattern are skipped even when they also match
-   * an include pattern.
+   * an include pattern. Excludes are client-side filters; they do not reduce B2 list API calls.
    */
   readonly exclude?: readonly SyncFilterPattern[]
 }

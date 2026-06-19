@@ -454,6 +454,57 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
+  it('pushes down safe include prefixes while filtering listed names', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const calls: Array<{ prefix?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { prefix?: string }) {
+        calls.push({
+          ...(opts?.prefix !== undefined ? { prefix: opts.prefix } : {}),
+        })
+        return {
+          files: [
+            makeFileVersion('root/active/keep.txt', 1),
+            makeFileVersion('root/active/skip.tmp', 2),
+            makeFileVersion('root/archive/old.txt', 3),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root/')
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        include: ['active/**'],
+        exclude: ['*.tmp'],
+      }),
+    )
+
+    expect(calls).toEqual([{ prefix: 'root/active/' }])
+    expect(entries.map((e) => e.relativePath)).toEqual(['active/keep.txt'])
+  })
+
   // Pagination: when listFileVersions returns nextFileName, B2Folder must
   // continue the loop with startFileName + startFileId until the server runs
   // out of pages. The simulator's default page size is large enough that real

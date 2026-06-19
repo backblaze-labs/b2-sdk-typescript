@@ -1,7 +1,7 @@
 import { lstat, readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
-import { pathPassesSyncFilters } from '../filters.ts'
+import { directoryMayContainSyncPaths, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -64,7 +64,9 @@ export class LocalFolder implements SyncFolder {
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
-        await this.walk(fullPath, out, options)
+        if (directoryMayContainSyncPaths(rel, options)) {
+          await this.walk(fullPath, out, options)
+        }
       } else if (entry.isFile()) {
         try {
           const s = await lstat(fullPath)
