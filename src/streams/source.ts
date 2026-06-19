@@ -407,7 +407,7 @@ abstract class FileRangeSource implements ContentSource {
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
     const data = await readFileRange(this.path, this.identity, this.offset, this.size)
-    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+    return data.buffer as ArrayBuffer
   }
 }
 
