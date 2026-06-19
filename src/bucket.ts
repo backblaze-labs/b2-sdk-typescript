@@ -36,6 +36,7 @@ import type { ReplicationConfiguration, ReplicationRule } from './types/replicat
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
+import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
@@ -190,8 +191,9 @@ export class Bucket {
      * greater than `recommendedPartSize`). On the small-file path this
      * option is silently ignored. Sliceable sources only — `StreamSource`
      * rejects resume because it can't replay parts. Discovery reuses only
-     * unfinished files whose resume identity metadata and upload options
-     * match the current call.
+     * unfinished files whose upload options and uploaded part lengths
+     * match the current call, and should only be used when bucket writers
+     * are mutually trusted.
      */
     resume?: boolean
     /**
@@ -200,6 +202,8 @@ export class Bucket {
      * plan.
      */
     resumeFileId?: LargeFileId
+    /** Diagnostic callback invoked when resume discovery rejects a candidate. */
+    onResumeCandidateRejected?: ResumeCandidateRejectedListener
   }): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize

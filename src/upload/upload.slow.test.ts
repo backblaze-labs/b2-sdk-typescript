@@ -4,7 +4,6 @@ import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { uploadLargeFile } from './large.ts'
-import { withResumeIdentityFileInfo } from './resume.ts'
 
 /**
  * Slow tier for `uploadLargeFile`: real multipart uploads that round-trip 5
@@ -143,7 +142,6 @@ describe('uploadLargeFile resume', () => {
         bucketId: bucket.id,
         fileName: 'resumed.bin',
         contentType: 'application/octet-stream',
-        fileInfo: withResumeIdentityFileInfo({}, size, 5_000_000),
       },
     )
 
@@ -215,6 +213,7 @@ describe('uploadLargeFile resume', () => {
       bucketId: bucket.id,
       fileName: 'explicit.bin',
       source: new BufferSource(data),
+      contentType: 'application/octet-stream',
       partSize: 5_000_000,
       concurrency: 1,
       resumeFileId: start.fileId,

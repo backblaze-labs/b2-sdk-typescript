@@ -13,11 +13,10 @@ import {
   makeClient,
 } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
-import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
-import { withResumeIdentityFileInfo } from './resume.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 /**
@@ -1286,6 +1285,26 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileName).toBe('resume-hold.bin')
   })
 
+  it('does not persist SDK resume metadata in finished fileInfo', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const fileInfo = Object.fromEntries(
+      Array.from({ length: 10 }, (_, index) => [`key_${index}`, `value_${index}`]),
+    )
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'resume-fileinfo-budget.bin',
+      source: new BufferSource(data),
+      fileInfo,
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileInfo).toEqual(fileInfo)
+  })
+
   it('skips a same-name unfinished upload with conflicting resume identity', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2 + 7)
@@ -1299,11 +1318,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         bucketId: bucketId as never,
         fileName: 'same-name.bin',
         contentType,
-        fileInfo: withResumeIdentityFileInfo(
-          { origin: 'conflict' },
-          conflictData.byteLength,
-          partSize,
-        ),
+        fileInfo: { origin: 'conflict' },
       },
     )
     const matching = await client.raw.startLargeFile(
@@ -1313,7 +1328,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         bucketId: bucketId as never,
         fileName: 'same-name.bin',
         contentType,
-        fileInfo: withResumeIdentityFileInfo({ origin: 'match' }, data.byteLength, partSize),
+        fileInfo: { origin: 'match' },
       },
     )
 
@@ -1362,6 +1377,113 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     const unfinishedIds = unfinished.files.map((file) => file.fileId)
     expect(unfinishedIds).toContain(conflict.fileId)
     expect(unfinishedIds).not.toContain(matching.fileId)
+  })
+
+  it('starts a new upload instead of auto-resuming SSE-C candidates', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const contentType = 'application/octet-stream'
+    const first = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'sse-c.bin',
+        contentType,
+        serverSideEncryption: sseCustomer('key-a', 'md5-a'),
+      },
+    )
+    const second = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'sse-c.bin',
+        contentType,
+        serverSideEncryption: sseCustomer('key-b', 'md5-b'),
+      },
+    )
+    expect(first.serverSideEncryption).not.toHaveProperty('customerKey')
+    expect(first.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
+
+    const { sha1Hex } = await import('../streams/hash.ts')
+    const partUrl = await client.raw.getUploadPartUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: first.fileId },
+    )
+    const part = data.slice(0, partSize)
+    const uploaded = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part.byteLength,
+        contentSha1: await sha1Hex(part),
+        serverSideEncryption: sseCustomer('key-a', 'md5-a'),
+      },
+      part,
+    )
+    expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKey')
+    expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'sse-c.bin',
+      source: new BufferSource(data),
+      contentType,
+      partSize,
+      concurrency: 1,
+      resume: true,
+      serverSideEncryption: sseCustomer('key-c', 'md5-c'),
+    })
+
+    expect(result.fileName).toBe('sse-c.bin')
+    expect(result.serverSideEncryption).not.toHaveProperty('customerKey')
+    expect(result.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucketId as never },
+    )
+    const unfinishedIds = unfinished.files.map((file) => file.fileId)
+    expect(unfinishedIds).toContain(first.fileId)
+    expect(unfinishedIds).toContain(second.fileId)
+    expect(unfinished.files[0]?.serverSideEncryption).not.toHaveProperty('customerKey')
+    expect(unfinished.files[0]?.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
+  })
+
+  it('rejects an explicit resumeFileId that targets a different file name', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const foreign = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucketId as never,
+        fileName: 'foreign.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucketId as never,
+        fileName: 'wanted.bin',
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        concurrency: 1,
+        resumeFileId: foreign.fileId,
+      }),
+    ).rejects.toThrow(/resumeFileId/)
+
+    const parts = await client.raw.listParts(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: foreign.fileId },
+    )
+    expect(parts.parts).toEqual([])
   })
 })
 

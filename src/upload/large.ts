@@ -13,7 +13,11 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { collectPartSha1s, findResumeCandidate, withResumeIdentityFileInfo } from './resume.ts'
+import {
+  findResumeCandidate,
+  type ResumeCandidateCriteria,
+  type ResumeCandidateRejectedListener,
+} from './resume.ts'
 import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
@@ -62,15 +66,23 @@ export interface UploadLargeFileOptions {
   /**
    * If true, look for an unfinished large file with the same bucket and file name
    * and skip parts whose locally-recomputed SHA-1 matches the server's. Automatic
-   * discovery only reuses unfinished files whose resume identity metadata and
-   * upload options match; otherwise a new large file is started.
+   * discovery only reuses unfinished files whose upload options and already
+   * uploaded part lengths match; otherwise a new large file is started.
+   *
+   * Auto-discovery trusts unfinished large files created by any writer with
+   * access to the bucket. Use it only when bucket writers are mutually trusted.
+   * SSE-C uploads are never auto-resumed because B2 does not expose the
+   * customer key identity in unfinished-file listings.
    */
   readonly resume?: boolean
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
-   * but the local `partSize` must still match the server's plan.
+   * after verifying that the ID belongs to the requested bucket/file name and
+   * matches the current upload options and already-uploaded part lengths.
    */
   readonly resumeFileId?: LargeFileId
+  /** Diagnostic callback invoked when resume discovery rejects a candidate. */
+  readonly onResumeCandidateRejected?: ResumeCandidateRejectedListener
 }
 
 /**
@@ -101,11 +113,7 @@ export async function uploadLargeFile(
   const totalSize = options.source.size
 
   const parts = planRanges(totalSize, partSize)
-  const baseFileInfo: Record<string, string> = { ...options.fileInfo }
-  const fileInfo =
-    options.resume === true
-      ? withResumeIdentityFileInfo(baseFileInfo, totalSize, partSize)
-      : baseFileInfo
+  const fileInfo: Record<string, string> = { ...options.fileInfo }
 
   // Construct the `b2_start_large_file` request body once so the two
   // non-resume branches below (no `resume`, resume-but-no-candidate)
@@ -121,6 +129,32 @@ export async function uploadLargeFile(
     ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
     ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
   }
+  const resumeCandidateCriteria: ResumeCandidateCriteria = {
+    contentType: startLargeFileRequest.contentType,
+    fileInfo: startLargeFileRequest.fileInfo,
+    sourceSize: totalSize,
+    partSize,
+    parts,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(startLargeFileRequest.serverSideEncryption !== undefined
+      ? { serverSideEncryption: startLargeFileRequest.serverSideEncryption }
+      : {}),
+    ...(startLargeFileRequest.fileRetention !== undefined
+      ? { fileRetention: startLargeFileRequest.fileRetention }
+      : {}),
+    ...(startLargeFileRequest.legalHold !== undefined
+      ? { legalHold: startLargeFileRequest.legalHold }
+      : {}),
+    ...(options.onResumeCandidateRejected !== undefined
+      ? { onCandidateRejected: options.onResumeCandidateRejected }
+      : {}),
+  }
+
+  if (!options.source.canSlice && (options.resume === true || options.resumeFileId !== undefined)) {
+    throw new Error(
+      'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
+    )
+  }
 
   // --- Resume discovery (M11.1) ---
   if (!options.source.canSlice && (options.resumeFileId !== undefined || options.resume === true)) {
@@ -133,26 +167,30 @@ export async function uploadLargeFile(
   let preUploaded: ReadonlyMap<number, string>
   let createdLargeFile = false
   if (options.resumeFileId !== undefined) {
-    largeFileId = options.resumeFileId
-    preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
-  } else if (options.resume === true) {
     const candidate = await findResumeCandidate(
       raw,
       accountInfo,
       options.bucketId,
       options.fileName,
       {
-        contentType: startLargeFileRequest.contentType,
-        fileInfo,
-        sourceSize: totalSize,
-        partSize,
-        parts,
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-        ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-        ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+        ...resumeCandidateCriteria,
+        resumeFileId: options.resumeFileId,
       },
+    )
+    if (candidate === null) {
+      throw new Error(
+        'uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.',
+      )
+    }
+    largeFileId = candidate.fileId
+    preUploaded = candidate.uploadedPartSha1s
+  } else if (options.resume === true) {
+    const candidate = await findResumeCandidate(
+      raw,
+      accountInfo,
+      options.bucketId,
+      options.fileName,
+      resumeCandidateCriteria,
     )
     if (candidate) {
       largeFileId = candidate.fileId

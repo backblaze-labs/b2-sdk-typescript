@@ -18,6 +18,7 @@ import type { FileVersion } from './types/file.ts'
 import type { FileId, LargeFileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import { uploadLargeFile } from './upload/large.ts'
+import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
@@ -142,7 +143,8 @@ export class B2Object {
      * Resume an unfinished multipart upload for this file name when one
      * exists. Only meaningful on the large-file path. Ignored on the
      * small-file path. Discovery reuses only unfinished files whose resume
-     * identity metadata and upload options match the current call.
+     * options and uploaded part lengths match the current call, and should
+     * only be used when bucket writers are mutually trusted.
      */
     resume?: boolean
     /**
@@ -150,6 +152,8 @@ export class B2Object {
      * their local SHA-1 is recomputed and matches the server-reported part SHA-1.
      */
     resumeFileId?: LargeFileId
+    /** Diagnostic callback invoked when resume discovery rejects a candidate. */
+    onResumeCandidateRejected?: ResumeCandidateRejectedListener
   }): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize

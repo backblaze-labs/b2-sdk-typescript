@@ -174,6 +174,13 @@ interface StoredKey {
   readonly expirationTimestamp: number | null
 }
 
+function publicServerSideEncryption(encryption: EncryptionSetting): EncryptionSetting {
+  if (encryption.mode === EncryptionMode.SseC) {
+    return { mode: encryption.mode, algorithm: encryption.algorithm } as EncryptionSetting
+  }
+  return encryption
+}
+
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
 export interface SimulatorJsonResponse {
   /** HTTP status code. */
@@ -1157,7 +1164,7 @@ export class B2Simulator {
         partNumber,
         contentLength: partData.byteLength,
         contentSha1: sha1,
-        serverSideEncryption: large.serverSideEncryption,
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: Date.now(),
       },
     }
@@ -1806,7 +1813,7 @@ export class B2Simulator {
           isClientAuthorizedToRead: true,
           value: large.legalHold,
         },
-        serverSideEncryption: large.serverSideEncryption,
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: large.uploadTimestamp,
       },
     }
@@ -1994,7 +2001,7 @@ export class B2Simulator {
         isClientAuthorizedToRead: true,
         value: f.legalHold,
       },
-      serverSideEncryption: f.serverSideEncryption,
+      serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
       uploadTimestamp: f.uploadTimestamp,
     }))
     const hasMore = startIndex + max < candidates.length
@@ -2336,7 +2343,9 @@ export class B2Simulator {
       fileRetention: { isClientAuthorizedToRead: true, value: params.fileRetention ?? null },
       legalHold: { isClientAuthorizedToRead: true, value: params.legalHold ?? null },
       replicationStatus: null,
-      serverSideEncryption: params.serverSideEncryption ?? { mode: EncryptionMode.None },
+      serverSideEncryption: publicServerSideEncryption(
+        params.serverSideEncryption ?? { mode: EncryptionMode.None },
+      ),
       uploadTimestamp: this.monotonicTimestamp(),
     }
   }
