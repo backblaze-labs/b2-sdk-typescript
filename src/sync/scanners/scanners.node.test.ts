@@ -586,7 +586,7 @@ describe('B2Folder', () => {
       },
     }
 
-    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root')
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root\\')
     const entries = await collect<B2SyncPath>(
       folder.scan({
         include: ['active/**'],

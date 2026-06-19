@@ -1,6 +1,7 @@
 export function normalizeB2FolderPrefix(prefix: string): string {
-  if (prefix === '' || prefix.endsWith('/')) return prefix
-  return `${prefix}/`
+  const normalized = prefix.split('\\').join('/')
+  if (normalized === '' || normalized.endsWith('/')) return normalized
+  return `${normalized}/`
 }
 
 export function normalizeB2RelativePath(path: string): string {

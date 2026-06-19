@@ -3695,7 +3695,7 @@ describe('synchronize', () => {
           dest: { ...dest, type: 'b2' },
           options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
           bucket: mockBucket as unknown as Bucket,
-          prefix: 'pfx',
+          prefix: 'pfx\\nested',
         }
 
         const events = await collectEvents(config)
@@ -3703,7 +3703,10 @@ describe('synchronize', () => {
         expect(uploads).toHaveLength(1)
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
         const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-        expect(args).toMatchObject({ fileName: 'pfx/hello.txt', signal: controller.signal })
+        expect(args).toMatchObject({
+          fileName: 'pfx/nested/hello.txt',
+          signal: controller.signal,
+        })
         expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
