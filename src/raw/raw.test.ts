@@ -20,7 +20,7 @@ describe('RawClient authorizeAccount', () => {
 
     await expect(
       raw.authorizeAccount('key-id', 'key-secret', 'ftp://attacker.example'),
-    ).rejects.toThrow('realm URL must use HTTPS or loopback HTTP for authorization')
+    ).rejects.toThrow('realm URL must use HTTPS or loopback IP HTTP for authorization')
     expect(seenUrls).toEqual([])
   })
 

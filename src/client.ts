@@ -40,13 +40,14 @@ export interface B2ClientOptions {
   /** The application key secret. */
   readonly applicationKey: string
   /**
-   * B2 realm to authenticate against. Accepts a known realm-map key or a
-   * direct base URL. Custom HTTPS hosts are trusted with the application key
-   * during authorize, so never derive `realm` from untrusted input. URL values
-   * must use HTTPS, or loopback HTTP for local testing only; application-key
-   * credentials are sent unencrypted over loopback HTTP. Unsupported schemes,
-   * malformed URLs, non-URL strings, and non-loopback plaintext HTTP are
-   * rejected before credentials are sent. Defaults to `"production"`.
+   * B2 realm to authenticate against. Accepts a known realm-map key
+   * (`"production"` or `"staging"`) or a direct base URL. Custom HTTPS hosts
+   * are trusted with the application key during authorize, so never derive
+   * `realm` from untrusted input. URL values must use HTTPS, or loopback IP
+   * literal HTTP for local testing only; application-key credentials are sent
+   * unencrypted over loopback HTTP. Unsupported schemes, malformed URLs,
+   * non-URL strings, hostnames such as `localhost`, and non-loopback plaintext
+   * HTTP are rejected before credentials are sent. Defaults to `"production"`.
    */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */

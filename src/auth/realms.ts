@@ -36,7 +36,7 @@ function realmUrlForError(realmUrl: string, url = parseAbsoluteRealmUrl(realmUrl
 
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
-  if (host === 'localhost' || host === '[::1]' || host === '::1') return true
+  if (host === '[::1]' || host === '::1') return true
 
   const parts = host.split('.')
   return (
@@ -63,7 +63,7 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
     )
   }
   throw new B2RealmConfigurationError(
-    `realm URL must use HTTPS or loopback HTTP for authorization: ${realmUrlForError(realmUrl, url)}`,
+    `realm URL must use HTTPS or loopback IP HTTP for authorization: ${realmUrlForError(realmUrl, url)}`,
   )
 }
 

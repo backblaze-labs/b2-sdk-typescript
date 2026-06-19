@@ -414,7 +414,7 @@ describe('getRealmUrl', () => {
 
   it('rejects unsupported realm URL schemes', () => {
     expect(() => getRealmUrl('ftp://attacker.example')).toThrow(
-      'realm URL must use HTTPS or loopback HTTP for authorization',
+      'realm URL must use HTTPS or loopback IP HTTP for authorization',
     )
   })
 
@@ -425,12 +425,20 @@ describe('getRealmUrl', () => {
   })
 
   it.each([
-    'http://localhost:8180',
     'http://127.0.0.1:8180',
     'http://127.0.0.2:8180',
     'http://[::1]:8180',
-  ])('allows loopback plaintext HTTP realm %s', (realm) => {
+  ])('allows loopback IP plaintext HTTP realm %s', (realm) => {
     expect(getRealmUrl(realm)).toBe(realm)
+  })
+
+  it.each([
+    'http://localhost:8180',
+    'http://foo.localhost:8180',
+  ])('rejects loopback hostname plaintext HTTP realm %s', (realm) => {
+    expect(() => getRealmUrl(realm)).toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
   })
 
   it('does not include non-loopback plaintext HTTP built-in realms', () => {
