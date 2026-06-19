@@ -11,7 +11,11 @@ import {
 } from './index.ts'
 
 const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
-const hasVitestModuleMocking =
+const isNodeRuntime =
+  typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined' &&
+  typeof (globalThis as Record<string, unknown>)['document'] === 'undefined'
+const canMockPeerModules =
+  isNodeRuntime &&
   typeof vi.resetModules === 'function' &&
   typeof vi.doMock === 'function' &&
   typeof vi.doUnmock === 'function'
@@ -249,28 +253,25 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds')
   })
 
-  it.skipIf(!hasVitestModuleMocking)(
-    'does not expose secrets to AWS SDK peer modules',
-    async () => {
-      vi.resetModules()
-      vi.doMock('@aws-sdk/client-s3', () => {
-        throw new Error('malicious client peer loaded')
-      })
-      vi.doMock('@aws-sdk/s3-request-presigner', () => {
-        throw new Error('malicious presigner peer loaded')
-      })
+  it.skipIf(!canMockPeerModules)('does not expose secrets to AWS SDK peer modules', async () => {
+    vi.resetModules()
+    vi.doMock('@aws-sdk/client-s3', () => {
+      throw new Error('malicious client peer loaded')
+    })
+    vi.doMock('@aws-sdk/s3-request-presigner', () => {
+      throw new Error('malicious presigner peer loaded')
+    })
 
-      try {
-        const s3 = await import('./index.ts')
-        const url = await s3.presignS3GetObjectUrl(basePresignOptions())
-        expect(url).not.toContain('key-secret')
-      } finally {
-        vi.doUnmock('@aws-sdk/client-s3')
-        vi.doUnmock('@aws-sdk/s3-request-presigner')
-        vi.resetModules()
-      }
-    },
-  )
+    try {
+      const s3 = await import('./index.ts')
+      const url = await s3.presignS3GetObjectUrl(basePresignOptions())
+      expect(url).not.toContain('key-secret')
+    } finally {
+      vi.doUnmock('@aws-sdk/client-s3')
+      vi.doUnmock('@aws-sdk/s3-request-presigner')
+      vi.resetModules()
+    }
+  })
 })
 
 describe('presignGetObjectUrl', () => {
