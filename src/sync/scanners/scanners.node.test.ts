@@ -588,8 +588,10 @@ describe('B2Folder', () => {
         })
         return {
           files: [
+            makeFileVersion('root/active', 4),
             makeFileVersion('root/active/keep.txt', 1),
             makeFileVersion('root/active/skip.tmp', 2),
+            makeFileVersion('root/active2/leak.txt', 5),
             makeFileVersion('root/archive/old.txt', 3),
           ],
           nextFileName: null,
@@ -606,8 +608,8 @@ describe('B2Folder', () => {
       }),
     )
 
-    expect(calls).toEqual([{ prefix: 'root/active/' }])
-    expect(entries.map((e) => e.relativePath)).toEqual(['active/keep.txt'])
+    expect(calls).toEqual([{ prefix: 'root/active' }])
+    expect(entries.map((e) => e.relativePath)).toEqual(['active', 'active/keep.txt'])
   })
 
   // Pagination: when listFileVersions returns nextFileName, B2Folder must

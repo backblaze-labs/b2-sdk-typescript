@@ -138,7 +138,9 @@ describe('sync filters', () => {
   })
 
   it('computes safe literal B2 prefixes for include filters', () => {
-    expect(literalPrefixForSyncFilters({ include: ['active/**'] })).toBe('active/')
+    expect(pathPassesSyncFilters('active', { include: ['active/**'] })).toBe(true)
+    expect(literalPrefixForSyncFilters({ include: ['active/**'] })).toBe('active')
+    expect(literalPrefixForSyncFilters({ include: ['active/**/keep.txt'] })).toBe('active/')
     expect(literalPrefixForSyncFilters({ include: ['active/a.txt', 'active/b.txt'] })).toBe(
       'active/',
     )

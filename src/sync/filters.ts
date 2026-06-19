@@ -216,14 +216,22 @@ function matchSegmentGlob(segment: string, glob: string): boolean {
 function literalPrefixForGlob(glob: string): string {
   const segments = splitPath(glob)
   const literalSegments: string[] = []
+  let firstWildcardIndex = segments.length
 
-  for (const segment of segments) {
-    if (segment === '**' || hasGlobWildcard(segment)) break
+  for (const [index, segment] of segments.entries()) {
+    if (segment === '**' || hasGlobWildcard(segment)) {
+      firstWildcardIndex = index
+      break
+    }
     literalSegments.push(segment)
   }
 
   if (literalSegments.length === 0) return ''
   const prefix = literalSegments.join('/')
+  const wildcardTail = segments.slice(firstWildcardIndex)
+  const tailMayMatchBarePrefix =
+    wildcardTail.length > 0 && wildcardTail.every((segment) => segment === '**')
+  if (tailMayMatchBarePrefix) return prefix
   return literalSegments.length < segments.length ? `${prefix}/` : prefix
 }
 
