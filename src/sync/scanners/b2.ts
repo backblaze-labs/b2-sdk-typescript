@@ -4,7 +4,7 @@ import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { isAbortError } from '../local-sha1.ts'
 import { literalPrefixForSyncFilters, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
-import { normalizeB2FolderPrefix, stripLeadingSlashes } from '../prefix.ts'
+import { normalizeB2FolderPrefix, normalizeB2RelativePath } from '../prefix.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -105,7 +105,9 @@ export class B2Folder implements SyncFolder {
   }
 
   private toRelativePath(fileName: string): string {
-    return stripLeadingSlashes(this.prefix === '' ? fileName : fileName.slice(this.prefix.length))
+    return normalizeB2RelativePath(
+      this.prefix === '' ? fileName : fileName.slice(this.prefix.length),
+    )
   }
 }
 

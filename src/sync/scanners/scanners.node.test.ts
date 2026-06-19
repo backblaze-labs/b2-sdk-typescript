@@ -482,7 +482,7 @@ describe('B2Folder', () => {
       contentType: 'application/octet-stream',
       fileId: 'fid' as unknown as FileId,
       fileInfo: {},
-      fileName: '/docs/readme.md',
+      fileName: '/docs\\readme.md',
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
       replicationStatus: null,
@@ -503,6 +503,48 @@ describe('B2Folder', () => {
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+  })
+
+  it('rejects unsafe B2 names before yielding relative paths', async () => {
+    function makeFolder(fileName: string): B2Folder {
+      const fileVersion: FileVersion = {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: 'fid' as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: 1,
+      }
+      const mockBucket = {
+        async listFileVersions() {
+          return {
+            files: [fileVersion],
+            nextFileName: null,
+            nextFileId: null,
+          }
+        },
+      }
+      return new B2Folder(mockBucket as unknown as Bucket)
+    }
+
+    await expect(collect<B2SyncPath>(makeFolder('../secret.txt').scan())).rejects.toThrow(
+      'Unsafe B2 file name',
+    )
+    await expect(collect<B2SyncPath>(makeFolder('safe/../secret.txt').scan())).rejects.toThrow(
+      'Unsafe B2 file name',
+    )
+    await expect(collect<B2SyncPath>(makeFolder('C:\\secret.txt').scan())).rejects.toThrow(
+      'Unsafe B2 file name',
+    )
   })
 
   it('pushes down safe include prefixes while filtering listed names', async () => {
