@@ -123,7 +123,7 @@ function assertSameIdentity(
 function rangeEndedEarlyError(path: FileSourcePath, offset: number, size: number): Error {
   const end = offset + size
   return new Error(
-    `FileSource: ${formatFilePath(path)} ended before byte range ${offset}-${end} was fully read.`,
+    `FileSource: ${formatFilePath(path)} ended before byte range [${offset}, ${end}) was fully read.`,
   )
 }
 
@@ -538,13 +538,16 @@ export function toContentSource(
   if (input instanceof Blob) {
     return new BlobSource(input)
   }
-  if (size === undefined) {
-    throw new Error('size is required when using a forward-only content source as input.')
-  }
   if (isReadableStream(input)) {
+    if (size === undefined) {
+      throw new Error('size is required when using a forward-only content source as input.')
+    }
     return new StreamSource(input, size)
   }
   if (isAsyncIterable(input)) {
+    if (size === undefined) {
+      throw new Error('size is required when using a forward-only content source as input.')
+    }
     return new AsyncIterableSource(input, size)
   }
   throw new TypeError('Unsupported content source input.')

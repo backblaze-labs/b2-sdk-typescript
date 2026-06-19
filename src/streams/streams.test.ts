@@ -447,6 +447,10 @@ describe('toContentSource', () => {
       'size is required when using a forward-only content source as input.',
     )
   })
+
+  it('throws unsupported input before requiring a size', () => {
+    expect(() => toContentSource({} as Uint8Array)).toThrow('Unsupported content source input.')
+  })
 })
 
 // ---------------------------------------------------------------------------
