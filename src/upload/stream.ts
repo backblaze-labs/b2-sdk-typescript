@@ -11,7 +11,7 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { toError } from '../util/to-error.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { fetchFreshPartUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
+import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
 export interface CreateWriteStreamOptions {
@@ -39,6 +39,8 @@ export interface CreateWriteStreamOptions {
   readonly signal?: AbortSignal
   /** Retry settings for upload-layer fresh-URL retries. */
   readonly retry?: Partial<RetryOptions>
+  /** Callback invoked before retrying with a fresh upload URL. */
+  readonly onUploadRetry?: UploadRetryListener
 }
 
 /**
@@ -138,28 +140,18 @@ export function createWriteStream(
     await sha1.update(data)
     const sha1Hex = await sha1.digest()
 
-    const result = await withFreshUploadUrlRetry({
+    const result = await uploadPartWithFreshUrl(raw, accountInfo, fileId, {
+      fileName: options.fileName,
+      partNumber,
+      data: data as BodyInit,
+      contentLength: data.byteLength,
+      contentSha1: sha1Hex,
       retry: options.retry,
       signal: options.signal,
-      checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
-      fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId),
-      returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
-      evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
-      upload: (entry) =>
-        raw.uploadPart(
-          entry.uploadUrl,
-          {
-            authorization: entry.authorizationToken,
-            partNumber,
-            contentLength: data.byteLength,
-            contentSha1: sha1Hex,
-            ...(options.serverSideEncryption !== undefined
-              ? { serverSideEncryption: options.serverSideEncryption }
-              : {}),
-          },
-          data as BodyInit,
-          options.signal,
-        ),
+      onUploadRetry: options.onUploadRetry,
+      ...(options.serverSideEncryption !== undefined
+        ? { serverSideEncryption: options.serverSideEncryption }
+        : {}),
     })
     partSha1s[partNumber - 1] = result.contentSha1
     tracker.addBytes(data.byteLength)

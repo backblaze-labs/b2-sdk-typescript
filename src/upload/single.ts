@@ -9,7 +9,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
-import { fetchFreshUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
+import { fetchFreshUploadUrl, type UploadRetryListener, withFreshUploadUrlRetry } from './retry.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {
@@ -37,6 +37,8 @@ export interface UploadFileOptions {
   readonly signal?: AbortSignal
   /** Retry settings for upload-layer fresh-URL retries. */
   readonly retry?: Partial<RetryOptions>
+  /** Callback invoked before retrying with a fresh upload URL. */
+  readonly onUploadRetry?: UploadRetryListener
 }
 
 /**
@@ -74,10 +76,13 @@ export async function uploadSmallFile(
   const tracker = new ProgressTracker(options.onProgress, data.byteLength, 1)
 
   const result = await withFreshUploadUrlRetry({
+    fileName: options.fileName,
+    partNumber: null,
     retry: options.retry,
     signal: options.signal,
+    onUploadRetry: options.onUploadRetry,
     checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
-    fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId),
+    fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
     returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
     evictEntry: (entry) => accountInfo.evictUploadUrl(options.bucketId, entry),
     upload: (entry) =>

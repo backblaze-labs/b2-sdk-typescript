@@ -2,7 +2,28 @@ import type { AccountInfo, UploadUrlEntry } from '../auth/account-info.ts'
 import { B2Error, NetworkError } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
+import type { EncryptionSetting } from '../types/encryption.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
+import type { UploadPartResponse } from '../types/upload.ts'
+
+/** Event emitted before an upload is retried against a fresh upload URL. */
+export interface UploadRetryEvent {
+  /** File name being uploaded. */
+  readonly fileName: string
+  /** Multipart part number, or `null` for a single-request file upload. */
+  readonly partNumber: number | null
+  /** One-based retry attempt that is about to run. */
+  readonly attempt: number
+  /** Maximum number of retry attempts allowed for this upload operation. */
+  readonly maxRetries: number
+  /** Backoff delay in milliseconds before the fresh URL is fetched. */
+  readonly delayMs: number
+  /** Classified error that triggered the fresh-URL retry. */
+  readonly error: B2Error | NetworkError
+}
+
+/** Callback invoked before an upload retry fetches a fresh upload URL. */
+export type UploadRetryListener = (event: UploadRetryEvent) => void
 
 /** Internal options for upload-layer fresh-URL retries. */
 export interface UploadLayerRetryOptions {
@@ -10,9 +31,13 @@ export interface UploadLayerRetryOptions {
   readonly retry?: Partial<RetryOptions> | undefined
   /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
   readonly signal?: AbortSignal | undefined
+  /** Callback invoked before a fresh-URL upload retry. */
+  readonly onUploadRetry?: UploadRetryListener | undefined
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
+  readonly fileName: string
+  readonly partNumber: number | null
   readonly checkout: () => UploadUrlEntry | null
   readonly fetchFresh: () => Promise<UploadUrlEntry>
   readonly returnEntry: (entry: UploadUrlEntry) => void
@@ -26,6 +51,7 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param bucketId - Bucket to upload into.
+ * @param signal - Optional abort signal for the fresh URL request.
  *
  * @returns A fresh upload URL entry.
  */
@@ -33,10 +59,16 @@ export async function fetchFreshUploadUrl(
   raw: RawClient,
   accountInfo: AccountInfo,
   bucketId: BucketId,
+  signal?: AbortSignal,
 ): Promise<UploadUrlEntry> {
-  const resp = await raw.getUploadUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-    bucketId,
-  })
+  const resp = await raw.getUploadUrl(
+    accountInfo.getApiUrl(),
+    accountInfo.getAuthToken(),
+    {
+      bucketId,
+    },
+    signal,
+  )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
 
@@ -46,6 +78,7 @@ export async function fetchFreshUploadUrl(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param fileId - Large file to upload a part into.
+ * @param signal - Optional abort signal for the fresh URL request.
  *
  * @returns A fresh part upload URL entry.
  */
@@ -53,11 +86,76 @@ export async function fetchFreshPartUploadUrl(
   raw: RawClient,
   accountInfo: AccountInfo,
   fileId: LargeFileId,
+  signal?: AbortSignal,
 ): Promise<UploadUrlEntry> {
-  const resp = await raw.getUploadPartUrl(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-    fileId,
-  })
+  const resp = await raw.getUploadPartUrl(
+    accountInfo.getApiUrl(),
+    accountInfo.getAuthToken(),
+    {
+      fileId,
+    },
+    signal,
+  )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
+}
+
+interface UploadPartWithFreshUrlOptions extends UploadLayerRetryOptions {
+  /** File name associated with the large-file upload. */
+  readonly fileName: string
+  /** One-based part number. */
+  readonly partNumber: number
+  /** Part bytes to upload. */
+  readonly data: BodyInit
+  /** Number of bytes in the part. */
+  readonly contentLength: number
+  /** SHA-1 hex digest of the part bytes. */
+  readonly contentSha1: string
+  /** Server-side encryption settings for this part. */
+  readonly serverSideEncryption?: EncryptionSetting | undefined
+}
+
+/**
+ * Uploads one multipart part with fresh-URL retry.
+ *
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param fileId - Large file to upload a part into.
+ * @param options - Part upload parameters and retry settings.
+ *
+ * @returns The uploaded part response.
+ */
+export function uploadPartWithFreshUrl(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  fileId: LargeFileId,
+  options: UploadPartWithFreshUrlOptions,
+): Promise<UploadPartResponse> {
+  return withFreshUploadUrlRetry({
+    fileName: options.fileName,
+    partNumber: options.partNumber,
+    retry: options.retry,
+    signal: options.signal,
+    onUploadRetry: options.onUploadRetry,
+    checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
+    fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
+    returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
+    evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
+    upload: (entry) =>
+      raw.uploadPart(
+        entry.uploadUrl,
+        {
+          authorization: entry.authorizationToken,
+          partNumber: options.partNumber,
+          contentLength: options.contentLength,
+          contentSha1: options.contentSha1,
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+        },
+        options.data,
+        options.signal,
+      ),
+  })
 }
 
 /**
@@ -74,16 +172,8 @@ export async function fetchFreshPartUploadUrl(
  */
 export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T>): Promise<T> {
   const retryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
-  let lastRetryableError: B2Error | NetworkError | undefined
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
-    if (attempt > 0 && lastRetryableError !== undefined) {
-      const retryAfter =
-        lastRetryableError instanceof B2Error ? lastRetryableError.retryAfter : undefined
-      const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
-      await sleep(delay, options.signal)
-    }
-
     options.signal?.throwIfAborted()
     const uploadEntry =
       attempt === 0
@@ -96,17 +186,44 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       return result
     } catch (err) {
       options.evictEntry(uploadEntry)
-      if (!isUploadRetryable(err) || attempt === retryOptions.maxRetries) {
+      if (options.signal?.aborted) {
         throw err
       }
-      lastRetryableError = err
+
+      const retryError = normalizeUploadRetryError(err)
+      if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
+        throw retryError
+      }
+
+      const retryAttempt = attempt + 1
+      const retryAfter = retryError instanceof B2Error ? retryError.retryAfter : undefined
+      const delayMs = computeBackoff(attempt, retryOptions, retryAfter)
+      options.onUploadRetry?.({
+        fileName: options.fileName,
+        partNumber: options.partNumber,
+        attempt: retryAttempt,
+        maxRetries: retryOptions.maxRetries,
+        delayMs,
+        error: retryError,
+      })
+      await sleep(delayMs, options.signal)
     }
   }
 
-  throw lastRetryableError ?? new NetworkError('Upload retry budget exhausted')
+  throw new NetworkError('Upload retry budget exhausted')
 }
 
 function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
   if (err instanceof NetworkError) return true
   return err instanceof B2Error && err.retryable
+}
+
+function normalizeUploadRetryError(err: unknown): unknown {
+  if (err instanceof B2Error || err instanceof NetworkError) return err
+  if (err instanceof DOMException && err.name === 'AbortError') return err
+  if (err instanceof TypeError || err instanceof DOMException) {
+    const message = err instanceof Error ? err.message : 'Upload response read failed'
+    return new NetworkError(message, err)
+  }
+  return err
 }

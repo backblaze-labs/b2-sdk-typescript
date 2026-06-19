@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
+import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
@@ -21,6 +22,20 @@ describe('B2Client with simulator', () => {
     expect(client.accountInfo.getAccountId()).toBe('sim_account_0001')
     expect(client.accountInfo.getRecommendedPartSize()).toBe(100_000_000)
     expect(client.accountInfo.getAbsoluteMinimumPartSize()).toBe(5_000_000)
+  })
+
+  it('exposes resolved upload retry options', () => {
+    const retryClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: new B2Simulator().transport(),
+      retry: { maxRetries: 2 },
+    })
+
+    expect(retryClient.uploadRetryOptions).toEqual({
+      ...DEFAULT_RETRY_OPTIONS,
+      maxRetries: 2,
+    })
   })
 
   it('creates and lists buckets', async () => {

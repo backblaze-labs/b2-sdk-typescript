@@ -14,7 +14,7 @@ import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { collectPartSha1s, findResumeCandidate } from './resume.ts'
-import { fetchFreshPartUploadUrl, withFreshUploadUrlRetry } from './retry.ts'
+import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -52,6 +52,8 @@ export interface UploadLargeFileOptions {
   readonly signal?: AbortSignal
   /** Retry settings for upload-layer fresh-URL retries. */
   readonly retry?: Partial<RetryOptions>
+  /** Callback invoked before retrying with a fresh upload URL. */
+  readonly onUploadRetry?: UploadRetryListener
   /**
    * If true, look for an unfinished large file with the same bucket and file name
    * and skip parts whose locally-recomputed SHA-1 matches the server's.
@@ -206,28 +208,18 @@ export async function uploadLargeFile(
           return
         }
 
-        const result = await withFreshUploadUrlRetry({
+        const result = await uploadPartWithFreshUrl(raw, accountInfo, largeFileId, {
+          fileName: options.fileName,
+          partNumber: part.partNumber,
+          data,
+          contentLength: data.byteLength,
+          contentSha1: sha1Hex,
           retry: options.retry,
           signal: options.signal,
-          checkout: () => accountInfo.checkoutPartUploadUrl(largeFileId),
-          fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, largeFileId),
-          returnEntry: (entry) => accountInfo.returnPartUploadUrl(largeFileId, entry),
-          evictEntry: (entry) => accountInfo.evictPartUploadUrl(largeFileId, entry),
-          upload: (entry) =>
-            raw.uploadPart(
-              entry.uploadUrl,
-              {
-                authorization: entry.authorizationToken,
-                partNumber: part.partNumber,
-                contentLength: data.byteLength,
-                contentSha1: sha1Hex,
-                ...(options.serverSideEncryption !== undefined
-                  ? { serverSideEncryption: options.serverSideEncryption }
-                  : {}),
-              },
-              data,
-              options.signal,
-            ),
+          onUploadRetry: options.onUploadRetry,
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
         })
 
         partSha1s[part.partNumber - 1] = result.contentSha1
@@ -333,28 +325,18 @@ async function uploadPartsSequentially(
       await partSha1.update(data)
       const sha1Hex = await partSha1.digest()
 
-      const result = await withFreshUploadUrlRetry({
+      const result = await uploadPartWithFreshUrl(raw, accountInfo, largeFileId, {
+        fileName: options.fileName,
+        partNumber: planned.partNumber,
+        data,
+        contentLength: data.byteLength,
+        contentSha1: sha1Hex,
         retry: options.retry,
         signal: options.signal,
-        checkout: () => accountInfo.checkoutPartUploadUrl(largeFileId),
-        fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, largeFileId),
-        returnEntry: (entry) => accountInfo.returnPartUploadUrl(largeFileId, entry),
-        evictEntry: (entry) => accountInfo.evictPartUploadUrl(largeFileId, entry),
-        upload: (entry) =>
-          raw.uploadPart(
-            entry.uploadUrl,
-            {
-              authorization: entry.authorizationToken,
-              partNumber: planned.partNumber,
-              contentLength: data.byteLength,
-              contentSha1: sha1Hex,
-              ...(options.serverSideEncryption !== undefined
-                ? { serverSideEncryption: options.serverSideEncryption }
-                : {}),
-            },
-            data,
-            options.signal,
-          ),
+        onUploadRetry: options.onUploadRetry,
+        ...(options.serverSideEncryption !== undefined
+          ? { serverSideEncryption: options.serverSideEncryption }
+          : {}),
       })
 
       partSha1s[planned.partNumber - 1] = result.contentSha1

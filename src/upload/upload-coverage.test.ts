@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
@@ -14,6 +15,7 @@ import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
+import type { UploadRetryEvent } from './retry.ts'
 
 /**
  * Branch-coverage tests for `uploadLargeFile` and `uploadSmallFile`. These
@@ -45,13 +47,26 @@ interface FreshUrlRetryHarness {
   getUploadPartUrlCalls: number
   uploadFileAttempts: number
   uploadPartAttempts: number
+  authorizeCalls: number
 }
 
 type UploadUrlBody = { uploadUrl: string; authorizationToken: string } & Record<string, unknown>
+interface UploadFailureSpec {
+  readonly status: number
+  readonly code: string
+  readonly message: string
+  readonly count: number
+}
 
 function freshUrlRetryHarness(
   inner: HttpTransport,
   failFirst: 'file' | 'part',
+  failure: UploadFailureSpec = {
+    status: 500,
+    code: 'internal_error',
+    message: 'first upload URL failed',
+    count: 1,
+  },
 ): FreshUrlRetryHarness {
   const stats: FreshUrlRetryHarness = {
     uploadFileUrls: [],
@@ -60,8 +75,13 @@ function freshUrlRetryHarness(
     getUploadPartUrlCalls: 0,
     uploadFileAttempts: 0,
     uploadPartAttempts: 0,
+    authorizeCalls: 0,
     transport: {
       async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_authorize_account')) {
+          stats.authorizeCalls += 1
+        }
+
         if (req.url.includes('b2_get_upload_url')) {
           const response = await inner.send(req)
           const body = await response.json<UploadUrlBody>()
@@ -85,16 +105,16 @@ function freshUrlRetryHarness(
         if (req.url.includes('b2_upload_file?')) {
           stats.uploadFileAttempts += 1
           stats.uploadFileUrls.push(req.url)
-          if (failFirst === 'file' && stats.uploadFileAttempts === 1) {
-            return jsonErrorResponse(500, 'internal_error', 'first upload URL failed')
+          if (failFirst === 'file' && stats.uploadFileAttempts <= failure.count) {
+            return jsonErrorResponse(failure.status, failure.code, failure.message)
           }
         }
 
         if (req.url.includes('b2_upload_part?')) {
           stats.uploadPartAttempts += 1
           stats.uploadPartUrls.push(req.url)
-          if (failFirst === 'part' && stats.uploadPartAttempts === 1) {
-            return jsonErrorResponse(500, 'internal_error', 'first part upload URL failed')
+          if (failFirst === 'part' && stats.uploadPartAttempts <= failure.count) {
+            return jsonErrorResponse(failure.status, failure.code, failure.message)
           }
         }
 
@@ -105,12 +125,17 @@ function freshUrlRetryHarness(
   return stats
 }
 
+async function countFileVersions(bucket: Bucket, fileName: string): Promise<number> {
+  const versions = await bucket.listFileVersions({ prefix: fileName })
+  return versions.files.filter((file) => file.fileName === fileName).length
+}
+
 describe('uploadLargeFile cleanup paths', () => {
   it('evicts the part upload URL and rethrows when b2_upload_part fails', async () => {
     // Wrap the simulator so the second `b2_upload_part` call returns 400.
     // Fail every part-upload (not the URL fetch). With concurrency=1 the
     // first part is dispatched and fails, the engine then enters the
-    // evict-then-rethrow catch (upload/large.ts:201-204).
+    // evict-then-rethrow path.
     const sim = new B2Simulator({ minimumPartSize: 100_000 })
     sim.injectFailure({
       on: 'b2_upload_part?fileId=',
@@ -156,8 +181,7 @@ describe('uploadLargeFile cleanup paths', () => {
 
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
     // Force EVERY `b2_upload_part` to fail AND `b2_cancel_large_file` to
-    // fail, so the outer cleanup's inner try/catch hits line 223-225 (the
-    // best-effort swallow). The original upload_part error must still be
+    // fail, so the outer cleanup's best-effort swallow runs. The original upload_part error must still be
     // the one that propagates to the caller.
     const sim = new B2Simulator({ minimumPartSize: 100_000 })
     // Match the part-upload URL (`b2_upload_part?fileId=`) — using bare
@@ -328,6 +352,414 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadPartAttempts).toBe(3)
     expect(harness.uploadPartUrls[0]).not.toBe(harness.uploadPartUrls[1])
   })
+
+  it('bounds duplicate small-file versions when success is stored but 5xx is returned', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const maxRetries = 2
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&stored=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          await inner.send(req)
+          return jsonErrorResponse(500, 'internal_error', 'stored but response failed')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stored-then-500',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const retryEvents: UploadRetryEvent[] = []
+    await expect(
+      bucket.upload({
+        fileName: 'duplicate.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        onUploadRetry: (event) => retryEvents.push(event),
+      }),
+    ).rejects.toThrow(/stored but response failed/)
+
+    expect(uploadAttempts).toBe(maxRetries + 1)
+    expect(getUploadUrlCalls).toBe(maxRetries + 1)
+    expect(retryEvents.map((event) => event.attempt)).toEqual([1, 2])
+    expect(await countFileVersions(bucket, 'duplicate.txt')).toBe(maxRetries + 1)
+  })
+
+  it('stops sending payloads immediately when aborted from the upload retry callback', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    const controller = new AbortController()
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          await inner.send(req)
+          return jsonErrorResponse(500, 'internal_error', 'stored but response failed')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 5, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'abort-payload-retry',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'abort-duplicate.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        signal: controller.signal,
+        onUploadRetry: () => controller.abort(),
+      }),
+    ).rejects.toThrow()
+
+    expect(uploadAttempts).toBe(1)
+    expect(await countFileVersions(bucket, 'abort-duplicate.txt')).toBe(1)
+  })
+
+  it('retries a lost 2xx upload response body read with a fresh URL', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    let getUploadUrlCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({ ...body, uploadUrl: `${body.uploadUrl}&body=${getUploadUrlCalls}` })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          const response = await inner.send(req)
+          if (uploadAttempts === 1) {
+            return {
+              ...response,
+              json: () => Promise.reject(new TypeError('response body lost')),
+            }
+          }
+          return response
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'lost-body',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'lost-body.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('lost-body.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'lost-body.txt')).toBe(2)
+  })
+
+  it('passes the abort signal to fresh upload URL fetches', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const controller = new AbortController()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    let sawFreshFetchSignal = false
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          if (getUploadUrlCalls === 2) {
+            sawFreshFetchSignal = req.signal === controller.signal
+            controller.abort()
+            throw new DOMException('Aborted', 'AbortError')
+          }
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          return jsonErrorResponse(500, 'internal_error', 'first upload failed')
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 5, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'abort-url-fetch',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'abort-fetch.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow()
+
+    expect(sawFreshFetchSignal).toBe(true)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(uploadAttempts).toBe(1)
+  })
+
+  it('retries 429 upload failures and emits increasing retry backoff events', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file', {
+      status: 429,
+      code: 'too_many_requests',
+      message: 'slow down',
+      count: 2,
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 2, initialRetryDelayMs: 1, maxRetryDelayMs: 10 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'retry-429',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const retryEvents: UploadRetryEvent[] = []
+    const result = await bucket.upload({
+      fileName: 'retry-429.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
+
+    expect(result.fileName).toBe('retry-429.txt')
+    expect(harness.uploadFileAttempts).toBe(3)
+    expect(retryEvents.map((event) => event.attempt)).toEqual([1, 2])
+    expect(retryEvents[0]?.delayMs).toBeGreaterThanOrEqual(1)
+    expect(retryEvents[1]?.delayMs).toBeGreaterThanOrEqual(2)
+    expect(retryEvents[1]?.delayMs).toBeGreaterThan(retryEvents[0]?.delayMs ?? 0)
+  })
+
+  it('retries upload network failures with a fresh URL', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&network=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          if (uploadAttempts === 1) {
+            throw new TypeError('socket closed')
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'retry-network',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'retry-network.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('retry-network.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+  })
+
+  it('recovers expired upload tokens through fresh URL retry without reauth', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file', {
+      status: 401,
+      code: 'expired_auth_token',
+      message: 'expired upload token',
+      count: 1,
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'expired-upload-token',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'expired-token.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('expired-token.txt')
+    expect(harness.authorizeCalls).toBe(1)
+    expect(harness.getUploadUrlCalls).toBe(2)
+    expect(harness.uploadFileAttempts).toBe(2)
+  })
+})
+
+describe('upload scoped handles ignore runtime scope overrides', () => {
+  it('keeps Bucket.upload small-file uploads in the bound bucket', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bound = await client.createBucket({
+      bucketName: 'bound-small',
+      bucketType: BucketType.AllPrivate,
+    })
+    const other = await client.createBucket({
+      bucketName: 'other-small',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const hostileOptions = {
+      bucketId: other.id,
+      fileName: 'scoped-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    } as unknown as Parameters<typeof bound.upload>[0]
+    await bound.upload(hostileOptions)
+
+    expect(await bound.getFileInfoByName('scoped-small.txt')).not.toBeNull()
+    expect(await other.getFileInfoByName('scoped-small.txt')).toBeNull()
+  })
+
+  it('keeps Bucket.upload multipart uploads in the bound bucket', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bound = await client.createBucket({
+      bucketName: 'bound-large',
+      bucketType: BucketType.AllPrivate,
+    })
+    const other = await client.createBucket({
+      bucketName: 'other-large',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const hostileOptions = {
+      bucketId: other.id,
+      fileName: 'scoped-large.bin',
+      source: new BufferSource(deterministicBytes(partSize * 2)),
+      partSize,
+      concurrency: 1,
+    } as unknown as Parameters<typeof bound.upload>[0]
+    await bound.upload(hostileOptions)
+
+    expect(await bound.getFileInfoByName('scoped-large.bin')).not.toBeNull()
+    expect(await other.getFileInfoByName('scoped-large.bin')).toBeNull()
+  })
+
+  it('keeps B2Object.upload small-file uploads on the bound bucket and name', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bound = await client.createBucket({
+      bucketName: 'object-bound-small',
+      bucketType: BucketType.AllPrivate,
+    })
+    const other = await client.createBucket({
+      bucketName: 'object-other-small',
+      bucketType: BucketType.AllPrivate,
+    })
+    const object = bound.file('allowed-small.txt')
+
+    const hostileOptions = {
+      bucketId: other.id,
+      fileName: 'escaped-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    } as unknown as Parameters<typeof object.upload>[0]
+    await object.upload(hostileOptions)
+
+    expect(await bound.getFileInfoByName('allowed-small.txt')).not.toBeNull()
+    expect(await bound.getFileInfoByName('escaped-small.txt')).toBeNull()
+    expect(await other.getFileInfoByName('escaped-small.txt')).toBeNull()
+  })
+
+  it('keeps B2Object.upload multipart uploads on the bound bucket and name', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bound = await client.createBucket({
+      bucketName: 'object-bound-large',
+      bucketType: BucketType.AllPrivate,
+    })
+    const other = await client.createBucket({
+      bucketName: 'object-other-large',
+      bucketType: BucketType.AllPrivate,
+    })
+    const object = bound.file('allowed-large.bin')
+
+    const partSize = 100_000
+    const hostileOptions = {
+      bucketId: other.id,
+      fileName: 'escaped-large.bin',
+      source: new BufferSource(deterministicBytes(partSize * 2)),
+      partSize,
+      concurrency: 1,
+    } as unknown as Parameters<typeof object.upload>[0]
+    await object.upload(hostileOptions)
+
+    expect(await bound.getFileInfoByName('allowed-large.bin')).not.toBeNull()
+    expect(await bound.getFileInfoByName('escaped-large.bin')).toBeNull()
+    expect(await other.getFileInfoByName('escaped-large.bin')).toBeNull()
+  })
 })
 
 describe('uploadLargeFile resume=true with no candidate', () => {
@@ -345,10 +777,9 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     bucketId = b.id
   })
 
-  it('forwards serverSideEncryption when no resume candidate exists (line 115-117)', async () => {
+  it('forwards serverSideEncryption when no resume candidate exists', async () => {
     // resume=true with no unfinished candidate falls through to the
-    // start_large_file branch at lines 107-121. With SSE-B2 supplied we
-    // hit the conditional spread at 115-117.
+    // start_large_file branch. With SSE-B2 supplied we hit the conditional spread.
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -364,7 +795,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     expect(result.contentLength).toBe(data.byteLength)
   })
 
-  it('forwards fileRetention when no resume candidate exists (line 118)', async () => {
+  it('forwards fileRetention when no resume candidate exists', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -382,7 +813,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     expect(result.fileName).toBe('resume-retention.bin')
   })
 
-  it('forwards legalHold when no resume candidate exists (line 119)', async () => {
+  it('forwards legalHold when no resume candidate exists', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -400,8 +831,8 @@ describe('uploadLargeFile resume=true with no candidate', () => {
 
 describe('uploadSmallFile cleanup path', () => {
   it('evicts the upload URL and rethrows when b2_upload_file fails', async () => {
-    // Force b2_upload_file to return 400. uploadSmallFile's catch at lines
-    // 97-100 must call evictUploadUrl and rethrow.
+    // Force b2_upload_file to return 400. uploadSmallFile must call
+    // evictUploadUrl and rethrow.
     const sim = new B2Simulator()
     // The small-file upload URL is `b2_upload_file?bucketId=...`. Matching
     // on `b2_upload_file?` is sufficient to distinguish from

@@ -113,7 +113,7 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version; use returned file IDs or version listing when your workflow needs to reconcile that case.
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version. Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs are bounded by `retry.maxRetries + 1`; each retry fetches one fresh upload URL, and that control-plane request has its own bounded `RetryTransport` budget. Upload retry uses the same `retry` budget and `AbortSignal` as other SDK retry paths; use `AbortSignal.timeout(...)` when an operation-level deadline matters.
 
 #### Resume a failed multipart upload
 

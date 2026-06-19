@@ -80,6 +80,8 @@ export class B2Client {
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
   readonly accountInfo: AccountInfo
+  /** Resolved retry settings used by upload-layer fresh-URL retry. */
+  readonly uploadRetryOptions: RetryOptions
   /**
    * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
    * a custom transport was supplied — in that case the SDK does not own the
@@ -90,7 +92,6 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
-  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -125,18 +126,6 @@ export class B2Client {
 
     this.raw = new RawClient({ transport: retryTransport })
   }
-
-  /**
-   * Returns the retry settings used by upload-layer fresh-URL retry.
-   *
-   * @returns The resolved retry settings for upload requests.
-   *
-   * @internal
-   */
-  getUploadRetryOptions(): RetryOptions {
-    return this.uploadRetryOptions
-  }
-
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
    *

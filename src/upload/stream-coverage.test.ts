@@ -11,16 +11,16 @@ import { BucketType } from '../types/bucket.ts'
  * happy-path multipart tests live in `stream.slow.test.ts`; this file
  * targets the remaining branches that aren't on a typical success path:
  *
- *   - `partSize ?? recommendedPartSize` default (line 73): exercised by
+ *   - `partSize ?? recommendedPartSize` default: exercised by
  *     omitting `partSize` so the engine falls back to the account's
  *     advertised recommended size. Uses a small simulator recommendation
  *     so the test still finishes near-instantly.
  *   - `errored = err instanceof Error ? err : new Error(String(err))`
- *     (lines 177 and 205): exercised by injecting a non-`Error` throw
+ *     path: exercised by injecting a non-`Error` throw
  *     from `b2_upload_part`.
- *   - `write()`'s "if (errored) throw errored" guard (line 190): exercised
+ *   - `write()`'s "if (errored) throw errored" guard: exercised
  *     by writing another chunk after the first part has already errored.
- *   - `abort()`'s "reason instanceof Error" branch (line 269): exercised
+ *   - `abort()`'s "reason instanceof Error" branch: exercised
  *     by aborting the writer with a non-Error reason (a plain string).
  *
  * Uses a `minimumPartSize: 100_000` + `recommendedPartSize: 200_000`
@@ -40,7 +40,7 @@ describe('createWriteStream branch coverage', () => {
     })
   })
 
-  it('falls back to recommendedPartSize when partSize is omitted (line 73)', async () => {
+  it('falls back to recommendedPartSize when partSize is omitted', async () => {
     // No `partSize` in the call: the engine picks the simulator's advertised
     // recommendedPartSize (200_000 here) and runs the upload through that.
     const data = deterministicBytes(400_000) // 2 parts at 200_000 each
@@ -57,7 +57,7 @@ describe('createWriteStream branch coverage', () => {
     expect(result.contentLength).toBe(data.byteLength)
   })
 
-  it('wraps a non-Error throw from uploadPart so done rejects with an Error (lines 177 / 205)', async () => {
+  it('wraps a non-Error throw from uploadPart so done rejects with an Error', async () => {
     // Custom transport rejects b2_upload_part with a plain string (not an
     // Error instance). The engine's `errored` latch must wrap it via
     // `new Error(String(err))` rather than passing it through unchanged,
@@ -115,7 +115,7 @@ describe('createWriteStream branch coverage', () => {
     expect(rejection).toBeInstanceOf(Error)
   })
 
-  // Note: line 190 (`if (errored) throw errored` inside write()) is reachable
+  // Note: `if (errored) throw errored` inside write() is reachable
   // in theory but hard to exercise reliably from a test. The WritableStream
   // pipeTo machinery either: (a) aborts after the first sink.write() resolves
   // and the abort hook tears down before the next write, or (b) races the
@@ -123,7 +123,7 @@ describe('createWriteStream branch coverage', () => {
   // the second sink.write() runs. Leaving this branch uncovered rather than
   // shipping a flaky test that depends on event-loop micro-timings.
 
-  it('abort() wraps a non-Error reason in an Error (line 269)', async () => {
+  it('abort() wraps a non-Error reason in an Error', async () => {
     // The abort() hook is invoked with `reason` of arbitrary type. When the
     // caller passes a string, the engine must wrap it as `new Error(String(reason))`
     // before calling `rejectDone` so the `done` promise rejects with an
