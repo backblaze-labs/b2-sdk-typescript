@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
+import { ChecksumMismatchError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
@@ -166,7 +167,121 @@ describe('synchronize download safety', () => {
       const events = await collectEvents(config)
       expect(events.some((event) => event.type === 'error')).toBe(true)
       expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
-      expect((await readdir(destRoot)).filter((name) => name.includes('.partial-'))).toEqual([])
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the existing destination when an abort interrupts the stream', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-abort-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const destPath = join(destRoot, 'keep.txt')
+      await writeFile(destPath, 'valid')
+      const controller = new AbortController()
+
+      const bucket = {
+        download: vi.fn().mockImplementation(() => {
+          setTimeout(() => controller.abort(), 0)
+          return Promise.resolve({
+            body: new ReadableStream<Uint8Array>({
+              pull() {
+                return new Promise<void>(() => {})
+              },
+            }),
+          })
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', 8)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete', signal: controller.signal },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the existing destination when checksum verification rejects at end', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-checksum-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const destPath = join(destRoot, 'keep.txt')
+      await writeFile(destPath, 'valid')
+
+      const bucket = {
+        download: vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('attacker'))
+              controller.error(
+                new ChecksumMismatchError({
+                  status: 400,
+                  code: 'bad_sha1_checksum',
+                  message: 'Downloaded content SHA-1 mismatch',
+                }),
+              )
+            },
+          }),
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', 8)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects short completed downloads before replacing the destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-short-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const destPath = join(destRoot, 'keep.txt')
+      await writeFile(destPath, 'valid')
+
+      const bucket = {
+        download: vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('short'))
+              controller.close()
+            },
+          }),
+        }),
+      } as unknown as Bucket
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', 99)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -236,7 +351,7 @@ describe('synchronize download safety', () => {
       expect(new TextDecoder().decode(await readFile(join(destRoot, 'sub')))).toBe(
         'not a directory',
       )
-      expect((await readdir(destRoot)).filter((name) => name.includes('.partial-'))).toEqual([])
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -248,7 +363,13 @@ describe('synchronize download safety', () => {
       const destRoot = join(root, 'dest')
       await mkdir(destRoot)
 
-      for (const relPath of ['../escape-posix.txt', '..\\escape-win.txt']) {
+      const absoluteEscapePath = join(root, 'escape-absolute.txt')
+      for (const relPath of [
+        '../escape-posix.txt',
+        '..\\escape-win.txt',
+        absoluteEscapePath,
+        'C:\\escape-drive.txt',
+      ]) {
         const bucket = {
           download: vi.fn().mockResolvedValue({
             body: new ReadableStream<Uint8Array>({
@@ -275,6 +396,8 @@ describe('synchronize download safety', () => {
       expect(await readdir(destRoot)).toEqual([])
       await expect(readFile(join(root, 'escape-posix.txt'))).rejects.toThrow()
       await expect(readFile(join(root, 'escape-win.txt'))).rejects.toThrow()
+      await expect(readFile(absoluteEscapePath)).rejects.toThrow()
+      await expect(readFile(join(root, 'escape-drive.txt'))).rejects.toThrow()
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -310,7 +433,7 @@ describe('synchronize download safety', () => {
       const events = await collectEvents(config)
       expect(events.some((event) => event.type === 'error')).toBe(true)
       expect(await readdir(outsideRoot)).toEqual([])
-      expect((await readdir(destRoot)).filter((name) => name.includes('.partial-'))).toEqual([])
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
       await expect(readFile(join(outsideRoot, 'escape.txt'))).rejects.toThrow()
     } finally {
       await rm(root, { recursive: true, force: true })

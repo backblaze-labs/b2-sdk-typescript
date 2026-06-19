@@ -127,6 +127,13 @@ Single-request uploads do not retry lost success response bodies or upload POST 
 
 Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
 
+`FileSource` is the Node.js-only content adapter. It is safe to import from the
+main package in browser builds, but `FileSource.fromPath()` and its read methods
+need local filesystem APIs at runtime. The source records the validated file
+identity and fails with `FileSource file changed after validation` if the path is
+replaced, truncated, or modified while a multipart upload is reading it; retry
+after active writers stop changing the file.
+
 #### Resume a failed multipart upload
 
 Resume has two paths. `resumeFileId` targets a known unfinished large-file ID returned by B2 when the multipart upload was started. `resume: true` without `resumeFileId` runs bounded same-name discovery and may continue uploading into the newest compatible unfinished upload; incompatible candidates are skipped and a fresh upload starts. Automatic discovery reuploads every planned part into the selected unfinished file instead of trusting pre-existing server parts by SHA-1 alone. With explicit `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.

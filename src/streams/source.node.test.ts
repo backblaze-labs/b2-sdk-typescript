@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rename, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -32,7 +32,7 @@ describe('FileSource', () => {
       const filePath = join(root, 'data.txt')
       await writeFile(filePath, 'abcd')
 
-      const source = new FileSource(filePath, 4)
+      const source = await FileSource.fromPath(filePath)
 
       await expect(new Response(source.slice(Number.NaN, 2).stream()).text()).resolves.toBe('ab')
       await expect(
@@ -46,34 +46,6 @@ describe('FileSource', () => {
     }
   })
 
-  it('rejects invalid file source ranges', () => {
-    expect(() => new FileSource('data.bin', -1)).toThrow(
-      'FileSource size must be a non-negative safe integer.',
-    )
-    expect(() => new FileSource('data.bin', Number.POSITIVE_INFINITY)).toThrow(
-      'FileSource size must be a non-negative safe integer.',
-    )
-    expect(() => new FileSource('data.bin', 1, -1)).toThrow(
-      'FileSource offset must be a non-negative safe integer.',
-    )
-  })
-
-  it('rejects direct ranges beyond the current file size', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-range-'))
-    try {
-      const filePath = join(root, 'data.bin')
-      await writeFile(filePath, new Uint8Array([1, 2]))
-
-      const source = new FileSource(filePath, 4)
-
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file is smaller than the requested range: ${filePath}`,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
   it('rejects when the validated file is truncated before reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-truncate-'))
     try {
@@ -82,6 +54,42 @@ describe('FileSource', () => {
 
       const source = await FileSource.fromPath(filePath)
       await truncate(filePath, 2)
+
+      await expect(source.toArrayBuffer()).rejects.toThrow(
+        `FileSource file changed after validation: ${filePath}`,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when the validated file content changes before reading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-mutated-'))
+    try {
+      const filePath = join(root, 'data.bin')
+      await writeFile(filePath, new TextEncoder().encode('safe'))
+
+      const source = await FileSource.fromPath(filePath)
+      await writeFile(filePath, new TextEncoder().encode('evil'))
+
+      await expect(source.toArrayBuffer()).rejects.toThrow(
+        `FileSource file changed after validation: ${filePath}`,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when the validated file is replaced before reading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-replaced-'))
+    try {
+      const filePath = join(root, 'data.bin')
+      const replacementPath = join(root, 'replacement.bin')
+      await writeFile(filePath, new TextEncoder().encode('safe'))
+      await writeFile(replacementPath, new TextEncoder().encode('evil'))
+
+      const source = await FileSource.fromPath(filePath)
+      await rename(replacementPath, filePath)
 
       await expect(source.toArrayBuffer()).rejects.toThrow(
         `FileSource file changed after validation: ${filePath}`,

@@ -13,8 +13,6 @@ interface FileIdentity {
   readonly ctimeMs: number
 }
 
-const fileSourceIdentities = new WeakMap<FileSource, FileIdentity>()
-
 interface FileStatsLike {
   readonly dev: number
   readonly ino: number
@@ -181,19 +179,22 @@ export class FileSource implements ContentSource {
   /** Random-access: each slice opens and reads only its requested byte range. */
   readonly canSlice = true
   private readonly offset: number
+  private readonly identity: FileIdentity
 
   /**
    * Creates a FileSource for a local filesystem path.
    * @param filePath - Path to the underlying file.
    * @param size - Number of bytes exposed by this source.
+   * @param identity - Validated regular-file identity, when captured.
    * @param offset - Byte offset where this source begins within the file.
    */
-  constructor(filePath: string, size: number, offset = 0) {
+  private constructor(filePath: string, size: number, identity: FileIdentity, offset = 0) {
     assertSafeByteCount(size, 'size')
     assertSafeByteCount(offset, 'offset')
     this.filePath = filePath
     this.size = size
     this.offset = offset
+    this.identity = identity
   }
 
   /**
@@ -209,9 +210,7 @@ export class FileSource implements ContentSource {
     try {
       const stats = await handle.stat()
       assertRegularFile(filePath, stats)
-      const source = new FileSource(filePath, stats.size)
-      fileSourceIdentities.set(source, identityFromStats(stats))
-      return source
+      return new FileSource(filePath, stats.size, identityFromStats(stats))
     } finally {
       await handle.close()
     }
@@ -227,10 +226,12 @@ export class FileSource implements ContentSource {
   slice(start: number, end: number): ContentSource {
     const sliceStart = clampByteRange(start, this.size)
     const sliceEnd = Math.max(sliceStart, clampByteRange(end, this.size))
-    const source = new FileSource(this.filePath, sliceEnd - sliceStart, this.offset + sliceStart)
-    const identity = fileSourceIdentities.get(this)
-    if (identity !== undefined) fileSourceIdentities.set(source, identity)
-    return source
+    return new FileSource(
+      this.filePath,
+      sliceEnd - sliceStart,
+      this.identity,
+      this.offset + sliceStart,
+    )
   }
 
   /**
@@ -241,8 +242,7 @@ export class FileSource implements ContentSource {
     const filePath = this.filePath
     const offset = this.offset
     const totalSize = this.size
-    const identity = fileSourceIdentities.get(this)
-    const requiredSize = offset + totalSize
+    const identity = this.identity
     let handle: FileHandleLike | null = null
     let position = offset
     let remaining = totalSize
@@ -263,7 +263,7 @@ export class FileSource implements ContentSource {
           }
 
           if (handle === null) {
-            handle = await openValidatedHandle(filePath, identity, requiredSize)
+            handle = await openValidatedHandle(filePath, identity)
           }
 
           const length = Math.min(FILE_SOURCE_CHUNK_SIZE, remaining)
@@ -272,13 +272,13 @@ export class FileSource implements ContentSource {
           if (bytesRead === 0) {
             throw new Error(`FileSource ended before reading ${totalSize} bytes: ${filePath}`)
           }
-          await assertHandleReady(filePath, handle, identity, requiredSize)
 
           position += bytesRead
           remaining -= bytesRead
           controller.enqueue(bytesRead === chunk.byteLength ? chunk : chunk.subarray(0, bytesRead))
 
           if (remaining === 0) {
+            await assertHandleReady(filePath, handle, identity)
             await closeHandle()
             controller.close()
           }
@@ -383,12 +383,11 @@ async function openNoFollow(filePath: string): Promise<FileHandleLike> {
 
 async function openValidatedHandle(
   filePath: string,
-  identity: FileIdentity | undefined,
-  requiredSize: number,
+  identity: FileIdentity,
 ): Promise<FileHandleLike> {
   const handle = await openNoFollow(filePath)
   try {
-    await assertHandleReady(filePath, handle, identity, requiredSize)
+    await assertHandleReady(filePath, handle, identity)
     return handle
   } catch (err) {
     await handle.close()
@@ -399,16 +398,11 @@ async function openValidatedHandle(
 async function assertHandleReady(
   filePath: string,
   handle: FileHandleLike,
-  identity: FileIdentity | undefined,
-  requiredSize: number,
+  identity: FileIdentity,
 ): Promise<void> {
   const stats = await handle.stat()
   assertRegularFile(filePath, stats)
-  if (identity !== undefined) {
-    assertSameIdentity(filePath, stats, identity)
-  } else if (stats.size < requiredSize) {
-    throw new Error(`FileSource file is smaller than the requested range: ${filePath}`)
-  }
+  assertSameIdentity(filePath, stats, identity)
 }
 
 function assertRegularFile(filePath: string, stats: FileStatsLike): void {
