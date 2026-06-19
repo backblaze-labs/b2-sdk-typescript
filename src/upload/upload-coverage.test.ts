@@ -1285,7 +1285,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileName).toBe('resume-hold.bin')
   })
 
-  it('does not persist SDK resume metadata in finished fileInfo', async () => {
+  it('keeps caller fileInfo untouched when resume is enabled', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
     const fileInfo = Object.fromEntries(

@@ -10,10 +10,10 @@ import { largeFileId as largeFileIdOf } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import type { UnfinishedLargeFile } from '../types/upload.ts'
 
-/** Legacy SDK-managed file-info key storing the source byte length for resumable uploads. */
+/** Compatibility-only file-info key read from legacy unfinished uploads; new uploads do not write it. */
 export const RESUME_SOURCE_SIZE_INFO_KEY = 'b2_sdk_resume_source_size'
 
-/** Legacy SDK-managed file-info key storing the effective multipart part size for resumable uploads. */
+/** Compatibility-only file-info key read from legacy unfinished uploads; new uploads do not write it. */
 export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
