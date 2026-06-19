@@ -822,7 +822,7 @@ describe('synchronize', () => {
       expect(errors[0]?.path).toBe('provider-boom.txt')
       expect(errors[0]?.message).toBe('provider boom')
       expect(errors[1]?.path).toBe('')
-      expect(errors[1]?.message).toBe('1 action(s) failed')
+      expect(errors[1]?.message).toBe('1 sync error(s) occurred')
       expect(getSettingForDownload).not.toHaveBeenCalled()
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
@@ -1153,7 +1153,7 @@ describe('synchronize', () => {
         expect(errors[0]?.path).toBe('gone.txt')
         expect(errors[0]?.message).toContain('failed to hash local file')
         expect(errors[1]?.path).toBe('')
-        expect(errors[1]?.message).toBe('1 action(s) failed')
+        expect(errors[1]?.message).toBe('1 sync error(s) occurred')
         expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(1)
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
       } finally {
@@ -1600,7 +1600,7 @@ describe('synchronize', () => {
       expect(errors[0]?.path).toBe('fail.txt')
       expect(errors[0]?.message).toBe('copy boom')
       expect(errors[1]?.path).toBe('')
-      expect(errors[1]?.message).toContain('1 action(s) failed')
+      expect(errors[1]?.message).toContain('1 sync error(s) occurred')
     })
 
     it('wraps a non-Error thrown value as a string', async () => {

@@ -176,7 +176,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       type: 'error',
       path: '',
       size: 0,
-      message: `${errors.length} action(s) failed`,
+      message: `${errors.length} sync error(s) occurred`,
     }
   }
 }
