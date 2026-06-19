@@ -8,7 +8,11 @@ import {
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { largeFileId as largeFileIdOf } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
-import type { UnfinishedLargeFile } from '../types/upload.ts'
+import type {
+  ReadableFileRetention,
+  ReadableLegalHold,
+  UnfinishedLargeFile,
+} from '../types/upload.ts'
 
 /** Compatibility-only file-info key read from legacy unfinished uploads; new uploads do not write it. */
 export const RESUME_SOURCE_SIZE_INFO_KEY = 'b2_sdk_resume_source_size'
@@ -475,15 +479,8 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
   }
 }
 
-type ReadableFileRetention =
-  | {
-      readonly isClientAuthorizedToRead: boolean
-      readonly value: FileRetentionValue | null
-    }
-  | undefined
-
 function fileRetentionMatches(
-  candidate: ReadableFileRetention,
+  candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
 ): boolean {
   if (expected === undefined) {
@@ -505,15 +502,8 @@ function fileRetentionValueEquals(
   )
 }
 
-type ReadableLegalHold =
-  | {
-      readonly isClientAuthorizedToRead: boolean
-      readonly value: LegalHoldValue | null
-    }
-  | undefined
-
 function legalHoldMatches(
-  candidate: ReadableLegalHold,
+  candidate: ReadableLegalHold | undefined,
   expected: LegalHoldValue | undefined,
 ): boolean {
   if (expected === undefined) {
@@ -554,7 +544,7 @@ function serverSideEncryptionRejectReason(
 
 function normalizeEncryption(
   encryption: EncryptionSetting | ListedEncryption | B2NoEncryptionWireSetting,
-): { readonly mode: EncryptionMode; readonly algorithm?: string } | undefined {
+): { readonly mode: EncryptionMode | string; readonly algorithm?: string } | undefined {
   if (encryption === undefined) return undefined
   // Real B2 responses may spell no encryption as `{ mode: null, algorithm: null }`.
   if (encryption.mode === null || encryption.mode === EncryptionMode.None) {
