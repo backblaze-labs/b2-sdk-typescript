@@ -40,6 +40,7 @@ export type {
 export type {
   EncryptionSetting,
   NoEncryption,
+  NoEncryptionWireSetting,
   PublicEncryptionSetting,
   SseB2Setting,
   SseCCustomerSetting,

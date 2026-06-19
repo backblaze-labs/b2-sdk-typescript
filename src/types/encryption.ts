@@ -62,11 +62,23 @@ export interface NoEncryption {
   readonly mode: 'none'
 }
 
+/** No-encryption shape returned by B2 response objects. */
+export interface NoEncryptionWireSetting {
+  /** Encryption mode discriminator. B2 response payloads use null for no encryption. */
+  readonly mode: null
+  /** Encryption algorithm. B2 response payloads use null when no encryption is applied. */
+  readonly algorithm: null
+}
+
 /** Union of all server-side encryption settings: B2-managed, customer-provided, or none. */
 export type EncryptionSetting = SseB2Setting | SseCCustomerSetting | NoEncryption
 
 /** Server-side encryption setting returned by B2 response objects. */
-export type PublicEncryptionSetting = SseB2Setting | SseCPublicSetting | NoEncryption
+export type PublicEncryptionSetting =
+  | SseB2Setting
+  | SseCPublicSetting
+  | NoEncryption
+  | NoEncryptionWireSetting
 
 /** Pre-built SSE-B2 encryption setting using AES-256. */
 export const SSE_B2: SseB2Setting = { mode: 'SSE-B2', algorithm: 'AES256' }

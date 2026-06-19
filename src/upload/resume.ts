@@ -516,13 +516,9 @@ function legalHoldMatches(
 }
 
 type ListedEncryption = PublicEncryptionSetting | undefined
-type B2NoEncryptionWireSetting = {
-  readonly mode: null
-  readonly algorithm?: null
-}
 
 function serverSideEncryptionRejectReason(
-  candidate: ListedEncryption | B2NoEncryptionWireSetting,
+  candidate: ListedEncryption,
   expected: EncryptionSetting | undefined,
 ): 'encryption-mismatch' | 'sse-c-unsupported' | null {
   if (expected?.mode === EncryptionMode.SseC) return 'sse-c-unsupported'
@@ -543,7 +539,7 @@ function serverSideEncryptionRejectReason(
 }
 
 function normalizeEncryption(
-  encryption: EncryptionSetting | ListedEncryption | B2NoEncryptionWireSetting,
+  encryption: EncryptionSetting | ListedEncryption,
 ): { readonly mode: EncryptionMode | string; readonly algorithm?: string } | undefined {
   if (encryption === undefined) return undefined
   // Real B2 responses may spell no encryption as `{ mode: null, algorithm: null }`.
