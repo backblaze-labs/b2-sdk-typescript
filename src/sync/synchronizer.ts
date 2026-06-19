@@ -113,13 +113,35 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const errors: Error[] = []
 
   if (options.compareMode === 'sha1') {
-    const pairs: SyncPair[] = []
+    const compareBatchSize =
+      Number.isFinite(concurrency) && concurrency > 0 ? Math.max(1, Math.floor(concurrency)) : 1
+    let batch: SyncPair[] = []
     for await (const pair of zipFolders(source, dest)) {
       if (options.signal?.aborted) return
-      pairs.push(pair)
+      batch.push(pair)
+      if (batch.length >= compareBatchSize) {
+        const preparedBatch = await processPreparedBatch(batch)
+        for (const event of preparedBatch.events) yield event
+        if (preparedBatch.aborted) return
+        batch = []
+      }
     }
 
-    const preparedPairs = await preparePairsForCompare(pairs, options.compareMode, {
+    const preparedBatch = await processPreparedBatch(batch)
+    for (const event of preparedBatch.events) yield event
+    if (preparedBatch.aborted) return
+  } else {
+    for await (const pair of zipFolders(source, dest)) {
+      if (options.signal?.aborted) return
+      yield processPreparedPair(pair, readyComparePair(pair))
+    }
+  }
+
+  async function processPreparedBatch(
+    batch: readonly SyncPair[],
+  ): Promise<{ readonly events: SyncEvent[]; readonly aborted: boolean }> {
+    if (batch.length === 0) return { events: [], aborted: false }
+    const preparedPairs = await preparePairsForCompare(batch, 'sha1', {
       concurrency,
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(options.sha1ReadTimeoutMillis !== undefined
@@ -127,15 +149,12 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         : {}),
     })
 
+    const events: SyncEvent[] = []
     for (const { originalPair, prepared } of preparedPairs) {
-      if (prepared.aborted || options.signal?.aborted) return
-      yield processPreparedPair(originalPair, prepared)
+      if (prepared.aborted || options.signal?.aborted) return { events, aborted: true }
+      events.push(processPreparedPair(originalPair, prepared))
     }
-  } else {
-    for await (const pair of zipFolders(source, dest)) {
-      if (options.signal?.aborted) return
-      yield processPreparedPair(pair, readyComparePair(pair))
-    }
+    return { events, aborted: false }
   }
 
   function processPreparedPair(

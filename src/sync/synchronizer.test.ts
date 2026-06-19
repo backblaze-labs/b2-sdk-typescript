@@ -1369,6 +1369,57 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('prepares sha1 comparisons in bounded batches', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sha1-batch-'))
+      try {
+        const data = new TextEncoder().encode('abc')
+        const sourceFiles: LocalSyncPath[] = []
+        const destFiles: B2SyncPath[] = []
+        for (const name of ['a.txt', 'b.txt', 'c.txt']) {
+          const filePath = join(root, name)
+          await writeFile(filePath, data)
+          sourceFiles.push({
+            relativePath: name,
+            absolutePath: filePath,
+            modTimeMillis: 1000,
+            size: data.byteLength,
+          })
+          destFiles.push(makeB2SyncPath(name, 1000, data.byteLength, undefined, '0'.repeat(40)))
+        }
+
+        let sourceScans = 0
+        const source: SyncFolder = {
+          type: 'local',
+          async *scan() {
+            for (const file of sourceFiles) {
+              sourceScans += 1
+              yield file
+            }
+          },
+        }
+        const dest = makeMemoryFolder(destFiles, 'b2')
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'sha1', keepMode: 'no-delete', concurrency: 2 },
+          bucket: makeMockBucket() as unknown as Bucket,
+          prefix: '',
+        }
+
+        const iterator = synchronize(config)
+        const first = await iterator.next()
+        expect(first.done).toBe(false)
+        expect(first.value?.type).toBe('compare')
+        expect(sourceScans).toBe(2)
+        await iterator.return?.(undefined)
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)('aborts while hashing a local file', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, open, rm } = await import('node:fs/promises')

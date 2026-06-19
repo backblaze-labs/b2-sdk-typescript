@@ -212,7 +212,10 @@ export async function preparePairsForCompare(
 
   const workerCount = Math.min(concurrency, pairs.length)
   await Promise.all(Array.from({ length: workerCount }, () => worker()))
-  return results.filter((result): result is PreparedComparePair => result !== undefined)
+  return pairs.map(
+    (pair, index): PreparedComparePair =>
+      results[index] ?? { originalPair: pair, prepared: aborted(pair) },
+  )
 }
 
 /**
@@ -398,6 +401,8 @@ function normalizeConcurrency(value: number | undefined): number {
 function formatHashError(error: Error): string {
   const code = (error as { readonly code?: unknown }).code
   if (typeof code === 'string' && code.length > 0) return code
+  const message = error.message.trim()
+  if (message.length > 0 && !/[\\/]/.test(message)) return message
   if (error.name.length > 0) return error.name
   return 'Error'
 }

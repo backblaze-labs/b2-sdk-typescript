@@ -237,6 +237,22 @@ describe('preparePairForCompare', () => {
     expect(result.errors).toHaveLength(1)
   })
 
+  it('surfaces safe local sha1 error messages', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('not a regular file')
+      },
+    })
+
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: not a regular file',
+    })
+  })
+
   it('keeps prepared B2 sha1 metadata when local hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeLocalSyncPath('large.bin', 1000, 100)
@@ -322,6 +338,23 @@ describe('preparePairsForCompare', () => {
     const results = await promise
     expect(results).toHaveLength(3)
     expect(maxActive).toBe(2)
+  })
+
+  it('returns aborted results for every pair when preparation aborts early', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const pairs = [1, 2, 3].map((n): [LocalSyncPath, B2SyncPath] => [
+      makeLocalSyncPath(`file-${n}.txt`, 1000, 100),
+      makeB2SyncPath(`file-${n}.txt`, 1000, 100, 'b'.repeat(40)),
+    ])
+
+    const results = await preparePairsForCompare(pairs, 'sha1', { signal: controller.signal })
+
+    expect(results).toHaveLength(pairs.length)
+    expect(results.map((result) => result.originalPair[0]?.relativePath)).toEqual(
+      pairs.map((pair) => pair[0].relativePath),
+    )
+    expect(results.every((result) => result.prepared.aborted)).toBe(true)
   })
 })
 
