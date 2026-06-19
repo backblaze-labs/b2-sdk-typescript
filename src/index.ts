@@ -86,7 +86,13 @@ export {
 export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
 export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
 export type { ContentSource } from './streams/source.ts'
-export { BlobSource, BufferSource, StreamSource, toContentSource } from './streams/source.ts'
+export {
+  BlobSource,
+  BufferSource,
+  FileSource,
+  StreamSource,
+  toContentSource,
+} from './streams/source.ts'
 export { Capability } from './types/auth.ts'
 // Named-constant enum objects paired with the string-literal type aliases.
 // These give users IDE autocomplete and typo protection

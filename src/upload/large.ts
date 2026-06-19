@@ -52,7 +52,7 @@ export interface UploadLargeFileOptions {
   readonly fileName: string
   /**
    * Content to upload. Sliceable sources ({@link BufferSource},
-   * {@link BlobSource}) use the parallel-parts path. Non-sliceable
+   * {@link BlobSource}, {@link FileSource}) use the parallel-parts path. Non-sliceable
    * sources ({@link StreamSource}) fall back to a sequential read path
    * — one part at a time, concurrency forced to 1 — so callers can
    * stream a multi-GB file without buffering the whole payload in

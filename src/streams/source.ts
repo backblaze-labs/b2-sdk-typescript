@@ -1,9 +1,13 @@
+import type { FileHandle } from 'node:fs/promises'
 import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
+const FILE_SOURCE_CHUNK_SIZE = 64 * 1024
+
 /**
- * Uniform adapter for upload content. Wraps File, Blob, Buffer, or ReadableStream
- * behind a common interface so upload logic does not depend on the input type.
+ * Uniform adapter for upload content. Wraps File, Blob, Buffer, file paths,
+ * or ReadableStream behind a common interface so upload logic does not depend
+ * on the input type.
  */
 export interface ContentSource {
   /** Total size of the content in bytes. */
@@ -14,7 +18,7 @@ export interface ContentSource {
    * Whether {@link slice} is safe to call on this source.
    *
    * `true` for in-memory / random-access sources (`BufferSource`,
-   * `BlobSource`) — the multipart upload engine can dispatch part reads
+   * `BlobSource`, `FileSource`) — the multipart upload engine can dispatch part reads
    * in parallel by slicing the source into disjoint ranges. `false`
    * for forward-only sources (`StreamSource`) — the engine must read
    * sequentially, one `partSize` chunk at a time. Callers that branch
@@ -127,6 +131,149 @@ export class BufferSource implements ContentSource {
   }
 }
 
+/** ContentSource backed by a local filesystem path. Node.js only. */
+export class FileSource implements ContentSource {
+  /** Absolute or relative path to the underlying local file. */
+  readonly filePath: string
+  /** {@inheritDoc} */
+  readonly size: number
+  /** Random-access: each slice opens and reads only its requested byte range. */
+  readonly canSlice = true
+  private readonly offset: number
+
+  /**
+   * Creates a FileSource for a local filesystem path.
+   * @param filePath - Path to the underlying file.
+   * @param size - Number of bytes exposed by this source.
+   * @param offset - Byte offset where this source begins within the file.
+   */
+  constructor(filePath: string, size: number, offset = 0) {
+    assertSafeByteCount(size, 'size')
+    assertSafeByteCount(offset, 'offset')
+    this.filePath = filePath
+    this.size = size
+    this.offset = offset
+  }
+
+  /**
+   * Creates a FileSource by statting the given filesystem path.
+   * @param filePath - Path to the local file.
+   *
+   * @returns A FileSource sized from the current file metadata.
+   *
+   * @throws If the path does not resolve to a regular file.
+   */
+  static async fromPath(filePath: string): Promise<FileSource> {
+    const { stat } = await import('node:fs/promises')
+    const info = await stat(filePath)
+    if (!info.isFile()) throw new Error(`FileSource path is not a regular file: ${filePath}`)
+    return new FileSource(filePath, info.size)
+  }
+
+  /**
+   * Return a new FileSource covering the specified byte range.
+   * @param start - The zero-based byte offset to begin the slice.
+   * @param end - The exclusive byte offset where the slice ends.
+   *
+   * @returns A new ContentSource representing the requested sub-range.
+   */
+  slice(start: number, end: number): ContentSource {
+    const sliceStart = clampByteRange(start, this.size)
+    const sliceEnd = Math.max(sliceStart, clampByteRange(end, this.size))
+    return new FileSource(this.filePath, sliceEnd - sliceStart, this.offset + sliceStart)
+  }
+
+  /**
+   * Open the file range as a ReadableStream.
+   * @returns A ReadableStream of the file bytes in this source's range.
+   */
+  stream(): ReadableStream<Uint8Array> {
+    const filePath = this.filePath
+    const offset = this.offset
+    const totalSize = this.size
+    let handle: FileHandle | null = null
+    let position = offset
+    let remaining = totalSize
+
+    async function closeHandle(): Promise<void> {
+      const current = handle
+      handle = null
+      if (current !== null) await current.close()
+    }
+
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          if (remaining <= 0) {
+            await closeHandle()
+            controller.close()
+            return
+          }
+
+          if (handle === null) {
+            const { open } = await import('node:fs/promises')
+            handle = await open(filePath, 'r')
+          }
+
+          const length = Math.min(FILE_SOURCE_CHUNK_SIZE, remaining)
+          const chunk = new Uint8Array(length)
+          const { bytesRead } = await handle.read(chunk, 0, length, position)
+          if (bytesRead === 0) {
+            throw new Error(`FileSource ended before reading ${totalSize} bytes: ${filePath}`)
+          }
+
+          position += bytesRead
+          remaining -= bytesRead
+          controller.enqueue(bytesRead === chunk.byteLength ? chunk : chunk.subarray(0, bytesRead))
+
+          if (remaining === 0) {
+            await closeHandle()
+            controller.close()
+          }
+        } catch (err) {
+          await closeHandle()
+          controller.error(err)
+        }
+      },
+
+      async cancel() {
+        await closeHandle()
+      },
+    })
+  }
+
+  /**
+   * Read this file range into an ArrayBuffer.
+   * @returns A promise that resolves with the bytes in this source's range.
+   */
+  async toArrayBuffer(): Promise<ArrayBuffer> {
+    const { open } = await import('node:fs/promises')
+    const handle = await open(this.filePath, 'r')
+    try {
+      const buffer = new Uint8Array(this.size)
+      let filled = 0
+      while (filled < buffer.byteLength) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          filled,
+          buffer.byteLength - filled,
+          this.offset + filled,
+        )
+        if (bytesRead === 0) {
+          throw new Error(`FileSource ended before reading ${this.size} bytes: ${this.filePath}`)
+        }
+        filled += bytesRead
+      }
+      return buffer.buffer.slice(
+        buffer.byteOffset,
+        buffer.byteOffset + buffer.byteLength,
+      ) as ArrayBuffer
+    } finally {
+      await handle.close()
+    }
+  }
+}
+
 /** ContentSource backed by a ReadableStream. Can only be consumed once and does not support slicing. */
 export class StreamSource implements ContentSource {
   /** {@inheritDoc} */
@@ -181,6 +328,17 @@ export class StreamSource implements ContentSource {
     const bytes = await collectStream(this.stream())
     return arrayBufferFor(bytes)
   }
+}
+
+function assertSafeByteCount(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`FileSource ${label} must be a non-negative safe integer.`)
+  }
+}
+
+function clampByteRange(value: number, size: number): number {
+  if (!Number.isFinite(value)) return size
+  return Math.min(size, Math.max(0, Math.trunc(value)))
 }
 
 /**

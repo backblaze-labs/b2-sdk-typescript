@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { EncryptionKey } from '../types/encryption.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
-import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
+import { BlobSource, BufferSource, FileSource, StreamSource, toContentSource } from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
 const SHA1_HELLO = 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d'
+const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
 
 // ---------------------------------------------------------------------------
 // hash.ts
@@ -221,6 +222,32 @@ describe('BlobSource', () => {
     const ab = await src.toArrayBuffer()
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(content)
+  })
+})
+
+describe('FileSource', () => {
+  it.skipIf(!isNode)('streams and slices a local file by byte range', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-'))
+    try {
+      const filePath = join(root, 'data.txt')
+      await writeFile(filePath, 'hello world')
+
+      const source = await FileSource.fromPath(filePath)
+      expect(source.size).toBe(11)
+      expect(source.canSlice).toBe(true)
+
+      const streamed = await new Response(source.stream()).arrayBuffer()
+      expect(new TextDecoder().decode(streamed)).toBe('hello world')
+
+      const sliced = source.slice(6, 11)
+      const bytes = await sliced.toArrayBuffer()
+      expect(new TextDecoder().decode(bytes)).toBe('world')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 
