@@ -461,6 +461,11 @@ describe('B2Folder', () => {
     })
 
     await bucket.upload({
+      fileName: 'backupfile.txt',
+      source: new BufferSource(enc.encode('raw-prefix')),
+    })
+    tick()
+    await bucket.upload({
       fileName: 'backup/docs/readme.md',
       source: new BufferSource(enc.encode('readme')),
     })
@@ -468,7 +473,7 @@ describe('B2Folder', () => {
     const folder = new B2Folder(bucket, 'backup')
     const entries = await collect<B2SyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md', 'file.txt'])
   })
 
   it('does not yield leading slashes when no prefix is configured', async () => {
@@ -505,11 +510,15 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
-  it('rejects unsafe B2 names before yielding relative paths', async () => {
-    function makeFolder(fileName: string): B2Folder {
-      const fileVersion: FileVersion = {
+  it('skips odd B2 names while yielding valid files', async () => {
+    function makeFileVersion(
+      fileName: string,
+      uploadTimestamp: number,
+      action: FileAction = FileAction.Upload,
+    ): FileVersion {
+      return {
         accountId: 'acc' as unknown as AccountId,
-        action: FileAction.Upload,
+        action,
         bucketId: 'b' as unknown as BucketId,
         contentLength: 1,
         contentMd5: null,
@@ -522,33 +531,32 @@ describe('B2Folder', () => {
         legalHold: { isClientAuthorizedToRead: true, value: null },
         replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
-        uploadTimestamp: 1,
+        uploadTimestamp,
       }
-      const mockBucket = {
-        async listFileVersions() {
-          return {
-            files: [fileVersion],
-            nextFileName: null,
-            nextFileId: null,
-          }
-        },
-      }
-      return new B2Folder(mockBucket as unknown as Bucket)
     }
 
-    for (const fileName of [
-      '../secret.txt',
-      'safe/../secret.txt',
-      'C:\\secret.txt',
-      '.',
-      'docs/./readme.md',
-      'docs//readme.md',
-      'docs/trailing/',
-    ]) {
-      await expect(collect<B2SyncPath>(makeFolder(fileName).scan())).rejects.toThrow(
-        'Unsafe B2 file name',
-      )
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('valid.txt', 1),
+            makeFileVersion('dir/', 2),
+            makeFileVersion('a//b', 3),
+            makeFileVersion('../secret.txt', 4),
+            makeFileVersion('docs/./readme.md', 5),
+            makeFileVersion('.well-known/config', 6),
+            makeFileVersion('hidden//marker', 7, FileAction.Hide),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
     }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['.well-known/config', 'valid.txt'])
   })
 
   it('pushes down safe include prefixes while filtering listed names', async () => {

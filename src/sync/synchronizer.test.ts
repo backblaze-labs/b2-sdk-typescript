@@ -3704,7 +3704,7 @@ describe('synchronize', () => {
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
         const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
         expect(args).toMatchObject({
-          fileName: 'pfx/nested/hello.txt',
+          fileName: 'pfx/nestedhello.txt',
           signal: controller.signal,
         })
         expect(args).not.toHaveProperty('serverSideEncryption')
@@ -3785,7 +3785,7 @@ describe('synchronize', () => {
       const deletes = events.filter((e) => e.type === 'delete-remote')
       expect(hides).toHaveLength(1)
       expect(deletes).toHaveLength(0)
-      expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt', {
+      expect(mockBucket.hideFile).toHaveBeenCalledWith('backuporphan.txt', {
         signal: controller.signal,
       })
       expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()

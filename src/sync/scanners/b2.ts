@@ -5,6 +5,7 @@ import { isAbortError } from '../local-sha1.ts'
 import { literalPrefixForSyncFilters, pathPassesSyncFilters } from '../filters.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import { normalizeB2FolderPrefix, normalizeB2RelativePath } from '../prefix.ts'
+import { validateSyncFilters } from '../regexp-safety.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -22,7 +23,7 @@ export class B2Folder implements SyncFolder {
    * Creates a new B2Folder for the given bucket and optional prefix.
    * @param bucket - The B2 bucket to scan.
    * @param prefix - Optional folder prefix to restrict the scan scope.
-   * Non-empty values are normalized with a trailing slash.
+   * Backslashes are normalized to forward slashes, but the prefix remains a raw B2 key prefix.
    */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
@@ -34,7 +35,8 @@ export class B2Folder implements SyncFolder {
    * @param options - Optional scan controls.
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
-    const grouped = new Map<string, FileVersion[]>()
+    validateSyncFilters(options)
+    const grouped = new Map<string, { relativePath: string; versions: FileVersion[] }>()
     const listPrefix = `${this.prefix}${literalPrefixForSyncFilters(options)}`
 
     let startFileName: string | undefined
@@ -65,14 +67,15 @@ export class B2Folder implements SyncFolder {
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
         if (this.prefix !== '' && !fv.fileName.startsWith(this.prefix)) continue
-        const relativePath = this.toRelativePath(fv.fileName)
+        const relativePath = this.tryToRelativePath(fv.fileName)
+        if (relativePath === null) continue
         if (!pathPassesSyncFilters(relativePath, options)) continue
 
         const existing = grouped.get(fv.fileName)
         if (existing) {
-          existing.push(fv)
+          existing.versions.push(fv)
         } else {
-          grouped.set(fv.fileName, [fv])
+          grouped.set(fv.fileName, { relativePath, versions: [fv] })
         }
       }
 
@@ -81,15 +84,17 @@ export class B2Folder implements SyncFolder {
       startFileId = listing.nextFileId ?? undefined
     }
 
-    const sorted = [...grouped.entries()].sort((a, b) => compareSyncPathNames(a[0], b[0]))
+    const sorted = [...grouped.entries()].sort(
+      (a, b) =>
+        compareSyncPathNames(a[1].relativePath, b[1].relativePath) ||
+        compareSyncPathNames(a[0], b[0]),
+    )
 
-    for (const [fileName, versions] of sorted) {
+    for (const [, { relativePath, versions }] of sorted) {
       if (options.signal?.aborted) return
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const selected = versions[0]
       if (!selected || selected.action === FileAction.Hide) continue
-
-      const relativePath = this.toRelativePath(fileName)
 
       const contentSha1 = selectB2ComparableSha1(selected)
       yield {
@@ -104,10 +109,14 @@ export class B2Folder implements SyncFolder {
     }
   }
 
-  private toRelativePath(fileName: string): string {
-    return normalizeB2RelativePath(
-      this.prefix === '' ? fileName : fileName.slice(this.prefix.length),
-    )
+  private tryToRelativePath(fileName: string): string | null {
+    try {
+      return normalizeB2RelativePath(
+        this.prefix === '' ? fileName : fileName.slice(this.prefix.length),
+      )
+    } catch {
+      return null
+    }
   }
 }
 

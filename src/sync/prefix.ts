@@ -1,14 +1,12 @@
 /**
- * Normalizes a B2 folder prefix to use forward slashes and end in `/` when non-empty.
+ * Normalizes a B2 folder prefix to use forward slashes while preserving raw key-prefix semantics.
  *
  * @param prefix - User-supplied B2 folder prefix.
  *
  * @returns Normalized B2 folder prefix.
  */
 export function normalizeB2FolderPrefix(prefix: string): string {
-  const normalized = prefix.split('\\').join('/')
-  if (normalized === '' || normalized.endsWith('/')) return normalized
-  return `${normalized}/`
+  return prefix.split('\\').join('/')
 }
 
 /**

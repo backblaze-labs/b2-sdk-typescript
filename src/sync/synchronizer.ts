@@ -81,8 +81,8 @@ export interface SynchronizerUpConfig extends SynchronizerConfig {
   /** The target B2 bucket. */
   readonly bucket: Bucket
   /**
-   * Folder-style key prefix for uploaded files in the bucket.
-   * Non-empty values are normalized with a trailing slash.
+   * Raw B2 key prefix for uploaded files in the bucket.
+   * Backslashes are normalized to forward slashes.
    */
   readonly prefix: string
 }
