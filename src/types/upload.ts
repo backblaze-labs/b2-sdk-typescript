@@ -90,11 +90,11 @@ export interface StartLargeFileResponse {
   readonly fileInfo: Record<string, string>
   /** Action that created this unfinished file version. */
   readonly action?: FileAction
-  /** Always 0 for unfinished large files. */
+  /** When present, always 0 for unfinished large files. */
   readonly contentLength?: number
-  /** Always `'none'` for unfinished large files. */
+  /** When present, always `'none'` for unfinished large files. */
   readonly contentSha1?: string
-  /** Always null for unfinished large files. */
+  /** When present, always null for unfinished large files. */
   readonly contentMd5?: string | null
   /** Object Lock retention settings for this unfinished file, when readable. */
   readonly fileRetention?: {
@@ -220,11 +220,11 @@ export interface UnfinishedLargeFile {
   readonly bucketId: BucketId
   /** MIME type of the file. */
   readonly contentType: string
-  /** Always 0 for unfinished large files. */
+  /** When present, always 0 for unfinished large files. */
   readonly contentLength?: number
-  /** Always `'none'` for unfinished large files. */
+  /** When present, always `'none'` for unfinished large files. */
   readonly contentSha1?: string
-  /** Always null for unfinished large files. */
+  /** When present, always null for unfinished large files. */
   readonly contentMd5?: string | null
   /** User-defined key-value metadata stored with the file. */
   readonly fileInfo: Record<string, string>
