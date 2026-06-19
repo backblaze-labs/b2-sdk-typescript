@@ -29,6 +29,7 @@ export {
   B2Error,
   B2InsufficientCapabilityError,
   B2RealmConfigurationError,
+  B2RedirectError,
   B2SsrfError,
   BadAuthTokenError,
   BadBucketIdError,

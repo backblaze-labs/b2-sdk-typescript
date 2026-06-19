@@ -10,6 +10,7 @@ import {
   AccessDeniedError,
   B2Error,
   B2RealmConfigurationError,
+  B2RedirectError,
   BadAuthTokenError,
   BadBucketIdError,
   BadJsonError,
@@ -505,6 +506,32 @@ describe('B2RealmConfigurationError', () => {
     expect(err.code).toBe('bad_request')
     expect(err.message).toBe('bad realm')
     expect(err.retryable).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B2RedirectError
+// ---------------------------------------------------------------------------
+
+describe('B2RedirectError', () => {
+  it('extends Error but is non-retryable', () => {
+    const err = new B2RedirectError('https://api.example.com', 302, 'https://next.example.com')
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(B2Error)
+    expect(err.retryable).toBe(false)
+  })
+
+  it('stores status and sanitized URLs', () => {
+    const err = new B2RedirectError(
+      'https://user:secret@api.example.com',
+      301,
+      'https://next:secret@next.example.com/path',
+    )
+    expect(err.name).toBe('B2RedirectError')
+    expect(err.status).toBe(301)
+    expect(err.url).toBe('https://api.example.com/')
+    expect(err.location).toBe('https://next.example.com/path')
+    expect(err.message).not.toContain('secret')
   })
 })
 

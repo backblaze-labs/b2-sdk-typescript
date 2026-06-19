@@ -16,8 +16,8 @@
  * Other programming errors and SDK preconditions, such as "not yet authorized",
  * "stream consumed twice", or "called before init", use the native `Error`
  * constructor instead. The direct `Error` outliers are
- * {@link B2InsufficientCapabilityError}, {@link B2SsrfError}, and
- * {@link NetworkError}.
+ * {@link B2InsufficientCapabilityError}, {@link B2RedirectError},
+ * {@link B2SsrfError}, and {@link NetworkError}.
  *
  * @packageDocumentation
  */
@@ -537,6 +537,50 @@ export class B2RealmConfigurationError extends B2Error {
   constructor(message: string) {
     super({ status: 400, code: 'bad_request', message })
     this.name = 'B2RealmConfigurationError'
+  }
+}
+
+function sanitizeUrlForError(url: string): string {
+  try {
+    const parsed = new URL(url)
+    parsed.username = ''
+    parsed.password = ''
+    return parsed.toString()
+  } catch {
+    return '<invalid URL>'
+  }
+}
+
+/** Thrown when the SDK refuses to follow an HTTP redirect automatically. */
+export class B2RedirectError extends Error {
+  /** Always `false` because a blocked redirect is deterministic. */
+  readonly retryable = false
+  /** The request URL whose response attempted to redirect. */
+  readonly url: string
+  /** HTTP redirect status code. */
+  readonly status: number
+  /** Sanitized redirect target, or `null` when no Location header was present. */
+  readonly location: string | null
+
+  /**
+   * Creates a new B2RedirectError instance.
+   *
+   * @param url - Original request URL.
+   * @param status - HTTP redirect status code.
+   * @param location - Redirect Location header, if present.
+   */
+  constructor(url: string, status: number, location: string | null) {
+    const safeUrl = sanitizeUrlForError(url)
+    const safeLocation = location !== null ? sanitizeUrlForError(location) : null
+    super(
+      safeLocation !== null
+        ? `HTTP ${status} redirect blocked for ${safeUrl} to ${safeLocation}`
+        : `HTTP ${status} redirect blocked for ${safeUrl}`,
+    )
+    this.name = 'B2RedirectError'
+    this.url = safeUrl
+    this.status = status
+    this.location = safeLocation
   }
 }
 

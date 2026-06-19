@@ -1,5 +1,6 @@
 import {
   B2Error,
+  B2RedirectError,
   B2SsrfError,
   classifyError,
   ExpiredAuthTokenError,
@@ -81,6 +82,7 @@ export class FetchTransport implements HttpTransport {
    * @returns The HTTP response.
    *
    * @throws B2SsrfError when the URL fails the configured SSRF guard.
+   * @throws B2RedirectError when a response attempts to redirect.
    */
   async send(request: HttpRequest): Promise<HttpResponse> {
     this.urlGuard.check(request.url)
@@ -94,9 +96,13 @@ export class FetchTransport implements HttpTransport {
       method: request.method,
       headers,
       body: request.body ?? null,
-      redirect: 'error',
+      redirect: 'manual',
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     })
+
+    if (response.status >= 300 && response.status < 400) {
+      throw new B2RedirectError(request.url, response.status, response.headers.get('Location'))
+    }
 
     return {
       status: response.status,
@@ -179,6 +185,7 @@ function shouldRetryInPlace(error: B2Error, url: string): boolean {
 function isTerminalTransportError(err: unknown): boolean {
   return (
     err instanceof B2Error ||
+    err instanceof B2RedirectError ||
     err instanceof NetworkError ||
     err instanceof B2SsrfError ||
     (err instanceof DOMException && err.name === 'AbortError')
