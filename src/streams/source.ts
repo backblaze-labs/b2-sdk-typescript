@@ -494,10 +494,14 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  static async fromPath(path: FileSourcePath): Promise<FileSource> {
+  static async fromPath<T extends typeof FileSource>(
+    this: T,
+    path: FileSourcePath,
+  ): Promise<InstanceType<T>> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
-    const InternalCtor = FileSource as unknown as {
-      new (path: FileSourcePath, identity: FileIdentity): FileSource
+    // biome-ignore lint/complexity/noThisInStatic: inherited factory must construct the receiver class.
+    const InternalCtor = this as unknown as {
+      new (path: FileSourcePath, identity: FileIdentity): InstanceType<T>
     }
     return new InternalCtor(path, identity)
   }

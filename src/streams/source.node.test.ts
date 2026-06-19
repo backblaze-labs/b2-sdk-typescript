@@ -41,6 +41,17 @@ describe('FileSource', () => {
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
   })
 
+  it('preserves subclasses when created with asynchronous validation', async () => {
+    class CustomFileSource extends FileSource {}
+    const path = join(tmpDir, 'subclass-payload.txt')
+    await writeFile(path, 'subclass body')
+
+    const source = await CustomFileSource.fromPath(path)
+
+    expect(source).toBeInstanceOf(CustomFileSource)
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('subclass body')
+  })
+
   it('returns ranged slices without reading unrelated bytes', async () => {
     const path = join(tmpDir, 'range.txt')
     await writeFile(path, '0123456789')
