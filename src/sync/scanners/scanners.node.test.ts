@@ -536,15 +536,19 @@ describe('B2Folder', () => {
       return new B2Folder(mockBucket as unknown as Bucket)
     }
 
-    await expect(collect<B2SyncPath>(makeFolder('../secret.txt').scan())).rejects.toThrow(
-      'Unsafe B2 file name',
-    )
-    await expect(collect<B2SyncPath>(makeFolder('safe/../secret.txt').scan())).rejects.toThrow(
-      'Unsafe B2 file name',
-    )
-    await expect(collect<B2SyncPath>(makeFolder('C:\\secret.txt').scan())).rejects.toThrow(
-      'Unsafe B2 file name',
-    )
+    for (const fileName of [
+      '../secret.txt',
+      'safe/../secret.txt',
+      'C:\\secret.txt',
+      '.',
+      'docs/./readme.md',
+      'docs//readme.md',
+      'docs/trailing/',
+    ]) {
+      await expect(collect<B2SyncPath>(makeFolder(fileName).scan())).rejects.toThrow(
+        'Unsafe B2 file name',
+      )
+    }
   })
 
   it('pushes down safe include prefixes while filtering listed names', async () => {

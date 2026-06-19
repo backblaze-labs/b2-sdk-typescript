@@ -6,7 +6,11 @@ export function normalizeB2FolderPrefix(prefix: string): string {
 
 export function normalizeB2RelativePath(path: string): string {
   const relativePath = stripLeadingSlashes(path.split('\\').join('/'))
-  if (/^[A-Za-z]:/.test(relativePath) || relativePath.split('/').includes('..')) {
+  const segments = relativePath.split('/')
+  if (
+    /^[A-Za-z]:/.test(relativePath) ||
+    segments.some((segment) => segment === '' || segment === '.' || segment === '..')
+  ) {
     throw new Error('Unsafe B2 file name cannot be used as a sync relative path')
   }
   return relativePath
