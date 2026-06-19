@@ -257,7 +257,7 @@ export async function presignS3GetObjectUrl(
     query.push(['response-content-type', options.responseContentType])
   }
   if (options.responseExpires !== undefined) {
-    query.push(['response-expires', options.responseExpires.toUTCString()])
+    query.push(['response-expires', normalizeResponseExpires(options.responseExpires)])
   }
 
   return await presignS3Request('GET', createSigV4PresignOptions(options), query, [])
@@ -394,6 +394,9 @@ function normalizeMetadataHeaders(metadata: Record<string, string> | undefined):
     if (!HTTP_HEADER_TOKEN.test(key)) {
       throw new TypeError('metadata keys must be non-empty valid HTTP header tokens.')
     }
+    if (typeof value !== 'string') {
+      throw new TypeError('metadata values must be strings.')
+    }
 
     const lowerKey = key.toLowerCase()
     if (seenKeys.has(lowerKey)) {
@@ -405,6 +408,14 @@ function normalizeMetadataHeaders(metadata: Record<string, string> | undefined):
   }
 
   return headers
+}
+
+function normalizeResponseExpires(responseExpires: Date): string {
+  if (!Number.isFinite(responseExpires.getTime())) {
+    throw new RangeError('responseExpires must be a valid Date.')
+  }
+
+  return responseExpires.toUTCString()
 }
 
 function assertSafeResponseOverride(name: string, value: string): void {

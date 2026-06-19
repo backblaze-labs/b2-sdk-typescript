@@ -269,6 +269,15 @@ describe('presignS3GetObjectUrl', () => {
       }),
     ).rejects.toThrow('responseContentDisposition must not force inline rendering')
   })
+
+  it('rejects invalid response expiry dates', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseExpires: new Date('not a date'),
+      }),
+    ).rejects.toThrow('responseExpires must be a valid Date.')
+  })
 })
 
 describe('presignGetObjectUrl', () => {
@@ -416,6 +425,18 @@ describe('presignPutObjectUrl', () => {
         },
       }),
     ).rejects.toThrow('signed header values must not contain control characters')
+  })
+
+  it('rejects non-string metadata values from JavaScript callers', async () => {
+    await expect(
+      presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        metadata: {
+          count: 123,
+        } as unknown as Record<string, string>,
+      }),
+    ).rejects.toThrow('metadata values must be strings.')
   })
 })
 

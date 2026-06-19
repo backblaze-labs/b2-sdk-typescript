@@ -13,5 +13,13 @@
  * @returns An ArrayBuffer containing exactly `bytes`.
  */
 export function arrayBufferFor(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  if (
+    bytes.buffer instanceof ArrayBuffer &&
+    bytes.byteOffset === 0 &&
+    bytes.byteLength === bytes.buffer.byteLength
+  ) {
+    return bytes.buffer
+  }
+
+  return bytes.slice().buffer as ArrayBuffer
 }
