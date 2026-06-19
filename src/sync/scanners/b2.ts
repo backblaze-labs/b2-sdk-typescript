@@ -10,9 +10,9 @@ import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
- * Scans a B2 bucket (optionally filtered by prefix) and yields {@link B2SyncPath} entries
- * sorted by deterministic file-name order. Hidden files are excluded. All versions are fetched
- * and grouped.
+ * Scans a B2 bucket (optionally filtered by a raw B2 key prefix) and yields
+ * {@link B2SyncPath} entries sorted by deterministic file-name order. Hidden files are excluded.
+ * All versions are fetched and grouped.
  */
 export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
@@ -22,7 +22,7 @@ export class B2Folder implements SyncFolder {
   /**
    * Creates a new B2Folder for the given bucket and optional prefix.
    * @param bucket - The B2 bucket to scan.
-   * @param prefix - Optional folder prefix to restrict the scan scope.
+   * @param prefix - Optional raw B2 key prefix to restrict the scan scope.
    * Backslashes are normalized to forward slashes, but the prefix remains a raw B2 key prefix.
    */
   constructor(bucket: Bucket, prefix = '') {
