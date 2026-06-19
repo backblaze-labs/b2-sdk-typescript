@@ -20,11 +20,11 @@ export class B2Folder implements SyncFolder {
   /**
    * Creates a new B2Folder for the given bucket and optional prefix.
    * @param bucket - The B2 bucket to scan.
-   * @param prefix - Optional key prefix to restrict the scan scope.
+   * @param prefix - Optional folder prefix to restrict the scan scope.
    */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
-    this.prefix = prefix
+    this.prefix = normalizeFolderPrefix(prefix)
   }
 
   /**
@@ -122,4 +122,9 @@ function emitScanError(options: SyncScanOptions, message: string, err: unknown):
   }
   options.onError?.(event)
   return new Error(event.message)
+}
+
+function normalizeFolderPrefix(prefix: string): string {
+  if (prefix === '' || prefix.endsWith('/')) return prefix
+  return `${prefix}/`
 }
