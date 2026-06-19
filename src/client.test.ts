@@ -23,6 +23,17 @@ describe('B2Client with simulator', () => {
     expect(client.accountInfo.getAbsoluteMinimumPartSize()).toBe(5_000_000)
   })
 
+  it('keeps upload retry plumbing off the public client shape', () => {
+    const retryClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      retry: { maxRetries: 2 },
+    })
+
+    expect('uploadRetryOptions' in retryClient).toBe(false)
+    expect('getUploadRetryOptions' in retryClient).toBe(false)
+  })
+
   it('creates and lists buckets', async () => {
     const bucket = await client.createBucket({
       bucketName: 'test-bucket',

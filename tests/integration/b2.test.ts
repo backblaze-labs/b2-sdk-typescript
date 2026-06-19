@@ -12,17 +12,70 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
+import { BadBucketIdError } from '../../src/errors/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
 
 const skip = !keyId || !appKey
+const currentBucketPrefix = 'sdk-it-'
+const legacyBucketPrefix = 'sdk-test-'
+const staleBucketAgeMs = 60 * 60 * 1000
+
+function makeBucketName(): string {
+  const runId = process.env.GITHUB_RUN_ID
+  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? '1'
+  const now = Date.now()
+  if (runId !== undefined && runId !== '') {
+    return `${currentBucketPrefix}${runId}-${runAttempt}-${now}`
+  }
+  return `${currentBucketPrefix}${now}`
+}
+
+function isIntegrationBucketName(name: string): boolean {
+  return name.startsWith(currentBucketPrefix) || name.startsWith(legacyBucketPrefix)
+}
+
+function bucketTimestamp(name: string): number | null {
+  const matches = [...name.matchAll(/\d{13}/g)]
+  const last = matches.at(-1)?.[0]
+  if (last === undefined) return null
+  const timestamp = Number(last)
+  return Number.isSafeInteger(timestamp) ? timestamp : null
+}
+
+function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
+  if (!isIntegrationBucketName(name)) return false
+  const createdAt = bucketTimestamp(name)
+  return createdAt !== null && now - createdAt > staleBucketAgeMs
+}
+
+async function emptyBucket(bucket: Bucket): Promise<void> {
+  for await (const file of bucket.paginateFileNames()) {
+    await bucket.deleteFileVersion(file.fileName, file.fileId)
+  }
+
+  const versions = await bucket.listFileVersions()
+  for (const fv of versions.files) {
+    await bucket.deleteFileVersion(fv.fileName, fv.fileId)
+  }
+}
+
+async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
+  try {
+    await emptyBucket(bucket)
+    await bucket.delete()
+  } catch (err) {
+    if (err instanceof BadBucketIdError) return
+    throw err
+  }
+}
 
 describe.skipIf(skip)('B2 integration', () => {
   let client: B2Client
   let bucket: Bucket
-  const bucketName = `sdk-test-${Date.now()}`
+  const bucketName = makeBucketName()
 
   beforeAll(async () => {
     client = new B2Client({
@@ -31,24 +84,15 @@ describe.skipIf(skip)('B2 integration', () => {
     })
     await client.authorize()
 
-    // Defensive: sweep stale `sdk-test-*` buckets from prior runs that crashed
-    // before their afterAll cleanup. Each B2 account has a bucket-count limit
-    // (typically 100); without this sweep the integration job starts failing
-    // once stale state accumulates. Safe because the workflow runs matrix
-    // entries serially (max-parallel: 1) so no concurrent run can have a
-    // live `sdk-test-*` bucket we'd accidentally nuke.
+    // Defensive: sweep stale integration buckets from prior runs that crashed
+    // before their afterAll cleanup. Keep this age-gated so another branch's
+    // live integration run cannot have its bucket removed mid-test.
     const existing = await client.listBuckets()
+    const now = Date.now()
     for (const b of existing) {
-      if (!b.name.startsWith('sdk-test-')) continue
+      if (!isStaleIntegrationBucket(b.name, now)) continue
       try {
-        for await (const file of b.paginateFileNames()) {
-          await b.deleteFileVersion(file.fileName, file.fileId)
-        }
-        const versions = await b.listFileVersions()
-        for (const fv of versions.files) {
-          await b.deleteFileVersion(fv.fileName, fv.fileId)
-        }
-        await b.delete()
+        await deleteBucketIfPresent(b)
       } catch {
         // Skip buckets we can't clean up (permissions, in-flight uploads).
         // They'll surface as a hard bucket-limit error later, which is the
@@ -64,17 +108,7 @@ describe.skipIf(skip)('B2 integration', () => {
 
   afterAll(async () => {
     if (!bucket) return
-
-    for await (const file of bucket.paginateFileNames()) {
-      await bucket.deleteFileVersion(file.fileName, file.fileId)
-    }
-
-    const versions = await bucket.listFileVersions()
-    for (const fv of versions.files) {
-      await bucket.deleteFileVersion(fv.fileName, fv.fileId)
-    }
-
-    await bucket.delete()
+    await deleteBucketIfPresent(bucket)
   })
 
   it('authorizes successfully', () => {

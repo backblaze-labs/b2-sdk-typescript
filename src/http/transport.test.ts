@@ -311,19 +311,24 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    // No transient 5xx is retried in place for upload endpoints (URL-pinned;
-    // a 5xx may mean a bad pod, so it must bubble for fresh-URL retry, #57).
+    // Retryable upload pod failures are not retried in place. Upload endpoints
+    // are URL-pinned, so pod failures bubble to the upload layer for fresh-URL
+    // retry. HTTP 429 is covered separately because it is account-level
+    // throttling and should retry in place.
     it.each([
+      ['b2_upload_file', 408],
       ['b2_upload_file', 500],
       ['b2_upload_file', 502],
       ['b2_upload_file', 503],
       ['b2_upload_file', 504],
+      ['b2_upload_part', 408],
       ['b2_upload_part', 500],
       ['b2_upload_part', 502],
       ['b2_upload_part', 503],
       ['b2_upload_part', 504],
     ] as const)('does not retry %s on HTTP %i in place', async (endpoint, status) => {
-      const errorBody = { status, code: 'internal_error', message: `HTTP ${status}` }
+      const code = status === 408 ? 'request_timeout' : 'internal_error'
+      const errorBody = { status, code, message: `HTTP ${status}` }
       // Second response would be 200 if it (wrongly) retried — assert it doesn't.
       innerTransport.send
         .mockResolvedValueOnce(mockResponse(status, errorBody))
@@ -340,6 +345,38 @@ describe('RetryTransport', () => {
       }
       await expect(transport.send(uploadRequest)).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      'b2_upload_file',
+      'b2_upload_part',
+    ] as const)('retries %s on HTTP 429 in place and respects Retry-After', async (endpoint) => {
+      const errorBody = { status: 429, code: 'too_many_requests', message: 'slow down' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(429, errorBody, { 'Retry-After': '2' }))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+      const sleepImpl = vi.fn<(_ms: number, _signal?: AbortSignal) => Promise<void>>(() =>
+        Promise.resolve(),
+      )
+
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100_000 },
+        sleepImpl,
+      })
+      const uploadRequest: HttpRequest = {
+        url: `https://pod-000.backblaze.com/b2api/v3/${endpoint}`,
+        method: 'POST',
+        headers: { Authorization: 'upload-token' },
+      }
+
+      const result = await transport.send(uploadRequest)
+
+      expect(result.status).toBe(200)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+      expect(innerTransport.send.mock.calls[0]?.[0].url).toBe(uploadRequest.url)
+      expect(innerTransport.send.mock.calls[1]?.[0].url).toBe(uploadRequest.url)
+      expect(sleepImpl).toHaveBeenCalledWith(2000, undefined)
     })
 
     it('does not treat b2_get_upload_url / b2_get_upload_part_url as upload endpoints (still retries 500)', async () => {
@@ -381,28 +418,6 @@ describe('RetryTransport', () => {
         method: 'GET',
         headers: { Authorization: 'token' },
       })
-      expect(result.status).toBe(200)
-      expect(innerTransport.send).toHaveBeenCalledTimes(2)
-    })
-
-    it('still retries 429 in place for upload endpoints (throttle, not pod health)', async () => {
-      // 408/429 are timeout/throttle signals, not pod-health 5xx, so they stay
-      // retryable in place for uploads.
-      const errorBody = { status: 429, code: 'too_many_requests', message: 'Slow down' }
-      innerTransport.send
-        .mockResolvedValueOnce(mockResponse(429, errorBody))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
-
-      const transport = makeRetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
-      })
-      const uploadRequest: HttpRequest = {
-        url: 'https://pod-000.backblaze.com/b2api/v3/b2_upload_file',
-        method: 'POST',
-        headers: { Authorization: 'upload-token' },
-      }
-      const result = await transport.send(uploadRequest)
       expect(result.status).toBe(200)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
@@ -525,6 +540,45 @@ describe('RetryTransport', () => {
       expect(secondCall?.headers?.['Authorization']).toBe('fresh-token-xyz')
       // Other headers untouched.
       expect(secondCall?.headers?.['Content-Type']).toBe('application/json')
+    })
+
+    it('retries after reauth even when maxRetries is zero', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+      const onReauth = vi.fn().mockResolvedValue('fresh-token-zero-budget')
+
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not loop forever on repeated reauth failures', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('still-bad-token')
+
+      innerTransport.send.mockResolvedValue(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
     it('throws expired auth token error when no onReauth callback is provided', async () => {

@@ -1,4 +1,10 @@
-import { B2Error, classifyError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import {
+  B2Error,
+  B2SsrfError,
+  classifyError,
+  ExpiredAuthTokenError,
+  NetworkError,
+} from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
@@ -16,6 +22,8 @@ export interface HttpRequest {
   readonly body?: BodyInit | null
   /** Optional abort signal for request cancellation. */
   readonly signal?: AbortSignal
+  /** Optional per-request retry override. */
+  readonly retry?: Partial<RetryOptions>
 }
 
 /** Represents a parsed HTTP response from the B2 API. */
@@ -124,24 +132,13 @@ export interface RetryTransportOptions {
 }
 
 /**
- * Decide whether a classified error should be retried in place for `url`.
- * Transient errors normally retry; the upload-endpoint 5xx carve-out is
- * explained inline.
+ * Decide whether `url` points at a URL-pinned upload POST endpoint.
  *
- * @param error - The classified, retryability-tagged error.
- * @param url - The request URL (used to detect upload endpoints).
- * @param status - The HTTP status of the failed response.
+ * @param url - Request URL to inspect.
  *
- * @returns Whether to retry the request in place.
+ * @returns Whether the request is a direct upload endpoint.
  */
-function shouldRetryInPlace(error: B2Error, url: string, status: number): boolean {
-  if (!error.retryable) return false
-  // Upload endpoints are URL-pinned: a 5xx may mean an unhealthy upload pod, so
-  // the correct recovery is a FRESH upload URL (the upload layer's job, tracked
-  // in #57) rather than re-POSTing the same URL. So NO transient 5xx is retried
-  // in place for uploads — those errors bubble to the upload layer. 408/429
-  // (timeout / throttle) are not pod-health signals and still retry in place.
-  //
+function isUploadEndpoint(url: string): boolean {
   // Match the upload POST endpoints, while avoiding two false positives:
   //   - the `b2_get_upload_url` / `b2_get_upload_part_url` URL-fetch calls
   //     (ordinary API endpoints — their paths don't contain `/b2_upload_*`); and
@@ -152,11 +149,37 @@ function shouldRetryInPlace(error: B2Error, url: string, status: number): boolea
   // `includes` still matches upload URLs that carry path segments after the
   // endpoint name (e.g. `/b2api/v2/b2_upload_file/<bucketId>/<token>`).
   const path = new URL(url).pathname
-  const isUploadEndpoint =
+  return (
     !path.startsWith('/file/') &&
     (path.includes('/b2_upload_file') || path.includes('/b2_upload_part'))
-  if (isUploadEndpoint && status >= 500 && status < 600) return false
+  )
+}
+
+/**
+ * Decide whether a classified error should be retried in place for `url`.
+ * Transient errors normally retry; upload endpoints bubble to the upload layer
+ * for fresh-URL retry except account-level 429 throttling, where fetching a new
+ * upload URL only amplifies the rate limit.
+ *
+ * @param error - The classified, retryability-tagged error.
+ * @param url - The request URL (used to detect upload endpoints).
+ *
+ * @returns Whether to retry the request in place.
+ */
+function shouldRetryInPlace(error: B2Error, url: string): boolean {
+  if (!error.retryable) return false
+  if (isUploadEndpoint(url) && error.status === 429) return true
+  if (isUploadEndpoint(url)) return false
   return true
+}
+
+function isTerminalTransportError(err: unknown): boolean {
+  return (
+    err instanceof B2Error ||
+    err instanceof NetworkError ||
+    err instanceof B2SsrfError ||
+    (err instanceof DOMException && err.name === 'AbortError')
+  )
 }
 
 /**
@@ -165,12 +188,10 @@ function shouldRetryInPlace(error: B2Error, url: string, status: number): boolea
  * expired auth tokens, and network failures. Delegates to an inner
  * {@link HttpTransport}.
  *
- * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned: a 5xx
- * may mean an unhealthy upload pod, so the correct recovery is a *fresh* upload
- * URL (B2's documented flow), not a re-POST to the same one. So NO transient 5xx
- * (500/502/503/504) is retried in place for upload endpoints — those errors
- * bubble to the upload layer; 408/429 still retry in place. Proper fresh-URL
- * upload retry is tracked separately.
+ * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned. Their
+ * retryable pod failures bubble to the upload layer, which evicts the failed
+ * URL, fetches a fresh one, and retries there. HTTP 429 remains an in-place
+ * retry so account-level throttling does not trigger extra upload URL fetches.
  */
 export class RetryTransport implements HttpTransport {
   /** The wrapped transport that performs actual HTTP requests. */
@@ -207,12 +228,15 @@ export class RetryTransport implements HttpTransport {
     // fresh Authorization header, so the caller's `originalRequest`
     // stays untouched.
     let request: HttpRequest = originalRequest
+    const retryOptions = { ...this.options, ...originalRequest.retry }
     let lastError: B2Error | NetworkError | undefined
+    let didReauth = false
+    let attempt = 0
 
-    for (let attempt = 0; attempt <= this.options.maxRetries; attempt++) {
+    while (attempt <= retryOptions.maxRetries) {
       if (attempt > 0 && lastError) {
         const retryAfter = lastError instanceof NetworkError ? undefined : lastError.retryAfter
-        const delay = computeBackoff(attempt - 1, this.options, retryAfter)
+        const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
         await this.sleepImpl(delay, request.signal)
       }
 
@@ -243,7 +267,12 @@ export class RetryTransport implements HttpTransport {
           ...(requestId !== undefined ? { requestId } : {}),
         })
 
-        if (error instanceof ExpiredAuthTokenError && this.onReauth) {
+        if (
+          error instanceof ExpiredAuthTokenError &&
+          this.onReauth &&
+          !isUploadEndpoint(request.url) &&
+          !didReauth
+        ) {
           // Reauth returns the FRESH token; build a new request with a
           // shallow-copied headers object so the Authorization swap
           // doesn't mutate the caller's original request (which they
@@ -256,23 +285,19 @@ export class RetryTransport implements HttpTransport {
             ...request,
             headers: { ...(request.headers ?? {}), Authorization: freshToken },
           }
+          didReauth = true
+          lastError = undefined
           continue
         }
 
-        if (
-          !shouldRetryInPlace(error, request.url, response.status) ||
-          attempt === this.options.maxRetries
-        ) {
+        if (!shouldRetryInPlace(error, request.url) || attempt === retryOptions.maxRetries) {
           throw error
         }
 
         lastError = error
+        attempt += 1
       } catch (err) {
-        if (err instanceof B2Error || err instanceof NetworkError) {
-          throw err
-        }
-
-        if (err instanceof DOMException && err.name === 'AbortError') {
+        if (isTerminalTransportError(err)) {
           throw err
         }
 
@@ -281,11 +306,12 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (attempt === this.options.maxRetries) {
+        if (isUploadEndpoint(request.url) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 
         lastError = networkErr
+        attempt += 1
       }
     }
 

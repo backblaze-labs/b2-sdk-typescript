@@ -2,10 +2,11 @@ import type { AccountInfo } from './auth/account-info.ts'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { getRealmUrl } from './auth/realms.ts'
 import { Bucket } from './bucket.ts'
-import type { RetryOptions } from './http/retry.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
 import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
+import { setClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
@@ -101,6 +102,8 @@ export class B2Client {
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     this.userAllowedSuffixes = options.allowedHostSuffixes
+    const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    setClientUploadRetryOptions(this, uploadRetryOptions)
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -117,13 +120,12 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      ...(options.retry !== undefined ? { retry: options.retry } : {}),
+      retry: uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 
     this.raw = new RawClient({ transport: retryTransport })
   }
-
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
    *

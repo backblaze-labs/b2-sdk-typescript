@@ -113,6 +113,10 @@ await bucket.upload({
 })
 ```
 
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
+
+Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one. Set `retryResponseBodyFailures: false` to fail instead of re-sending a payload when the success response body is lost. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+
 #### Resume a failed multipart upload
 
 Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`, checks which parts are already on the server, and only re-uploads the missing ones. Parts whose locally-recomputed SHA-1 matches the server's are skipped.

@@ -9,22 +9,53 @@
  *   B2_APPLICATION_KEY_ID
  *   B2_APPLICATION_KEY
  *
- * Creates a fresh `sdk-examples-node<major>-<timestamp>` bucket, runs the
- * examples against it, and tears down on success OR failure. A defensive
- * sweep at startup removes any `sdk-examples-*` bucket from previously
- * crashed runs (safe because the workflow serializes matrix entries with
- * max-parallel: 1).
+ * Creates a fresh `sdk-rex-n<major>-<run>-<attempt>-<timestamp>` bucket,
+ * runs the examples against it, and tears down on success OR failure. A
+ * defensive age-gated sweep at startup removes stale real-example buckets
+ * from previously crashed runs without touching buckets from live runs.
  */
 
 import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { BadBucketIdError } from '../../src/errors/index.ts'
 import type { Bucket } from '../../src/index.ts'
 import { B2Client } from '../../src/index.ts'
 
 const NODE_MAJOR = (process.versions.node ?? '').split('.')[0] ?? 'unknown'
-const BUCKET_PREFIX = `sdk-examples-node${NODE_MAJOR}-`
+const currentBucketPrefix = 'sdk-rex-'
+const legacyBucketPrefix = 'sdk-examples-'
+const staleBucketAgeMs = 60 * 60 * 1000
+
+function makeBucketName(): string {
+  const runId = process.env.GITHUB_RUN_ID
+  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? '1'
+  const now = Date.now()
+  const node = `n${NODE_MAJOR}`
+  if (runId !== undefined && runId !== '') {
+    return `${currentBucketPrefix}${node}-${runId}-${runAttempt}-${now}`
+  }
+  return `${currentBucketPrefix}${node}-${now}`
+}
+
+function isRealExampleBucketName(name: string): boolean {
+  return name.startsWith(currentBucketPrefix) || name.startsWith(legacyBucketPrefix)
+}
+
+function bucketTimestamp(name: string): number | null {
+  const matches = [...name.matchAll(/\d{13}/g)]
+  const last = matches.at(-1)?.[0]
+  if (last === undefined) return null
+  const timestamp = Number(last)
+  return Number.isSafeInteger(timestamp) ? timestamp : null
+}
+
+function isStaleRealExampleBucket(name: string, now = Date.now()): boolean {
+  if (!isRealExampleBucketName(name)) return false
+  const createdAt = bucketTimestamp(name)
+  return createdAt !== null && now - createdAt > staleBucketAgeMs
+}
 
 /**
  * Run a child process inheriting stdout/stderr. Resolves on exit code 0,
@@ -63,6 +94,15 @@ async function emptyAndDeleteBucket(b: Bucket): Promise<void> {
   await b.delete()
 }
 
+async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
+  try {
+    await emptyAndDeleteBucket(bucket)
+  } catch (err) {
+    if (err instanceof BadBucketIdError) return
+    throw err
+  }
+}
+
 async function main(): Promise<void> {
   const keyId = process.env['B2_APPLICATION_KEY_ID']
   const appKey = process.env['B2_APPLICATION_KEY']
@@ -70,17 +110,17 @@ async function main(): Promise<void> {
     console.error('B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY are required')
     process.exit(2)
   }
-  const bucketName = `${BUCKET_PREFIX}${Date.now()}`
+  const bucketName = makeBucketName()
 
   const client = new B2Client({ applicationKeyId: keyId, applicationKey: appKey })
   await client.authorize()
 
-  // Sweep leftover sdk-examples-* buckets from any previously-crashed run.
-  // Safe with max-parallel: 1 in the workflow.
+  // Sweep only stale buckets from crashed runs. Other branches and older
+  // workflow attempts may still be using the same B2 account concurrently.
   for (const b of await client.listBuckets()) {
-    if (!b.name.startsWith('sdk-examples-')) continue
+    if (!isStaleRealExampleBucket(b.name)) continue
     try {
-      await emptyAndDeleteBucket(b)
+      await deleteBucketIfPresent(b)
     } catch (err) {
       console.warn(`could not clean up stale bucket ${b.name}: ${String(err)}`)
     }
@@ -182,7 +222,7 @@ async function main(): Promise<void> {
   } finally {
     console.log(`\nTearing down bucket ${bucketName}...`)
     try {
-      await emptyAndDeleteBucket(bucket)
+      await deleteBucketIfPresent(bucket)
     } catch (err) {
       console.error(`teardown failed: ${String(err)}`)
     }

@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
   ApplicationKey,
@@ -68,6 +69,11 @@ import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
 export interface RawClientOptions {
   /** The HTTP transport used to send requests (e.g., FetchTransport or RetryTransport). */
   readonly transport: HttpTransport
+}
+
+interface JsonPostOptions {
+  readonly signal?: AbortSignal
+  readonly retry?: Partial<RetryOptions>
 }
 
 /**
@@ -187,6 +193,8 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param signal - An optional abort signal for cancellation.
+   * @param retry - Optional per-request retry override.
    *
    * @returns The upload URL and authorization token.
    */
@@ -194,8 +202,13 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: GetUploadUrlRequest,
+    signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadUrlResponse> {
-    return this.postJson<GetUploadUrlResponse>(apiUrl, authToken, 'b2_get_upload_url', request)
+    return this.postJson<GetUploadUrlResponse>(apiUrl, authToken, 'b2_get_upload_url', request, {
+      ...(signal !== undefined ? { signal } : {}),
+      ...(retry !== undefined ? { retry } : {}),
+    })
   }
 
   /**
@@ -413,6 +426,8 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param signal - An optional abort signal for cancellation.
+   * @param retry - Optional per-request retry override.
    *
    * @returns The upload part URL and authorization token.
    */
@@ -420,12 +435,18 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: GetUploadPartUrlRequest,
+    signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadPartUrlResponse> {
     return this.postJson<GetUploadPartUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_part_url',
       request,
+      {
+        ...(signal !== undefined ? { signal } : {}),
+        ...(retry !== undefined ? { retry } : {}),
+      },
     )
   }
 
@@ -789,6 +810,7 @@ export class RawClient {
    * @param authToken - The authorization token.
    * @param endpoint - The B2 API endpoint name.
    * @param body - The JSON request body.
+   * @param options - Optional abort and per-request retry settings.
    *
    * @returns The parsed JSON response.
    */
@@ -797,6 +819,7 @@ export class RawClient {
     authToken: string,
     endpoint: string,
     body: unknown,
+    options?: JsonPostOptions,
   ): Promise<T> {
     const response = await this.transport.send({
       url: `${apiUrl}/b2api/v3/${endpoint}`,
@@ -806,6 +829,8 @@ export class RawClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     return response.json<T>()
   }

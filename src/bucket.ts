@@ -6,6 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -35,6 +36,7 @@ import type { ReplicationConfiguration, ReplicationRule } from './types/replicat
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
+import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -172,6 +174,13 @@ export class Bucket {
     concurrency?: number
     /** Callback invoked with upload progress events. */
     onProgress?: ProgressListener
+    /** Callback invoked before retrying with a fresh upload URL. */
+    onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the file. Defaults to true; set false to avoid possible duplicate versions.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
@@ -194,8 +203,9 @@ export class Bucket {
 
     if (isLarge) {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
-        bucketId: this.id,
         ...options,
+        bucketId: this.id,
+        retry: getClientUploadRetryOptions(this.client),
       })
     }
 
@@ -204,8 +214,9 @@ export class Bucket {
     // single-request uploads.
     const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
-      bucketId: this.id,
       ...smallOptions,
+      bucketId: this.id,
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 

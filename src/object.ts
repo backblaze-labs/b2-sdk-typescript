@@ -9,6 +9,7 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -17,6 +18,7 @@ import type { FileVersion } from './types/file.ts'
 import type { FileId, LargeFileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import { uploadLargeFile } from './upload/large.ts'
+import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
 
@@ -126,6 +128,13 @@ export class B2Object {
     concurrency?: number
     /** Callback invoked with upload progress events. */
     onProgress?: ProgressListener
+    /** Callback invoked before retrying with a fresh upload URL. */
+    onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the file. Defaults to true; set false to avoid possible duplicate versions.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
@@ -145,18 +154,20 @@ export class B2Object {
 
     if (isLarge) {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
+        ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
-        ...options,
+        retry: getClientUploadRetryOptions(this.client),
       })
     }
 
     // Small-file path doesn't accept resume options.
     const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
+      ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      ...smallOptions,
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 
@@ -280,13 +291,21 @@ export class B2Object {
     concurrency?: number
     /** Callback invoked with upload progress events. */
     onProgress?: ProgressListener
+    /** Callback invoked before retrying with a fresh upload URL. */
+    onUploadRetry?: UploadRetryListener
+    /**
+     * Retry when an upload response body cannot be read after B2 may have stored
+     * the part. Defaults to true; set false to avoid re-sending the part.
+     */
+    retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */
     signal?: AbortSignal
   }): UploadWriteHandle {
     return createWriteStream(this.client.raw, this.client.accountInfo, {
+      ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      ...(options ?? {}),
+      retry: getClientUploadRetryOptions(this.client),
     })
   }
 
