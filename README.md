@@ -106,7 +106,7 @@ await bucket.upload({
   source: new FileSource('/var/backups/db.dump'),
 })
 
-// Large file with progress tracking
+// Large file with progress tracking (Node)
 await bucket.upload({
   fileName: 'backup.tar.gz',
   source: new FileSource('/path/to/backup.tar.gz'),

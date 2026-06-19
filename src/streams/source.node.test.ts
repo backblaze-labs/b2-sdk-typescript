@@ -53,6 +53,17 @@ describe('FileSource', () => {
     expect(decoder.decode(await slice.toArrayBuffer())).toBe('89')
   })
 
+  it('coerces fractional slice offsets to integers', async () => {
+    const path = join(tmpDir, 'fractional.txt')
+    await writeFile(path, '0123456789')
+
+    const source = new FileSource(path)
+    const slice = source.slice(1.9, 4.9)
+
+    expect(slice.size).toBe(3)
+    expect(decoder.decode(await slice.toArrayBuffer())).toBe('123')
+  })
+
   it('streams only the selected byte range', async () => {
     const path = join(tmpDir, 'stream.txt')
     await writeFile(path, 'prefix-body-suffix')

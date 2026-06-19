@@ -77,7 +77,8 @@ function fileOpenFlags(): number {
 
 function normalizeSliceOffset(value: number, size: number): number {
   if (!Number.isFinite(value)) throw new RangeError('FileSource slice offsets must be finite.')
-  const offset = value < 0 ? size + value : value
+  const integer = Math.trunc(value)
+  const offset = integer < 0 ? size + integer : integer
   return Math.min(Math.max(offset, 0), size)
 }
 
