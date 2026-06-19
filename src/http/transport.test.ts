@@ -122,6 +122,31 @@ describe('FetchTransport', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('blocks opaque redirects returned by browser fetch implementations', async () => {
+    fetchSpy.mockResolvedValue({
+      status: 0,
+      type: 'opaqueredirect',
+      headers: new Headers(),
+    } as Response)
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        method: 'GET',
+        headers: { Authorization: 'Basic secret' },
+      }),
+    ).rejects.toMatchObject({
+      name: 'B2RedirectError',
+      status: 0,
+      location: null,
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.redirect).toBe('manual')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('does not override an existing User-Agent header', async () => {
     fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
 

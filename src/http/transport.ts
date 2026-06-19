@@ -100,7 +100,7 @@ export class FetchTransport implements HttpTransport {
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
     })
 
-    if (response.status >= 300 && response.status < 400) {
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
       throw new B2RedirectError(request.url, response.status, response.headers.get('Location'))
     }
 

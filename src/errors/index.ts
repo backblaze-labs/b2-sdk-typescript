@@ -557,7 +557,7 @@ export class B2RedirectError extends Error {
   readonly retryable = false
   /** The request URL whose response attempted to redirect. */
   readonly url: string
-  /** HTTP redirect status code. */
+  /** HTTP redirect status code, or 0 for an opaque browser redirect. */
   readonly status: number
   /** Sanitized redirect target, or `null` when no Location header was present. */
   readonly location: string | null
