@@ -1,9 +1,25 @@
+/**
+ * Normalizes a B2 folder prefix to use forward slashes and end in `/` when non-empty.
+ *
+ * @param prefix - User-supplied B2 folder prefix.
+ *
+ * @returns Normalized B2 folder prefix.
+ */
 export function normalizeB2FolderPrefix(prefix: string): string {
   const normalized = prefix.split('\\').join('/')
   if (normalized === '' || normalized.endsWith('/')) return normalized
   return `${normalized}/`
 }
 
+/**
+ * Normalizes a B2 object name into a safe folder-relative sync path.
+ *
+ * @param path - B2 object name returned by a listing.
+ *
+ * @returns Folder-relative sync path.
+ *
+ * @throws When the object name cannot be represented as a safe relative path.
+ */
 export function normalizeB2RelativePath(path: string): string {
   const relativePath = stripLeadingSlashes(path.split('\\').join('/'))
   const segments = relativePath.split('/')
