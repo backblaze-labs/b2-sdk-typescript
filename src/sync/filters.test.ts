@@ -83,7 +83,7 @@ describe('sync filters', () => {
       'Sync filter RegExp is too long',
     )
     expect(() =>
-      pathPassesSyncFilters('aaaaaaaaab', { include: [tooManyUnboundedQuantifiers] }),
+      pathPassesSyncFilters(`${'a'.repeat(9)}b`, { include: [tooManyUnboundedQuantifiers] }),
     ).toThrow('Sync filter RegExp is too complex')
   })
 
