@@ -255,7 +255,7 @@ describe('presignGetObjectUrl', () => {
     )
 
     expect(typeof url).toBe('string')
-    expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
+    expect(url).toContain('/file/my-bucket/path/to/file.txt')
     expect(url).toContain('Authorization=auth-token-123')
   })
 })
@@ -322,18 +322,23 @@ describe('deriveS3RegionFromEndpoint', () => {
   it('returns null for custom endpoints', () => {
     expect(deriveS3RegionFromEndpoint('https://s3.example.test')).toBeNull()
   })
+
+  it('returns null for malformed endpoints', () => {
+    expect(deriveS3RegionFromEndpoint('s3.us-west-004.backblazeb2.com')).toBeNull()
+    expect(deriveS3RegionFromEndpoint('http://[invalid')).toBeNull()
+  })
 })
 
 describe('createNativeDownloadAuthorizationUrl', () => {
-  it('constructs URL with encoded bucket and file name', () => {
+  it('constructs URL with encoded bucket and B2-encoded file name', () => {
     const url = createNativeDownloadAuthorizationUrl(
       'https://f004.backblazeb2.com',
       'my-bucket',
-      'path/to/file.txt',
+      'path/to/my file#2.txt',
       'auth-token-123',
     )
 
-    expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
+    expect(url).toContain('/file/my-bucket/path/to/my%20file%232.txt')
   })
 
   it('includes the authorization token', () => {

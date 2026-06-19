@@ -10,6 +10,7 @@
  */
 
 import type { AccountInfo } from '../auth/account-info.ts'
+import { encodeFileName } from '../raw/encoding.ts'
 
 const DEFAULT_PRESIGN_EXPIRES_IN = 3600
 const MAX_PRESIGN_EXPIRES_IN = 604_800
@@ -189,7 +190,13 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
  * @returns The derived region, or `null` when the endpoint is not a standard B2 S3 URL.
  */
 export function deriveS3RegionFromEndpoint(endpoint: string): string | null {
-  const hostname = new URL(endpoint).hostname.toLowerCase()
+  let hostname: string
+  try {
+    hostname = new URL(endpoint).hostname.toLowerCase()
+  } catch {
+    return null
+  }
+
   const match = /^s3\.([a-z0-9-]+)\.backblazeb2\.com$/.exec(hostname)
   return match?.[1] ?? null
 }
@@ -242,7 +249,7 @@ export async function presignS3GetObjectUrl(
  * @param authorizationToken - A download authorization token from `b2_get_download_authorization`.
  * @param validDurationInSeconds - Compatibility-only value for the non-authoritative `expires` query.
  *
- * @returns The B2 native download URL string.
+ * @returns The B2 native download-authorization URL string.
  *
  * @deprecated Use {@link createNativeDownloadAuthorizationUrl} for B2 native
  * download-token URLs, or {@link presignS3GetObjectUrl} for real S3-compatible
@@ -309,7 +316,7 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
  * @param authorizationToken - A download authorization token from `b2_get_download_authorization`.
  * @param validDurationInSeconds - Compatibility-only value for the non-authoritative `expires` query.
  *
- * @returns The B2 native download URL string.
+ * @returns The B2 native download-authorization URL string, not an S3 presigned URL.
  */
 export function createNativeDownloadAuthorizationUrl(
   downloadUrl: string,
@@ -319,7 +326,7 @@ export function createNativeDownloadAuthorizationUrl(
   validDurationInSeconds = DEFAULT_PRESIGN_EXPIRES_IN,
 ): string {
   const expires = Math.floor(Date.now() / 1000) + validDurationInSeconds
-  return `${downloadUrl}/file/${awsPercentEncode(bucketName)}/${awsPercentEncode(fileName)}?Authorization=${awsPercentEncode(authorizationToken)}&expires=${expires}`
+  return `${downloadUrl}/file/${awsPercentEncode(bucketName)}/${encodeFileName(fileName)}?Authorization=${awsPercentEncode(authorizationToken)}&expires=${expires}`
 }
 
 type QueryParam = readonly [name: string, value: string]
