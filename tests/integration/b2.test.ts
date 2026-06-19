@@ -52,13 +52,14 @@ function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
 }
 
 async function emptyBucket(bucket: Bucket): Promise<void> {
+  const deleted = new Set<string>()
   for await (const file of bucket.paginateFileNames()) {
-    await bucket.deleteFileVersion(file.fileName, file.fileId)
+    await deleteFileVersionOnce(bucket, file.fileName, file.fileId, deleted)
   }
 
   const versions = await bucket.listFileVersions()
   for (const fv of versions.files) {
-    await bucket.deleteFileVersion(fv.fileName, fv.fileId)
+    await deleteFileVersionOnce(bucket, fv.fileName, fv.fileId, deleted)
   }
 }
 
@@ -70,6 +71,33 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
     if (err instanceof BadBucketIdError) return
     throw err
   }
+}
+
+async function deleteFileVersionOnce(
+  b: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+  deleted: Set<string>,
+): Promise<void> {
+  const key = `${fileName}\0${fileId}`
+  if (deleted.has(key)) return
+  deleted.add(key)
+  try {
+    await b.deleteFileVersion(fileName, fileId)
+  } catch (err) {
+    if (!hasB2ErrorCode(err, 'file_not_present') && !hasB2ErrorCode(err, 'no_such_file')) {
+      throw err
+    }
+  }
+}
+
+function hasB2ErrorCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { readonly code?: unknown }).code === code
+  )
 }
 
 describe.skipIf(skip)('B2 integration', () => {
