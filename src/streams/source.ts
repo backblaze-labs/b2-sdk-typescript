@@ -266,7 +266,6 @@ export class FileSource implements ContentSource {
             handle = await openValidatedHandle(filePath, identity, requiredSize)
           }
 
-          await assertHandleReady(filePath, handle, identity, requiredSize)
           const length = Math.min(FILE_SOURCE_CHUNK_SIZE, remaining)
           const chunk = new Uint8Array(length)
           const { bytesRead } = await handle.read(chunk, 0, length, position)
