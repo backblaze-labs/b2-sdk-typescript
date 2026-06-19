@@ -1,5 +1,3 @@
-import type { Stats } from 'node:fs'
-import type { FileHandle } from 'node:fs/promises'
 import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
@@ -16,6 +14,26 @@ interface FileIdentity {
 }
 
 const fileSourceIdentities = new WeakMap<FileSource, FileIdentity>()
+
+interface FileStatsLike {
+  readonly dev: number
+  readonly ino: number
+  readonly size: number
+  readonly mtimeMs: number
+  readonly ctimeMs: number
+  isFile(): boolean
+}
+
+interface FileHandleLike {
+  read(
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number,
+  ): Promise<{ bytesRead: number }>
+  stat(): Promise<FileStatsLike>
+  close(): Promise<void>
+}
 
 /**
  * Uniform adapter for upload content. Wraps File, Blob, Buffer, file paths,
@@ -225,7 +243,7 @@ export class FileSource implements ContentSource {
     const totalSize = this.size
     const identity = fileSourceIdentities.get(this)
     const requiredSize = offset + totalSize
-    let handle: FileHandle | null = null
+    let handle: FileHandleLike | null = null
     let position = offset
     let remaining = totalSize
 
@@ -350,12 +368,14 @@ function assertSafeByteCount(value: number, label: string): void {
 }
 
 function clampByteRange(value: number, size: number): number {
-  // Support Blob/ArrayBuffer-style `slice(start, Infinity)` by clamping to EOF.
-  if (!Number.isFinite(value)) return size
+  if (Number.isNaN(value)) return 0
+  // Support Blob/ArrayBuffer-style `slice(start, Infinity)` while keeping
+  // negative infinity pinned to the start of the file range.
+  if (!Number.isFinite(value)) return value < 0 ? 0 : size
   return Math.min(size, Math.max(0, Math.trunc(value)))
 }
 
-async function openNoFollow(filePath: string): Promise<FileHandle> {
+async function openNoFollow(filePath: string): Promise<FileHandleLike> {
   const { constants } = await import('node:fs')
   const { open } = await import('node:fs/promises')
   const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
@@ -366,7 +386,7 @@ async function openValidatedHandle(
   filePath: string,
   identity: FileIdentity | undefined,
   requiredSize: number,
-): Promise<FileHandle> {
+): Promise<FileHandleLike> {
   const handle = await openNoFollow(filePath)
   try {
     await assertHandleReady(filePath, handle, identity, requiredSize)
@@ -379,7 +399,7 @@ async function openValidatedHandle(
 
 async function assertHandleReady(
   filePath: string,
-  handle: FileHandle,
+  handle: FileHandleLike,
   identity: FileIdentity | undefined,
   requiredSize: number,
 ): Promise<void> {
@@ -392,11 +412,11 @@ async function assertHandleReady(
   }
 }
 
-function assertRegularFile(filePath: string, stats: Stats): void {
+function assertRegularFile(filePath: string, stats: FileStatsLike): void {
   if (!stats.isFile()) throw new Error(`FileSource path is not a regular file: ${filePath}`)
 }
 
-function assertSameIdentity(filePath: string, stats: Stats, identity: FileIdentity): void {
+function assertSameIdentity(filePath: string, stats: FileStatsLike, identity: FileIdentity): void {
   if (
     stats.dev !== identity.dev ||
     stats.ino !== identity.ino ||
@@ -408,7 +428,7 @@ function assertSameIdentity(filePath: string, stats: Stats, identity: FileIdenti
   }
 }
 
-function identityFromStats(stats: Stats): FileIdentity {
+function identityFromStats(stats: FileStatsLike): FileIdentity {
   return {
     dev: stats.dev,
     ino: stats.ino,
