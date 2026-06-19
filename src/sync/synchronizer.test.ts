@@ -977,7 +977,7 @@ describe('synchronize', () => {
     })
 
     it.skipIf(!isNode)(
-      'uses B2 large_file_sha1 fallback to avoid re-uploading unchanged large files',
+      'reports unavailable sha1 for large B2 metadata without re-uploading repeatedly',
       async () => {
         const { tmpdir } = await import('node:os')
         const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
@@ -1012,8 +1012,18 @@ describe('synchronize', () => {
           const firstRun = await collectEvents(config)
           const secondRun = await collectEvents(config)
 
-          expect(firstRun.filter((e) => e.type === 'skip')).toHaveLength(1)
-          expect(secondRun.filter((e) => e.type === 'skip')).toHaveLength(1)
+          const firstErrors = firstRun.filter((e) => e.type === 'error')
+          const secondErrors = secondRun.filter((e) => e.type === 'error')
+          expect(firstRun.filter((e) => e.type === 'skip')).toHaveLength(0)
+          expect(secondRun.filter((e) => e.type === 'skip')).toHaveLength(0)
+          expect(firstErrors[0]).toMatchObject({
+            path: 'large.bin',
+            message: expect.stringContaining('verifiable SHA-1 is unavailable'),
+          })
+          expect(secondErrors[0]).toMatchObject({
+            path: 'large.bin',
+            message: expect.stringContaining('verifiable SHA-1 is unavailable'),
+          })
           expect(mockBucket.upload).not.toHaveBeenCalled()
         } finally {
           await rm(root, { recursive: true, force: true })
@@ -1021,7 +1031,7 @@ describe('synchronize', () => {
       },
     )
 
-    it.skipIf(!isNode)('skips when sha1 comparison has no verifiable B2 hash', async () => {
+    it.skipIf(!isNode)('errors when sha1 comparison has no verifiable B2 hash', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
@@ -1051,9 +1061,12 @@ describe('synchronize', () => {
         }
 
         const events = await collectEvents(config)
-        const skips = events.filter((e) => e.type === 'skip')
-        expect(skips).toHaveLength(1)
-        expect(skips[0]?.message).toContain('verifiable SHA-1 is unavailable')
+        const errors = events.filter((e) => e.type === 'error')
+        expect(events.filter((e) => e.type === 'skip')).toHaveLength(0)
+        expect(errors[0]).toMatchObject({
+          path: 'unknown.txt',
+          message: expect.stringContaining('verifiable SHA-1 is unavailable'),
+        })
         expect(mockBucket.upload).not.toHaveBeenCalled()
       } finally {
         await rm(root, { recursive: true, force: true })
@@ -1152,6 +1165,8 @@ describe('synchronize', () => {
         expect(errors).toHaveLength(2)
         expect(errors[0]?.path).toBe('gone.txt')
         expect(errors[0]?.message).toContain('failed to hash local file')
+        expect(errors[0]?.message).not.toContain(badPath)
+        expect(errors[0]?.message).not.toContain(root)
         expect(errors[1]?.path).toBe('')
         expect(errors[1]?.message).toBe('1 sync error(s) occurred')
         expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(1)
@@ -1186,6 +1201,50 @@ describe('synchronize', () => {
       expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(1)
       expect(events.find((e) => e.type === 'compare')?.size).toBe(0)
       expect(mockBucket.upload).not.toHaveBeenCalled()
+    })
+
+    it.skipIf(!isNode)('emits hashed bytes for sha1 dry-run comparisons', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sha1-dry-run-'))
+      try {
+        const data = new TextEncoder().encode('abc')
+        const filePath = join(root, 'changed.txt')
+        await writeFile(filePath, data)
+
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'changed.txt',
+          absolutePath: filePath,
+          modTimeMillis: 1000,
+          size: data.byteLength,
+        }
+        const destFile = makeB2SyncPath(
+          'changed.txt',
+          1000,
+          data.byteLength,
+          undefined,
+          '0'.repeat(40),
+        )
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([destFile], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'sha1', keepMode: 'no-delete', dryRun: true },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(events.find((e) => e.type === 'compare')?.size).toBe(data.byteLength)
+        expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(1)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
     })
 
     it.skipIf(!isNode || isWindows)('aborts while hashing a local file', async () => {

@@ -3,7 +3,14 @@ import type { FileVersion } from '../../types/file.ts'
 import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
 import type { SyncPair } from '../pairing.ts'
-import type { B2SyncPath, CompareMode, LocalSyncPath, SyncEvent, SyncPath } from '../types.ts'
+import type {
+  B2SyncPath,
+  CompareMode,
+  LocalSyncPath,
+  SyncErrorEvent,
+  SyncEvent,
+  SyncPath,
+} from '../types.ts'
 
 const unverifiedSha1Prefix = 'unverified:'
 
@@ -37,7 +44,7 @@ export interface ComparePreparationResult {
 /**
  * Determines whether two files should be considered different based on the compare mode.
  * For `sha1`, callers that use the low-level policy helpers should first call
- * {@link preparePairForCompare} so local hashes and B2 multipart hash fallbacks are populated.
+ * {@link preparePairForCompare} so local hashes and verified B2 hashes are populated.
  *
  * @param source - The source file metadata.
  * @param dest - The destination file metadata.
@@ -77,7 +84,7 @@ function sha1ValuesAreDifferent(source: SyncPath, dest: SyncPath): boolean {
 /**
  * Prepares a pair for the selected compare mode.
  *
- * For `sha1`, this fills missing B2 hashes from verified metadata, hashes the local side only
+ * For `sha1`, this fills missing B2 hashes from server-verified metadata, hashes the local side only
  * when size cannot already prove a difference, and converts local hash I/O failures into
  * per-file sync events instead of aborting the whole run.
  *
@@ -101,7 +108,8 @@ export async function preparePairForCompare(
   const metadataPair: SyncPair = [withB2ContentSha1(source), withB2ContentSha1(dest)]
   if (hasUntrustedSha1(metadataPair)) return ready(metadataPair)
   if (hasUnavailableB2Sha1(metadataPair)) {
-    return skipped(metadataPair, unavailableSha1Event(metadataPair))
+    const event = unavailableSha1Event(metadataPair)
+    return skipped(metadataPair, event, new Error(event.message))
   }
 
   const [metadataSource, metadataDest] = metadataPair
@@ -130,29 +138,28 @@ export async function preparePairForCompare(
   const bytesHashed = sourceResult.bytesHashed + destResult.bytesHashed
 
   if (sourceState.kind === 'unavailable' || destState.kind === 'unavailable') {
-    return skipped(preparedPair, unavailableSha1Event(preparedPair), undefined, bytesHashed)
+    const event = unavailableSha1Event(preparedPair)
+    return skipped(preparedPair, event, new Error(event.message), bytesHashed)
   }
 
   return ready(preparedPair, bytesHashed)
 }
 
 /**
- * Extracts the best verifiable SHA-1 value from a B2 file version.
+ * Extracts the best comparable SHA-1 value from a B2 file version.
  *
- * Large/multipart B2 files report `contentSha1: null`; when a whole-file digest exists it is
- * stored in `fileInfo.large_file_sha1`, so that value is used as a verified fallback.
+ * Large/multipart B2 files report `contentSha1: null`. The optional
+ * `fileInfo.large_file_sha1` value is client supplied and is not trusted as proof of bytes, so
+ * it is not used to prove equality.
  * `unverified:<hex>` values are preserved as untrusted sentinels and never prove equality.
  *
  * @param version - B2 file version metadata.
  *
- * @returns A lowercase verifiable SHA-1, an untrusted sentinel, or null when unavailable.
+ * @returns A lowercase server-verifiable SHA-1, an untrusted sentinel, or null when unavailable.
  */
 export function selectB2ComparableSha1(version: FileVersion): string | null {
   if (isUntrustedSha1(version.contentSha1)) return version.contentSha1.toLowerCase()
-  return (
-    normalizeVerifiableSha1(version.contentSha1) ??
-    normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
-  )
+  return normalizeVerifiableSha1(version.contentSha1)
 }
 
 type Sha1State =
@@ -195,7 +202,7 @@ async function preparePathSha1(
         type: 'error',
         path: path.relativePath,
         size: 0,
-        message: `failed to hash local file for sha1 comparison: ${error.message}`,
+        message: `failed to hash local file for sha1 comparison: ${formatHashError(error)}`,
       },
       error,
       aborted: false,
@@ -284,14 +291,21 @@ function aborted(pair: SyncPair): ComparePreparationResult {
   }
 }
 
-function unavailableSha1Event(pair: SyncPair): SyncEvent {
+function unavailableSha1Event(pair: SyncPair): SyncErrorEvent {
   const path = (pair[0] ?? pair[1])?.relativePath ?? ''
   return {
-    type: 'skip',
+    type: 'error',
     path,
     size: 0,
     message: 'sha1 comparison skipped because a verifiable SHA-1 is unavailable',
   }
+}
+
+function formatHashError(error: Error): string {
+  const code = (error as { readonly code?: unknown }).code
+  if (typeof code === 'string' && code.length > 0) return code
+  if (error.name.length > 0) return error.name
+  return 'Error'
 }
 
 async function sha1File(path: LocalSyncPath, signal?: AbortSignal): Promise<string> {

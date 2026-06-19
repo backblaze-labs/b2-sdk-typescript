@@ -4,9 +4,12 @@ import type { FileVersion } from '../types/file.ts'
 /**
  * Strategy for comparing source and destination files.
  *
- * The `sha1` mode compares verifiable SHA-1 digests as a practical drift detector. It is
- * not a cryptographic integrity or tamper-proofing guarantee, because SHA-1 collisions are
- * possible and B2 can expose unavailable or untrusted checksum metadata for some objects.
+ * The `sha1` mode compares 40-character hexadecimal SHA-1 digests as a practical drift
+ * detector. Digest case is normalized before comparison. Missing, null, unavailable, or
+ * non-verifiable metadata cannot prove equality: the high-level synchronizer either transfers
+ * conservatively for untrusted metadata or reports a per-file error and skips action generation
+ * when a B2 file has no server-verifiable digest. This is not a cryptographic integrity or
+ * tamper-proofing guarantee, because SHA-1 collisions are possible.
  */
 export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
@@ -28,10 +31,11 @@ export interface SyncPath {
    * SHA-1 checksum state for compare modes that need content hashes.
    *
    * - `undefined`: not computed yet; the synchronizer may hash local files before comparing.
-   * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
+   * - `null`: known to be unavailable; `sha1` sync reports a per-file error and skips the pair.
    * - 40-character hex string: known verifiable digest.
    * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
-   *   consumers must not treat it as proof that bytes match.
+   *   consumers must not treat it as proof that bytes match, and `sha1` mode treats it as
+   *   different.
    */
   readonly contentSha1?: string | null
 }
@@ -93,8 +97,8 @@ export interface SyncActionEvent {
   /** Relative path of the file this event concerns. */
   readonly path: string
   /**
-   * Size in bytes of the file involved, or local bytes hashed for `compare` events in
-   * `sha1` mode.
+   * Size in bytes of the file involved. For `compare` events, this is local bytes hashed in
+   * `sha1` mode, not bytes transferred.
    */
   readonly size: number
 }
@@ -153,7 +157,7 @@ export interface SyncOptions {
   readonly dryRun?: boolean
   /** Tolerance for comparison (bytes for size, milliseconds for modtime). */
   readonly compareThreshold?: number
-  /** Signal to abort the sync operation. */
+  /** Signal to abort the sync operation, including in-progress local SHA-1 reads. */
   readonly signal?: AbortSignal
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider

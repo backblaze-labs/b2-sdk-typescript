@@ -181,12 +181,12 @@ describe('filesAreDifferent', () => {
 })
 
 describe('selectB2ComparableSha1', () => {
-  it('uses fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
+  it('does not trust fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
     const sha1 = 'a'.repeat(40)
     const file = makeB2SyncPath('large.bin', 1000, 100, null, {
       large_file_sha1: sha1.toUpperCase(),
     })
-    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(sha1)
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBeNull()
   })
 
   it('preserves unverified sentinels as untrusted metadata', () => {
@@ -215,7 +215,7 @@ describe('preparePairForCompare', () => {
     const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
     const result = await preparePairForCompare([source, dest], 'sha1', {
       readLocalSha1: async () => {
-        throw new Error('read failed')
+        throw Object.assign(new Error("ENOENT: open '/tmp/file.txt'"), { code: 'ENOENT' })
       },
     })
 
@@ -223,17 +223,19 @@ describe('preparePairForCompare', () => {
     expect(result.events[0]).toMatchObject({
       type: 'error',
       path: 'file.txt',
-      message: expect.stringContaining('read failed'),
+      message: 'failed to hash local file for sha1 comparison: ENOENT',
     })
+    const event = result.events[0]
+    expect(event?.type).toBe('error')
+    if (event?.type !== 'error') throw new Error('expected error event')
+    expect(event.message).not.toContain('/tmp/file.txt')
     expect(result.errors).toHaveLength(1)
   })
 
   it('keeps prepared B2 sha1 metadata when local hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeLocalSyncPath('large.bin', 1000, 100)
-    const dest = withoutPathContentSha1(
-      makeB2SyncPath('large.bin', 1000, 100, null, { large_file_sha1: sha1 }),
-    )
+    const dest = withoutPathContentSha1(makeB2SyncPath('large.bin', 1000, 100, sha1))
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
       readLocalSha1: async () => {
@@ -263,9 +265,7 @@ describe('preparePairForCompare', () => {
     const controller = new AbortController()
     const sha1 = 'a'.repeat(40)
     const source = makeLocalSyncPath('file.txt', 1000, 100)
-    const dest = withoutPathContentSha1(
-      makeB2SyncPath('file.txt', 1000, 100, null, { large_file_sha1: sha1 }),
-    )
+    const dest = withoutPathContentSha1(makeB2SyncPath('file.txt', 1000, 100, sha1))
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
       signal: controller.signal,

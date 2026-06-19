@@ -89,10 +89,20 @@ SYNC_MODE=size SYNC_DELETE=true SYNC_CONCURRENCY=8 SYNC_DRY_RUN=true \
 | `SYNC_CONCURRENCY` | `4` | Parallel upload/download workers |
 | `SYNC_DRY_RUN` | `false` | Print actions without executing them |
 
-`SYNC_MODE=sha1` hashes local files and compares them with verifiable B2 SHA-1 metadata,
-including `fileInfo.large_file_sha1` for multipart files. It is useful for accidental drift
-detection, not as a cryptographic tamper guarantee. Files without a verifiable remote SHA-1 are
-skipped with a surfaced event instead of being transferred repeatedly.
+`SYNC_MODE=sha1` hashes local files and compares them with server-verifiable B2 SHA-1
+metadata. It is useful for accidental drift detection, not as a cryptographic tamper guarantee.
+B2 large/multipart files usually do not expose a server-verifiable whole-file SHA-1; the
+client-supplied `fileInfo.large_file_sha1` value is not trusted as proof of equality. Such files
+are reported as per-file errors and are not transferred repeatedly.
+
+SHA-1 comparison is a serial pre-pass: `SYNC_CONCURRENCY` controls transfer workers, not local
+hashing. Matching-size local files are fully read to hash them, and changed uploads may read the
+same file again for transfer. `SYNC_DRY_RUN=true` still performs those comparison reads. The
+example logs `compare` events with the bytes hashed so you can distinguish a long hash pass from
+a hung sync. Incorrect or adversarial size-matching, hash-mismatching metadata can force a full
+local hash pass and transfers in `sha1` mode. The SDK does not impose a per-file hash timeout;
+callers that need one should pass an `AbortSignal` from an external watchdog when using the sync
+API directly.
 
 ### Upload with a progress bar
 

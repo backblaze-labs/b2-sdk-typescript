@@ -9,7 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **New `sha1` sync compare mode.** `CompareMode` now accepts `'sha1'`, and `SyncPath` exposes an optional `contentSha1` field so custom scanners can supply known content hashes. The synchronizer hashes local files only when cheaper metadata cannot already prove drift, compares against verifiable B2 SHA-1 metadata, and uses `fileInfo.large_file_sha1` for multipart objects. Files whose SHA-1 is genuinely unavailable are skipped with a surfaced event rather than being transferred repeatedly; untrusted `unverified:<hex>` metadata never proves equality. This is an accidental drift detector, not a cryptographic tamper guarantee. Closes #29.
+- **New `sha1` sync compare mode.** `CompareMode` now accepts `'sha1'`, and `SyncPath` exposes an optional `contentSha1` field so custom scanners can supply known content hashes. The synchronizer hashes local files only when cheaper metadata cannot already prove drift and compares against server-verifiable B2 SHA-1 metadata. B2 large/multipart files whose `contentSha1` is unavailable, including files that only have client-supplied `fileInfo.large_file_sha1`, are reported as per-file errors and are not transferred repeatedly; untrusted `unverified:<hex>` metadata never proves equality. SHA-1 comparison is a serial local-read pre-pass, dry-runs still hash matching-size files, and `compare` events report hashed local bytes in `size`. This is an accidental drift detector, not a cryptographic tamper guarantee. Closes #29.
+
+### Changed
+
+- **Sync error summary wording now reports total sync errors.** The terminal summary event changed from `N action(s) failed` to `N sync error(s) occurred` because SHA-1 preparation failures are surfaced alongside transfer/action failures.
+- **`compare` event `size` may report local bytes hashed.** In `sha1` mode, `compare.size` is the number of local bytes read for hashing, not bytes transferred; consumers that previously assumed compare events always had `size: 0` should filter by event type before summing transfer bytes.
 
 ### Fixed
 

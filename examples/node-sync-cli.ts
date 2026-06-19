@@ -10,7 +10,9 @@
  *   SYNC_CONCURRENCY=N              (default: 4)
  *   SYNC_DRY_RUN=true|false         (default: false)
  *
- * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee.
+ * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee. It runs
+ * local hashing as a serial comparison pass before transfers; SYNC_CONCURRENCY applies to
+ * transfers, not hashing. Dry-runs still hash matching-size local files.
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'
@@ -56,6 +58,7 @@ async function main() {
   let uploaded = 0
   let skipped = 0
   let errors = 0
+  let hashedBytes = 0
 
   const config: SynchronizerUpConfig = {
     source,
@@ -85,13 +88,19 @@ async function main() {
         console.error(`  ERROR: ${event.path}: ${event.message}`)
         break
       case 'compare':
+        if (compareMode === 'sha1' && event.size > 0) {
+          hashedBytes += event.size
+          console.log(`  compared ${event.path} (${event.size} bytes hashed)`)
+        }
         break
       default:
         console.log(`  ${event.type}: ${event.path}`)
     }
   }
 
-  console.log(`\nDone. Uploaded: ${uploaded}, Skipped: ${skipped}, Errors: ${errors}`)
+  console.log(
+    `\nDone. Uploaded: ${uploaded}, Skipped: ${skipped}, Errors: ${errors}, Hashed: ${hashedBytes} bytes`,
+  )
 }
 
 main().catch((err) => {
