@@ -69,7 +69,11 @@ export type S3PresignDate = Date | number | string
 export interface S3PresignObjectUrlOptions extends B2S3Config {
   /** Bucket containing the object. */
   readonly bucketName: string
-  /** Object key / B2 file name to sign. */
+  /**
+   * Object key / B2 file name to sign. Keys with path segments exactly `.`
+   * or `..` cannot be presigned safely because common URL parsers normalize
+   * them before sending the request.
+   */
   readonly fileName: string
   /**
    * URL validity duration in seconds. Defaults to 3600. Must be an integer
@@ -347,6 +351,7 @@ async function presignS3Request(
   const { shortDate, longDate } = formatSigningDate(options.signingDate)
   const credentialScope = `${shortDate}/${region}/${SERVICE}/${TERMINATOR}`
   const credential = `${options.applicationKeyId}/${credentialScope}`
+  assertNoDotOnlyObjectKeySegments(options.fileName)
   const canonicalUri = buildCanonicalUri(endpoint.pathname, options.bucketName, options.fileName)
   const headers = normalizeSignedHeaders([['host', endpoint.host], ...extraHeaders])
   const signedHeaders = headers.map(([name]) => name).join(';')
@@ -457,6 +462,14 @@ function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: s
   const basePath =
     endpointPath === '' || endpointPath === '/' ? '' : endpointPath.replace(/\/+$/, '')
   return `${basePath}/${encodePathSegment(bucketName)}/${encodePath(fileName)}`
+}
+
+function assertNoDotOnlyObjectKeySegments(fileName: string): void {
+  if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
+    throw new TypeError(
+      'fileName must not contain dot-only path segments because URL parsers can normalize presigned S3 paths.',
+    )
+  }
 }
 
 function encodePath(path: string): string {

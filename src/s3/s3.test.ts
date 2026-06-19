@@ -212,6 +212,15 @@ describe('presignS3GetObjectUrl', () => {
     )
   })
 
+  it('rejects dot-only object key segments that URL parsers normalize', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'path/.././file.txt',
+      }),
+    ).rejects.toThrow('fileName must not contain dot-only path segments')
+  })
+
   it('signs response override query parameters', async () => {
     const url = new URL(
       await presignS3GetObjectUrl({
