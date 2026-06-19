@@ -2019,6 +2019,23 @@ describe('synchronize', () => {
       // With 6 actions and concurrency 2, at least 2 should overlap.
       expect(maxInFlight).toBeGreaterThanOrEqual(2)
     })
+
+    it('normalizes invalid concurrency before transfer execution', async () => {
+      const mockBucket = makeMockBucket()
+      const source = makeMemoryFolder([makeB2SyncPath('copy.txt', 1000, 5)], 'b2')
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency: Number.NaN },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      const events = await collectEvents(config)
+      expect(events.filter((e) => e.type === 'copy-done')).toHaveLength(1)
+    })
   })
 
   describe('factory bucket requirements', () => {

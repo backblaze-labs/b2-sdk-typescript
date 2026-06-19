@@ -101,7 +101,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const { source, dest, options } = config
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
-  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
+  const concurrency = normalizeSyncConcurrency(options.concurrency)
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
@@ -113,8 +113,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const errors: Error[] = []
 
   if (options.compareMode === 'sha1') {
-    const compareBatchSize =
-      Number.isFinite(concurrency) && concurrency > 0 ? Math.max(1, Math.floor(concurrency)) : 1
+    const compareBatchSize = concurrency
     let batch: SyncPair[] = []
     for await (const pair of zipFolders(source, dest)) {
       if (options.signal?.aborted) return
@@ -223,6 +222,19 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       message: `${errors.length} sync error(s) occurred`,
     }
   }
+}
+
+/**
+ * Normalizes user-provided sync concurrency before it reaches semaphore construction.
+ *
+ * @param value - Optional concurrency value from sync options.
+ *
+ * @returns A positive integer concurrency value.
+ */
+function normalizeSyncConcurrency(value: number | undefined): number {
+  const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
+  if (!Number.isFinite(candidate) || candidate < 1) return DEFAULT_TRANSFER_CONCURRENCY
+  return Math.max(1, Math.floor(candidate))
 }
 
 /**

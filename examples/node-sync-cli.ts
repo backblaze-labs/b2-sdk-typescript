@@ -47,7 +47,7 @@ async function main() {
 
   const compareMode = parseCompareMode(process.env.SYNC_MODE ?? 'modtime')
   const keepMode: KeepMode = process.env.SYNC_DELETE === 'true' ? 'delete' : 'no-delete'
-  const concurrency = Number.parseInt(process.env.SYNC_CONCURRENCY ?? '4', 10)
+  const concurrency = parseConcurrency(process.env.SYNC_CONCURRENCY ?? '4')
   const dryRun = process.env.SYNC_DRY_RUN === 'true'
 
   if (dryRun) console.log('DRY RUN: no changes will be made\n')
@@ -118,4 +118,11 @@ function parseCompareMode(value: string): CompareMode {
     default:
       throw new Error(`Unsupported SYNC_MODE "${value}". Use modtime, size, sha1, or none.`)
   }
+}
+
+function parseConcurrency(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`Unsupported SYNC_CONCURRENCY "${value}". Use a positive integer.`)
+  }
+  return Number.parseInt(value, 10)
 }
