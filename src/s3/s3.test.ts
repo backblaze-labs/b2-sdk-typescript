@@ -180,6 +180,18 @@ describe('presignS3GetObjectUrl', () => {
     expect(url.searchParams.get('x-id')).toBe('GetObject')
     expect(url.searchParams.has('Authorization')).toBe(false)
     expect(url.toString()).not.toContain('key-secret')
+
+    const signature = url.searchParams.get('X-Amz-Signature')
+    expect(signature).toMatch(/^[a-f0-9]{64}$/)
+
+    const urlWithDifferentSecret = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        applicationKey: 'other-key-secret',
+      }),
+    )
+    expect(urlWithDifferentSecret.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
+    expect(urlWithDifferentSecret.searchParams.get('X-Amz-Signature')).not.toBe(signature)
   })
 
   it('uses explicit regions for custom endpoints', async () => {
