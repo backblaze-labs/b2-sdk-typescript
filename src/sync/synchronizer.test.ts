@@ -995,9 +995,16 @@ describe('synchronize', () => {
             modTimeMillis: 1000,
             size: data.byteLength,
           }
-          const destFile = makeB2SyncPath('large.bin', 1000, data.byteLength, undefined, null, {
-            large_file_sha1: await sha1Hex(data),
-          })
+          const largeFileSha1 = await sha1Hex(data)
+          const destFile = makeB2SyncPath(
+            'large.bin',
+            1000,
+            data.byteLength,
+            undefined,
+            null,
+            { large_file_sha1: largeFileSha1 },
+            largeFileSha1,
+          )
           const source = makeMemoryFolder([sourceFile], 'local')
           const dest = makeMemoryFolder([destFile], 'b2')
 
@@ -1040,9 +1047,16 @@ describe('synchronize', () => {
           modTimeMillis: 1000,
           size: data.byteLength,
         }
-        const destFile = makeB2SyncPath('large.bin', 1000, data.byteLength, undefined, null, {
-          large_file_sha1: '0'.repeat(40),
-        })
+        const largeFileSha1 = '0'.repeat(40)
+        const destFile = makeB2SyncPath(
+          'large.bin',
+          1000,
+          data.byteLength,
+          undefined,
+          null,
+          { large_file_sha1: largeFileSha1 },
+          largeFileSha1,
+        )
         const source = makeMemoryFolder([sourceFile], 'local')
         const dest = makeMemoryFolder([destFile], 'b2')
 

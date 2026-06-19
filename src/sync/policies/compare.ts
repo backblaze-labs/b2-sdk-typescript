@@ -303,9 +303,7 @@ function comparableSha1(path: SyncPath): Sha1State {
 }
 
 function withB2ContentSha1(path: SyncPath): SyncPath {
-  if (!isB2SyncPath(path) || (path.contentSha1 !== undefined && path.contentSha1 !== null)) {
-    return path
-  }
+  if (!isB2SyncPath(path) || path.contentSha1 !== undefined) return path
   return { ...path, contentSha1: selectB2ComparableSha1(path.selectedVersion) }
 }
 

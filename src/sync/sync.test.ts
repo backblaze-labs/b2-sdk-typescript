@@ -268,6 +268,22 @@ describe('preparePairForCompare', () => {
     expect(result.pair[1]?.contentSha1).toBe(sha1)
   })
 
+  it('does not override explicit null B2 sha1 metadata', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeLocalSyncPath('large.bin', 1000, 100)
+    const dest = makeB2SyncPath('large.bin', 1000, 100, null, { large_file_sha1: sha1 }, null)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readLocalSha1: async () => {
+        throw new Error('should not hash')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]?.type).toBe('skip')
+    expect(result.pair[1]?.contentSha1).toBeNull()
+  })
+
   it('does not skip action generation for invalid B2 checksum metadata', async () => {
     const source = makeLocalSyncPath('file.txt', 1000, 100)
     const dest = makeB2SyncPath('file.txt', 1000, 100, 'not-a-sha1')
