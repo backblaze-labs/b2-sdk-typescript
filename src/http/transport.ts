@@ -230,7 +230,7 @@ export class RetryTransport implements HttpTransport {
     let request: HttpRequest = originalRequest
     const retryOptions = { ...this.options, ...originalRequest.retry }
     let lastError: B2Error | NetworkError | undefined
-    let reauthenticated = false
+    let didReauth = false
     let attempt = 0
 
     while (attempt <= retryOptions.maxRetries) {
@@ -271,7 +271,7 @@ export class RetryTransport implements HttpTransport {
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
           !isUploadEndpoint(request.url) &&
-          !reauthenticated
+          !didReauth
         ) {
           // Reauth returns the FRESH token; build a new request with a
           // shallow-copied headers object so the Authorization swap
@@ -285,7 +285,7 @@ export class RetryTransport implements HttpTransport {
             ...request,
             headers: { ...(request.headers ?? {}), Authorization: freshToken },
           }
-          reauthenticated = true
+          didReauth = true
           lastError = undefined
           continue
         }

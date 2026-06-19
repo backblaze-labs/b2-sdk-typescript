@@ -542,7 +542,7 @@ describe('RetryTransport', () => {
       expect(secondCall?.headers?.['Content-Type']).toBe('application/json')
     })
 
-    it('reauthenticates and retries once even when maxRetries is zero', async () => {
+    it('retries after reauth even when maxRetries is zero', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
       const okResponse = mockResponse(200, { ok: true })
@@ -563,7 +563,7 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it('does not reauthenticate in an infinite loop', async () => {
+    it('does not loop forever on repeated reauth failures', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
       const onReauth = vi.fn().mockResolvedValue('still-bad-token')
