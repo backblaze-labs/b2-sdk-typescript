@@ -582,6 +582,13 @@ async function uploadPartsSequentially(
       tracker.addBytes(data.byteLength)
       tracker.completePart()
     }
+    if (carry !== null) {
+      throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
+    }
+    const extra = await reader.read()
+    if (!extra.done) {
+      throw new Error('uploadLargeFile: source stream emitted more bytes than advertised size.')
+    }
     completed = true
   } finally {
     if (!completed) {

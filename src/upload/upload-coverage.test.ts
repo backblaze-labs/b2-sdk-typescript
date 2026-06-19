@@ -3809,6 +3809,39 @@ describe('uploadSmallFile cleanup path', () => {
     expect(returned).toBe(true)
   })
 
+  it('rejects a forward-only source that emits more bytes than advertised', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-bytes',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize + 10)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-extra.bin',
+        source: new StreamSource(readable, partSize + 1),
+        partSize,
+      }),
+    ).rejects.toThrow(/emitted more bytes than advertised size/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'stream-extra.bin')).toBeUndefined()
+  })
+
   it('rejects a streaming-source upload when resume is requested', async () => {
     // StreamSource has no random access, so resume can't replay parts.
     // The engine bails early with a clear message and cancels the

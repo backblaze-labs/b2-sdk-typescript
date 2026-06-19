@@ -62,11 +62,11 @@ function isNodeFsSync(value: unknown): value is NodeFsSync {
   const candidate = value as Record<string, unknown>
   const constants = candidate['constants']
   return (
-    typeof candidate['lstatSync'] === 'function' &&
     typeof constants === 'object' &&
     constants !== null &&
     typeof (constants as Record<string, unknown>)['O_RDONLY'] === 'number' &&
-    typeof (constants as Record<string, unknown>)['O_NOFOLLOW'] === 'number'
+    typeof (constants as Record<string, unknown>)['O_NOFOLLOW'] === 'number' &&
+    typeof candidate['lstatSync'] === 'function'
   )
 }
 
