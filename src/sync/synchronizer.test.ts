@@ -468,7 +468,7 @@ describe('synchronize', () => {
 
     it.skipIf(!isNode)('rejects upload when same-size file identity changes', async () => {
       const { tmpdir } = await import('node:os')
-      const { mkdtemp, rm, unlink, writeFile } = await import('node:fs/promises')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
       const { LocalFolder } = await import('./scanners/local.ts')
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-identity-'))
@@ -477,12 +477,21 @@ describe('synchronize', () => {
         await writeFile(filePath, 'safe')
         const scanned: LocalSyncPath[] = []
         for await (const path of new LocalFolder(root).scan()) scanned.push(path)
-        await unlink(filePath)
-        await writeFile(filePath, 'evil')
+        const [path] = scanned
+        if (path?.fileIdentity === undefined) throw new Error('expected scanned file identity')
+        const staleIdentity = {
+          ...path.fileIdentity,
+          inode: path.fileIdentity.inode + 1,
+        }
+        const stalePath: LocalSyncPath = { ...path, fileIdentity: staleIdentity }
 
         const mockBucket = makeMockBucket()
         const config: SynchronizerUpConfig = {
-          source: { ...makeMemoryFolder(scanned, 'local'), type: 'local', root },
+          source: {
+            ...makeMemoryFolder([stalePath], 'local'),
+            type: 'local',
+            root,
+          },
           dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
           options: { compareMode: 'modtime', keepMode: 'no-delete' },
           bucket: mockBucket as unknown as Bucket,
