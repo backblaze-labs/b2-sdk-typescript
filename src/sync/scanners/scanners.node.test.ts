@@ -85,12 +85,14 @@ describe('LocalFolder', () => {
     await writeFile(join(tmpDir, 'alpha.txt'), 'a')
     await writeFile(join(tmpDir, 'Zed.txt'), 'z')
     await writeFile(join(tmpDir, 'bravo.txt'), 'b')
+    await writeFile(join(tmpDir, 'Zulu.txt'), 'z')
 
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual([
       'Zed.txt',
+      'Zulu.txt',
       'alpha.txt',
       'bravo.txt',
       'charlie.txt',
@@ -452,12 +454,15 @@ describe('B2Folder', () => {
     await bucket.upload({ fileName: 'apple.txt', source: new BufferSource(enc.encode('a')) })
     tick()
     await bucket.upload({ fileName: 'mango.txt', source: new BufferSource(enc.encode('m')) })
+    tick()
+    await bucket.upload({ fileName: 'Zoo.txt', source: new BufferSource(enc.encode('Z')) })
 
     const folder = new B2Folder(bucket)
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual([
       'Zebra.txt',
+      'Zoo.txt',
       'apple.txt',
       'mango.txt',
       'zebra.txt',
