@@ -70,6 +70,12 @@ export interface B2ClientOptions {
    * transport is the user's responsibility to harden.
    */
   readonly allowedHostSuffixes?: readonly string[]
+  /**
+   * Follow same-origin GET/HEAD redirects in the default fetch transport after
+   * checking each target with the SSRF guard. POST redirects remain blocked.
+   * Defaults to false.
+   */
+  readonly followSameHostRedirects?: boolean
 }
 
 /**
@@ -110,7 +116,7 @@ export class B2Client {
     this.applicationKey = options.applicationKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
-    bindAccountInfoRealm(this.accountInfo, this.realmUrl)
+    bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
     setClientUploadRetryOptions(this, uploadRetryOptions)
@@ -124,6 +130,9 @@ export class B2Client {
       baseTransport = new FetchTransport({
         urlGuard,
         ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
+        ...(options.followSameHostRedirects !== undefined
+          ? { followSameHostRedirects: options.followSameHostRedirects }
+          : {}),
       })
       this.urlGuard = urlGuard
     }
@@ -374,7 +383,11 @@ export class B2Client {
   }
 }
 
-function bindAccountInfoRealm(accountInfo: AccountInfo, realmUrl: string): void {
-  const bindRealmUrl = (accountInfo as { setRealmUrl?: (realmUrl: string) => void }).setRealmUrl
-  if (typeof bindRealmUrl === 'function') bindRealmUrl.call(accountInfo, realmUrl)
+function bindAccountInfoAuthContext(
+  accountInfo: AccountInfo,
+  realmUrl: string,
+  applicationKeyId: string,
+): void {
+  accountInfo.setApplicationKeyId?.(applicationKeyId)
+  accountInfo.setRealmUrl?.(realmUrl)
 }

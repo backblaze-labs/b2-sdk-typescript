@@ -11,6 +11,9 @@ import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from 
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const MAX_SAME_HOST_REDIRECTS = 5
+
 /** Describes an outgoing HTTP request to the B2 API. */
 export interface HttpRequest {
   /** Fully qualified URL to send the request to. */
@@ -63,6 +66,8 @@ export interface HttpTransport {
 export class FetchTransport implements HttpTransport {
   /** User-Agent string sent with every request. */
   private readonly userAgent: string
+  /** Whether same-origin GET/HEAD redirects should be followed after guard checks. */
+  private readonly followSameHostRedirects: boolean
   /** SSRF allow-list applied to every outgoing URL. Mutable so `B2Client.authorize()` can lock it down post-auth. */
   readonly urlGuard: UrlGuard
 
@@ -70,8 +75,18 @@ export class FetchTransport implements HttpTransport {
    * Creates a new FetchTransport.
    * @param options - Optional configuration: custom User-Agent prefix and SSRF guard.
    */
-  constructor(options?: { userAgent?: string; urlGuard?: UrlGuard }) {
+  constructor(options?: {
+    userAgent?: string
+    urlGuard?: UrlGuard
+    /**
+     * Follow same-origin GET/HEAD redirects after checking the target with the
+     * URL guard. POST redirects are still blocked to avoid replaying
+     * credential-bearing payloads to an unexpected endpoint.
+     */
+    followSameHostRedirects?: boolean
+  }) {
     this.userAgent = getUserAgent(options?.userAgent)
+    this.followSameHostRedirects = options?.followSameHostRedirects ?? false
     this.urlGuard = options?.urlGuard ?? new UrlGuard()
   }
 
@@ -85,33 +100,75 @@ export class FetchTransport implements HttpTransport {
    * @throws B2RedirectError when a response attempts to redirect.
    */
   async send(request: HttpRequest): Promise<HttpResponse> {
-    this.urlGuard.check(request.url)
+    let currentRequest = request
 
-    const headers = new Headers(request.headers)
-    if (!headers.has('User-Agent')) {
-      headers.set('User-Agent', this.userAgent)
+    for (let redirectCount = 0; redirectCount <= MAX_SAME_HOST_REDIRECTS; redirectCount++) {
+      this.urlGuard.check(currentRequest.url)
+
+      const headers = new Headers(currentRequest.headers)
+      if (!headers.has('User-Agent')) {
+        headers.set('User-Agent', this.userAgent)
+      }
+
+      const response = await fetch(currentRequest.url, {
+        method: currentRequest.method,
+        headers,
+        body: currentRequest.body ?? null,
+        redirect: 'manual',
+        ...(currentRequest.signal !== undefined ? { signal: currentRequest.signal } : {}),
+      })
+
+      if (isBlockedRedirect(response)) {
+        const location = response.headers.get('Location')
+        if (
+          this.followSameHostRedirects &&
+          location !== null &&
+          redirectCount < MAX_SAME_HOST_REDIRECTS &&
+          canFollowSameHostRedirect(currentRequest, location)
+        ) {
+          const nextUrl = new URL(location, currentRequest.url).toString()
+          await cancelResponseBody(response)
+          this.urlGuard.check(nextUrl)
+          currentRequest = { ...currentRequest, url: nextUrl }
+          continue
+        }
+
+        await cancelResponseBody(response)
+        throw new B2RedirectError(currentRequest.url, response.status, location)
+      }
+
+      return {
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+        json: <T>() => response.json() as Promise<T>,
+        text: () => response.text(),
+        arrayBuffer: () => response.arrayBuffer(),
+      }
     }
 
-    const response = await fetch(request.url, {
-      method: request.method,
-      headers,
-      body: request.body ?? null,
-      redirect: 'manual',
-      ...(request.signal !== undefined ? { signal: request.signal } : {}),
-    })
+    throw new B2RedirectError(currentRequest.url, 310, currentRequest.url)
+  }
+}
 
-    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
-      throw new B2RedirectError(request.url, response.status, response.headers.get('Location'))
-    }
+function isBlockedRedirect(response: Response): boolean {
+  return response.type === 'opaqueredirect' || REDIRECT_STATUSES.has(response.status)
+}
 
-    return {
-      status: response.status,
-      headers: response.headers,
-      body: response.body,
-      json: <T>() => response.json() as Promise<T>,
-      text: () => response.text(),
-      arrayBuffer: () => response.arrayBuffer(),
-    }
+function canFollowSameHostRedirect(request: HttpRequest, location: string): boolean {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return false
+  try {
+    return new URL(request.url).origin === new URL(location, request.url).origin
+  } catch {
+    return false
+  }
+}
+
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel()
+  } catch {
+    // Best-effort cleanup before throwing the redirect error.
   }
 }
 

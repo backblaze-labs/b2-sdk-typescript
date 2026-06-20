@@ -26,7 +26,9 @@ import { B2Client } from '../../src/index.ts'
 const NODE_MAJOR = (process.versions.node ?? '').split('.')[0] ?? 'unknown'
 const currentBucketPrefix = 'sdk-rex-'
 const legacyBucketPrefix = 'sdk-examples-'
-const staleBucketAgeMs = 60 * 60 * 1000
+// Keep above the workflow's 60-minute job timeout so overlapping startup
+// sweeps cannot delete another live run's active bucket.
+const staleBucketAgeMs = 2 * 60 * 60 * 1000
 
 function makeBucketName(): string {
   const runId = process.env.GITHUB_RUN_ID
@@ -105,10 +107,6 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
     if (err instanceof BadBucketIdError) return
     throw err
   }
-}
-
-function isUnparseableExampleBucket(bucketName: string): boolean {
-  return SDK_EXAMPLE_BUCKET_PREFIX_RE.test(bucketName) && !SDK_EXAMPLE_BUCKET_RE.test(bucketName)
 }
 
 async function main(): Promise<void> {

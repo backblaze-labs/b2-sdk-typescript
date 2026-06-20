@@ -3,8 +3,7 @@
  *
  * Every B2 error response maps to a specific {@link B2Error} subclass.
  * Retry behavior is exposed through {@link B2Error.retryable}.
- * Examples include {@link ExpiredAuthTokenError}.
- * Examples also include {@link CapExceededError}.
+ * Examples include {@link ExpiredAuthTokenError} and {@link CapExceededError}.
  * Use {@link classifyError} to convert a raw error response into the
  * appropriate subclass.
  *
@@ -540,11 +539,13 @@ export class B2RealmConfigurationError extends B2Error {
   }
 }
 
-function sanitizeUrlForError(url: string): string {
+function sanitizeUrlForError(url: string, baseUrl?: string): string {
   try {
-    const parsed = new URL(url)
+    const parsed = baseUrl !== undefined ? new URL(url, baseUrl) : new URL(url)
     parsed.username = ''
     parsed.password = ''
+    parsed.search = ''
+    parsed.hash = ''
     return parsed.toString()
   } catch {
     return '<invalid URL>'
@@ -571,7 +572,7 @@ export class B2RedirectError extends Error {
    */
   constructor(url: string, status: number, location: string | null) {
     const safeUrl = sanitizeUrlForError(url)
-    const safeLocation = location !== null ? sanitizeUrlForError(location) : null
+    const safeLocation = location !== null ? sanitizeUrlForError(location, url) : null
     super(
       safeLocation !== null
         ? `HTTP ${status} redirect blocked for ${safeUrl} to ${safeLocation}`

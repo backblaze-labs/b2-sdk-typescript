@@ -122,6 +122,57 @@ describe('FetchTransport', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
+  it('cancels redirect response bodies before throwing', async () => {
+    const redirectResponse = new Response('redirect body', {
+      status: 302,
+      headers: { Location: 'https://api.backblazeb2.com/next' },
+    })
+    const cancelSpy = vi.spyOn(redirectResponse.body as ReadableStream<Uint8Array>, 'cancel')
+    fetchSpy.mockResolvedValue(redirectResponse)
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        method: 'GET',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(cancelSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes non-redirect 3xx responses through as ordinary responses', async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 304 }))
+
+    const transport = new FetchTransport()
+    const response = await transport.send({ url: 'https://example.com/file', method: 'GET' })
+
+    expect(response.status).toBe(304)
+  })
+
+  it('can opt into guard-checked same-origin GET redirects', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response('move', {
+          status: 302,
+          headers: { Location: '/file/bucket/object' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }))
+
+    const transport = new FetchTransport({ followSameHostRedirects: true })
+    const response = await transport.send({
+      url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+      method: 'GET',
+    })
+
+    expect(await response.text()).toBe('ok')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect((fetchSpy.mock.calls[1] as [string, RequestInit])[0]).toBe(
+      'https://f001.backblazeb2.com/file/bucket/object',
+    )
+  })
+
   it('blocks opaque redirects returned by browser fetch implementations', async () => {
     fetchSpy.mockResolvedValue({
       status: 0,

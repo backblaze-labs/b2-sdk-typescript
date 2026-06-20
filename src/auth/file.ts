@@ -14,31 +14,50 @@ interface PersistedAuthState {
   readonly _b2sdk?: {
     readonly version?: number
     readonly realmUrl?: string
+    readonly applicationKeyId?: string
   }
-  readonly version?: number
-  readonly realmUrl?: string
-  readonly auth?: AuthorizeAccountResponse
 }
 
 function readPersistedAuthState(value: unknown): {
   auth: AuthorizeAccountResponse
   realmUrl: string | null
+  applicationKeyId: string | null
 } | null {
   if (value === null || typeof value !== 'object') return null
 
   const maybeState = value as PersistedAuthState
-  if (maybeState.auth !== undefined) {
-    return {
-      auth: maybeState.auth,
-      realmUrl: typeof maybeState.realmUrl === 'string' ? maybeState.realmUrl : null,
-    }
-  }
-
   const realmUrl =
     maybeState._b2sdk !== undefined && typeof maybeState._b2sdk.realmUrl === 'string'
       ? maybeState._b2sdk.realmUrl
       : null
-  return { auth: value as AuthorizeAccountResponse, realmUrl }
+  const applicationKeyId =
+    maybeState._b2sdk !== undefined && typeof maybeState._b2sdk.applicationKeyId === 'string'
+      ? maybeState._b2sdk.applicationKeyId
+      : null
+  return { auth: value as AuthorizeAccountResponse, realmUrl, applicationKeyId }
+}
+
+function isProductionBackblazeEndpoint(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return (
+      parsed.protocol === 'https:' &&
+      (parsed.hostname === 'backblazeb2.com' || parsed.hostname.endsWith('.backblazeb2.com'))
+    )
+  } catch {
+    return false
+  }
+}
+
+function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
+  try {
+    const storageApi = auth.apiInfo.storageApi
+    return [storageApi.apiUrl, storageApi.downloadUrl, storageApi.s3ApiUrl].every(
+      isProductionBackblazeEndpoint,
+    )
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -60,6 +79,8 @@ export class FileAccountInfo implements AccountInfo {
   private writeQueue: Promise<void> = Promise.resolve()
   private realmUrl: string | undefined
   private loadedAuthRealmUrl: string | null | undefined
+  private applicationKeyId: string | undefined
+  private loadedAuthApplicationKeyId: string | null | undefined
 
   /**
    * Constructs a `FileAccountInfo` bound to a JSON file on disk. The file is
@@ -84,7 +105,8 @@ export class FileAccountInfo implements AccountInfo {
       if (parsed === null) return
       this.inner.setAuth(parsed.auth)
       this.loadedAuthRealmUrl = parsed.realmUrl
-      this.discardMismatchedRealmAuth()
+      this.loadedAuthApplicationKeyId = parsed.applicationKeyId
+      this.discardMismatchedAuth()
     } catch {
       // Missing file, invalid JSON, or permission denied: start empty.
     }
@@ -99,13 +121,35 @@ export class FileAccountInfo implements AccountInfo {
    */
   setRealmUrl(realmUrl: string): void {
     this.realmUrl = realmUrl
-    this.discardMismatchedRealmAuth()
+    this.discardMismatchedAuth()
   }
 
-  private discardMismatchedRealmAuth(): void {
-    if (this.realmUrl === undefined || this.inner.getAuth() === null) return
-    if (this.loadedAuthRealmUrl === this.realmUrl) return
-    if (this.loadedAuthRealmUrl === null && this.realmUrl === REALM_URLS.production) return
+  /**
+   * Binds this cache to the configured application key ID. `B2Client` calls
+   * this when a FileAccountInfo instance is supplied, so stale auth produced by
+   * another key is discarded before it can be used.
+   *
+   * @param applicationKeyId - Application key ID configured on the client.
+   */
+  setApplicationKeyId(applicationKeyId: string): void {
+    this.applicationKeyId = applicationKeyId
+    this.discardMismatchedAuth()
+  }
+
+  private discardMismatchedAuth(): void {
+    const auth = this.inner.getAuth()
+    if (auth === null) return
+
+    const realmMatches =
+      this.realmUrl === undefined ||
+      this.loadedAuthRealmUrl === this.realmUrl ||
+      (this.loadedAuthRealmUrl === null &&
+        this.realmUrl === REALM_URLS['production'] &&
+        isProductionAuthResponse(auth))
+    const applicationKeyMatches =
+      this.applicationKeyId === undefined ||
+      this.loadedAuthApplicationKeyId === this.applicationKeyId
+    if (realmMatches && applicationKeyMatches) return
 
     this.clear()
   }
@@ -134,6 +178,9 @@ export class FileAccountInfo implements AccountInfo {
               _b2sdk: {
                 version: PERSISTED_AUTH_VERSION,
                 realmUrl: this.realmUrl,
+                ...(this.applicationKeyId !== undefined
+                  ? { applicationKeyId: this.applicationKeyId }
+                  : {}),
               },
             })
           : JSON.stringify(auth)
@@ -167,6 +214,7 @@ export class FileAccountInfo implements AccountInfo {
   setAuth(auth: AuthorizeAccountResponse): void {
     this.inner.setAuth(auth)
     this.loadedAuthRealmUrl = this.realmUrl ?? null
+    this.loadedAuthApplicationKeyId = this.applicationKeyId ?? null
     void this.flush()
   }
 
@@ -183,6 +231,7 @@ export class FileAccountInfo implements AccountInfo {
   clear(): void {
     this.inner.clear()
     this.loadedAuthRealmUrl = undefined
+    this.loadedAuthApplicationKeyId = undefined
     void this.flush()
   }
 

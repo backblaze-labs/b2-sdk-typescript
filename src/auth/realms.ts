@@ -1,20 +1,22 @@
 import { B2RealmConfigurationError } from '../errors/index.ts'
 
+/** Name of a verified built-in auth realm alias. */
+export type RealmName = 'production' | 'staging'
+
+const VERIFIED_REALM_URLS = {
+  /** Public production B2 Native API authorize endpoint. */
+  production: 'https://api.backblazeb2.com',
+  /** Backblaze staging authorize endpoint from the official Python SDK realm map. */
+  staging: 'https://api.backblaze.net',
+} as const satisfies Record<RealmName, string>
+
 /**
  * Map of verified realm names to their `b2_authorize_account` base API URLs.
  * The staging URL aligns with Backblaze's official Python SDK realm map.
  * Region-specific API URLs are discovered from the authorize response, so
  * unverified regional aliases are intentionally omitted.
  */
-export const REALM_URLS = {
-  /** Public production B2 Native API authorize endpoint. */
-  production: 'https://api.backblazeb2.com',
-  /** Backblaze staging authorize endpoint from the official Python SDK realm map. */
-  staging: 'https://api.backblaze.net',
-} as const satisfies Record<string, string>
-
-/** Name of a verified built-in auth realm alias. */
-export type RealmName = keyof typeof REALM_URLS
+export const REALM_URLS: Record<string, string> = VERIFIED_REALM_URLS
 
 const HTTP_REALM_URL_WITH_HOST = /^https?:\/\/[^/?#]/i
 
@@ -31,6 +33,8 @@ function realmUrlForError(realmUrl: string, url = parseAbsoluteRealmUrl(realmUrl
   const redacted = new URL(url)
   redacted.username = ''
   redacted.password = ''
+  redacted.search = ''
+  redacted.hash = ''
   return redacted.toString()
 }
 
@@ -75,7 +79,9 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
  * @param realmUrl - The resolved realm URL to validate.
  *
  * @throws B2RealmConfigurationError when the realm URL is not absolute, uses an
- * unsupported scheme, or uses non-loopback plaintext HTTP.
+ * unsupported scheme, or uses non-loopback plaintext HTTP. Loopback IP HTTP is
+ * accepted only for local testing and sends the application key unencrypted to
+ * whichever process is listening on that address and port.
  */
 export function assertSecureRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
@@ -88,20 +94,8 @@ export function assertSecureRealmUrl(realmUrl: string): void {
   assertAuthorizableRealmScheme(realmUrl, url)
 }
 
-/**
- * Validate a realm URL before using it for credential-bearing authorization.
- *
- * @param realmUrl - The resolved realm URL to validate.
- *
- * @throws B2RealmConfigurationError when the realm URL is not absolute, uses an
- * unsupported scheme, or uses non-loopback plaintext HTTP.
- */
-export function assertAuthorizableRealmUrl(realmUrl: string): void {
-  assertSecureRealmUrl(realmUrl)
-}
-
 function isRealmName(realm: string): realm is RealmName {
-  return Object.hasOwn(REALM_URLS, realm)
+  return Object.hasOwn(VERIFIED_REALM_URLS, realm)
 }
 
 /**
@@ -118,7 +112,7 @@ function isRealmName(realm: string): realm is RealmName {
  * absolute, uses an unsupported scheme, or uses non-loopback plaintext HTTP.
  */
 export function getRealmUrl(realm: string): string {
-  const url = isRealmName(realm) ? REALM_URLS[realm] : realm
+  const url = isRealmName(realm) ? VERIFIED_REALM_URLS[realm] : realm
   assertSecureRealmUrl(url)
   return url
 }

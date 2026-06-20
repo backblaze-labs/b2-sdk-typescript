@@ -523,15 +523,29 @@ describe('B2RedirectError', () => {
 
   it('stores status and sanitized URLs', () => {
     const err = new B2RedirectError(
-      'https://user:secret@api.example.com',
+      'https://user:secret@api.example.com/b2api?token=request-secret#request-fragment',
       301,
-      'https://next:secret@next.example.com/path',
+      'https://next:secret@next.example.com/path?token=location-secret#location-fragment',
     )
     expect(err.name).toBe('B2RedirectError')
     expect(err.status).toBe(301)
-    expect(err.url).toBe('https://api.example.com/')
+    expect(err.url).toBe('https://api.example.com/b2api')
     expect(err.location).toBe('https://next.example.com/path')
     expect(err.message).not.toContain('secret')
+    expect(err.message).not.toContain('token=')
+    expect(err.message).not.toContain('fragment')
+  })
+
+  it('resolves relative redirect locations before sanitizing them', () => {
+    const err = new B2RedirectError(
+      'https://api.example.com/b2api/v3/b2_authorize_account',
+      302,
+      '/login?token=location-secret#location-fragment',
+    )
+
+    expect(err.location).toBe('https://api.example.com/login')
+    expect(err.message).not.toContain('location-secret')
+    expect(err.message).not.toContain('location-fragment')
   })
 })
 

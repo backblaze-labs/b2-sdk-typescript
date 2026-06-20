@@ -402,14 +402,15 @@ describe('getRealmUrl', () => {
   it('redacts URL userinfo from realm validation errors', () => {
     let thrown: unknown
     try {
-      getRealmUrl('http://user:secret@attacker.example')
+      getRealmUrl('http://user:secret@attacker.example/realm?token=query-secret#fragment-secret')
     } catch (err) {
       thrown = err
     }
     expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
-    expect((thrown as Error).message).toContain('http://attacker.example/')
+    expect((thrown as Error).message).toContain('http://attacker.example/realm')
     expect((thrown as Error).message).not.toContain('secret')
     expect((thrown as Error).message).not.toContain('user')
+    expect((thrown as Error).message).not.toContain('token=')
   })
 
   it('rejects unsupported realm URL schemes', () => {

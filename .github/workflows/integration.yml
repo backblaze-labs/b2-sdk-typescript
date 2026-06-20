@@ -69,6 +69,7 @@ jobs:
   real-examples:
     name: Run examples against real B2 (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # Run after the integration suite passes so a wire-format break shows up
     # as an integration failure (sharp signal) rather than a confusing
     # example-script failure.
