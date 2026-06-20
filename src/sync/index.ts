@@ -20,6 +20,13 @@ export {
   SkipAction,
   UploadAction,
 } from './actions/index.ts'
+export {
+  directoryMayContainSyncPaths,
+  filterSyncPaths,
+  literalPrefixForSyncFilters,
+  pathPassesSyncFilters,
+  pathSkippedByRegExpInputLimit,
+} from './filters.ts'
 export type { SyncPair } from './pairing.ts'
 export { zipFolders } from './pairing.ts'
 export { compareSyncRelativePaths } from './path-order.ts'

@@ -934,6 +934,60 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['active', 'active/keep.txt'])
   })
 
+  it('does not push include prefixes past normalized separator positions', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const files = [
+      makeFileVersion('docs\\readme.md', 1),
+      makeFileVersion('docs/guide.md', 2),
+      makeFileVersion('other/readme.md', 3),
+    ]
+    const calls: Array<{ prefix?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { prefix?: string }) {
+        calls.push({
+          ...(opts?.prefix !== undefined ? { prefix: opts.prefix } : {}),
+        })
+        return {
+          files:
+            opts?.prefix === undefined
+              ? files
+              : files.filter((file) => file.fileName.startsWith(opts.prefix ?? '')),
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        include: ['docs/readme.md'],
+      }),
+    )
+
+    expect(calls).toEqual([{ prefix: 'docs' }])
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+  })
+
   it('preserves backslashes in raw B2 prefixes', async () => {
     function makeFileVersion(name: string, ts: number): FileVersion {
       return {

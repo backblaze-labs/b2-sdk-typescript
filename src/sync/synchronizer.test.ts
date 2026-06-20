@@ -746,6 +746,42 @@ describe('synchronize', () => {
         await rm(root, { recursive: true, force: true })
       }
     })
+
+    it.skipIf(!isNode)('uses a slashless B2 upload prefix as a raw key prefix', async () => {
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-raw-prefix-'))
+      try {
+        const filePath = join(root, 'file.txt')
+        await writeFile(filePath, 'raw-prefix')
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'file.txt',
+          absolutePath: filePath,
+          modTimeMillis: 2000,
+          size: 10,
+        }
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: 'backups',
+        }
+
+        await collectEvents(config)
+
+        expect(mockBucket.upload).toHaveBeenCalledWith(
+          expect.objectContaining({ fileName: 'backupsfile.txt' }),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('dry-run mode', () => {
@@ -1080,6 +1116,42 @@ describe('synchronize', () => {
       // With signal already aborted, the generator returns early.
       // It may yield zero events or stop after the first iteration check.
       expect(events.length).toBeLessThanOrEqual(1)
+    })
+
+    it('closes active scan iterators when aborting during pairing', async () => {
+      const controller = new AbortController()
+      const cleanedUp: string[] = []
+      const makeTrackedFolder = (name: string, type: 'local' | 'b2'): SyncFolder => ({
+        type,
+        async *scan() {
+          try {
+            yield { relativePath: 'a.txt', modTimeMillis: 1000, size: 10 }
+            yield { relativePath: 'b.txt', modTimeMillis: 1000, size: 10 }
+          } finally {
+            cleanedUp.push(name)
+          }
+        },
+      })
+      const source = makeTrackedFolder('source', 'local')
+      const dest = makeTrackedFolder('dest', 'b2')
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: {
+          compareMode: 'none',
+          keepMode: 'no-delete',
+          dryRun: true,
+          signal: controller.signal,
+        },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      }
+
+      for await (const _event of synchronize(config)) {
+        controller.abort()
+      }
+
+      expect(cleanedUp.sort()).toEqual(['dest', 'source'])
     })
   })
 
@@ -1431,6 +1503,73 @@ describe('synchronize', () => {
         await expect(access(outsideFile)).rejects.toThrow()
       } finally {
         await rm(parent, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('does not modify a swapped leaf symlink target', async () => {
+      const fsPromises = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await fsPromises.mkdtemp(join(tmpdir(), 'b2sdk-sync-leaf-symlink-'))
+      const root = join(parent, 'root')
+      const outside = join(parent, 'outside')
+      const outsideFile = join(outside, 'payload.txt')
+      const destPath = join(root, 'docs', 'payload.txt')
+      let stopRacing = false
+      let racePromise: Promise<void> | undefined
+      const startRacing = () => {
+        racePromise ??= (async () => {
+          while (!stopRacing) {
+            await fsPromises.rm(destPath, { force: true })
+            try {
+              await fsPromises.symlink(outsideFile, destPath, 'file')
+            } catch (error) {
+              const code =
+                typeof error === 'object' && error !== null && 'code' in error
+                  ? (error as { readonly code?: unknown }).code
+                  : undefined
+              if (code === 'EPERM' || code === 'EACCES') return
+            }
+            await new Promise((resolve) => setTimeout(resolve, 0))
+          }
+        })()
+      }
+      try {
+        await fsPromises.mkdir(root)
+        await fsPromises.mkdir(outside)
+        await fsPromises.writeFile(outsideFile, 'outside')
+
+        const source = makeMemoryFolder([makeB2SyncPath('docs/payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = {
+          ...makeMockBucket(),
+          download: vi.fn().mockResolvedValue({
+            body: new ReadableStream({
+              async pull(controller) {
+                startRacing()
+                controller.enqueue(new Uint8Array([1, 2, 3]))
+                controller.close()
+              },
+            }),
+          }),
+        }
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        await collectEvents(config)
+
+        stopRacing = true
+        await racePromise
+        await expect(fsPromises.readFile(outsideFile, 'utf8')).resolves.toBe('outside')
+      } finally {
+        stopRacing = true
+        await racePromise?.catch(() => undefined)
+        await fsPromises.rm(parent, { recursive: true, force: true })
       }
     })
 

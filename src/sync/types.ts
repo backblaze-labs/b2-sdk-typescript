@@ -305,7 +305,11 @@ export interface SyncEncryptionProvider {
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
-  /** True when `scan(filters)` already enforces include/exclude filters itself. */
+  /**
+   * True when `scan(filters)` already enforces include/exclude filters itself.
+   * Custom folders that set this should use the exported filter helpers from
+   * `@backblaze-labs/b2-sdk/sync` to stay aligned with the SDK glob and RegExp dialect.
+   */
   readonly appliesScanFilters?: true
   /** Scans the folder and yields files sorted by `compareSyncRelativePaths`. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>

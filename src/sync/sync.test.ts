@@ -1043,6 +1043,64 @@ describe('zipFolders', () => {
 
     expect(pairs).toEqual([['photos/cat.jpg', 'photos/cat.jpg']])
   })
+
+  it('closes both scan iterators when one scan throws', async () => {
+    const cleanedUp: string[] = []
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          throw new Error('source failed')
+        } finally {
+          cleanedUp.push('source')
+        }
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'b2',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 10)
+        } finally {
+          cleanedUp.push('dest')
+        }
+      },
+    }
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest)) {
+          // exhaust until the source scanner fails
+        }
+      })(),
+    ).rejects.toThrow('source failed')
+    expect(cleanedUp.sort()).toEqual(['dest', 'source'])
+  })
+
+  it('closes both scan iterators when the consumer stops early', async () => {
+    const cleanedUp: string[] = []
+    const makeTrackedFolder = (name: string): SyncFolder => ({
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 10)
+        } finally {
+          cleanedUp.push(name)
+        }
+      },
+    })
+
+    const iter = zipFolders(makeTrackedFolder('source'), makeTrackedFolder('dest'))[
+      Symbol.asyncIterator
+    ]()
+    await expect(iter.next()).resolves.toMatchObject({ done: false })
+    await iter.return?.(undefined)
+
+    expect(cleanedUp.sort()).toEqual(['dest', 'source'])
+  })
 })
 
 describe('generateActions', () => {

@@ -525,8 +525,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
     download(source: B2SyncPath): SyncAction {
       const bucket = downConfig.bucket
-      const root =
-        downConfig.dest?.type === 'local' ? (downConfig.dest as { root: string }).root : ''
+      const root = localSyncRoot(downConfig.dest)
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
@@ -613,8 +612,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
-      const root =
-        downConfig.dest?.type === 'local' ? (downConfig.dest as { root: string }).root : ''
+      const root = localSyncRoot(downConfig.dest)
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
         const { unlink } = await import('node:fs/promises')
         config.options.signal?.throwIfAborted()
@@ -623,7 +621,12 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         if (targetPath !== actualPath) {
           throw new Error(`Refusing to delete outside sync root: ${path.relativePath}`)
         }
-        await unlink(targetPath)
+        const verifiedTargetPath = await resolveContainedLocalPath(
+          root,
+          path.relativePath,
+          targetPath,
+        )
+        await unlink(verifiedTargetPath)
       })
     },
 
@@ -637,6 +640,10 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   }
 
   return factory
+}
+
+function localSyncRoot(folder: LocalSyncFolder | undefined): string {
+  return folder?.type === 'local' ? folder.root : ''
 }
 
 function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {

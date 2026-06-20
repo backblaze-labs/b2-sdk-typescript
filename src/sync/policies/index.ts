@@ -19,7 +19,12 @@ export interface ActionFactory {
   download(source: B2SyncPath): SyncAction
   /** Creates an action to server-side copy a B2 file to a new destination path. */
   copy(source: B2SyncPath, destPath: string): SyncAction
-  /** Creates an action to hide a file in B2 (soft delete). */
+  /**
+   * Creates an action to hide a file in B2 (soft delete).
+   * Receives the full {@link B2SyncPath} so implementations can use
+   * `selectedVersion.fileName` when a raw B2 prefix or normalized sync path
+   * differs from the stored object key.
+   */
   hide(path: B2SyncPath): SyncAction
   /** Creates an action to permanently delete a remote B2 file version. */
   deleteRemote(path: B2SyncPath): SyncAction

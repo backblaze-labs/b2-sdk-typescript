@@ -1,5 +1,6 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
+import type { FileId } from '../../types/ids.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { isAbortError } from '../local-sha1.ts'
 import {
@@ -17,7 +18,6 @@ import type {
   SyncErrorEvent,
   SyncFolder,
   SyncScanOptions,
-  SyncSkipEvent,
   SyncSkipReason,
 } from '../types.ts'
 
@@ -62,7 +62,7 @@ export class B2Folder implements SyncFolder {
     const listPrefix = this.listPrefixFor(options)
 
     let startFileName: string | undefined
-    let startFileId: string | undefined
+    let startFileId: FileId | undefined
 
     while (true) {
       if (options.signal?.aborted) return
@@ -72,9 +72,7 @@ export class B2Folder implements SyncFolder {
         listing = await this.bucket.listFileVersions({
           ...(listPrefix !== '' ? { prefix: listPrefix } : {}),
           ...(startFileName !== undefined ? { startFileName } : {}),
-          ...(startFileId !== undefined
-            ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
-            : {}),
+          ...(startFileId !== undefined ? { startFileId } : {}),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (err) {
@@ -123,7 +121,7 @@ export class B2Folder implements SyncFolder {
         }
         if (!pathPassesSyncFilters(relativePath, options)) {
           if (pathSkippedByRegExpInputLimit(relativePath, options)) {
-            this.emitSkipEvent(options, {
+            emitScannerSkip(options, {
               ...regexpInputTooLongSkip(relativePath),
               b2FileName: fv.fileName,
             })
@@ -207,7 +205,7 @@ export class B2Folder implements SyncFolder {
     const filterPrefix = literalPrefixForSyncFilters(filters)
     if (filterPrefix === '') return this.prefix
     if (this.prefix !== '' && !this.prefix.endsWith('/')) return this.prefix
-    return `${this.prefix}${filterPrefix}`
+    return `${this.prefix}${rawPrefixBeforeNormalizedSeparator(filterPrefix)}`
   }
 
   private emitSkip(
@@ -217,7 +215,7 @@ export class B2Folder implements SyncFolder {
     reason: SyncSkipReason,
     message: string,
   ): void {
-    this.emitSkipEvent(filters, {
+    emitScannerSkip(filters, {
       type: 'skip',
       path,
       size: 0,
@@ -226,10 +224,11 @@ export class B2Folder implements SyncFolder {
       b2FileName,
     })
   }
+}
 
-  private emitSkipEvent(filters: SyncScanOptions | undefined, event: SyncSkipEvent): void {
-    emitScannerSkip(filters, event)
-  }
+function rawPrefixBeforeNormalizedSeparator(filterPrefix: string): string {
+  const separatorIndex = filterPrefix.indexOf('/')
+  return separatorIndex === -1 ? filterPrefix : filterPrefix.slice(0, separatorIndex)
 }
 
 function emitScanError(options: SyncScanOptions, message: string, err: unknown): Error {
