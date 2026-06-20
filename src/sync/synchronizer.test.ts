@@ -6,7 +6,7 @@ import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-io.ts'
-import { compareSyncPathNames } from './path-order.ts'
+import { compareSyncRelativePaths } from './path-order.ts'
 import { B2Folder } from './scanners/b2.ts'
 import type {
   SynchronizerConfig,
@@ -82,7 +82,9 @@ function makeMemoryFolder(files: SyncPath[], type: 'local' | 'b2' = 'local'): Sy
   return {
     type,
     async *scan() {
-      const sorted = [...files].sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
+      const sorted = [...files].sort((a, b) =>
+        compareSyncRelativePaths(a.relativePath, b.relativePath),
+      )
       for (const f of sorted) yield f
     },
   }
@@ -1356,14 +1358,57 @@ describe('synchronize', () => {
       },
     )
 
+    it.skipIf(!isNode)('refuses downloads through symlinked local directories', async () => {
+      const { access, mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-symlink-'))
+      const root = join(parent, 'root')
+      const outside = join(parent, 'outside')
+      const outsideFile = join(outside, 'payload.txt')
+      try {
+        await mkdir(root)
+        await mkdir(outside)
+        try {
+          await symlink(outside, join(root, 'docs'), 'dir')
+        } catch {
+          return
+        }
+
+        const source = makeMemoryFolder([makeB2SyncPath('docs/payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'docs/payload.txt',
+          }),
+        )
+        await expect(access(outsideFile)).rejects.toThrow()
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)(
       'allows downloads when the local root already ends in a separator',
       async () => {
-        const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+        const { mkdtemp, readFile, realpath, rm } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
         const { join, parse, relative } = await import('node:path')
         const tempRoot = await mkdtemp(join(tmpdir(), 'b2sdk-sync-root-sep-'))
-        const targetPath = join(tempRoot, 'download.txt')
+        const realTempRoot = await realpath(tempRoot)
+        const targetPath = join(realTempRoot, 'download.txt')
         const parsed = parse(targetPath)
         const separator = parsed.root.includes('\\') ? '\\' : '/'
         const relativePath = relative(parsed.root, targetPath).split(separator).join('/')

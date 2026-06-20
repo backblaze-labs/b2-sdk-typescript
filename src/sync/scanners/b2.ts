@@ -8,7 +8,7 @@ import {
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
-import { normalizeB2FolderPrefix, normalizeB2RelativePath } from '../prefix.ts'
+import { asRawB2KeyPrefix, normalizeB2RelativePath } from '../prefix.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
@@ -47,7 +47,7 @@ export class B2Folder implements SyncFolder {
    */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
-    this.prefix = normalizeB2FolderPrefix(prefix)
+    this.prefix = asRawB2KeyPrefix(prefix)
   }
 
   /**

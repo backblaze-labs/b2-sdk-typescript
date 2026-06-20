@@ -21,7 +21,7 @@ export function pathPassesSyncFilters(
 ): boolean {
   validateSyncFilters(filters)
   const path = normalizePath(relativePath)
-  if (pathSkippedByRegExpInputLimit(path, filters)) return false
+  if (normalizedPathSkippedByRegExpInputLimit(path, filters)) return false
 
   const include = filters?.include ?? []
   const exclude = filters?.exclude ?? []
@@ -122,8 +122,14 @@ export function pathSkippedByRegExpInputLimit(
   filters: SyncFilterOptions | undefined,
 ): boolean {
   validateSyncFilters(filters)
-  const path = normalizePath(relativePath)
-  return pathExceedsSafeRegExpInput(path) && filtersContainRegExp(filters)
+  return normalizedPathSkippedByRegExpInputLimit(normalizePath(relativePath), filters)
+}
+
+function normalizedPathSkippedByRegExpInputLimit(
+  normalizedPath: string,
+  filters: SyncFilterOptions | undefined,
+): boolean {
+  return pathExceedsSafeRegExpInput(normalizedPath) && filtersContainRegExp(filters)
 }
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {

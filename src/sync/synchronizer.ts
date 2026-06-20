@@ -33,7 +33,7 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
-import { normalizeB2FolderPrefix } from './prefix.ts'
+import { asRawB2KeyPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
@@ -499,7 +499,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const factory: ActionFactory = {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
-      const prefix = normalizeB2FolderPrefix(upConfig.prefix ?? '')
+      const prefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
       assertBucket(bucket, 'upload')
 
       return new UploadAction(
@@ -684,5 +684,42 @@ async function resolveContainedLocalPath(
     throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
   }
 
+  await assertPathHasNoSymlinkComponents(safeRoot, pathFromRoot, relativePath)
+
   return target
+}
+
+async function assertPathHasNoSymlinkComponents(
+  safeRoot: string,
+  pathFromRoot: string,
+  relativePath: string,
+): Promise<void> {
+  if (pathFromRoot === '') return
+
+  const { lstat } = await import('node:fs/promises')
+  const { join, sep } = await import('node:path')
+  let current = safeRoot
+
+  for (const segment of pathFromRoot.split(sep)) {
+    current = join(current, segment)
+    let stats: Awaited<ReturnType<typeof lstat>>
+    try {
+      stats = await lstat(current)
+    } catch (error) {
+      if (isNotFoundError(error)) return
+      throw error
+    }
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to access path through symlink: ${relativePath}`)
+    }
+  }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { readonly code?: unknown }).code === 'ENOENT'
+  )
 }

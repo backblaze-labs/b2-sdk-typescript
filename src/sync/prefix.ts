@@ -1,5 +1,5 @@
 /**
- * Returns the raw B2 key prefix exactly as supplied, without adding a folder boundary.
+ * Treats the supplied string as a raw B2 key prefix without adding a folder boundary.
  *
  * B2 keys are byte-oriented names, not local filesystem paths. A backslash in a prefix is a real
  * key character and must not be rewritten to `/`; callers that want slash-delimited prefixes should
@@ -9,7 +9,7 @@
  *
  * @returns Raw B2 key prefix.
  */
-export function normalizeB2FolderPrefix(prefix: string): string {
+export function asRawB2KeyPrefix(prefix: string): string {
   return prefix
 }
 

@@ -1,22 +1,11 @@
-/**
- * Compares sync paths with the same ordering that {@link zipFolders} uses.
- *
- * This is JavaScript's deterministic string order, not locale collation.
- * Scanners must use this order so merge-joining can pair paths correctly.
- *
- * @param a - First relative sync path.
- * @param b - Second relative sync path.
- *
- * @returns `-1` when `a` sorts first, `1` when `b` sorts first, otherwise `0`.
- */
-export function compareSyncPathNames(a: string, b: string): number {
-  if (a < b) return -1
-  if (a > b) return 1
-  return 0
-}
+const syncPathCollator = new Intl.Collator('en-US', {
+  numeric: false,
+  sensitivity: 'variant',
+  usage: 'sort',
+})
 
 /**
- * Compares sync-relative paths using the same collation everywhere sorted scans are consumed.
+ * Compares sync-relative paths using the same fixed collation everywhere sorted scans are consumed.
  *
  * @param left - First sync-relative path.
  * @param right - Second sync-relative path.
@@ -24,5 +13,17 @@ export function compareSyncPathNames(a: string, b: string): number {
  * @returns Negative, zero, or positive using the SDK scan collation.
  */
 export function compareSyncRelativePaths(left: string, right: string): number {
-  return compareSyncPathNames(left, right)
+  const result = syncPathCollator.compare(left, right)
+  return result === 0 && left !== right ? compareCodeUnits(left, right) : result
+}
+
+/** Backwards-compatible alias for the SDK scan collation. */
+export function compareSyncPathNames(a: string, b: string): number {
+  return compareSyncRelativePaths(a, b)
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
 }
