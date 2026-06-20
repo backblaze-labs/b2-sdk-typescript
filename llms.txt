@@ -1,6 +1,6 @@
 # @backblaze-labs/b2-sdk
 
-> The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript. Zero runtime dependencies. Isomorphic — runs unmodified in Node.js 22+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge.
+> The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript. Zero runtime dependencies. Isomorphic — runs unmodified in Node.js 22.3+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge.
 
 ## Install
 

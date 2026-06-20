@@ -47,6 +47,9 @@ export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
 const STREAM_EMITTED_TOO_MANY_BYTES_ERROR =
   'uploadLargeFile: source stream emitted more bytes than advertised size.'
+const STREAM_TRAILING_EMPTY_CHUNKS_ERROR =
+  'uploadLargeFile: source stream emitted too many empty chunks after advertised size.'
+const MAX_TRAILING_EMPTY_CHUNKS = 1024
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -586,8 +589,13 @@ async function uploadPartsSequentially(
     if (carry !== null) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
+    let trailingEmptyChunks = 0
     let extra = await reader.read()
     while (!extra.done && extra.value.byteLength === 0) {
+      trailingEmptyChunks += 1
+      if (trailingEmptyChunks > MAX_TRAILING_EMPTY_CHUNKS) {
+        throw new Error(STREAM_TRAILING_EMPTY_CHUNKS_ERROR)
+      }
       extra = await reader.read()
     }
     if (!extra.done) {

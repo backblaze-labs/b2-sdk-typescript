@@ -1,4 +1,13 @@
-import { appendFile, chmod, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  appendFile,
+  chmod,
+  mkdtemp,
+  rename,
+  rm,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -28,7 +37,6 @@ describe('FileSource', () => {
     expect(source.size).toBe(15)
     expect(source.canSlice).toBe(true)
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from disk')
-    await expect(source.assertUnchanged()).resolves.toBeUndefined()
   })
 
   it('can be created with asynchronous filesystem validation', async () => {
@@ -206,6 +214,19 @@ describe('FileSource', () => {
     await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
 
+  it('documents best-effort checks do not catch restored-mtime rewrites', async () => {
+    const path = join(tmpDir, 'restored-mtime.txt')
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+    await writeFile(path, 'original data')
+    await utimes(path, fixedTime, fixedTime)
+
+    const source = new FileSource(path)
+    await writeFile(path, 'tampered data')
+    await utimes(path, fixedTime, fixedTime)
+
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('tampered data')
+  })
+
   it.skipIf(process.platform === 'win32')('rejects a path replaced by a symlink', async () => {
     const path = join(tmpDir, 'payload.txt')
     const secretPath = join(tmpDir, 'secret.txt')
@@ -229,7 +250,7 @@ describe('FileSource', () => {
     await rm(path)
     await rename(replacementPath, path)
 
-    await expect(source.assertUnchanged('during test')).rejects.toThrow(/changed during test/)
+    await expect(source.toArrayBuffer()).rejects.toThrow(/changed before read/)
   })
 })
 

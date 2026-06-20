@@ -62,7 +62,7 @@ function getNodeFsSync(): NodeFsSync {
   const fs = processLike?.getBuiltinModule?.('node:fs')
   if (!isNodeFsSync(fs)) {
     throw new Error(
-      'FileSource constructor requires Node.js 22.3+ synchronous filesystem APIs; use FileSource.fromPath() in older Node 22 runtimes.',
+      'FileSource constructor requires Node.js 22.3+ synchronous filesystem APIs; use FileSource.fromPath() when synchronous filesystem access is unavailable.',
     )
   }
   return fs
@@ -497,12 +497,14 @@ class FileSliceSource extends FileRangeSource {}
  * Node filesystem APIs only when constructed or read. The constructor performs
  * synchronous filesystem validation so `size` is immediately available; request
  * handlers, sync loops, and other latency-sensitive code should use
- * {@link FileSource.fromPath}. Both paths validate a regular, non-symlink file
- * identity; reads reject if the path is replaced, if the filesystem cannot
- * report stable identity, or if the file is modified before the configured byte
- * range is read. Slices preserve that captured identity, so multipart uploads
- * can read disjoint ranges without materialising the whole file in memory or
- * following later path swaps.
+ * {@link FileSource.fromPath}. Both paths capture a best-effort regular,
+ * non-symlink file identity; reads reject if the path is replaced, if the
+ * filesystem cannot report stable identity, or if size/mtime changes before the
+ * configured byte range is read. This is not tamper-resistant: an in-place
+ * rewrite that preserves size and restores mtime can pass the check. Use an
+ * independent digest when a caller must prove the bytes are unchanged. Slices
+ * preserve the captured identity, so multipart uploads can read disjoint ranges
+ * without materialising the whole file in memory or following later path swaps.
  */
 export class FileSource extends FileRangeSource {
   /**
@@ -541,18 +543,6 @@ export class FileSource extends FileRangeSource {
   static async fromPath(path: FileSourcePath): Promise<FileSource> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
     return constructFileSourceFromIdentity(path, identity)
-  }
-
-  /**
-   * Verify that the backing file still matches the captured file identity.
-   * @param when - Context included in any thrown error message.
-   *
-   * @returns A promise that resolves when the file still matches.
-   *
-   * @throws If the path no longer references the captured regular file.
-   */
-  assertUnchanged(when = 'after read'): Promise<void> {
-    return this.verifyUnchanged(when)
   }
 }
 

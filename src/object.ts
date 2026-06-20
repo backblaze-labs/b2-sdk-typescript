@@ -1,5 +1,5 @@
 import type { Bucket } from './bucket.ts'
-import type { B2Client } from './client.ts'
+import { type B2Client, getClientUploadRetryOptions } from './client.ts'
 import { createParallelDownloadStream } from './download/parallel.ts'
 import {
   type DownloadResult,

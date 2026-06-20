@@ -1,4 +1,4 @@
-import type { B2Client } from './client.ts'
+import { type B2Client, getClientUploadRetryOptions } from './client.ts'
 import { copyLargeFile } from './copy/large.ts'
 import {
   type DownloadResult,

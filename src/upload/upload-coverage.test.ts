@@ -3996,6 +3996,48 @@ describe('uploadSmallFile cleanup path', () => {
     expect(bytes).toEqual(expected)
   })
 
+  it('rejects unbounded trailing empty forward-only chunks after advertised bytes', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-trailer-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+        controller.enqueue(deterministicBytes(partSize).reverse())
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-trailer-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-trailer-poison.bin'),
+    ).toBeUndefined()
+  })
+
   it('rejects a streaming-source upload when resume is requested', async () => {
     // StreamSource has no random access, so resume can't replay parts.
     // The engine bails early with a clear message and cancels the

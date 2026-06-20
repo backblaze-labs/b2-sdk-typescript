@@ -24,6 +24,8 @@ import type { ReplicationConfiguration } from './types/replication.ts'
 import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
+const GET_CLIENT_UPLOAD_RETRY_OPTIONS = Symbol('B2Client.getUploadRetryOptions')
+
 /** Result of {@link B2Client.hasCapabilities}. */
 export interface CapabilityCheckResult {
   /** `true` when the key carries every requested capability. */
@@ -93,6 +95,7 @@ export interface B2ClientOptions {
  * ```
  */
 export class B2Client {
+  #uploadRetryOptions: RetryOptions
   /** Low-level client for direct B2 API calls. */
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
@@ -148,6 +151,17 @@ export class B2Client {
     if (cachedAuth !== null) this.lockUrlGuard(cachedAuth)
 
     this.raw = new RawClient({ transport: retryTransport })
+  }
+
+  /**
+   * Returns resolved upload retry options for SDK internals.
+   *
+   * @returns Resolved retry options.
+   *
+   * @internal
+   */
+  [GET_CLIENT_UPLOAD_RETRY_OPTIONS](): RetryOptions {
+    return this.#uploadRetryOptions
   }
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
@@ -396,4 +410,16 @@ function bindAccountInfoAuthContext(
 ): void {
   accountInfo.setApplicationKeyId?.(applicationKeyId)
   accountInfo.setRealmUrl?.(realmUrl)
+}
+
+/**
+ * Returns resolved upload retry options for a B2Client instance.
+ * @param client - Client instance.
+ *
+ * @returns Resolved retry options.
+ *
+ * @internal
+ */
+export function getClientUploadRetryOptions(client: B2Client): RetryOptions {
+  return client[GET_CLIENT_UPLOAD_RETRY_OPTIONS]()
 }
