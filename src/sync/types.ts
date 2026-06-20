@@ -169,6 +169,10 @@ export interface SyncOptions {
   readonly signal?: AbortSignal
   /** Optional idle/no-progress timeout in milliseconds for SHA-1 reads in `sha1` mode. */
   readonly sha1ReadTimeoutMillis?: number
+  /** Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads. */
+  readonly sha1VerificationTimeoutMillis?: number
+  /** Optional absolute byte ceiling for untrusted B2 SHA-1 verification reads. */
+  readonly sha1VerificationMaxBytes?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
 }

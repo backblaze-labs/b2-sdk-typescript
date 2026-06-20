@@ -16,9 +16,12 @@ const unverifiedSha1Prefix = 'unverified:'
  * @returns A lowercase comparable SHA-1, an untrusted sentinel, or null when unavailable.
  */
 export function selectB2ComparableSha1(version: FileVersion): string | null {
-  if (isUntrustedSha1(version.contentSha1)) return version.contentSha1.toLowerCase()
-  const contentSha1 = normalizeVerifiableSha1(version.contentSha1)
-  if (contentSha1 !== null) return contentSha1
+  const originalContentSha1 = version.contentSha1
+  if (typeof originalContentSha1 === 'string') {
+    if (isUntrustedSha1(originalContentSha1)) return originalContentSha1.toLowerCase()
+    const contentSha1 = normalizeVerifiableSha1(originalContentSha1)
+    return contentSha1 ?? String(originalContentSha1).toLowerCase()
+  }
 
   const largeFileSha1 = normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
   return largeFileSha1 === null ? null : `${unverifiedSha1Prefix}${largeFileSha1}`

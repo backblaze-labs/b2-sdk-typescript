@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
@@ -112,7 +112,52 @@ describe('uploadLargeFile resume', () => {
     bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
   })
 
-  it('resume: true picks up an existing unfinished large file and skips uploaded parts', async () => {
+  it('resume: true re-uploads existing server parts by default', async () => {
+    const size = 5_000_010
+    const data = deterministicBytes(size)
+
+    const startResp = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'resume-reupload.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const partUrl = await client.raw.getUploadPartUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: startResp.fileId },
+    )
+    const part1Data = data.slice(0, 5_000_000)
+    const { sha1Hex } = await import('../streams/hash.ts')
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part1Data.byteLength,
+        contentSha1: await sha1Hex(part1Data),
+      },
+      part1Data,
+    )
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'resume-reupload.bin',
+      source: new BufferSource(data),
+      partSize: 5_000_000,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('resume-reupload.bin')
+    expect(uploadPart).toHaveBeenCalledTimes(2)
+  })
+
+  it('resume: true can opt into trusting matching server parts', async () => {
     const size = 5_000_010
     const data = deterministicBytes(size)
 
@@ -144,6 +189,7 @@ describe('uploadLargeFile resume', () => {
       },
       part1Data,
     )
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
 
     // Step 2: resume with the same file name. Should find the unfinished file
     // via listUnfinishedLargeFiles, see part 1 already uploaded with matching SHA-1,
@@ -155,10 +201,12 @@ describe('uploadLargeFile resume', () => {
       partSize: 5_000_000,
       concurrency: 1,
       resume: true,
+      trustServerPartSha1s: true,
     })
 
     expect(result.fileName).toBe('resumed.bin')
     expect(result.contentLength).toBe(size)
+    expect(uploadPart).toHaveBeenCalledTimes(1)
   })
 
   it('resume: true with no candidate falls back to a fresh upload', async () => {

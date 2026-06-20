@@ -186,7 +186,7 @@ export async function preparePairForCompare(
     return skipped(preparedPair, unavailableSha1Event(preparedPair), undefined, bytesHashed)
   }
 
-  const shouldVerifyB2Bytes = sourceState.kind === 'untrusted' || destState.kind === 'untrusted'
+  const shouldVerifyB2Bytes = untrustedSha1CouldSuppressTransfer(sourceState, destState)
   const readB2Sha1 = options.readB2Sha1
   if (shouldVerifyB2Bytes && hasB2Path(preparedPair) && readB2Sha1 !== undefined) {
     return verifyB2Sha1Bytes(preparedPair, { ...options, readB2Sha1 }, bytesHashed)
@@ -225,7 +225,7 @@ export async function preparePairsForCompare(
 
 type Sha1State =
   | { readonly kind: 'verified'; readonly value: string }
-  | { readonly kind: 'untrusted' }
+  | { readonly kind: 'untrusted'; readonly value: string | null }
   | { readonly kind: 'unavailable' }
 
 interface PreparedPath {
@@ -363,11 +363,25 @@ async function prepareB2PathSha1(
 function comparableSha1(path: SyncPath): Sha1State {
   const candidate = path.contentSha1
   if (candidate === null || candidate === undefined) return { kind: 'unavailable' }
-  if (isUntrustedSha1(candidate)) return { kind: 'untrusted' }
+  if (isUntrustedSha1(candidate)) {
+    return {
+      kind: 'untrusted',
+      value: normalizeVerifiableSha1(candidate.slice('unverified:'.length)),
+    }
+  }
 
   const sha1 = normalizeVerifiableSha1(candidate)
-  if (sha1 === null) return { kind: 'untrusted' }
+  if (sha1 === null) return { kind: 'untrusted', value: null }
   return { kind: 'verified', value: sha1 }
+}
+
+function untrustedSha1CouldSuppressTransfer(source: Sha1State, dest: Sha1State): boolean {
+  if (source.kind === 'untrusted' && dest.kind === 'verified') return source.value === dest.value
+  if (dest.kind === 'untrusted' && source.kind === 'verified') return dest.value === source.value
+  if (source.kind === 'untrusted' && dest.kind === 'untrusted') {
+    return source.value !== null && source.value === dest.value
+  }
+  return false
 }
 
 function withB2ContentSha1(path: SyncPath): SyncPath {

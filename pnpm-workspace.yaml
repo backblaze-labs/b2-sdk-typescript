@@ -2,4 +2,5 @@ allowBuilds:
   '@biomejs/biome': true
   esbuild: true
 overrides:
-  ws: 8.20.1
+  markdown-it: ^14.1.2
+  ws: ^8.21.0

@@ -119,7 +119,7 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 #### Resume a failed multipart upload
 
-Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`, checks which parts are already on the server, and only re-uploads the missing ones. Parts whose locally-recomputed SHA-1 matches the server's are skipped.
+Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`. By default it re-uploads parts instead of treating server-reported part SHA-1 values as proof, which is safer for buckets with multiple writers. Set `trustServerPartSha1s: true` only when every writer that can create unfinished large files in the bucket is mutually trusted; then parts whose locally-recomputed SHA-1 matches the server's are skipped.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100
@@ -128,6 +128,7 @@ await bucket.upload({
   source: new BlobSource(largeBlob),
   partSize: 64 * 1024 * 1024,
   resume: true,
+  // trustServerPartSha1s: true, // trusted-writer buckets only
 })
 
 // Or target a specific in-progress large file explicitly

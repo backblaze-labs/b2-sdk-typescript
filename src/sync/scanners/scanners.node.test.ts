@@ -27,6 +27,8 @@ async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
 }
 
 const enc = new TextEncoder()
+const processLike = (globalThis as { process?: { platform?: string } }).process
+const isWindows = processLike?.platform === 'win32'
 
 /**
  * Advance the fake clock by 1 ms so the simulator assigns a distinct
@@ -130,6 +132,35 @@ describe('LocalFolder', () => {
     expect(entries[0]?.relativePath).toBe('a/b/file.txt')
     expect(entries[0]?.relativePath).not.toContain('\\')
   })
+
+  it.skipIf(isWindows)('continues scanning after an unreadable subdirectory', async () => {
+    const { chmod } = await import('node:fs/promises')
+    const blockedDir = join(tmpDir, 'blocked')
+    await mkdir(blockedDir)
+    await writeFile(join(tmpDir, 'readable.txt'), 'ok')
+    await chmod(blockedDir, 0)
+    const errors: unknown[] = []
+
+    try {
+      const folder = new LocalFolder(tmpDir)
+      const entries = await collect<LocalSyncPath>(
+        folder.scan({
+          onError: (event) => errors.push(event),
+        }),
+      )
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['readable.txt'])
+      expect(errors).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          path: 'blocked',
+          message: expect.stringContaining('failed to scan local directory'),
+        }),
+      )
+    } finally {
+      await chmod(blockedDir, 0o700).catch(() => {})
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -192,6 +223,41 @@ describe('B2Folder', () => {
         type: 'error',
         path: '',
         message: 'failed to scan B2 file versions: temporary outage',
+      }),
+    )
+  })
+
+  it('passes abort signals into B2 list requests', async () => {
+    const controller = new AbortController()
+    const listFileVersions = vi.fn().mockImplementation(
+      (options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('aborted', 'AbortError')),
+            { once: true },
+          )
+          controller.abort()
+        }),
+    )
+    const errors: unknown[] = []
+    const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
+
+    await expect(
+      collect<B2SyncPath>(
+        folder.scan({
+          signal: controller.signal,
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('failed to scan B2 file versions')
+    expect(listFileVersions).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    )
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: 'failed to scan B2 file versions: aborted',
       }),
     )
   })
@@ -481,5 +547,40 @@ describe('B2Folder', () => {
     // The continuation forwards startFileName; nextFileId === null propagates
     // through, which is acceptable for the listFileVersions contract.
     expect(calls[1]?.startFileName).toBe('b.txt')
+  })
+
+  it('keeps malformed B2 contentSha1 as untrusted scan metadata', async () => {
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            {
+              accountId: 'acc' as unknown as AccountId,
+              action: FileAction.Upload,
+              bucketId: 'b' as unknown as BucketId,
+              contentLength: 1,
+              contentMd5: null,
+              contentSha1: 'not-a-sha1',
+              contentType: 'application/octet-stream',
+              fileId: 'fid_bad' as unknown as FileId,
+              fileInfo: {},
+              fileName: 'bad.txt',
+              fileRetention: { isClientAuthorizedToRead: true, value: null },
+              legalHold: { isClientAuthorizedToRead: true, value: null },
+              replicationStatus: null,
+              serverSideEncryption: { mode: EncryptionMode.None },
+              uploadTimestamp: 1,
+            },
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries[0]?.contentSha1).toBe('not-a-sha1')
   })
 })

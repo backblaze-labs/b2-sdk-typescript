@@ -1,8 +1,8 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { toError } from '../util/to-error.ts'
+import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
-
-const DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS = 30_000
 
 /** Options for reading a local file SHA-1 digest. */
 export interface LocalSha1ReadOptions {
@@ -28,13 +28,7 @@ export type LocalSha1Reader = (
  * @returns A sanitized reason suitable for event messages.
  */
 export function formatHashError(error: Error): string {
-  const code = (error as { readonly code?: unknown }).code
-  if (typeof code === 'string' && code.length > 0) return code
-  const message = error.message.trim()
-  // Node filesystem errors often include absolute paths; hide any slash-bearing message.
-  if (message.length > 0 && !/[\\/]/.test(message)) return message
-  if (error.name.length > 0) return error.name
-  return 'Error'
+  return sanitizeErrorReason(error)
 }
 
 /**
@@ -66,7 +60,7 @@ export async function readLocalSha1File(
 ): Promise<string> {
   const { constants } = await import('node:fs')
   const { lstat, open } = await import('node:fs/promises')
-  const timeoutMillis = normalizeTimeoutMillis(options.timeoutMillis)
+  const timeoutMillis = normalizeSha1TimeoutMillis(options.timeoutMillis)
   const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)
   const hash = new IncrementalSha1()
   let stream: (AsyncIterable<Uint8Array> & { destroy(error?: Error): void }) | undefined
@@ -128,13 +122,6 @@ export async function readLocalSha1File(
     stream?.destroy()
     await file?.close().catch(() => {})
   }
-}
-
-function normalizeTimeoutMillis(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value) || value < 1) {
-    return DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS
-  }
-  return Math.floor(value)
 }
 
 /* v8 ignore start -- defensive stale-filesystem stall handling is not portable to trigger */

@@ -1,5 +1,6 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
+import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
@@ -48,19 +49,21 @@ export class LocalFolder implements SyncFolder {
     try {
       entries = await readdir(dir, { withFileTypes: true })
     } catch (err) {
-      throw this.emitScanError(options, relativePath(this.root, dir), 'directory', err)
+      const error = this.emitScanError(options, relativePath(this.root, dir), 'directory', err)
+      if (dir === this.root) throw error
+      return
     }
 
     for (const entry of entries) {
       if (options.signal?.aborted) return
 
       const fullPath = join(dir, entry.name)
+      const rel = relativePath(this.root, fullPath)
       if (entry.isDirectory()) {
         await this.walk(fullPath, out, options)
       } else if (entry.isFile()) {
         try {
           const s = await stat(fullPath)
-          const rel = relativePath(this.root, fullPath)
           out.push({
             relativePath: rel,
             absolutePath: fullPath,
@@ -69,8 +72,10 @@ export class LocalFolder implements SyncFolder {
           })
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
-          throw this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)
+          this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)
         }
+      } else {
+        this.emitScanError(options, rel, 'file', new Error('not a regular file'))
       }
     }
   }
@@ -85,7 +90,7 @@ export class LocalFolder implements SyncFolder {
       type: 'error',
       path,
       size: 0,
-      message: `failed to scan local ${kind}: ${formatScanError(err)}`,
+      message: `failed to scan local ${kind}: ${sanitizeErrorReason(err)}`,
     }
     options.onError?.(event)
     return new Error(event.message)
@@ -94,18 +99,4 @@ export class LocalFolder implements SyncFolder {
 
 function relativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join('/')
-}
-
-function formatScanError(err: unknown): string {
-  if (err instanceof Error) {
-    const code = (err as { readonly code?: unknown }).code
-    if (typeof code === 'string' && code.length > 0) return code
-    /* v8 ignore start -- fallback formatting is for nonstandard filesystem errors */
-    const message = err.message.trim()
-    if (message.length > 0 && !/[\\/]/.test(message)) return message
-    if (err.name.length > 0) return err.name
-    /* v8 ignore stop */
-  }
-  /* v8 ignore next -- defensive fallback for non-Error throws from filesystem shims */
-  return 'Error'
 }

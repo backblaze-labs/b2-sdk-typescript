@@ -189,9 +189,15 @@ export class Bucket {
      * exists. Only consulted on the large-file path (source size
      * greater than `recommendedPartSize`). On the small-file path this
      * option is silently ignored. Sliceable sources only — `StreamSource`
-     * rejects resume because it can't replay parts.
+     * rejects resume because it can't replay parts. Matching server parts are
+     * re-uploaded unless `trustServerPartSha1s` is also true.
      */
     resume?: boolean
+    /**
+     * Trust server-reported part SHA-1 values when resuming and skip matching
+     * parts. Only enable this for buckets where every writer is mutually trusted.
+     */
+    trustServerPartSha1s?: boolean
     /**
      * Resume into a specific large-file ID. Overrides the `resume`
      * discovery path. The local `partSize` must match the server-side
@@ -320,6 +326,8 @@ export class Bucket {
     prefix?: string
     /** Delimiter for virtual directory grouping. */
     delimiter?: string
+    /** Optional abort signal for the listing request. */
+    signal?: AbortSignal
   }): Promise<ListFileVersionsResponse> {
     return this.client.raw.listFileVersions(
       this.client.accountInfo.getApiUrl(),
@@ -331,6 +339,9 @@ export class Bucket {
         ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
         ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
         ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+      },
+      {
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       },
     )
   }

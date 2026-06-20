@@ -1,5 +1,6 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
+import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { compareSyncPathNames } from '../path-order.ts'
 import { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
@@ -45,6 +46,7 @@ export class B2Folder implements SyncFolder {
           ...(startFileId !== undefined
             ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
             : {}),
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (err) {
         throw emitScanError(options, 'failed to scan B2 file versions', err)
@@ -94,22 +96,8 @@ function emitScanError(options: SyncScanOptions, message: string, err: unknown):
     type: 'error',
     path: '',
     size: 0,
-    message: `${message}: ${formatScanError(err)}`,
+    message: `${message}: ${sanitizeErrorReason(err)}`,
   }
   options.onError?.(event)
   return new Error(event.message)
-}
-
-function formatScanError(err: unknown): string {
-  if (err instanceof Error) {
-    const code = (err as { readonly code?: unknown }).code
-    if (typeof code === 'string' && code.length > 0) return code
-    const message = err.message.trim()
-    if (message.length > 0 && !/[\\/]/.test(message)) return message
-    /* v8 ignore start -- defensive fallback for path-bearing or empty Error values */
-    if (err.name.length > 0) return err.name
-    /* v8 ignore stop */
-  }
-  /* v8 ignore next -- defensive fallback for non-Error throws from B2-compatible shims */
-  return 'Error'
 }

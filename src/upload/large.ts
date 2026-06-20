@@ -61,9 +61,15 @@ export interface UploadLargeFileOptions {
   readonly retryResponseBodyFailures?: boolean
   /**
    * If true, look for an unfinished large file with the same bucket and file name
-   * and skip parts whose locally-recomputed SHA-1 matches the server's.
+   * and reuse its file ID. Already-uploaded server parts are re-uploaded unless
+   * {@link trustServerPartSha1s} is also true.
    */
   readonly resume?: boolean
+  /**
+   * Trust server-reported part SHA-1 values when resuming and skip matching parts.
+   * Only enable this for buckets where every writer is mutually trusted.
+   */
+  readonly trustServerPartSha1s?: boolean
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
    * but the local `partSize` must still match the server's plan.
@@ -206,7 +212,11 @@ export async function uploadLargeFile(
 
         // Resume short-circuit: server already has this part with matching SHA-1
         const serverSha1 = preUploaded.get(part.partNumber)
-        if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
+        if (
+          options.trustServerPartSha1s === true &&
+          serverSha1 !== undefined &&
+          serverSha1 === sha1Hex
+        ) {
           partSha1s[part.partNumber - 1] = serverSha1
           tracker.addBytes(data.byteLength)
           tracker.completePart()

@@ -104,7 +104,10 @@ read the same file again for transfer. `SYNC_DRY_RUN=true` still performs those 
 The example logs `compare.bytesHashed` so you can distinguish a long hash pass from a hung sync.
 Incorrect or adversarial size-matching, hash-mismatching metadata can force a full hash pass and
 transfers in `sha1` mode. The SDK bounds local and B2 SHA-1 reads with an idle/no-progress timeout,
-rejects non-regular local files, and bounds local reads to the scanned size.
+adds an absolute deadline to untrusted B2 verification downloads, rejects non-regular local files,
+and bounds local reads to the scanned size. Untrusted B2 verification also refuses to read more
+bytes than the selected version's `contentLength`; set `sha1VerificationMaxBytes` in code when you
+need a lower absolute ceiling for large-object verification.
 
 ### Upload with a progress bar
 

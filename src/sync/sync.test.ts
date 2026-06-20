@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
@@ -199,6 +199,16 @@ describe('selectB2ComparableSha1', () => {
     const sha1 = 'a'.repeat(40)
     const file = makeB2SyncPath('untrusted.txt', 1000, 100, `unverified:${sha1}`)
     expect(selectB2ComparableSha1(file.selectedVersion)).toBe(`unverified:${sha1}`)
+  })
+
+  it('keeps malformed contentSha1 as untrusted metadata', () => {
+    const file = makeB2SyncPath('malformed.txt', 1000, 100, 'not-a-sha1')
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBe('not-a-sha1')
+  })
+
+  it('returns null when no B2 sha1 metadata is available', () => {
+    const file = makeB2SyncPath('missing.txt', 1000, 100, null)
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBeNull()
   })
 })
 
@@ -536,6 +546,20 @@ describe('preparePairForCompare', () => {
     })
 
     expect(hashedPaths).toEqual(['dest.txt'])
+    expect(result.events).toEqual([])
+    expect(result.pair[0]?.contentSha1).toBe(sha1)
+    expect(result.pair[1]?.contentSha1).toBe(sha1)
+  })
+
+  it('verifies both B2 sides when matching untrusted metadata could suppress a transfer', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('source.txt', 1000, 100, `unverified:${sha1}`)
+    const dest = makeB2SyncPath('dest.txt', 1000, 100, `unverified:${sha1}`)
+    const readB2Sha1 = vi.fn().mockResolvedValue(sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', { readB2Sha1 })
+
+    expect(readB2Sha1).toHaveBeenCalledTimes(2)
     expect(result.events).toEqual([])
     expect(result.pair[0]?.contentSha1).toBe(sha1)
     expect(result.pair[1]?.contentSha1).toBe(sha1)
