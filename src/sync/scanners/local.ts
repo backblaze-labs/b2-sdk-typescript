@@ -65,10 +65,12 @@ export class LocalFolder implements SyncFolder {
       } else if (entry.isFile()) {
         try {
           const s = await lstat(fullPath)
+          /* v8 ignore start -- lstat race after a Dirent file result is not deterministic */
           if (!s.isFile()) {
             this.emitScanError(options, rel, 'file', new Error('not a regular file'))
             continue
           }
+          /* v8 ignore stop */
           out.push({
             relativePath: rel,
             absolutePath: fullPath,

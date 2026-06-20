@@ -402,6 +402,102 @@ describe('synchronize', () => {
         await rm(outside, { recursive: true, force: true })
       }
     })
+
+    it.skipIf(!isNode)('rejects upload when the scanned path is a directory', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-dir-'))
+      try {
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'dir',
+          absolutePath: root,
+          modTimeMillis: 1000,
+          size: 0,
+        }
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+        expect(events.find((event) => event.type === 'error')?.message).toContain(
+          'not a regular file',
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('rejects upload when the scanned file size changes', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-size-'))
+      try {
+        const filePath = join(root, 'report.txt')
+        await writeFile(filePath, 'safe')
+        await writeFile(filePath, 'changed')
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'report.txt',
+          absolutePath: filePath,
+          modTimeMillis: 1000,
+          size: 4,
+        }
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+        expect(events.find((event) => event.type === 'error')?.message).toContain('size changed')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('rejects upload when same-size file identity changes', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, unlink, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const { LocalFolder } = await import('./scanners/local.ts')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-identity-'))
+      try {
+        const filePath = join(root, 'report.txt')
+        await writeFile(filePath, 'safe')
+        const scanned: LocalSyncPath[] = []
+        for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+        await unlink(filePath)
+        await writeFile(filePath, 'evil')
+
+        const mockBucket = makeMockBucket()
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder(scanned, 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+        expect(events.find((event) => event.type === 'error')?.message).toContain(
+          'local file changed before upload',
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('dry-run mode', () => {
