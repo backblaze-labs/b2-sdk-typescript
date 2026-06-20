@@ -253,7 +253,7 @@ describe('FileSource', () => {
     await rm(path)
     await rename(replacementPath, path)
 
-    await expect(source.toArrayBuffer()).rejects.toThrow(/changed before read/)
+    await expect(source.toArrayBuffer()).rejects.toThrow(/(?:changed|was modified) before read/)
   })
 })
 
