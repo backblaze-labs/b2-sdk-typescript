@@ -1,6 +1,9 @@
 import { arrayBufferFor } from './bytes.ts'
 import { utf8Encoder } from './text-codec.ts'
 
+const CRYPTO_UNAVAILABLE_MESSAGE =
+  'SHA-256 and HMAC-SHA256 require globalThis.crypto.subtle or Node.js node:crypto.'
+
 /**
  * Convert bytes to a lowercase hex string.
  *
@@ -26,7 +29,7 @@ export async function sha256Hex(data: string | Uint8Array): Promise<string> {
     return hexEncode(new Uint8Array(digest))
   }
 
-  const { createHash } = await import('node:crypto')
+  const { createHash } = await importNodeCrypto()
   return createHash('sha256').update(bytes).digest('hex')
 }
 
@@ -61,10 +64,18 @@ export async function hmacSha256(
     return new Uint8Array(signature)
   }
 
-  const { createHmac } = await import('node:crypto')
+  const { createHmac } = await importNodeCrypto()
   return new Uint8Array(createHmac('sha256', keyBytes).update(dataBytes).digest())
 }
 
 function bytesFor(data: string | Uint8Array): Uint8Array {
   return typeof data === 'string' ? utf8Encoder.encode(data) : data
+}
+
+async function importNodeCrypto(): Promise<typeof import('node:crypto')> {
+  try {
+    return await import('node:crypto')
+  } catch (err) {
+    throw new Error(CRYPTO_UNAVAILABLE_MESSAGE, { cause: err })
+  }
 }

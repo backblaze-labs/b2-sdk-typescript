@@ -630,4 +630,22 @@ describe('createNativeDownloadAuthorizationUrl', () => {
 
     expect(url).toContain('Authorization=secret-token')
   })
+
+  it('rejects invalid compatibility duration values', () => {
+    for (const validDurationInSeconds of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        createNativeDownloadAuthorizationUrl(
+          'https://f004.backblazeb2.com',
+          'bucket',
+          'file.txt',
+          'secret-token',
+          validDurationInSeconds,
+        ),
+      ).toThrow(
+        `validDurationInSeconds must be a non-negative safe integer; received ${String(
+          validDurationInSeconds,
+        )}.`,
+      )
+    }
+  })
 })

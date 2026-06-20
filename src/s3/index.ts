@@ -379,7 +379,8 @@ export function createNativeDownloadAuthorizationUrl(
   authorizationToken: string,
   validDurationInSeconds = DEFAULT_PRESIGN_EXPIRES_IN,
 ): string {
-  const expires = Math.floor(Date.now() / 1000) + validDurationInSeconds
+  const expires =
+    Math.floor(Date.now() / 1000) + normalizeValidDurationInSeconds(validDurationInSeconds)
   return `${downloadUrl}/file/${encodeUrlComponent(bucketName)}/${encodeFileName(fileName)}?Authorization=${encodeUrlComponent(authorizationToken)}&expires=${expires}`
 }
 
@@ -413,6 +414,18 @@ function normalizeContentLength(contentLength: number): string {
   }
 
   return String(contentLength)
+}
+
+function normalizeValidDurationInSeconds(validDurationInSeconds: number): number {
+  if (!Number.isSafeInteger(validDurationInSeconds) || validDurationInSeconds < 0) {
+    throw new RangeError(
+      `validDurationInSeconds must be a non-negative safe integer; received ${String(
+        validDurationInSeconds,
+      )}.`,
+    )
+  }
+
+  return validDurationInSeconds
 }
 
 function normalizeMetadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
