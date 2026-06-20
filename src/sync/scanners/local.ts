@@ -6,8 +6,9 @@ import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from 
 
 /**
  * Scans a local directory tree and yields {@link LocalSyncPath} entries
- * sorted by deterministic relative path order. Unreadable files and directories abort the scan with
- * an error diagnostic so they cannot be mistaken for absent source files.
+ * sorted by deterministic relative path order. A root directory read failure aborts the scan with
+ * an error diagnostic. Per-entry file or directory failures are reported through `onError` and the
+ * scan continues over readable siblings so partial results can still be synchronized.
  */
 export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
