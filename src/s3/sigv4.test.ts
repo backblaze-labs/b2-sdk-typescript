@@ -5,43 +5,68 @@ import { presignS3Request } from './sigv4.ts'
 const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
 
 describe('presignS3Request', () => {
-  it('canonicalizes duplicate query parameters and signed header names', async () => {
-    const url = await presignS3Request(
-      'GET',
-      {
-        endpoint: 'https://s3.us-west-004.backblazeb2.com/root/',
-        region: 'us-west-004',
-        accessKeyId: 'key-id',
-        secretAccessKey: 'key-secret',
-        bucketName: 'my-bucket',
-        fileName: "special/!*'().txt",
-        expiresIn: 60,
-        signingDate: SIGNING_DATE,
-      },
-      [
-        ['partNumber', '1'],
-        ['partNumber', '2'],
-        ['partNumber', '1'],
-        ['special', "!*'()"],
-        ['x-id', 'GetObject'],
-      ],
-      [
-        ['X-Amz-Meta-Dupe', ' first   value '],
-        ['x-amz-meta-dupe', 'second value'],
-      ],
+  it('canonicalizes duplicate query parameters and combines duplicate signed header names', async () => {
+    const url = new URL(
+      await presignS3Request(
+        'GET',
+        {
+          endpoint: 'https://s3.us-west-004.backblazeb2.com/root/',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: "special/!*'().txt",
+          expiresIn: 60,
+          signingDate: SIGNING_DATE,
+        },
+        [
+          ['partNumber', '1'],
+          ['partNumber', '2'],
+          ['partNumber', '1'],
+          ['special', "!*'()"],
+          ['x-id', 'GetObject'],
+        ],
+        [
+          ['X-Amz-Meta-Dupe', ' first   value '],
+          ['x-amz-meta-dupe', 'second value'],
+        ],
+      ),
+    )
+    const combinedHeaderUrl = new URL(
+      await presignS3Request(
+        'GET',
+        {
+          endpoint: 'https://s3.us-west-004.backblazeb2.com/root/',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: "special/!*'().txt",
+          expiresIn: 60,
+          signingDate: SIGNING_DATE,
+        },
+        [
+          ['partNumber', '1'],
+          ['partNumber', '2'],
+          ['partNumber', '1'],
+          ['special', "!*'()"],
+          ['x-id', 'GetObject'],
+        ],
+        [['x-amz-meta-dupe', 'first value,second value']],
+      ),
     )
 
-    const parsed = new URL(url)
-    const query = parsed.search.slice(1)
+    const query = url.search.slice(1)
 
-    expect(parsed.pathname).toBe('/root/my-bucket/special/%21%2A%27%28%29.txt')
+    expect(url.pathname).toBe('/root/my-bucket/special/%21%2A%27%28%29.txt')
     expect(query).toContain('partNumber=1&partNumber=1&partNumber=2')
     expect(query).toContain('special=%21%2A%27%28%29')
-    expect(parsed.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
-    expect(parsed.searchParams.get('X-Amz-SignedHeaders')).toBe(
-      'host;x-amz-meta-dupe;x-amz-meta-dupe',
+    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host;x-amz-meta-dupe')
+    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(
+      combinedHeaderUrl.searchParams.get('X-Amz-Signature'),
     )
-    expect(parsed.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('includes non-default endpoint ports in the presigned URL', async () => {

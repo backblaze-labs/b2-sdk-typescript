@@ -227,8 +227,19 @@ function awsPercentEncode(value: string): string {
 }
 
 function normalizeSignedHeaders(headers: readonly SignedHeader[]): SignedHeader[] {
-  return headers
-    .map(([name, value]) => [name.toLowerCase(), normalizeHeaderValue(value)] as const)
+  const combinedHeaders = new Map<string, string[]>()
+  for (const [name, value] of headers) {
+    const normalizedName = name.toLowerCase()
+    const values = combinedHeaders.get(normalizedName)
+    if (values) {
+      values.push(normalizeHeaderValue(value))
+    } else {
+      combinedHeaders.set(normalizedName, [normalizeHeaderValue(value)])
+    }
+  }
+
+  return [...combinedHeaders.entries()]
+    .map(([name, values]) => [name, values.join(',')] as const)
     .sort(([a], [b]) => {
       if (a < b) return -1
       if (a > b) return 1
