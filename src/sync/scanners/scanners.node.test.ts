@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -175,6 +175,19 @@ describe('LocalFolder', () => {
     await expect(
       collect<LocalSyncPath>(folder.scan({ signal: controller.signal })),
     ).rejects.toThrow('stop local scan')
+  })
+
+  it('scans a symlinked root directory', async () => {
+    const realRoot = join(tmpDir, 'real-root')
+    const linkRoot = join(tmpDir, 'link-root')
+    await mkdir(realRoot)
+    await writeFile(join(realRoot, 'file.txt'), 'content')
+    await symlink(realRoot, linkRoot, 'dir')
+
+    const folder = new LocalFolder(linkRoot)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
   })
 
   it('uses forward slashes in relative paths even on the current platform', async () => {
