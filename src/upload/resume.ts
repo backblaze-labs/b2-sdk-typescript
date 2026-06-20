@@ -181,7 +181,7 @@ export async function findResumeCandidate(
       {
         bucketId,
         maxFileCount: explicitResumeFileId === undefined ? 100 : 1,
-        ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
+        namePrefix: fileName,
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
       criteria.signal !== undefined ? { signal: criteria.signal } : undefined,
@@ -245,51 +245,6 @@ export async function findResumeCandidate(
   }
 
   return null
-}
-
-/**
- * Lists all uploaded parts for a large file, paginating until exhausted.
- *
- * @param raw - Low-level B2 API client.
- * @param accountInfo - Authorized account state.
- * @param fileId - ID of the large file to inspect.
- * @param signal - Optional abort signal used for B2 list requests and checked between pages.
- *
- * @returns A map from 1-based part number to its server-stored SHA-1.
- */
-export async function collectPartSha1s(
-  raw: RawClient,
-  accountInfo: AccountInfo,
-  fileId: LargeFileId,
-  signal?: AbortSignal,
-): Promise<Map<number, string>> {
-  const parts = await collectPartInfo(raw, accountInfo, fileId, signal)
-  return partInfoToSha1s(parts)
-}
-
-/**
- * Lists all uploaded parts for a large file, including byte lengths.
- *
- * @param raw - Low-level B2 API client.
- * @param accountInfo - Authorized account state.
- * @param fileId - ID of the large file to inspect.
- * @param signal - Optional abort signal used for B2 list requests and checked between pages.
- *
- * @returns A map from 1-based part number to part resume metadata.
- */
-export async function collectPartInfo(
-  raw: RawClient,
-  accountInfo: AccountInfo,
-  fileId: LargeFileId,
-  signal?: AbortSignal,
-): Promise<Map<number, ResumePartInfo>> {
-  const result = await collectResumePartInfo(
-    raw,
-    accountInfo,
-    fileId,
-    signal !== undefined ? { signal } : {},
-  )
-  return result.parts
 }
 
 interface CollectResumePartInfoOptions {

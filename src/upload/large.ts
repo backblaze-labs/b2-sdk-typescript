@@ -279,8 +279,10 @@ export async function uploadLargeFile(
         await partSha1.update(data)
         const sha1Hex = await partSha1.digest()
 
-        // Security-critical resume gate: metadata and lengths are not enough.
-        // Reuse only when the server part SHA-1 matches the local bytes.
+        // Best-effort resume dedup gate: metadata and lengths are not enough.
+        // A SHA-1 match is not a cryptographic guarantee against malicious
+        // bucket co-writers, so auto-resume is documented for mutually trusted
+        // writers only.
         const serverSha1 = preUploaded.get(part.partNumber)
         if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
           partSha1s[part.partNumber - 1] = serverSha1
