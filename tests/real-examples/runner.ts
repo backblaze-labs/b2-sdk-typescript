@@ -82,7 +82,7 @@ async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<voi
     } catch (err) {
       if (attempt === maxAttempts) throw err
       console.warn(
-        `${argv.join(' ')} failed on attempt ${attempt}/${maxAttempts}; retrying in ${attempt}s`,
+        `${argv.join(' ')} failed on attempt ${attempt}/${maxAttempts}: ${String(err)}; retrying in ${attempt}s`,
       )
       await sleep(attempt * 1_000)
     }

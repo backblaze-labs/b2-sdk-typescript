@@ -10,6 +10,7 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
+import { syncTempFileName, syncTempRunId } from '../temp-files.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -325,6 +326,21 @@ describe('LocalFolder', () => {
 
     expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-directory.partial/keep.txt'])
     await expect(access(partialDir)).resolves.toBeFalsy()
+  })
+
+  it('skips reserved sync download temp directories', async () => {
+    const reservedDir = syncTempFileName(
+      '1234567890abcdef12345678',
+      syncTempRunId(1234, '1234567890abcdef1234567890abcdef'),
+    )
+    await mkdir(join(tmpDir, reservedDir), { recursive: true })
+    await writeFile(join(tmpDir, reservedDir, 'hidden.txt'), 'hidden')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
   })
 })
 
