@@ -1410,6 +1410,89 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)(
+      'does not sweep active partial files from concurrent downloads',
+      async () => {
+        const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-concurrent-'))
+        const slowClose = deferred()
+        try {
+          const slowReadStarted = deferred()
+          let slowPulled = false
+          const mockBucket = makeMockBucket()
+          mockBucket.downloadById.mockImplementation(async (fileId: string) => {
+            if (fileId === 'fid_same/a-slow.txt') {
+              return {
+                body: new ReadableStream<Uint8Array>({
+                  pull(controller) {
+                    if (!slowPulled) {
+                      slowPulled = true
+                      slowReadStarted.resolve(undefined)
+                      controller.enqueue(new Uint8Array([1]))
+                      return slowClose.promise
+                    }
+                    controller.close()
+                    return undefined
+                  },
+                }),
+              }
+            }
+
+            await slowReadStarted.promise
+            setTimeout(() => slowClose.resolve(undefined), 10)
+            return {
+              body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new Uint8Array([2]))
+                  controller.close()
+                },
+              }),
+            }
+          })
+          const source = makeMemoryFolder(
+            [
+              makeB2SyncPath('same/a-slow.txt', 2000, 1),
+              makeB2SyncPath('same/b-fast.txt', 2000, 1),
+            ],
+            'b2',
+          )
+          const dest = makeMemoryFolder([], 'local')
+
+          const config: SynchronizerDownConfig = {
+            source: { ...source, type: 'b2' },
+            dest: { ...dest, type: 'local', root },
+            options: {
+              compareMode: 'modtime',
+              keepMode: 'no-delete',
+              concurrency: 2,
+            },
+            bucket: mockBucket as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events.filter((event) => event.type === 'error')).toEqual([])
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: 'download-done', path: 'same/a-slow.txt' }),
+          )
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: 'download-done', path: 'same/b-fast.txt' }),
+          )
+          await expect(readFile(join(root, 'same', 'a-slow.txt'))).resolves.toEqual(
+            Buffer.from([1]),
+          )
+          await expect(readFile(join(root, 'same', 'b-fast.txt'))).resolves.toEqual(
+            Buffer.from([2]),
+          )
+        } finally {
+          slowClose.resolve(undefined)
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
     it.skipIf(!isNode)('refuses downloads outside the local sync root', async () => {
       const { access, mkdtemp, rm } = await import('node:fs/promises')
       const { tmpdir } = await import('node:os')
