@@ -43,7 +43,7 @@ export interface CreateWriteStreamOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Defaults to true; set false to avoid re-sending the part.
+   * the part. Defaults to false because retrying can create duplicate bytes.
    */
   readonly retryResponseBodyFailures?: boolean
 }

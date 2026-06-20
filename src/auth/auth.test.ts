@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { B2RealmConfigurationError } from '../errors/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
-import { getRealmUrl, REALM_URLS } from './realms.ts'
+import { assertSecureRealmUrl, getRealmUrl, REALM_URLS } from './realms.ts'
 import { UploadUrlPool } from './upload-url-pool.ts'
 
 const mockAuth: AuthorizeAccountResponse = {
@@ -372,12 +373,15 @@ describe('UploadUrlPool', () => {
 // -- getRealmUrl --------------------------------------------------------
 
 describe('getRealmUrl', () => {
-  it('returns the well-known URL for the production realm', () => {
-    expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
+  it.each([
+    ['production', 'https://api.backblazeb2.com'],
+    ['staging', 'https://api.backblaze.net'],
+  ])('returns the well-known URL for the %s realm', (realm, url) => {
+    expect(getRealmUrl(realm)).toBe(url)
   })
 
-  it('returns the well-known URL for the staging realm', () => {
-    expect(getRealmUrl('staging')).toBe('https://api.backblazeb2.com')
+  it('does not alias staging to production', () => {
+    expect(getRealmUrl('staging')).not.toBe(getRealmUrl('production'))
   })
 
   it('returns a custom URL as-is when it is not a known realm name', () => {
@@ -385,12 +389,104 @@ describe('getRealmUrl', () => {
     expect(getRealmUrl(customUrl)).toBe(customUrl)
   })
 
-  it('returns an unknown realm name as-is (fallback behavior)', () => {
-    expect(getRealmUrl('dev')).toBe('dev')
+  it('returns unknown realm names unchanged so callers can resolve custom aliases', () => {
+    expect(getRealmUrl('sandbox')).toBe('sandbox')
+  })
+
+  it('rejects non-loopback plaintext HTTP realms', () => {
+    expect(() => assertSecureRealmUrl('http://attacker.example')).toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
+  })
+
+  it('redacts URL userinfo from realm validation errors', () => {
+    let thrown: unknown
+    try {
+      assertSecureRealmUrl(
+        'http://user:secret@attacker.example/realm?token=query-secret#fragment-secret',
+      )
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
+    expect((thrown as Error).message).toContain('http://attacker.example/realm')
+    expect((thrown as Error).message).not.toContain('secret')
+    expect((thrown as Error).message).not.toContain('user:')
+    expect((thrown as Error).message).not.toContain('@')
+    expect((thrown as Error).message).not.toContain('token=')
+  })
+
+  it.each([
+    'https://realm.example?x=1',
+    'https://realm.example#x',
+    'https://user:pass@realm.example',
+    'https://user:secret@api.example.com',
+    'https://api.example.com?token=query-secret',
+    'https://api.example.com#fragment-secret',
+  ])('rejects realm URLs with non-base components %s', (realm) => {
+    let thrown: unknown
+    try {
+      assertSecureRealmUrl(realm)
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
+    expect((thrown as Error).message).toContain(
+      'realm URL must not include credentials, query, or fragment for authorization',
+    )
+    expect((thrown as Error).message).not.toContain('secret')
+    expect((thrown as Error).message).not.toContain('user')
+    expect((thrown as Error).message).not.toContain('pass')
+    expect((thrown as Error).message).not.toContain('token=')
+  })
+
+  it('rejects unsupported realm URL schemes', () => {
+    expect(() => assertSecureRealmUrl('ftp://attacker.example')).toThrow(
+      'realm URL must use HTTPS or loopback IP HTTP for authorization',
+    )
+  })
+
+  it.each(['https:example.com', 'https:///path'])('rejects malformed realm URL %s', (realm) => {
+    expect(() => assertSecureRealmUrl(realm)).toThrow(
+      'realm URL must be an absolute HTTP(S) URL with a hostname for authorization',
+    )
+  })
+
+  it.each([
+    'http://127.0.0.1:8180',
+    'http://127.0.0.2:8180',
+    'http://[::1]:8180',
+  ])('allows loopback IP plaintext HTTP realm %s', (realm) => {
+    expect(() => assertSecureRealmUrl(realm)).not.toThrow()
+  })
+
+  it.each([
+    'http://localhost:8180',
+    'http://foo.localhost:8180',
+  ])('rejects loopback hostname plaintext HTTP realm %s', (realm) => {
+    expect(() => assertSecureRealmUrl(realm)).toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
+  })
+
+  it('does not include non-loopback plaintext HTTP built-in realms', () => {
+    for (const url of Object.values(REALM_URLS)) {
+      expect(url.startsWith('http://')).toBe(false)
+    }
   })
 
   it('REALM_URLS contains the expected known realms', () => {
-    expect(Object.keys(REALM_URLS)).toContain('production')
-    expect(Object.keys(REALM_URLS)).toContain('staging')
+    expect(Object.keys(REALM_URLS)).toEqual(expect.arrayContaining(['production', 'staging']))
+  })
+
+  it('keeps public REALM_URLS mutations out of internal realm resolution', () => {
+    const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
+    REALM_URLS['production'] = 'https://attacker.example'
+    try {
+      expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
+    } finally {
+      REALM_URLS['production'] = originalProduction
+    }
   })
 })

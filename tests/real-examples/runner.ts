@@ -26,7 +26,9 @@ import { B2Client } from '../../src/index.ts'
 const NODE_MAJOR = (process.versions.node ?? '').split('.')[0] ?? 'unknown'
 const currentBucketPrefix = 'sdk-rex-'
 const legacyBucketPrefix = 'sdk-examples-'
-const staleBucketAgeMs = 60 * 60 * 1000
+// Keep above the workflow's 60-minute job timeout so overlapping startup
+// sweeps cannot delete another live run's active bucket.
+const staleBucketAgeMs = 2 * 60 * 60 * 1000
 
 function makeBucketName(): string {
   const runId = process.env.GITHUB_RUN_ID
@@ -55,6 +57,10 @@ function isStaleRealExampleBucket(name: string, now = Date.now()): boolean {
   if (!isRealExampleBucketName(name)) return false
   const createdAt = bucketTimestamp(name)
   return createdAt !== null && now - createdAt > staleBucketAgeMs
+}
+
+function isUnparseableRealExampleBucket(name: string): boolean {
+  return isRealExampleBucketName(name) && bucketTimestamp(name) === null
 }
 
 /**
@@ -118,7 +124,12 @@ async function main(): Promise<void> {
   // Sweep only stale buckets from crashed runs. Other branches and older
   // workflow attempts may still be using the same B2 account concurrently.
   for (const b of await client.listBuckets()) {
-    if (!isStaleRealExampleBucket(b.name)) continue
+    if (!isStaleRealExampleBucket(b.name)) {
+      if (isUnparseableRealExampleBucket(b.name)) {
+        console.warn(`skipping example bucket with unparseable timestamp: ${b.name}`)
+      }
+      continue
+    }
     try {
       await deleteBucketIfPresent(b)
     } catch (err) {

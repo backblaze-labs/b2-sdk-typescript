@@ -132,7 +132,8 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the file. Defaults to true; set false to avoid possible duplicate versions.
+     * the file. Defaults to false because retrying can create duplicate
+     * versions; set true only when at-least-once upload semantics are acceptable.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
@@ -295,7 +296,8 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the part. Defaults to true; set false to avoid re-sending the part.
+     * the part. Defaults to false because retrying can create duplicate bytes;
+     * set true only when at-least-once upload semantics are acceptable.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */

@@ -152,6 +152,16 @@ export interface AuthorizeAccountRequest {
   readonly applicationKeyId: string
   /** The application key secret. */
   readonly applicationKey: string
-  /** Optional realm override (e.g., `'production'`, `'staging'`). Defaults to production. */
+  /**
+   * Optional realm override. Accepts a known realm-map key (`"production"` or
+   * `"staging"`) or a direct base URL. Custom HTTPS hosts are trusted with the
+   * application key during authorize, so never derive this value from untrusted
+   * input. URL values must use HTTPS, or loopback IP literal HTTP for local
+   * testing only; application-key credentials are sent unencrypted over
+   * loopback HTTP. Unsupported schemes, malformed URLs, non-URL strings,
+   * plaintext HTTP hostnames such as `localhost`, and non-loopback plaintext
+   * HTTP are rejected before credentials are sent. URL values must not include
+   * userinfo, query strings, or fragments. Defaults to production.
+   */
   readonly realm?: string
 }

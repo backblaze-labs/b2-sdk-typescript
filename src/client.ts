@@ -39,7 +39,18 @@ export interface B2ClientOptions {
   readonly applicationKeyId: string
   /** The application key secret. */
   readonly applicationKey: string
-  /** B2 realm to authenticate against. Defaults to `"production"`. */
+  /**
+   * B2 realm to authenticate against. Accepts a known realm-map key
+   * (`"production"` or `"staging"`) or a direct base URL. Custom HTTPS hosts
+   * are trusted with the application key during authorize, so never derive
+   * `realm` from untrusted input. URL values must use HTTPS, or loopback IP
+   * literal HTTP for local testing only; application-key credentials are sent
+   * unencrypted over loopback HTTP. Unsupported schemes, malformed URLs,
+   * non-URL strings, plaintext HTTP hostnames such as `localhost`, and
+   * non-loopback plaintext HTTP are rejected before credentials are sent. URL
+   * values must not include userinfo, query strings, or fragments. Defaults to
+   * `"production"`.
+   */
   readonly realm?: string
   /** Storage backend for authorization state. Defaults to {@link InMemoryAccountInfo}. */
   readonly accountInfo?: AccountInfo
@@ -61,6 +72,12 @@ export interface B2ClientOptions {
    * transport is the user's responsibility to harden.
    */
   readonly allowedHostSuffixes?: readonly string[]
+  /**
+   * Follow same-origin GET/HEAD redirects in the default fetch transport after
+   * checking each target with the SSRF guard. POST redirects remain blocked.
+   * Defaults to true.
+   */
+  readonly followSameOriginRedirects?: boolean
 }
 
 /**
@@ -101,6 +118,7 @@ export class B2Client {
     this.applicationKey = options.applicationKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
+    bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
     setClientUploadRetryOptions(this, uploadRetryOptions)
@@ -114,6 +132,9 @@ export class B2Client {
       baseTransport = new FetchTransport({
         urlGuard,
         ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
+        ...(options.followSameOriginRedirects !== undefined
+          ? { followSameOriginRedirects: options.followSameOriginRedirects }
+          : {}),
       })
       this.urlGuard = urlGuard
     }
@@ -123,6 +144,9 @@ export class B2Client {
       retry: uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
+
+    const cachedAuth = this.accountInfo.getAuth()
+    if (cachedAuth !== null) this.lockUrlGuard(cachedAuth)
 
     this.raw = new RawClient({ transport: retryTransport })
   }
@@ -138,8 +162,11 @@ export class B2Client {
       this.realmUrl,
     )
     this.accountInfo.setAuth(auth)
-    // Lock the SSRF guard to the realm's hosts (plus any user additions).
-    // No-op when the caller supplied a custom transport: their threat model.
+    this.lockUrlGuard(auth)
+    return auth
+  }
+
+  private lockUrlGuard(auth: AuthorizeAccountResponse): void {
     if (this.urlGuard !== null) {
       const derived = deriveAllowedSuffixes(auth.apiInfo.storageApi)
       const merged =
@@ -150,7 +177,6 @@ export class B2Client {
           : derived
       this.urlGuard.setAllowedSuffixes(merged)
     }
-    return auth
   }
 
   /**
@@ -362,4 +388,13 @@ export class B2Client {
     const missing = needed.filter((cap) => !available.has(cap as string))
     return { ok: missing.length === 0, missing }
   }
+}
+
+function bindAccountInfoAuthContext(
+  accountInfo: AccountInfo,
+  realmUrl: string,
+  applicationKeyId: string,
+): void {
+  accountInfo.setApplicationKeyId?.(applicationKeyId)
+  accountInfo.setRealmUrl?.(realmUrl)
 }

@@ -41,7 +41,7 @@ export interface UploadFileOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the file. Defaults to true; set false to avoid possible duplicate versions.
+   * the file. Defaults to false because retrying can create duplicate versions.
    */
   readonly retryResponseBodyFailures?: boolean
 }

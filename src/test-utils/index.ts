@@ -172,6 +172,35 @@ export function jsonResponse<T>(data: T, status = 200): HttpResponse {
 }
 
 /**
+ * Test transport that records every attempted request and then throws. Use it
+ * for "must fail before transport" assertions where credentials must never
+ * leave the SDK.
+ *
+ * @param message - Error message thrown if the transport is unexpectedly used.
+ *
+ * @returns The transport plus arrays populated with attempted requests.
+ */
+export function recordingTransport(message = 'transport should not be called'): {
+  transport: HttpTransport
+  seenRequests: HttpRequest[]
+  seenUrls: string[]
+} {
+  const seenRequests: HttpRequest[] = []
+  const seenUrls: string[] = []
+  return {
+    transport: {
+      async send(request: HttpRequest): Promise<HttpResponse> {
+        seenRequests.push(request)
+        seenUrls.push(request.url)
+        throw new Error(message)
+      },
+    },
+    seenRequests,
+    seenUrls,
+  }
+}
+
+/**
  * Options for {@link failingTransport}.
  */
 export interface FailingTransportOptions {

@@ -113,9 +113,9 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version, so that specific retry is disabled by default.
 
-Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one. Set `retryResponseBodyFailures: false` to fail instead of re-sending a payload when the success response body is lost. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one. Set `retryResponseBodyFailures: true` to opt into re-sending a payload when the success response body is lost. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
 
 #### Resume a failed multipart upload
 
@@ -405,7 +405,7 @@ if (accountInfo.getAuth() === null) {
 }
 ```
 
-`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
+`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk. `FileAccountInfo` serializes writes inside one process but does not lock across processes; if multiple versions, realms, or application keys share one cache path during a rolling deploy, mismatched auth is ignored in memory without truncating the other process's file. Pass `onDiscard` or `onWriteError` to observe cache churn, or use one cache path per resolved realm and key.
 
 ## Subpath exports
 
@@ -519,6 +519,8 @@ new B2Client({
 ```
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
+
+Same-origin GET/HEAD redirects are followed by default after each redirected target is checked by the guard. POST redirects and cross-origin redirects remain blocked so credential-bearing payloads are not replayed to unexpected endpoints. Pass `followSameOriginRedirects: false` to block even same-origin GET/HEAD redirects. Browser and edge fetch implementations may expose manual cross-origin redirects only as opaque redirects with no readable `Location`, so those redirects remain blocked.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 

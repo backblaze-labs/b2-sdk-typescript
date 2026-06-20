@@ -1,23 +1,27 @@
 /**
  * Typed error hierarchy for B2 API failures.
  *
- * Every B2 error response is mapped to a specific {@link B2Error} subclass
- * (e.g. {@link ExpiredAuthTokenError}, {@link CapExceededError}) with pre-computed
- * {@link B2Error.retryable | retryable} flags. Use {@link classifyError} to convert
- * a raw error response into the appropriate subclass.
+ * Every B2 error response maps to a specific {@link B2Error} subclass.
+ * Retry behavior is exposed through {@link B2Error.retryable}.
+ * Examples include {@link ExpiredAuthTokenError} and {@link CapExceededError}.
+ * Use {@link classifyError} to convert a raw error response into the
+ * appropriate subclass.
  *
- * Convention: `B2Error` and its subclasses represent failures returned by
- * the B2 API. Programming errors and SDK preconditions (e.g. "not yet
- * authorized", "stream consumed twice", "called before init") use the
- * native `Error` constructor instead. Two outliers extend `Error` directly
- * rather than `B2Error` because they originate inside the SDK before any
- * B2 request is made: {@link B2InsufficientCapabilityError} (raised by
- * `B2Client.hasCapabilities`) and {@link B2SsrfError} (raised by the
- * default `UrlGuard` before `fetch`).
+ * Convention: most `B2Error` subclasses represent failures returned by the B2
+ * API. The client-side exception is {@link B2RealmConfigurationError}; it
+ * extends `B2Error` so realm-validation failures can be handled with the SDK
+ * error hierarchy before credentials are sent.
+ *
+ * Other programming errors and SDK preconditions, such as "not yet authorized",
+ * "stream consumed twice", or "called before init", use the native `Error`
+ * constructor instead. The direct `Error` outliers are
+ * {@link B2InsufficientCapabilityError}, {@link B2RedirectError},
+ * {@link B2SsrfError}, and {@link NetworkError}.
  *
  * @packageDocumentation
  */
 
+import { redactUrlForError } from '../internal/url-redaction.ts'
 import {
   type B2ErrorCode,
   type B2ErrorResponse,
@@ -520,6 +524,52 @@ export class B2SsrfError extends Error {
   ) {
     super(message)
     this.name = 'B2SsrfError'
+  }
+}
+
+/** Thrown when a configured auth realm cannot safely be used for authorization. */
+export class B2RealmConfigurationError extends B2Error {
+  /**
+   * Creates a new B2RealmConfigurationError instance.
+   *
+   * @param message - Human-readable description of the invalid realm setting.
+   */
+  constructor(message: string) {
+    super({ status: 400, code: 'bad_request', message })
+    this.name = 'B2RealmConfigurationError'
+  }
+}
+
+/** Thrown when the SDK refuses to follow an HTTP redirect automatically. */
+export class B2RedirectError extends Error {
+  /** Always `false` because a blocked redirect is deterministic. */
+  readonly retryable = false
+  /** Sanitized request URL whose response attempted to redirect. */
+  readonly url: string
+  /** HTTP redirect status code, or 0 for an opaque browser redirect. */
+  readonly status: number
+  /** Sanitized redirect target, or `null` when no Location header was present. */
+  readonly location: string | null
+
+  /**
+   * Creates a new B2RedirectError instance.
+   *
+   * @param url - Request URL whose response attempted to redirect. Stored as a sanitized URL.
+   * @param status - HTTP redirect status code.
+   * @param location - Redirect Location header, if present. Stored as a sanitized URL.
+   */
+  constructor(url: string, status: number, location: string | null) {
+    const safeUrl = redactUrlForError(url)
+    const safeLocation = location !== null ? redactUrlForError(location, { baseUrl: url }) : null
+    super(
+      safeLocation !== null
+        ? `HTTP ${status} redirect blocked for ${safeUrl} to ${safeLocation}`
+        : `HTTP ${status} redirect blocked for ${safeUrl}`,
+    )
+    this.name = 'B2RedirectError'
+    this.url = safeUrl
+    this.status = status
+    this.location = safeLocation
   }
 }
 

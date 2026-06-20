@@ -8,7 +8,11 @@
  * @packageDocumentation
  */
 
-export type { AccountInfo, UploadUrlEntry } from './auth/account-info.ts'
+export type {
+  AccountInfo,
+  AuthContextAwareAccountInfo,
+  UploadUrlEntry,
+} from './auth/account-info.ts'
 export { InMemoryAccountInfo } from './auth/in-memory.ts'
 export {
   Bucket,
@@ -28,6 +32,8 @@ export {
   AccessDeniedError,
   B2Error,
   B2InsufficientCapabilityError,
+  B2RealmConfigurationError,
+  B2RedirectError,
   B2SsrfError,
   BadAuthTokenError,
   BadBucketIdError,

@@ -9,6 +9,8 @@ import {
 import {
   AccessDeniedError,
   B2Error,
+  B2RealmConfigurationError,
+  B2RedirectError,
   BadAuthTokenError,
   BadBucketIdError,
   BadJsonError,
@@ -485,6 +487,79 @@ describe.each(newSubclassCases)('$label', ({ label, ctor, response, retryable })
 
     expect(err.requestId).toBe('req-new-subclass')
     expect(err.retryAfter).toBe(9)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B2RealmConfigurationError
+// ---------------------------------------------------------------------------
+
+describe('B2RealmConfigurationError', () => {
+  it('extends B2Error', () => {
+    expect(new B2RealmConfigurationError('bad realm')).toBeInstanceOf(B2Error)
+  })
+
+  it('sets config-error metadata', () => {
+    const err = new B2RealmConfigurationError('bad realm')
+    expect(err.name).toBe('B2RealmConfigurationError')
+    expect(err.status).toBe(400)
+    expect(err.code).toBe('bad_request')
+    expect(err.message).toBe('bad realm')
+    expect(err.retryable).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B2RedirectError
+// ---------------------------------------------------------------------------
+
+describe('B2RedirectError', () => {
+  it('extends Error but is non-retryable', () => {
+    const err = new B2RedirectError('https://api.example.com', 302, 'https://next.example.com')
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(B2Error)
+    expect(err.retryable).toBe(false)
+  })
+
+  it('stores status and sanitized URLs', () => {
+    const err = new B2RedirectError(
+      'https://user:secret@api.example.com/b2api?token=request-secret#request-fragment',
+      301,
+      'https://next:secret@next.example.com/path?token=location-secret#location-fragment',
+    )
+    expect(err.name).toBe('B2RedirectError')
+    expect(err.status).toBe(301)
+    expect(err.url).toBe('https://api.example.com/b2api')
+    expect(err.location).toBe('https://next.example.com/path')
+    expect(err.message).not.toContain('secret')
+    expect(err.message).not.toContain('token=')
+    expect(err.message).not.toContain('fragment')
+  })
+
+  it('resolves relative redirect locations before sanitizing them', () => {
+    const err = new B2RedirectError(
+      'https://api.example.com/b2api/v3/b2_authorize_account',
+      302,
+      '/login?token=location-secret#location-fragment',
+    )
+
+    expect(err.location).toBe('https://api.example.com/login')
+    expect(err.message).not.toContain('location-secret')
+    expect(err.message).not.toContain('location-fragment')
+  })
+
+  it('redacts secret-bearing redirect path segments', () => {
+    const err = new B2RedirectError(
+      'https://api.example.com/b2api/v3/path-secret?authorizationToken=request-secret#secret',
+      302,
+      'https://next.example.com/callback/location-secret?authorizationToken=location-secret#secret',
+    )
+
+    expect(err.url).toBe('https://api.example.com/b2api/...')
+    expect(err.location).toBe('https://next.example.com/callback/...')
+    expect(err.message).not.toContain('path-secret')
+    expect(err.message).not.toContain('location-secret')
+    expect(err.message).not.toContain('authorizationToken')
   })
 })
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { B2Error, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import { B2Error, B2RedirectError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
 import { FetchTransport, RetryTransport } from './transport.ts'
 
@@ -98,6 +98,164 @@ describe('FetchTransport', () => {
       }),
     ).rejects.toBeInstanceOf(B2SsrfError)
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('blocks redirects explicitly so redirected URLs cannot bypass the guard', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { Location: 'http://169.254.169.254/latest/meta-data/' },
+      }),
+    )
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        method: 'GET',
+        headers: { Authorization: 'Basic secret' },
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.redirect).toBe('manual')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancels redirect response bodies before throwing', async () => {
+    const redirectResponse = new Response('redirect body', {
+      status: 302,
+      headers: { Location: 'https://api.backblazeb2.com/next' },
+    })
+    const cancelSpy = vi.spyOn(redirectResponse.body as ReadableStream<Uint8Array>, 'cancel')
+    fetchSpy.mockResolvedValue(redirectResponse)
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        method: 'POST',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(cancelSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes non-redirect 3xx responses through as ordinary responses', async () => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 304 }))
+
+    const transport = new FetchTransport()
+    const response = await transport.send({ url: 'https://example.com/file', method: 'GET' })
+
+    expect(response.status).toBe(304)
+  })
+
+  it('follows guard-checked same-origin GET redirects by default', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(
+        new Response('move', {
+          status: 302,
+          headers: { Location: '/file/bucket/object' },
+        }),
+      )
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }))
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+      method: 'GET',
+    })
+
+    expect(await response.text()).toBe('ok')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect((fetchSpy.mock.calls[1] as [string, RequestInit])[0]).toBe(
+      'https://f001.backblazeb2.com/file/bucket/object',
+    )
+  })
+
+  it('can opt out of following same-origin GET redirects', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: '/file/bucket/object' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameOriginRedirects: false })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow cross-origin redirects when same-origin redirects are enabled', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: 'https://evil.backblazeb2.com/file/bucket/object' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
+        headers: { Authorization: 'token-123' },
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow POST redirects when same-origin redirects are enabled', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 307,
+        headers: { Location: '/b2api/v3/b2_list_buckets' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',
+        method: 'POST',
+        headers: { Authorization: 'token-123' },
+        body: '{}',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks opaque redirects returned by browser fetch implementations', async () => {
+    fetchSpy.mockResolvedValue({
+      status: 0,
+      type: 'opaqueredirect',
+      headers: new Headers(),
+    } as Response)
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        method: 'GET',
+        headers: { Authorization: 'Basic secret' },
+      }),
+    ).rejects.toMatchObject({
+      name: 'B2RedirectError',
+      status: 0,
+      location: null,
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.redirect).toBe('manual')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('does not override an existing User-Agent header', async () => {
@@ -794,10 +952,10 @@ describe('RetryTransport', () => {
   })
 
   // --------------------------------------------------------------------------
-  // B2Error / NetworkError re-thrown without wrapping
+  // SDK errors re-thrown without wrapping
   // --------------------------------------------------------------------------
 
-  describe('B2Error re-thrown without wrapping', () => {
+  describe('SDK errors re-thrown without wrapping', () => {
     it('re-throws B2Error from inner transport without wrapping', async () => {
       const b2Err = new B2Error({ status: 500, code: 'internal_error', message: 'Internal error' })
       innerTransport.send.mockRejectedValue(b2Err)
@@ -831,6 +989,26 @@ describe('RetryTransport', () => {
       } catch (err) {
         expect(err).toBe(netErr)
       }
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('re-throws B2RedirectError without retrying', async () => {
+      const redirectErr = new B2RedirectError(
+        'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        302,
+        'http://user:secret@169.254.169.254/latest/meta-data/',
+      )
+      innerTransport.send.mockRejectedValue(redirectErr)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toBe(redirectErr)
+      expect(redirectErr.retryable).toBe(false)
+      expect(redirectErr.location).toBe('http://169.254.169.254/latest/...')
+      expect(redirectErr.message).not.toContain('secret')
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
   })

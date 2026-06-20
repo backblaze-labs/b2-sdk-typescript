@@ -3,7 +3,7 @@ import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
-import { daysFromNow, makeClient, readStream } from './test-utils/index.ts'
+import { daysFromNow, makeClient, readStream, recordingTransport } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
@@ -163,6 +163,23 @@ describe('B2Client with simulator', () => {
 // --- SSRF guard integration ---
 
 describe('B2Client SSRF guard', () => {
+  it('defers invalid realm validation until authorize before transport sees credentials', async () => {
+    const { seenUrls, transport } = recordingTransport()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'http://attacker.example',
+      transport,
+    })
+
+    expect(seenUrls).toEqual([])
+    await expect(client.authorize()).rejects.toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
+    expect(seenUrls).toEqual([])
+  })
+
   it('exposes urlGuard=null when a custom transport is supplied (user owns hardening)', () => {
     const sim = new B2Simulator()
     const client = new B2Client({

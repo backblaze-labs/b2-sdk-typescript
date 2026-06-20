@@ -496,11 +496,12 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'abort-duplicate.txt')).toBe(1)
   })
 
-  it('retries a lost 2xx upload response body read with a fresh URL', async () => {
+  it('retries a lost 2xx upload response body read only when explicitly enabled', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let uploadAttempts = 0
     let getUploadUrlCalls = 0
+    const retryEvents: UploadRetryEvent[] = []
     const transport: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
         if (req.url.includes('b2_get_upload_url')) {
@@ -538,15 +539,18 @@ describe('upload fresh-URL retry', () => {
     const result = await bucket.upload({
       fileName: 'lost-body.txt',
       source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retryResponseBodyFailures: true,
+      onUploadRetry: (event) => retryEvents.push(event),
     })
 
     expect(result.fileName).toBe('lost-body.txt')
     expect(uploadAttempts).toBe(2)
     expect(getUploadUrlCalls).toBe(2)
+    expect(retryEvents).toHaveLength(1)
     expect(await countFileVersions(bucket, 'lost-body.txt')).toBe(2)
   })
 
-  it('can disable retry after a lost 2xx upload response body', async () => {
+  it('does not retry after a lost 2xx upload response body by default', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let uploadAttempts = 0
@@ -579,7 +583,6 @@ describe('upload fresh-URL retry', () => {
       bucket.upload({
         fileName: 'lost-body-disabled.txt',
         source: new BufferSource(new Uint8Array([1, 2, 3])),
-        retryResponseBodyFailures: false,
       }),
     ).rejects.toThrow(/response body lost/)
 
