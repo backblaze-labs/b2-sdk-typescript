@@ -675,10 +675,7 @@ export class RawClient {
     try {
       fileVersion = await response.json<FileVersion>()
     } catch (err) {
-      if (err instanceof TypeError || err instanceof DOMException) {
-        throw finishLargeFileResponseBodyError(err)
-      }
-      throw err
+      throw finishLargeFileResponseBodyError(err)
     }
     return normalizeFileVersionSha1(fileVersion)
   }

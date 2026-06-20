@@ -1011,7 +1011,7 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(cleanupFailures[0]?.error).toBeInstanceOf(Error)
   })
 
-  it('does not cancel when finishLargeFile commits but its response body is lost', async () => {
+  it('does not cancel when finishLargeFile commits but its response body cannot be parsed', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     let finishCalls = 0
@@ -1028,7 +1028,7 @@ describe('uploadLargeFile cleanup paths', () => {
             finishCalls += 1
             return {
               ...response,
-              json: () => Promise.reject(new TypeError('finish response body lost')),
+              json: () => Promise.reject(new SyntaxError('malformed finish response body')),
             }
           }
           return response
