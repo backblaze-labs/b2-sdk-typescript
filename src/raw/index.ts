@@ -72,6 +72,12 @@ export interface RawClientOptions {
   readonly transport: HttpTransport
 }
 
+/** Optional request controls for {@link RawClient.listFileVersions}. */
+export interface ListFileVersionsOptions {
+  /** Optional abort signal for the listing request. */
+  readonly signal?: AbortSignal
+}
+
 interface JsonPostOptions {
   readonly signal?: AbortSignal
   readonly retry?: Partial<RetryOptions>
@@ -304,7 +310,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListFileVersionsRequest,
-    options?: JsonPostOptions,
+    options?: ListFileVersionsOptions,
   ): Promise<ListFileVersionsResponse> {
     return normalizeFileVersionListSha1(
       await this.postJson<ListFileVersionsResponse>(
