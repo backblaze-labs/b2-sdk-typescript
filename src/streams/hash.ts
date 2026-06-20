@@ -1,3 +1,4 @@
+import { arrayBufferFor } from '../util/bytes.ts'
 import { hexEncode } from '../util/crypto.ts'
 
 /** Internal wrapper around a Node.js Hash instance. */
@@ -259,10 +260,9 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
     h.update(data)
     return h.digest('hex')
   }
-  // Pass the view directly (not `data.buffer`) so WebCrypto hashes exactly
-  // `data`'s bytes. A subarray shares its parent's buffer, so hashing
-  // `.buffer` would digest the whole backing buffer and produce a wrong hash.
+  // Copy subarray and SharedArrayBuffer-backed views so WebCrypto hashes
+  // exactly `data`'s visible bytes with a plain ArrayBuffer.
   /* v8 ignore next 2 -- WebCrypto fallback, only reachable when node:crypto is unavailable */
-  const hashBuffer = await crypto.subtle.digest('SHA-1', data as Uint8Array<ArrayBuffer>)
+  const hashBuffer = await crypto.subtle.digest('SHA-1', arrayBufferFor(data))
   return hexEncode(new Uint8Array(hashBuffer))
 }
