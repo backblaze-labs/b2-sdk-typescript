@@ -169,6 +169,27 @@ describe('B2Folder', () => {
     expect(listFileVersions).toHaveBeenCalledTimes(1)
   })
 
+  it('surfaces B2 listing errors', async () => {
+    const listFileVersions = vi.fn().mockRejectedValue(new Error('temporary outage'))
+    const errors: unknown[] = []
+    const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
+
+    await expect(
+      collect<B2SyncPath>(
+        folder.scan({
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('failed to scan B2 file versions')
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        path: '',
+        message: 'failed to scan B2 file versions: temporary outage',
+      }),
+    )
+  })
+
   it('scans a bucket with files and yields them sorted by name', async () => {
     const bucket = await client.createBucket({
       bucketName: 'sorted-bucket',

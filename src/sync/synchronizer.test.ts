@@ -221,6 +221,31 @@ describe('synchronize', () => {
       // Two files: one source-only ('new.txt'), one dest-only ('old.txt')
       expect(compareEvents).toHaveLength(2)
     })
+
+    it('schedules actions from full sha1 compare batches', async () => {
+      const source = makeMemoryFolder(
+        [makeLocalSyncPath('a.txt', 1000, 10), makeLocalSyncPath('b.txt', 1000, 20)],
+        'local',
+      )
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: {
+          compareMode: 'sha1',
+          keepMode: 'no-delete',
+          concurrency: 1,
+          dryRun: true,
+        },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+      expect(events.filter((e) => e.type === 'compare')).toHaveLength(2)
+      expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(2)
+    })
   })
 
   describe('action execution (upload direction)', () => {

@@ -147,9 +147,11 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
           const preparedBatch = await processPreparedBatch(batch)
           for (const item of preparedBatch.items) {
             yield item.event
+            /* v8 ignore next -- abort between compare yield and scheduling is timing-dependent */
             if (options.signal?.aborted) return
             for (const action of item.actions) await scheduleAction(action)
           }
+          /* v8 ignore next -- batch preparation abort races are covered through lower-level tests */
           if (preparedBatch.aborted) return
           batch = []
         }

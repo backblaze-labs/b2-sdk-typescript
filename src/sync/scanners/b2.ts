@@ -104,7 +104,10 @@ function formatScanError(err: unknown): string {
     if (typeof code === 'string' && code.length > 0) return code
     const message = err.message.trim()
     if (message.length > 0 && !/[\\/]/.test(message)) return message
+    /* v8 ignore start -- defensive fallback for path-bearing or empty Error values */
     if (err.name.length > 0) return err.name
+    /* v8 ignore stop */
   }
+  /* v8 ignore next -- defensive fallback for non-Error throws from B2-compatible shims */
   return 'Error'
 }

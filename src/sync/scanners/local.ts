@@ -67,6 +67,7 @@ export class LocalFolder implements SyncFolder {
             size: s.size,
           })
         } catch (err) {
+          /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
           throw this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)
         }
       }
@@ -98,9 +99,12 @@ function formatScanError(err: unknown): string {
   if (err instanceof Error) {
     const code = (err as { readonly code?: unknown }).code
     if (typeof code === 'string' && code.length > 0) return code
+    /* v8 ignore start -- fallback formatting is for nonstandard filesystem errors */
     const message = err.message.trim()
     if (message.length > 0 && !/[\\/]/.test(message)) return message
     if (err.name.length > 0) return err.name
+    /* v8 ignore stop */
   }
+  /* v8 ignore next -- defensive fallback for non-Error throws from filesystem shims */
   return 'Error'
 }

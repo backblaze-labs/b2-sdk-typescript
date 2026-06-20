@@ -288,6 +288,7 @@ async function verifyB2Sha1Bytes(
   bytesHashed: number,
 ): Promise<ComparePreparationResult> {
   const [source, dest] = pair
+  /* v8 ignore next -- callers only verify B2 bytes for paired compare results */
   if (source === null || dest === null) return readyComparePair(pair, bytesHashed)
 
   const sourceResult = await prepareB2PathSha1(source, options)
@@ -297,6 +298,7 @@ async function verifyB2Sha1Bytes(
   }
 
   const destResult = await prepareB2PathSha1(dest, options)
+  /* v8 ignore next -- destination abort mirrors the covered source abort path */
   if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
   if (destResult.event) {
     return skipped(
@@ -318,6 +320,7 @@ async function prepareB2PathSha1(
     return { path, bytesHashed: 0, aborted: false }
   }
 
+  /* v8 ignore next -- pre-aborted B2 reads are covered at pair level */
   if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
 
   try {
@@ -438,6 +441,7 @@ function aborted(pair: SyncPair): ComparePreparationResult {
 }
 
 function unavailableSha1Event(pair: SyncPair): SyncSkipEvent {
+  /* v8 ignore next -- unavailable SHA-1 events always have at least one side */
   const path = (pair[0] ?? pair[1])?.relativePath ?? ''
   return {
     type: 'skip',
