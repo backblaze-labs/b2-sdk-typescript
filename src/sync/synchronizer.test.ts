@@ -3519,7 +3519,7 @@ describe('synchronize', () => {
             path: '../escape-delete.txt',
           }),
         )
-        await expect(access(outsidePath)).resolves.toBeUndefined()
+        await expect(access(outsidePath).then(() => true)).resolves.toBe(true)
       } finally {
         await rm(root, { recursive: true, force: true })
         await rm(outsidePath, { force: true })
