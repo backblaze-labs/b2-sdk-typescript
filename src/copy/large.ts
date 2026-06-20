@@ -4,7 +4,11 @@ import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
-import { type CleanupFailureListener, cancelLargeFileBestEffort } from '../upload/cancel.ts'
+import {
+  type CleanupFailureListener,
+  cancelLargeFileBestEffort,
+  notifyAmbiguousLargeFileCleanupSkipped,
+} from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
@@ -160,9 +164,17 @@ export async function copyLargeFile(
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    if (!(err instanceof FinishLargeFileResponseBodyError)) {
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, cleanupCopyOptions(options))
+    if (err instanceof FinishLargeFileResponseBodyError) {
+      const enriched = new FinishLargeFileResponseBodyError(err.message, {
+        cause: err.cause ?? err,
+        fileId: largeFileId,
+        bucketId: destBucketId,
+        fileName: options.fileName,
+      })
+      notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
+      throw enriched
     }
+    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, cleanupCopyOptions(options))
     throw err
   }
 }
