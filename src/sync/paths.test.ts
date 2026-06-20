@@ -29,6 +29,16 @@ describe('sync path safety', () => {
     )
   })
 
+  it('resolves paths when the root already ends with a separator', () => {
+    expect(resolveSafeLocalPath('/sync-root/', 'nested/file.txt', posixPath)).toBe(
+      '/sync-root/nested/file.txt',
+    )
+  })
+
+  it('resolves paths under the filesystem root', () => {
+    expect(resolveSafeLocalPath('/', 'nested/file.txt', posixPath)).toBe('/nested/file.txt')
+  })
+
   it('rejects absolute local paths', () => {
     expect(() => resolveSafeLocalPath('/sync-root', '/outside.txt', posixPath)).toThrow(
       'Sync path must be relative',

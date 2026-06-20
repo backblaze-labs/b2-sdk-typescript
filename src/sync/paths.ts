@@ -41,7 +41,8 @@ export function resolveSafeLocalPath(
   }
   const fullPath = path.resolve(root, relativePath)
   const rootPath = path.resolve(root)
-  if (fullPath !== rootPath && !fullPath.startsWith(`${rootPath}${path.sep}`)) {
+  const rootPrefix = rootPath.endsWith(path.sep) ? rootPath : `${rootPath}${path.sep}`
+  if (fullPath !== rootPath && !fullPath.startsWith(rootPrefix)) {
     throw new Error(`Sync path escapes the local root: ${relativePath}`)
   }
   return fullPath
