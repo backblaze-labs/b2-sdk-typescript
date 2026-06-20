@@ -12,8 +12,8 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
+import { utf8Encoder } from '../util/text-codec.ts'
 import {
-  DEFAULT_PRESIGN_EXPIRES_IN,
   presignS3Request,
   type QueryParam,
   type SignedHeader,
@@ -21,10 +21,18 @@ import {
 } from './sigv4.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
-const DANGEROUS_RESPONSE_CONTENT_TYPES = new Set([
+const DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN = 3600
+const FILE_NAME_MAX_BYTES = 1024
+const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'text/html',
   'application/xhtml+xml',
   'image/svg+xml',
+  'application/javascript',
+  'text/javascript',
+  'application/ecmascript',
+  'text/ecmascript',
+  'text/xml',
+  'application/xml',
 ])
 
 /**
@@ -116,9 +124,9 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   readonly responseContentLanguage?: string
   /**
    * Override the response Content-Type header. If attacker-controlled, this
-   * can make stored bytes render as HTML/script from the storage origin.
+   * can make stored bytes render as active content from the storage origin.
    * Restrict it to known-safe values before signing. The helper rejects known
-   * browser-executable content types by default.
+   * browser-executable and sniffable XML/JavaScript content types by default.
    */
   readonly responseContentType?: string
   /**
@@ -133,14 +141,14 @@ export interface PresignS3PutObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Optional content type for the uploaded object. When supplied, the generated
    * URL signs the Content-Type header, so upload clients must send the same
-   * value. Browser-executable types such as `text/html` are rejected by default.
+   * value. Browser-executable and sniffable XML/JavaScript types are rejected
+   * by default.
    */
   readonly contentType?: string
   /**
    * Permit browser-executable `contentType` values such as `text/html`,
-   * `application/xhtml+xml`, or `image/svg+xml`. Leave this unset unless the
-   * uploaded object is intentionally meant to render active content from the
-   * storage origin.
+   * JavaScript, SVG, or XML media types. Leave this unset unless the uploaded
+   * object is intentionally meant to render active content from the storage origin.
    */
   readonly allowBrowserExecutableContentType?: boolean
   /**
@@ -169,8 +177,9 @@ export type PresignPutObjectUrlOptions = PresignS3PutObjectUrlOptions
  * Derives an S3-compatible client configuration from B2 authorization state.
  * Pass the result to `new S3Client(config)` from `@aws-sdk/client-s3`.
  *
- * Non-standard, custom, or proxied endpoints require an explicit `region`; the
- * SDK no longer falls back to `us-west-004` because that can mis-sign requests.
+ * Non-standard, custom, or proxied endpoints require an explicit `region`; set
+ * it before deploying this SDK to those endpoints. The SDK no longer falls back
+ * to `us-west-004` because that can mis-sign requests.
  *
  * @param config - B2 auth state, application key credentials, and optional region override.
  *
@@ -190,6 +199,9 @@ export type PresignPutObjectUrlOptions = PresignS3PutObjectUrlOptions
 export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
   const s3Url = config.accountInfo.getS3ApiUrl()
   const region = config.region ?? deriveRequiredS3Region(s3Url)
+  assertNonEmptyStringOption('applicationKeyId', config.applicationKeyId)
+  assertNonEmptyStringOption('applicationKey', config.applicationKey)
+  assertNonEmptyStringOption('region', region)
 
   return {
     endpoint: s3Url,
@@ -225,13 +237,17 @@ export function deriveS3RegionFromEndpoint(endpoint: string): string | null {
   return match?.[1] ?? null
 }
 
+// S3 SigV4 presign helpers.
+
 /**
  * Generates an AWS Signature Version 4 presigned GET URL for B2's S3-compatible API.
  *
  * This helper signs internally and does not pass the B2 application key to
  * runtime peer dependencies. Response override options are signed into the URL
  * and control headers served from the storage origin; do not populate them from
- * untrusted input without an allow-list.
+ * untrusted input without an allow-list. Presign success does not prove the URL
+ * will be accepted later; keep URL-generating hosts clock-synchronized and
+ * check clock skew when downstream use returns SigV4 403 errors.
  *
  * @param options - B2 auth state, S3 credentials, target object, and signing options.
  *
@@ -241,7 +257,10 @@ export async function presignS3GetObjectUrl(
   options: PresignS3GetObjectUrlOptions,
 ): Promise<string> {
   const query: QueryParam[] = [['x-id', 'GetObject']]
-  if (options.versionId !== undefined) query.push(['versionId', options.versionId])
+  if (options.versionId !== undefined) {
+    assertSafeQueryValue('versionId', options.versionId)
+    query.push(['versionId', options.versionId])
+  }
   if (options.responseCacheControl !== undefined) {
     assertSafeResponseOverride('responseCacheControl', options.responseCacheControl)
     query.push(['response-cache-control', options.responseCacheControl])
@@ -270,7 +289,10 @@ export async function presignS3GetObjectUrl(
 }
 
 /**
- * Backward-compatible B2-native download authorization URL helper.
+ * Returns a B2-native download-authorization URL, not an S3 presigned URL.
+ *
+ * This deprecated helper preserves the legacy positional output contract where
+ * the whole file name is encoded as one URL component, including `/` as `%2F`.
  *
  * @param downloadUrl - The B2 download URL from authorization.
  * @param bucketName - The bucket containing the file.
@@ -291,13 +313,14 @@ export function presignGetObjectUrl(
   authorizationToken: string,
   validDurationInSeconds?: number,
 ): string {
-  return createNativeDownloadAuthorizationUrl(
-    downloadUrl,
-    bucketName,
-    fileName,
-    authorizationToken,
-    validDurationInSeconds,
-  )
+  assertSafeBucketName(bucketName)
+  assertNativeDownloadFileName(fileName)
+  const expires =
+    Math.floor(Date.now() / 1000) +
+    normalizeValidDurationInSeconds(
+      validDurationInSeconds ?? DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
+    )
+  return `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeURIComponent(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
 }
 
 /**
@@ -305,8 +328,12 @@ export function presignGetObjectUrl(
  * third-party uploads through B2's S3-compatible API.
  *
  * This helper signs internally and does not pass the B2 application key to
- * runtime peer dependencies. A presigned PUT URL is a bearer credential for
- * writing one key. If `contentType` and `contentLength` are omitted, the holder
+ * runtime peer dependencies. A presigned PUT URL is a replayable bearer
+ * credential for writing one key until expiry. Retried PUTs can create
+ * duplicate B2 file versions when a response is lost after B2 stored the object.
+ * Use unique keys or reconcile uploaded file IDs/checksums, and configure
+ * lifecycle/version cleanup where duplicate versions must be removed
+ * automatically. If `contentType` and `contentLength` are omitted, the holder
  * can choose any content type, including browser-executable types, and any size
  * accepted by B2; bind both values before handing URLs to untrusted uploaders
  * to limit financial-DoS and content-type smuggling risk.
@@ -355,6 +382,8 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
   return await presignS3PutObjectUrl(options)
 }
 
+// B2-native download authorization helper.
+
 /**
  * Constructs a B2-native download URL using a token from `b2_get_download_authorization`.
  * This is not an S3 presigned URL.
@@ -377,11 +406,13 @@ export function createNativeDownloadAuthorizationUrl(
   bucketName: string,
   fileName: string,
   authorizationToken: string,
-  validDurationInSeconds = DEFAULT_PRESIGN_EXPIRES_IN,
+  validDurationInSeconds = DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
 ): string {
+  assertSafeBucketName(bucketName)
+  assertNativeDownloadFileName(fileName)
   const expires =
     Math.floor(Date.now() / 1000) + normalizeValidDurationInSeconds(validDurationInSeconds)
-  return `${downloadUrl}/file/${encodeUrlComponent(bucketName)}/${encodeFileName(fileName)}?Authorization=${encodeUrlComponent(authorizationToken)}&expires=${expires}`
+  return `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeFileName(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
 }
 
 function deriveRequiredS3Region(endpoint: string): string {
@@ -389,7 +420,7 @@ function deriveRequiredS3Region(endpoint: string): string {
   if (region !== null) return region
 
   throw new Error(
-    `Unable to derive B2 S3 region from endpoint "${endpoint}". Pass an explicit region.`,
+    `Unable to derive B2 S3 region from endpoint "${endpoint}". Pass an explicit \`region\` option before deploying custom or proxied endpoints.`,
   )
 }
 
@@ -428,6 +459,55 @@ function normalizeValidDurationInSeconds(validDurationInSeconds: number): number
   return validDurationInSeconds
 }
 
+function assertNonEmptyStringOption(name: string, value: unknown): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${name} must be a non-empty string.`)
+  }
+}
+
+function assertSafeBucketName(bucketName: string): void {
+  if (bucketName.length === 0) {
+    throw new TypeError('bucketName must be a non-empty string.')
+  }
+  if (hasHttpHeaderControlCharacter(bucketName)) {
+    throw new TypeError('bucketName must not contain control characters.')
+  }
+  if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
+    throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
+  }
+}
+
+function assertNativeDownloadFileName(fileName: string): void {
+  assertValidB2FileName(fileName)
+
+  if (fileName.startsWith('/') || fileName.endsWith('/') || fileName.includes('//')) {
+    throw new TypeError('fileName cannot start with "/", end with "/", or contain "//".')
+  }
+}
+
+function assertValidB2FileName(fileName: string): void {
+  if (fileName.length === 0) {
+    throw new TypeError('fileName must be a non-empty string.')
+  }
+
+  const bytes = utf8Encoder.encode(fileName)
+  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
+    throw new TypeError(
+      `fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes; received ${bytes.byteLength}.`,
+    )
+  }
+
+  if (hasHttpHeaderControlCharacter(fileName)) {
+    throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
+  }
+
+  if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
+    throw new TypeError(
+      'fileName must not contain dot-only path segments because URL parsers can normalize presigned paths.',
+    )
+  }
+}
+
 function normalizeMetadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
   const headers: SignedHeader[] = []
   const seenKeys = new Set<string>()
@@ -464,6 +544,14 @@ function assertSafeResponseOverride(name: string, value: string): void {
   assertSafeHeaderValue(name, value, 'response header value')
 }
 
+function assertSafeQueryValue(name: string, value: string): void {
+  if (hasHttpHeaderControlCharacter(value)) {
+    throw new TypeError(
+      `${name} must not contain control characters because it becomes a query parameter.`,
+    )
+  }
+}
+
 function assertSafeHeaderValue(name: string, value: string, target: string): void {
   if (hasHttpHeaderControlCharacter(value)) {
     throw new TypeError(
@@ -473,25 +561,21 @@ function assertSafeHeaderValue(name: string, value: string, target: string): voi
 }
 
 function assertSafeResponseContentType(contentType: string): void {
-  assertSafeResponseOverride('responseContentType', contentType)
-
-  const mediaType = mediaTypeFor(contentType)
-  if (mediaType && DANGEROUS_RESPONSE_CONTENT_TYPES.has(mediaType)) {
-    throw new TypeError(
-      `responseContentType "${mediaType}" can execute in browsers; allow-list a safe content type before signing response overrides.`,
-    )
-  }
+  assertNonExecutableContentType(
+    'responseContentType',
+    contentType,
+    'response header value',
+    'allow-list a safe content type before signing response overrides',
+  )
 }
 
 function assertSafePutContentType(contentType: string): void {
-  assertSafeHeaderValue('contentType', contentType, 'stored object Content-Type')
-
-  const mediaType = mediaTypeFor(contentType)
-  if (mediaType && DANGEROUS_RESPONSE_CONTENT_TYPES.has(mediaType)) {
-    throw new TypeError(
-      `contentType "${mediaType}" can execute in browsers; pass allowBrowserExecutableContentType only when active content is intentional.`,
-    )
-  }
+  assertNonExecutableContentType(
+    'contentType',
+    contentType,
+    'stored object Content-Type',
+    'pass allowBrowserExecutableContentType only when active content is intentional',
+  )
 }
 
 function assertSafeResponseContentDisposition(contentDisposition: string): void {
@@ -509,6 +593,20 @@ function mediaTypeFor(contentType: string): string {
   return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
 }
 
-function encodeUrlComponent(value: string): string {
-  return encodeURIComponent(value)
+function assertNonExecutableContentType(
+  name: string,
+  contentType: string,
+  target: string,
+  guidance: string,
+): void {
+  assertSafeHeaderValue(name, contentType, target)
+
+  const mediaType = mediaTypeFor(contentType)
+  if (isBrowserExecutableContentType(mediaType)) {
+    throw new TypeError(`${name} "${mediaType}" can execute in browsers; ${guidance}.`)
+  }
+}
+
+function isBrowserExecutableContentType(mediaType: string): boolean {
+  return BROWSER_EXECUTABLE_CONTENT_TYPES.has(mediaType) || mediaType.endsWith('+xml')
 }

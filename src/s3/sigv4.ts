@@ -74,6 +74,7 @@ export async function presignS3Request(
   const query: QueryParam[] = [
     ['X-Amz-Algorithm', 'AWS4-HMAC-SHA256'],
     ['X-Amz-Credential', credential],
+    ['X-Amz-Content-Sha256', UNSIGNED_PAYLOAD],
     ['X-Amz-Date', longDate],
     ['X-Amz-Expires', String(expiresIn)],
     ['X-Amz-SignedHeaders', signedHeaders],
@@ -159,6 +160,9 @@ function assertSafeBucketName(bucketName: string): void {
   if (bucketName.length === 0) {
     throw new TypeError('bucketName must be a non-empty string.')
   }
+  if (hasHttpHeaderControlCharacter(bucketName)) {
+    throw new TypeError('bucketName must not contain control characters.')
+  }
   if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
     throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
   }
@@ -181,10 +185,6 @@ function assertValidB2FileName(fileName: string): void {
     if (code < 0x20 || code === 0x7f) {
       throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
     }
-  }
-
-  if (fileName.startsWith('/') || fileName.endsWith('/') || fileName.includes('//')) {
-    throw new TypeError('fileName cannot start with "/", end with "/", or contain "//".')
   }
 
   if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {

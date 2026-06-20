@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 
 import type { AccountInfo } from '../auth/account-info.ts'
 import {
@@ -12,6 +12,19 @@ import {
 } from './index.ts'
 
 const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
+const REAL_DATE = globalThis.Date
+const BROWSER_EXECUTABLE_CONTENT_TYPES = [
+  'text/html; charset=utf-8',
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'application/javascript',
+  'text/javascript',
+  'application/ecmascript',
+  'text/ecmascript',
+  'text/xml',
+  'application/xml',
+  'application/custom+xml',
+] as const
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(
@@ -57,12 +70,36 @@ function basePresignOptions() {
 }
 
 function useSigningDate(): void {
-  vi.useFakeTimers()
-  vi.setSystemTime(SIGNING_DATE)
+  const fixedTime = SIGNING_DATE.getTime()
+  class FixedDate extends REAL_DATE {
+    constructor(...args: unknown[]) {
+      if (args.length === 0) {
+        super(fixedTime)
+      } else if (args.length === 1) {
+        super(args[0] as string | number | Date)
+      } else {
+        super(...(args as [number, number, number?, number?, number?, number?, number?]))
+      }
+    }
+
+    static override now(): number {
+      return fixedTime
+    }
+  }
+
+  Object.defineProperty(globalThis, 'Date', {
+    configurable: true,
+    value: FixedDate as DateConstructor,
+    writable: true,
+  })
 }
 
 afterEach(() => {
-  vi.useRealTimers()
+  Object.defineProperty(globalThis, 'Date', {
+    configurable: true,
+    value: REAL_DATE,
+    writable: true,
+  })
 })
 
 describe('createS3ClientConfig', () => {
@@ -120,7 +157,34 @@ describe('createS3ClientConfig', () => {
         applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
       }),
-    ).toThrow('Pass an explicit region')
+    ).toThrow('Pass an explicit `region` option')
+  })
+
+  it('validates credentials and explicit regions before returning config', () => {
+    const accountInfo = createMockAccountInfo()
+
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: '',
+        applicationKey: 'test-key',
+      }),
+    ).toThrow('applicationKeyId must be a non-empty string')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
+        applicationKey: undefined,
+      } as unknown as Parameters<typeof createS3ClientConfig>[0]),
+    ).toThrow('applicationKey must be a non-empty string')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        region: '',
+      }),
+    ).toThrow('region must be a non-empty string')
   })
 
   it('sets forcePathStyle to true', () => {
@@ -181,7 +245,7 @@ describe('presignS3GetObjectUrl', () => {
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/path/to/file.txt')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
-    expect(url.searchParams.has('X-Amz-Content-Sha256')).toBe(false)
+    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
@@ -193,7 +257,7 @@ describe('presignS3GetObjectUrl', () => {
     expect(url.toString()).not.toContain('key-secret')
 
     const signature = url.searchParams.get('X-Amz-Signature')
-    expect(signature).toBe('1661a8f3dce3f4c3acc5ab65779c2c414879bcf33b103afb63c77364f92d04de')
+    expect(signature).toBe('4314cf0a273b0890980eed707afb1720f20aeefcfc5f6426a0f0543f236c8f11')
 
     const urlWithDifferentSecret = new URL(
       await presignS3GetObjectUrl({
@@ -225,6 +289,21 @@ describe('presignS3GetObjectUrl', () => {
     )
   })
 
+  it('rejects missing and empty S3 credential inputs before returning URLs', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        applicationKeyId: '',
+      }),
+    ).rejects.toThrow('applicationKeyId must be a non-empty string')
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        applicationKey: undefined,
+      } as unknown as Parameters<typeof presignS3GetObjectUrl>[0]),
+    ).rejects.toThrow('applicationKey must be a non-empty string')
+  })
+
   it('omits an explicit default TLS port from the signed host header', async () => {
     useSigningDate()
 
@@ -253,12 +332,22 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('fileName must not contain dot-only path segments')
   })
 
+  it('allows slash-boundary object keys before signing', async () => {
+    for (const fileName of ['/leading-slash', 'a//b.txt', 'trailing/']) {
+      const url = new URL(
+        await presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          fileName,
+        }),
+      )
+
+      expect(url.pathname).toContain(fileName)
+    }
+  })
+
   it('rejects B2-invalid object key names before signing', async () => {
     const invalidNames = [
       ['', 'fileName must be a non-empty string'],
-      ['/leading-slash', 'fileName cannot start with "/"'],
-      ['a//b.txt', 'fileName cannot start with "/"'],
-      ['trailing/', 'fileName cannot start with "/"'],
       ['has\u0001ctrl.txt', 'fileName must not contain control characters'],
       ['a'.repeat(1025), 'fileName must be at most 1024 UTF-8 bytes'],
     ] as const
@@ -294,18 +383,32 @@ describe('presignS3GetObjectUrl', () => {
   })
 
   it('signs response override query parameters', async () => {
+    const expires = new Date('2024-03-04T05:06:07Z')
     const url = new URL(
       await presignS3GetObjectUrl({
         ...basePresignOptions(),
+        versionId:
+          '4_zf1f51fb5fe4dcb2f845d0c1b_f118c4446a350b0da_d20240102_m030405_c004_v0402000_t0001_u01704168845000',
+        responseCacheControl: 'private, max-age=60',
         responseContentDisposition: 'attachment; filename="safe.txt"',
+        responseContentEncoding: 'gzip',
+        responseContentLanguage: 'en-US',
         responseContentType: 'text/plain',
+        responseExpires: expires,
       }),
     )
 
+    expect(url.searchParams.get('versionId')).toBe(
+      '4_zf1f51fb5fe4dcb2f845d0c1b_f118c4446a350b0da_d20240102_m030405_c004_v0402000_t0001_u01704168845000',
+    )
+    expect(url.searchParams.get('response-cache-control')).toBe('private, max-age=60')
     expect(url.searchParams.get('response-content-disposition')).toBe(
       'attachment; filename="safe.txt"',
     )
+    expect(url.searchParams.get('response-content-encoding')).toBe('gzip')
+    expect(url.searchParams.get('response-content-language')).toBe('en-US')
     expect(url.searchParams.get('response-content-type')).toBe('text/plain')
+    expect(url.searchParams.get('response-expires')).toBe(expires.toUTCString())
   })
 
   it('rejects out-of-range expiry values', async () => {
@@ -317,6 +420,15 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds; received 604801')
   })
 
+  it('rejects version IDs with control characters before signing', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        versionId: 'safe\nx-amz-meta-evil: yes',
+      }),
+    ).rejects.toThrow('versionId must not contain control characters')
+  })
+
   it('does not expose secrets or require AWS presigner peer modules', async () => {
     const s3 = await import('./index.ts')
     const url = await s3.presignS3GetObjectUrl(basePresignOptions())
@@ -325,12 +437,14 @@ describe('presignS3GetObjectUrl', () => {
   })
 
   it('rejects browser-executable response content type overrides', async () => {
-    await expect(
-      presignS3GetObjectUrl({
-        ...basePresignOptions(),
-        responseContentType: 'text/html; charset=utf-8',
-      }),
-    ).rejects.toThrow('responseContentType "text/html" can execute in browsers')
+    for (const responseContentType of BROWSER_EXECUTABLE_CONTENT_TYPES) {
+      await expect(
+        presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          responseContentType,
+        }),
+      ).rejects.toThrow('responseContentType')
+    }
   })
 
   it('rejects inline response content disposition overrides', async () => {
@@ -362,8 +476,34 @@ describe('presignGetObjectUrl', () => {
     )
 
     expect(typeof url).toBe('string')
-    expect(url).toContain('/file/my-bucket/path/to/file.txt')
+    expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
     expect(url).toContain('Authorization=auth-token-123')
+  })
+
+  it('rejects native URL path-normalizing inputs', () => {
+    expect(() =>
+      presignGetObjectUrl(
+        'https://f004.backblazeb2.com',
+        'my-bucket',
+        'allowed/../private.txt',
+        'auth-token-123',
+      ),
+    ).toThrow('fileName must not contain dot-only path segments')
+    expect(() =>
+      presignGetObjectUrl('https://f004.backblazeb2.com', '..', 'file.txt', 'auth-token-123'),
+    ).toThrow('bucketName must not be "." or ".."')
+  })
+
+  it('rejects invalid compatibility duration values', () => {
+    expect(() =>
+      presignGetObjectUrl(
+        'https://f004.backblazeb2.com',
+        'bucket',
+        'file.txt',
+        'secret-token',
+        1.5,
+      ),
+    ).toThrow('validDurationInSeconds must be a non-negative safe integer')
   })
 })
 
@@ -383,7 +523,7 @@ describe('presignS3PutObjectUrl', () => {
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
     expect(url.pathname).toBe('/my-bucket/uploads/photo.jpg')
     expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256')
-    expect(url.searchParams.has('X-Amz-Content-Sha256')).toBe(false)
+    expect(url.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
     expect(url.searchParams.get('X-Amz-Credential')).toBe(
       'key-id/20240102/us-west-004/s3/aws4_request',
     )
@@ -393,7 +533,7 @@ describe('presignS3PutObjectUrl', () => {
     expect(url.searchParams.get('x-id')).toBe('PutObject')
     expect(url.toString()).not.toContain('key-secret')
     expect(url.searchParams.get('X-Amz-Signature')).toBe(
-      '95824355640aee3368f99fac75ef7d85f5f379ee8696c3d9de3ed81eb56d9fee',
+      '622f0e7d4cd7771cc7c2c277a345f529542fdf0f24573a271b5e861ba4a68201',
     )
   })
 
@@ -413,6 +553,21 @@ describe('presignS3PutObjectUrl', () => {
 
     expect(withContentType).not.toBe(withoutContentType)
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host')
+  })
+
+  it('rejects missing and empty S3 credential inputs before returning URLs', async () => {
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        applicationKeyId: '',
+      }),
+    ).rejects.toThrow('applicationKeyId must be a non-empty string')
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        applicationKey: undefined,
+      } as unknown as Parameters<typeof presignS3PutObjectUrl>[0]),
+    ).rejects.toThrow('applicationKey must be a non-empty string')
   })
 
   it('signs content length when requested', async () => {
@@ -452,13 +607,15 @@ describe('presignS3PutObjectUrl', () => {
   })
 
   it('rejects browser-executable content types by default', async () => {
-    await expect(
-      presignS3PutObjectUrl({
-        ...basePresignOptions(),
-        fileName: 'uploads/page.html',
-        contentType: 'text/html; charset=utf-8',
-      }),
-    ).rejects.toThrow('contentType "text/html" can execute in browsers')
+    for (const contentType of BROWSER_EXECUTABLE_CONTENT_TYPES) {
+      await expect(
+        presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          fileName: 'uploads/page.html',
+          contentType,
+        }),
+      ).rejects.toThrow('contentType')
+    }
   })
 
   it('allows browser-executable content types with explicit opt-in', async () => {
@@ -474,15 +631,21 @@ describe('presignS3PutObjectUrl', () => {
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host')
   })
 
+  it('allows slash-boundary object keys before signing', async () => {
+    for (const fileName of ['/leading-slash', 'a//b.txt', 'trailing/']) {
+      const url = new URL(
+        await presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          fileName,
+        }),
+      )
+
+      expect(url.pathname).toContain(fileName)
+    }
+  })
+
   it('rejects B2-invalid object key names before signing', async () => {
-    for (const fileName of [
-      '',
-      '/leading-slash',
-      'a//b.txt',
-      'trailing/',
-      'has\u0001ctrl.txt',
-      'a'.repeat(1025),
-    ]) {
+    for (const fileName of ['', 'has\u0001ctrl.txt', 'a'.repeat(1025)]) {
       await expect(
         presignS3PutObjectUrl({
           ...basePresignOptions(),
@@ -629,6 +792,37 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     )
 
     expect(url).toContain('Authorization=secret-token')
+  })
+
+  it('rejects file names and bucket names that can normalize outside the path prefix', () => {
+    for (const fileName of [
+      'allowed/../private.txt',
+      'path/.././file.txt',
+      '/leading-slash',
+      'a//b.txt',
+      'trailing/',
+      'has\u0001ctrl.txt',
+    ]) {
+      expect(() =>
+        createNativeDownloadAuthorizationUrl(
+          'https://f004.backblazeb2.com',
+          'bucket',
+          fileName,
+          'secret-token',
+        ),
+      ).toThrow()
+    }
+
+    for (const bucketName of ['..', '.', 'has/slash', 'has\u0001ctrl']) {
+      expect(() =>
+        createNativeDownloadAuthorizationUrl(
+          'https://f004.backblazeb2.com',
+          bucketName,
+          'file.txt',
+          'secret-token',
+        ),
+      ).toThrow()
+    }
   })
 
   it('rejects invalid compatibility duration values', () => {

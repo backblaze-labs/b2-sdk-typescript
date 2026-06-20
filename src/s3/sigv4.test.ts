@@ -37,6 +37,7 @@ describe('presignS3Request', () => {
     expect(parsed.pathname).toBe('/root/my-bucket/special/%21%2A%27%28%29.txt')
     expect(query).toContain('partNumber=1&partNumber=1&partNumber=2')
     expect(query).toContain('special=%21%2A%27%28%29')
+    expect(parsed.searchParams.get('X-Amz-Content-Sha256')).toBe('UNSIGNED-PAYLOAD')
     expect(parsed.searchParams.get('X-Amz-SignedHeaders')).toBe(
       'host;x-amz-meta-dupe;x-amz-meta-dupe',
     )
