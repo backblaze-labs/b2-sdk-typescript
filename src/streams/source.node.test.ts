@@ -35,6 +35,43 @@ describe('FileSource', () => {
     }
   })
 
+  it('streams an empty local file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-empty-'))
+    try {
+      const filePath = join(root, 'empty.bin')
+      await writeFile(filePath, new Uint8Array())
+
+      const source = await FileSource.fromPath(filePath)
+      expect(source.size).toBe(0)
+      await expect(new Response(source.stream()).arrayBuffer()).resolves.toHaveProperty(
+        'byteLength',
+        0,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('closes the local file handle when a stream is canceled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-cancel-'))
+    try {
+      const filePath = join(root, 'large.bin')
+      const renamedPath = join(root, 'renamed.bin')
+      await writeFile(filePath, new Uint8Array(64 * 1024 + 1))
+
+      const source = await FileSource.fromPath(filePath)
+      const reader = source.stream().getReader()
+      const firstChunk = await reader.read()
+      expect(firstChunk.done).toBe(false)
+      await reader.cancel()
+
+      await rename(filePath, renamedPath)
+      expect((await readFile(renamedPath)).byteLength).toBe(64 * 1024 + 1)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('clamps slice bounds like built-in slice sources', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-bounds-'))
     try {
@@ -54,6 +91,15 @@ describe('FileSource', () => {
       await expect(
         new Response(source.slice(-2, Number.POSITIVE_INFINITY).stream()).text(),
       ).resolves.toBe('cd')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects non-regular local paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-dir-'))
+    try {
+      await expect(FileSource.fromPath(root)).rejects.toThrow()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

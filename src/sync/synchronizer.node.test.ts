@@ -23,6 +23,8 @@ import type {
 import { synchronize } from './synchronizer.ts'
 import type { B2SyncPath, SyncEvent } from './types.ts'
 
+const isBun = typeof (globalThis as Record<string, unknown>)['Bun'] !== 'undefined'
+
 async function collectEvents(config: SynchronizerConfig): Promise<SyncEvent[]> {
   const events: SyncEvent[] = []
   for await (const event of synchronize(config)) {
@@ -321,6 +323,41 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it('rejects oversized downloads before replacing the destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-long-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const destPath = join(destRoot, 'keep.txt')
+      await writeFile(destPath, 'valid')
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('too-long'))
+              controller.close()
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', 3)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('uses independent temp files for overlapping downloads to the same destination', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-overlap-'))
     try {
@@ -444,6 +481,172 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it('cancels a download body when destination validation fails after download starts', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cancel-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      await writeFile(join(destRoot, 'sub'), 'not a directory')
+
+      let canceled = false
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('bad'))
+            },
+            cancel() {
+              canceled = true
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('sub/escape.txt', 3)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(canceled).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isBun)(
+    'removes a temp file when post-open validation fails before identity capture',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-open-fail-'))
+      const destRoot = join(root, 'dest')
+      let removedTemp = false
+      let statFailed = false
+
+      vi.doMock('node:fs/promises', async () => {
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+        return {
+          ...actual,
+          open: async (...args: unknown[]) => {
+            const handle = await actual.open(...(args as Parameters<typeof actual.open>))
+            const targetPath = String(args[0])
+            if (targetPath.includes('.b2sdk-') && targetPath.endsWith('.partial')) {
+              return {
+                async close() {
+                  await handle.close()
+                },
+                async stat() {
+                  statFailed = true
+                  throw new Error('simulated temp stat failure')
+                },
+              }
+            }
+            return handle
+          },
+          rm: async (...args: unknown[]) => {
+            const targetPath = String(args[0])
+            if (targetPath.includes('.b2sdk-') && targetPath.endsWith('.partial')) {
+              removedTemp = true
+            }
+            return actual.rm(...(args as Parameters<typeof actual.rm>))
+          },
+        }
+      })
+
+      try {
+        await mkdir(destRoot)
+
+        const bucket = makeMockDownloadBucket(
+          vi.fn().mockResolvedValue({
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('bad'))
+                controller.close()
+              },
+            }),
+          }),
+        )
+
+        const config: SynchronizerDownConfig = {
+          source: makeB2MemoryFolder([makeB2Path('fail.txt', 3)]),
+          dest: new LocalFolder(destRoot),
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket,
+        }
+
+        const events = await collectEvents(config)
+        expect(statFailed).toBe(true)
+        expect(removedTemp).toBe(true)
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+      } finally {
+        vi.doUnmock('node:fs/promises')
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(isBun)(
+    'does not write outside the root when a destination parent is swapped before temp open',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-'))
+      const destRoot = join(root, 'dest')
+      const outsideRoot = join(root, 'outside')
+      const subDir = join(destRoot, 'sub')
+      let swapped = false
+
+      vi.doMock('node:fs/promises', async () => {
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+        return {
+          ...actual,
+          open: async (...args: unknown[]) => {
+            const targetPath = String(args[0])
+            if (!swapped && targetPath.includes('.b2sdk-') && targetPath.endsWith('.partial')) {
+              swapped = true
+              await actual.rm(subDir, { recursive: true, force: true })
+              await actual.symlink(outsideRoot, subDir, 'dir')
+            }
+            return actual.open(...(args as Parameters<typeof actual.open>))
+          },
+        }
+      })
+
+      try {
+        await mkdir(subDir, { recursive: true })
+        await mkdir(outsideRoot)
+
+        const bucket = makeMockDownloadBucket(
+          vi.fn().mockResolvedValue({
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('bad'))
+                controller.close()
+              },
+            }),
+          }),
+        )
+
+        const config: SynchronizerDownConfig = {
+          source: makeB2MemoryFolder([makeB2Path('sub/authorized_keys', 3)]),
+          dest: new LocalFolder(destRoot),
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket,
+        }
+
+        const events = await collectEvents(config)
+        expect(swapped).toBe(true)
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        expect(await readdir(outsideRoot)).toEqual([])
+        await expect(readFile(join(outsideRoot, 'authorized_keys'))).rejects.toThrow()
+      } finally {
+        vi.doUnmock('node:fs/promises')
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+
   it('rejects traversal paths before creating files inside or outside the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-traversal-'))
     try {
@@ -452,6 +655,8 @@ describe('synchronize download safety', () => {
 
       const absoluteEscapePath = join(root, 'escape-absolute.txt')
       for (const relPath of [
+        '',
+        '.',
         '../escape-posix.txt',
         '..\\escape-win.txt',
         absoluteEscapePath,
@@ -567,4 +772,66 @@ describe('synchronize upload safety', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it.skipIf(isBun)(
+    'does not upload bytes from a parent directory swapped outside the source root',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-parent-symlink-'))
+      const sourceRoot = join(root, 'source')
+      const sourceSubDir = join(sourceRoot, 'sub')
+      const outsideRoot = join(root, 'outside')
+      const filePath = join(sourceSubDir, 'leak.bin')
+      let swapped = false
+
+      vi.doMock('node:fs/promises', async () => {
+        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+        return {
+          ...actual,
+          open: async (...args: unknown[]) => {
+            if (!swapped && String(args[0]) === filePath) {
+              swapped = true
+              await actual.rm(sourceSubDir, { recursive: true, force: true })
+              await actual.symlink(outsideRoot, sourceSubDir, 'dir')
+            }
+            return actual.open(...(args as Parameters<typeof actual.open>))
+          },
+        }
+      })
+
+      try {
+        await mkdir(sourceSubDir, { recursive: true })
+        await mkdir(outsideRoot)
+        await writeFile(filePath, new TextEncoder().encode('safe'))
+        await writeFile(join(outsideRoot, 'leak.bin'), new TextEncoder().encode('secret'))
+
+        let uploaded: Uint8Array | null = null
+        const bucket = {
+          upload: vi
+            .fn()
+            .mockImplementation(
+              async (options: { source: { toArrayBuffer(): Promise<ArrayBuffer> } }) => {
+                uploaded = new Uint8Array(await options.source.toArrayBuffer())
+              },
+            ),
+        } as unknown as Bucket
+
+        const config: SynchronizerUpConfig = {
+          source: new LocalFolder(sourceRoot),
+          dest: makeB2MemoryFolder([]),
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(swapped).toBe(true)
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        expect(bucket.upload).not.toHaveBeenCalled()
+        expect(uploaded).toBeNull()
+      } finally {
+        vi.doUnmock('node:fs/promises')
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
 })
