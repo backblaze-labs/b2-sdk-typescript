@@ -6,6 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
+import type { RetryOptions } from './http/retry.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -120,18 +121,21 @@ export class Bucket {
   /** Full bucket metadata as returned by the B2 API. */
   readonly info: BucketInfo
   private readonly client: B2Client
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
+   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
    *
    * @internal
    */
-  constructor(client: B2Client, info: BucketInfo) {
+  constructor(client: B2Client, info: BucketInfo, uploadRetryOptions: RetryOptions) {
     this.client = client
     this.info = info
     this.id = info.bucketId
     this.name = info.bucketName
+    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -141,7 +145,7 @@ export class Bucket {
    * @returns A B2Object handle bound to this bucket and file name.
    */
   file(fileName: string): B2Object {
-    return new B2Object(this.client, this, fileName)
+    return new B2Object(this.client, this, fileName, this.uploadRetryOptions)
   }
 
   /**
@@ -224,7 +228,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: this.client.uploadRetryOptions,
+        retry: this.uploadRetryOptions,
       })
     }
 
@@ -242,7 +246,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: this.client.uploadRetryOptions,
+      retry: this.uploadRetryOptions,
     })
   }
 

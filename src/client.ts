@@ -97,8 +97,6 @@ export class B2Client {
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
   readonly accountInfo: AccountInfo
-  /** Resolved retry settings used by upload-layer fresh-URL retries. */
-  readonly uploadRetryOptions: RetryOptions
   /**
    * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
    * a custom transport was supplied — in that case the SDK does not own the
@@ -109,6 +107,7 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
+  readonly #uploadRetryOptions: RetryOptions
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -121,7 +120,7 @@ export class B2Client {
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
-    this.uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    this.#uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -141,7 +140,7 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      retry: this.uploadRetryOptions,
+      retry: this.#uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 
@@ -227,7 +226,7 @@ export class B2Client {
       this.accountInfo.getAuthToken(),
       request,
     )
-    return new Bucket(this, info)
+    return new Bucket(this, info, this.#uploadRetryOptions)
   }
 
   /**
@@ -252,7 +251,7 @@ export class B2Client {
         ...options,
       },
     )
-    return resp.buckets.map((info) => new Bucket(this, info))
+    return resp.buckets.map((info) => new Bucket(this, info, this.#uploadRetryOptions))
   }
 
   /**
