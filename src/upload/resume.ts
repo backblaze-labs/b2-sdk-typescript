@@ -71,7 +71,7 @@ export type ResumeCandidateRejectedReason =
 export interface ResumeCandidateRejectedEvent {
   /** ID of the unfinished large file, when the event is candidate-specific. */
   readonly fileId?: LargeFileId
-  /** Requested destination file name. */
+  /** Alias of {@link requestedFileName}, retained for compatibility. */
   readonly fileName: string
   /** Requested destination file name. */
   readonly requestedFileName: string

@@ -183,6 +183,9 @@ export class B2Object {
       resume: _resume,
       resumeFileId: _resumeFileId,
       onResumeCandidateRejected: _onResumeCandidateRejected,
+      resumeMaxListPages: _resumeMaxListPages,
+      resumeMaxPartCandidates: _resumeMaxPartCandidates,
+      resumeMaxPartPages: _resumeMaxPartPages,
       ...smallOptions
     } = options
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
