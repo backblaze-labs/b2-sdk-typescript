@@ -6604,7 +6604,7 @@ describe('synchronize', () => {
     )
 
     it.skipIf(!isNode)(
-      'does not publish success if a local file changes after upload',
+      'publishes success if a local file changes after upload bytes are read',
       async () => {
         const { tmpdir } = await import('node:os')
         const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
@@ -6643,10 +6643,10 @@ describe('synchronize', () => {
 
           const events = await collectEvents(config)
 
-          expect(events.some((event) => event.type === 'upload-done')).toBe(false)
+          expect(events.some((event) => event.type === 'upload-done')).toBe(true)
           expect(
             events.some((event) => event.type === 'error' && event.message.includes(filePath)),
-          ).toBe(true)
+          ).toBe(false)
         } finally {
           await rm(root, { recursive: true, force: true })
         }

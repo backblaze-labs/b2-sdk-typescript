@@ -10,6 +10,7 @@
  */
 
 import { assertSecureRealmUrl } from '../auth/realms.ts'
+import { UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
@@ -116,6 +117,11 @@ function isAbortSignal(value: unknown): value is AbortSignal {
     'aborted' in value &&
     typeof (value as AbortSignal).addEventListener === 'function'
   )
+}
+
+function uploadResponseBodyError(err: unknown): UploadResponseBodyError {
+  const message = err instanceof Error ? err.message : 'Upload response body could not be read'
+  return new UploadResponseBodyError(message, err)
 }
 
 /**
@@ -348,7 +354,11 @@ export class RawClient {
       body,
       ...(signal !== undefined ? { signal } : {}),
     })
-    return normalizeFileVersionSha1(await response.json<FileVersion>())
+    try {
+      return normalizeFileVersionSha1(await response.json<FileVersion>())
+    } catch (err) {
+      throw uploadResponseBodyError(err)
+    }
   }
 
   /**
@@ -621,7 +631,11 @@ export class RawClient {
       body,
       ...(signal !== undefined ? { signal } : {}),
     })
-    return response.json<UploadPartResponse>()
+    try {
+      return await response.json<UploadPartResponse>()
+    } catch (err) {
+      throw uploadResponseBodyError(err)
+    }
   }
 
   /**

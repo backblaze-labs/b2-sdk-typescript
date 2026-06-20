@@ -41,6 +41,7 @@ import {
   TooManyBucketsError,
   TooManyFilesError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from './index.ts'
 
 // ---------------------------------------------------------------------------
@@ -611,6 +612,19 @@ describe('NetworkError', () => {
   it('leaves cause undefined when not provided', () => {
     const err = new NetworkError('Connection refused')
     expect(err.cause).toBeUndefined()
+  })
+})
+
+describe('UploadResponseBodyError', () => {
+  it('extends Error and stores the cause', () => {
+    const cause = new TypeError('body lost')
+    const err = new UploadResponseBodyError('body lost', cause)
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(B2Error)
+    expect(err.name).toBe('UploadResponseBodyError')
+    expect(err.message).toBe('body lost')
+    expect(err.cause).toBe(cause)
   })
 })
 

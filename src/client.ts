@@ -262,10 +262,7 @@ export class B2Client {
    */
   async getBucket(bucketName: string): Promise<Bucket | null> {
     const buckets = await this.listBuckets({ bucketName })
-    const match = buckets[0]
-    if (match !== undefined) return match
-    const allBuckets = await this.listBuckets()
-    return allBuckets.find((bucket) => bucket.name === bucketName) ?? null
+    return buckets[0] ?? null
   }
 
   /**

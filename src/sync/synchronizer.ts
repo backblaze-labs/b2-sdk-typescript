@@ -818,7 +818,6 @@ function createActionFactory(
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             ...(signal !== undefined ? { signal } : {}),
           })
-          await fileSource.assertUnchanged('after upload')
         },
       )
     },

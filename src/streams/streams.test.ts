@@ -334,6 +334,18 @@ describe('StreamSource', () => {
     expect(src.size).toBe(10)
   })
 
+  it('rejects invalid size values', () => {
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), -1)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), Number.POSITIVE_INFINITY)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), 1.5)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
+  })
+
   it('stream returns the underlying ReadableStream', async () => {
     const data = new TextEncoder().encode('stream data')
     const src = new StreamSource(makeStream(data), data.byteLength)
@@ -371,6 +383,35 @@ describe('StreamSource', () => {
     const ab = await src.toArrayBuffer()
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]))
+  })
+
+  it('toArrayBuffer rejects when the stream emits too many bytes', async () => {
+    const src = new StreamSource(makeStream(new Uint8Array([1, 2])), 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'StreamSource emitted more bytes than the advertised byte count.',
+    )
+  })
+
+  it('toArrayBuffer rejects when the stream emits too few bytes', async () => {
+    const src = new StreamSource(makeStream(new Uint8Array([1])), 2)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'StreamSource ended before the advertised byte count.',
+    )
+  })
+
+  it('toArrayBuffer allows trailing empty chunks after the advertised bytes', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+        controller.enqueue(new Uint8Array(0))
+        controller.close()
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1]))
   })
 
   it('toArrayBuffer throws on second call (stream consumed)', async () => {
@@ -496,7 +537,7 @@ describe('toContentSource', () => {
       },
     })
     expect(() => toContentSource(rs)).toThrow(
-      'size is required when using a forward-only content source as input.',
+      'size is required when using a ReadableStream as input.',
     )
   })
 

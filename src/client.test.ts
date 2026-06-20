@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
@@ -118,22 +118,6 @@ describe('B2Client with simulator', () => {
     const found = await client.getBucket('find-me')
     expect(found).not.toBeNull()
     expect(found?.name).toBe('find-me')
-  })
-
-  it('falls back to an unfiltered bucket list by name', async () => {
-    await client.createBucket({ bucketName: 'find-fallback', bucketType: BucketType.AllPublic })
-    const listBuckets = client.listBuckets.bind(client)
-    const spy = vi.spyOn(client, 'listBuckets').mockImplementation(async (options) => {
-      if (options?.bucketName === 'find-fallback') return []
-      return listBuckets(options)
-    })
-
-    const found = await client.getBucket('find-fallback')
-
-    expect(found).not.toBeNull()
-    expect(found?.name).toBe('find-fallback')
-    expect(spy).toHaveBeenCalledWith({ bucketName: 'find-fallback' })
-    expect(spy).toHaveBeenCalledWith()
   })
 
   it('uploads and lists files', async () => {

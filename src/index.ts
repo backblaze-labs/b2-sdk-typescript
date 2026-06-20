@@ -65,6 +65,7 @@ export {
   TooManyBucketsError,
   TooManyFilesError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from './errors/index.ts'
 export type { RetryOptions } from './http/retry.ts'
 export type {

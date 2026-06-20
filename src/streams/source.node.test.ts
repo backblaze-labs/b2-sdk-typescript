@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -39,22 +39,6 @@ describe('FileSource', () => {
     expect(source.size).toBe(21)
     expect(source.canSlice).toBe(true)
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
-  })
-
-  it('preserves subclasses when created and sliced with asynchronous validation', async () => {
-    class CustomFileSource extends FileSource {
-      readonly marker = 'custom'
-    }
-    const path = join(tmpDir, 'subclass-payload.txt')
-    await writeFile(path, 'subclass body')
-
-    const source = await CustomFileSource.fromPath(path)
-    const slice = source.slice(0, 8)
-
-    expect(source).toBeInstanceOf(CustomFileSource)
-    expect(slice).toBeInstanceOf(CustomFileSource)
-    expect((slice as CustomFileSource).marker).toBe('custom')
-    expect(decoder.decode(await slice.toArrayBuffer())).toBe('subclass')
   })
 
   it('returns ranged slices without reading unrelated bytes', async () => {
@@ -136,6 +120,34 @@ describe('FileSource', () => {
       getBuiltinModule.mockRestore()
     }
   })
+
+  it('ignores validation-bypassing constructor arguments', async () => {
+    const path = join(tmpDir, 'constructor.txt')
+    await writeFile(path, 'safe payload')
+    const UnsafeCtor = FileSource as unknown as new (
+      path: string,
+      identity: Record<string, unknown>,
+    ) => FileSource
+
+    const source = new UnsafeCtor(path, { dev: 1, ino: 1, size: 1, mtimeMs: 1 })
+
+    expect(source.size).toBe(12)
+    await writeFile(path, 'changed payload')
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'allows metadata-only chmod changes after construction',
+    async () => {
+      const path = join(tmpDir, 'chmod.txt')
+      await writeFile(path, 'metadata-only')
+
+      const source = new FileSource(path)
+      await chmod(path, 0o600)
+
+      expect(decoder.decode(await source.toArrayBuffer())).toBe('metadata-only')
+    },
+  )
 
   it('rejects if the file is truncated after construction', async () => {
     const path = join(tmpDir, 'truncate.txt')

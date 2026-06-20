@@ -1,9 +1,12 @@
 import { arrayBufferFor } from '../util/bytes.ts'
-import { collectStream } from './collect.ts'
 
-const FILE_READ_CHUNK_SIZE = 64 * 1024
+const FILE_READ_CHUNK_SIZE = 1024 * 1024
+const READABLE_STREAM_SIZE_REQUIRED_ERROR = 'size is required when using a ReadableStream as input.'
 const FORWARD_ONLY_SIZE_REQUIRED_ERROR =
   'size is required when using a forward-only content source as input.'
+const STREAM_SOURCE_ENDED_EARLY_ERROR = 'StreamSource ended before the advertised byte count.'
+const STREAM_SOURCE_TOO_MANY_BYTES_ERROR =
+  'StreamSource emitted more bytes than the advertised byte count.'
 
 /** Filesystem path accepted by {@link FileSource}. */
 export type FileSourcePath = string | URL
@@ -36,11 +39,16 @@ interface NodeFsSync {
 interface FileIdentity {
   readonly dev: number
   readonly ino: number
-  readonly mode: number
   readonly size: number
   readonly mtimeMs: number
-  readonly ctimeMs: number
 }
+
+let pendingFileSourceIdentity:
+  | {
+      readonly path: FileSourcePath
+      readonly identity: FileIdentity
+    }
+  | undefined
 
 function getNodeFsSync(): NodeFsSync {
   // FileSource exposes `size` synchronously, so the constructor cannot use the
@@ -68,6 +76,8 @@ function isNodeFsSync(value: unknown): value is NodeFsSync {
 
 async function fileOpenFlags(): Promise<number> {
   const { constants } = await import('node:fs')
+  // O_NOFOLLOW is unavailable on some platforms. When it is absent, the
+  // post-open fstat identity check below is the symlink-swap defense.
   return constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
 }
 
@@ -86,11 +96,16 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
   return {
     dev: stats.dev,
     ino: stats.ino,
-    mode: stats.mode,
     size: stats.size,
     mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
   }
+}
+
+function takePendingFileSourceIdentity(path: FileSourcePath): FileIdentity | undefined {
+  if (pendingFileSourceIdentity?.path !== path) return undefined
+  const { identity } = pendingFileSourceIdentity
+  pendingFileSourceIdentity = undefined
+  return identity
 }
 
 function assertStableIdentity(path: FileSourcePath, stats: FileStatsLike): void {
@@ -120,14 +135,10 @@ function assertSameIdentity(
   when: string,
 ): void {
   assertStableIdentity(path, actual)
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino || actual.mode !== expected.mode) {
+  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
-  if (
-    actual.size !== expected.size ||
-    actual.mtimeMs !== expected.mtimeMs ||
-    actual.ctimeMs !== expected.ctimeMs
-  ) {
+  if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
 }
@@ -199,6 +210,11 @@ async function readFileRange(
     /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
     await file.close().catch(() => {})
   }
+}
+
+async function closeFileBestEffort(file: FileHandleLike | null): Promise<void> {
+  /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
+  await file?.close().catch(() => {})
 }
 
 function asyncIterableToReadableStream(
@@ -441,10 +457,11 @@ abstract class FileRangeSource implements ContentSource {
   /**
    * Open this file range as a Web ReadableStream.
    *
-   * The stream opens and closes the file for each chunk so callers that abandon
-   * a partially consumed public stream do not leave a descriptor open. For very
-   * large local-file uploads, pass `FileSource` directly to `bucket.upload()` so
-   * the multipart engine can use ranged `toArrayBuffer()` reads instead.
+   * The stream opens the file lazily on first pull, keeps the descriptor for the
+   * stream lifetime, and closes it when the range is fully read, cancelled, or
+   * errors. For very large local-file uploads, pass `FileSource` directly to
+   * `bucket.upload()` so the multipart engine can use ranged `toArrayBuffer()`
+   * reads instead.
    *
    * @returns A ReadableStream that reads the configured file range lazily.
    */
@@ -453,22 +470,59 @@ abstract class FileRangeSource implements ContentSource {
     const identity = this.identity
     let position = this.offset
     let remaining = this.size
+    let file: FileHandleLike | null = null
+
+    const getFile = async (): Promise<FileHandleLike> => {
+      file ??= await openValidatedFile(path, identity)
+      return file
+    }
+
+    const closeFile = async (): Promise<void> => {
+      const openFile = file
+      file = null
+      await closeFileBestEffort(openFile)
+    }
 
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        if (remaining === 0) {
-          controller.close()
-          return
+        try {
+          if (remaining === 0) {
+            await closeFile()
+            controller.close()
+            return
+          }
+
+          const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
+          const data = new Uint8Array(length)
+          const openFile = await getFile()
+          let filled = 0
+          while (filled < data.byteLength) {
+            const { bytesRead } = await openFile.read(
+              data,
+              filled,
+              data.byteLength - filled,
+              position + filled,
+            )
+            if (bytesRead === 0) throw rangeEndedEarlyError(path, position, length)
+            filled += bytesRead
+          }
+          const stats = await openFile.stat()
+          assertSameIdentity(path, identity, stats, 'while being streamed')
+
+          position += data.byteLength
+          remaining -= data.byteLength
+          controller.enqueue(data)
+          if (remaining === 0) {
+            await closeFile()
+            controller.close()
+          }
+        } catch (err) {
+          await closeFile()
+          throw err
         }
-
-        const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
-        // Open per pull so an abandoned public stream cannot strand a file descriptor.
-        const data = await readFileRange(path, identity, position, length)
-
-        position += data.byteLength
-        remaining -= data.byteLength
-        controller.enqueue(data)
-        if (remaining === 0) controller.close()
+      },
+      async cancel() {
+        await closeFile()
       },
     })
   }
@@ -509,41 +563,11 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  constructor(path: FileSourcePath)
-  /**
-   * Internal constructor path used by {@link FileSource.fromPath}.
-   * @param path - Local filesystem path or file URL.
-   * @param identity - Prevalidated file identity.
-   * @param offset - Absolute byte offset where this source starts.
-   * @param size - Number of bytes in this source.
-   *
-   * @internal
-   */
-  constructor(path: FileSourcePath, identity?: FileIdentity, offset = 0, size?: number) {
+  constructor(path: FileSourcePath) {
     const resolvedIdentity =
-      identity ?? validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
-    super(path, resolvedIdentity, offset, size ?? resolvedIdentity.size)
-  }
-
-  /**
-   * Create a subclass-preserving file-backed source for a sub-range.
-   * @param path - Local filesystem path or file URL.
-   * @param identity - File identity captured when the root FileSource was constructed.
-   * @param offset - Absolute byte offset where this source starts.
-   * @param size - Number of bytes in this source.
-   *
-   * @returns A ContentSource representing the requested range.
-   */
-  protected override createSlice(
-    path: FileSourcePath,
-    identity: FileIdentity,
-    offset: number,
-    size: number,
-  ): ContentSource {
-    const InternalCtor = this.constructor as unknown as {
-      new (path: FileSourcePath, identity: FileIdentity, offset: number, size: number): FileSource
-    }
-    return new InternalCtor(path, identity, offset, size)
+      takePendingFileSourceIdentity(path) ??
+      validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
+    super(path, resolvedIdentity, 0, resolvedIdentity.size)
   }
 
   /**
@@ -555,16 +579,16 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  static async fromPath<T extends typeof FileSource>(
-    this: T,
-    path: FileSourcePath,
-  ): Promise<InstanceType<T>> {
+  static async fromPath(path: FileSourcePath): Promise<FileSource> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
-    // biome-ignore lint/complexity/noThisInStatic: inherited factory must construct the receiver class.
-    const InternalCtor = this as unknown as {
-      new (path: FileSourcePath, identity: FileIdentity): InstanceType<T>
+    pendingFileSourceIdentity = { path, identity }
+    try {
+      return new FileSource(path)
+    } finally {
+      if (pendingFileSourceIdentity?.identity === identity) {
+        pendingFileSourceIdentity = undefined
+      }
     }
-    return new InternalCtor(path, identity)
   }
 
   /**
@@ -602,6 +626,7 @@ export class StreamSource implements ContentSource {
     private readonly readable: ReadableStream<Uint8Array>,
     size: number,
   ) {
+    validateStreamSourceSize(size)
     this.size = size
   }
 
@@ -632,9 +657,59 @@ export class StreamSource implements ContentSource {
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
-    const bytes = await collectStream(this.stream(), options)
+  async toArrayBuffer(): Promise<ArrayBuffer> {
+    const bytes = await collectStreamExactly(this.stream(), this.size)
     return arrayBufferFor(bytes)
+  }
+}
+
+function validateStreamSourceSize(size: number): void {
+  if (!Number.isFinite(size) || !Number.isInteger(size) || size < 0) {
+    throw new RangeError('StreamSource size must be a non-negative finite integer.')
+  }
+}
+
+async function collectStreamExactly(
+  stream: ReadableStream<Uint8Array>,
+  expectedSize: number,
+): Promise<Uint8Array> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  let completed = false
+
+  try {
+    while (total < expectedSize) {
+      const { done, value } = await reader.read()
+      if (done) throw new Error(STREAM_SOURCE_ENDED_EARLY_ERROR)
+      if (value.byteLength === 0) continue
+      if (total + value.byteLength > expectedSize) {
+        throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+
+    let extra = await reader.read()
+    while (!extra.done && extra.value.byteLength === 0) {
+      extra = await reader.read()
+    }
+    if (!extra.done) throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
+
+    const result = new Uint8Array(expectedSize)
+    let offset = 0
+    for (const chunk of chunks) {
+      result.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    completed = true
+    return result
+  } finally {
+    if (!completed) {
+      /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
+      await reader.cancel().catch(() => {})
+    }
+    reader.releaseLock()
   }
 }
 
@@ -672,7 +747,7 @@ export function toContentSource(
   }
   if (isReadableStream(input)) {
     if (size === undefined) {
-      throw new Error(FORWARD_ONLY_SIZE_REQUIRED_ERROR)
+      throw new Error(READABLE_STREAM_SIZE_REQUIRED_ERROR)
     }
     return new StreamSource(input, size)
   }
