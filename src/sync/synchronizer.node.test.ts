@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -878,6 +878,45 @@ describe('synchronize download safety', () => {
 })
 
 describe('synchronize upload safety', () => {
+  it('does not upload a file replaced after scan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-replaced-'))
+    try {
+      const sourceRoot = join(root, 'source')
+      await mkdir(sourceRoot)
+      const filePath = join(sourceRoot, 'file.txt')
+      const replacementPath = join(root, 'replacement.txt')
+      await writeFile(filePath, 'safe')
+      await writeFile(replacementPath, 'evil')
+
+      const bucket = {
+        upload: vi.fn(),
+      } as unknown as Bucket
+
+      const config: SynchronizerUpConfig = {
+        source: new LocalFolder(sourceRoot),
+        dest: makeB2MemoryFolder([]),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+        prefix: '',
+      }
+
+      const gen = synchronize(config)
+      const first = await gen.next()
+      expect(first.done).toBe(false)
+      expect(first.value?.type).toBe('compare')
+
+      await rm(filePath)
+      await rename(replacementPath, filePath)
+
+      const rest: SyncEvent[] = []
+      for await (const event of gen) rest.push(event)
+      expect(rest.some((event) => event.type === 'error')).toBe(true)
+      expect(bucket.upload).not.toHaveBeenCalled()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not upload bytes from a symlink swapped in after FileSource validation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-symlink-'))
     try {
