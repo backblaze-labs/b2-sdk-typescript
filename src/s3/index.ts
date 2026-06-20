@@ -12,17 +12,16 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
-import { utf8Encoder } from '../util/text-codec.ts'
 import {
   presignS3Request,
   type QueryParam,
   type SignedHeader,
   type SigV4PresignRequestOptions,
 } from './sigv4.ts'
+import { assertNativeDownloadFileName, assertSafeBucketName } from './validation.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN = 3600
-const FILE_NAME_MAX_BYTES = 1024
 const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'text/html',
   'application/xhtml+xml',
@@ -462,49 +461,6 @@ function normalizeValidDurationInSeconds(validDurationInSeconds: number): number
 function assertNonEmptyStringOption(name: string, value: unknown): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(`${name} must be a non-empty string.`)
-  }
-}
-
-function assertSafeBucketName(bucketName: string): void {
-  if (bucketName.length === 0) {
-    throw new TypeError('bucketName must be a non-empty string.')
-  }
-  if (hasHttpHeaderControlCharacter(bucketName)) {
-    throw new TypeError('bucketName must not contain control characters.')
-  }
-  if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
-    throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
-  }
-}
-
-function assertNativeDownloadFileName(fileName: string): void {
-  assertValidB2FileName(fileName)
-
-  if (fileName.startsWith('/') || fileName.endsWith('/') || fileName.includes('//')) {
-    throw new TypeError('fileName cannot start with "/", end with "/", or contain "//".')
-  }
-}
-
-function assertValidB2FileName(fileName: string): void {
-  if (fileName.length === 0) {
-    throw new TypeError('fileName must be a non-empty string.')
-  }
-
-  const bytes = utf8Encoder.encode(fileName)
-  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
-    throw new TypeError(
-      `fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes; received ${bytes.byteLength}.`,
-    )
-  }
-
-  if (hasHttpHeaderControlCharacter(fileName)) {
-    throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
-  }
-
-  if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
-    throw new TypeError(
-      'fileName must not contain dot-only path segments because URL parsers can normalize presigned paths.',
-    )
   }
 }
 

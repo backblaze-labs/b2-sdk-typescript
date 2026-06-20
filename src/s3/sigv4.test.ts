@@ -91,6 +91,34 @@ describe('presignS3Request', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('wraps malformed endpoint URL errors with presign context', async () => {
+    let error: unknown
+    try {
+      await presignS3Request(
+        'GET',
+        {
+          endpoint: 'not a url',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: 'file.txt',
+          signingDate: SIGNING_DATE,
+        },
+        [['x-id', 'GetObject']],
+        [],
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(TypeError)
+    expect((error as Error).message).toBe(
+      'S3 presigned URL endpoint must be a valid URL; received "not a url".',
+    )
+    expect((error as Error & { cause?: unknown }).cause).toBeInstanceOf(TypeError)
+  })
+
   it('rejects invalid signing dates and empty bucket names', async () => {
     const options = {
       endpoint: 'https://s3.us-west-004.backblazeb2.com',

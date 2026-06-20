@@ -1,8 +1,7 @@
 import { hexEncode, hmacSha256, sha256Hex } from '../util/crypto.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
-import { utf8Encoder } from '../util/text-codec.ts'
+import { assertSafeBucketName, assertValidB2FileName } from './validation.ts'
 
-const FILE_NAME_MAX_BYTES = 1024
 const MAX_PRESIGN_EXPIRES_IN = 604_800
 const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD'
 const SERVICE = 's3'
@@ -59,7 +58,7 @@ export async function presignS3Request(
   extraQuery: readonly QueryParam[],
   extraHeaders: readonly SignedHeader[],
 ): Promise<string> {
-  const endpoint = new URL(options.endpoint)
+  const endpoint = parseEndpoint(options.endpoint)
   assertHttpsEndpoint(endpoint)
   const expiresIn = normalizeExpiresIn(options.expiresIn)
   const { shortDate, longDate } = formatSigningDate(options.signingDate)
@@ -148,48 +147,20 @@ function canonicalHostHeader(endpoint: URL): string {
   return `${endpoint.hostname}:${endpoint.port}`
 }
 
+function parseEndpoint(endpoint: string): URL {
+  try {
+    return new URL(endpoint)
+  } catch (cause) {
+    throw new TypeError(`S3 presigned URL endpoint must be a valid URL; received "${endpoint}".`, {
+      cause,
+    })
+  }
+}
+
 function assertHttpsEndpoint(endpoint: URL): void {
   if (endpoint.protocol !== 'https:') {
     throw new TypeError(
       `S3 presigned URLs require an https: endpoint; received "${endpoint.origin}".`,
-    )
-  }
-}
-
-function assertSafeBucketName(bucketName: string): void {
-  if (bucketName.length === 0) {
-    throw new TypeError('bucketName must be a non-empty string.')
-  }
-  if (hasHttpHeaderControlCharacter(bucketName)) {
-    throw new TypeError('bucketName must not contain control characters.')
-  }
-  if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
-    throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
-  }
-}
-
-function assertValidB2FileName(fileName: string): void {
-  if (fileName.length === 0) {
-    throw new TypeError('fileName must be a non-empty string.')
-  }
-
-  const bytes = utf8Encoder.encode(fileName)
-  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
-    throw new TypeError(
-      `fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes; received ${bytes.byteLength}.`,
-    )
-  }
-
-  for (let i = 0; i < fileName.length; i++) {
-    const code = fileName.charCodeAt(i)
-    if (code < 0x20 || code === 0x7f) {
-      throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
-    }
-  }
-
-  if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
-    throw new TypeError(
-      'fileName must not contain dot-only path segments because URL parsers can normalize presigned S3 paths.',
     )
   }
 }
