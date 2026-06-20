@@ -64,11 +64,13 @@ export function assertNativeDownloadFileName(fileName: string): void {
 /**
  * Validate a B2 file name for URL signing safety.
  *
- * This is not the native download URL path-boundary guard. B2 and S3 object
- * names can contain leading, trailing, or repeated slashes, so this guard only
- * enforces size, control-character, and dot-segment constraints needed before
- * signing. Dot-only path segments are rejected because URL parsers can normalize
- * them before the request is sent.
+ * This is presign-safety validation, not full native B2 file-name validation.
+ * S3-compatible object keys may use leading, trailing, or repeated slash
+ * patterns that native B2 download URLs reject. Native download URLs apply the
+ * stricter {@link assertNativeDownloadFileName} path-boundary guard. This guard
+ * only enforces size, control-character, and dot-segment constraints needed
+ * before signing. Dot-only path segments are rejected because URL parsers can
+ * normalize them before the request is sent.
  *
  * @param fileName - B2 file name supplied by the caller.
  *
