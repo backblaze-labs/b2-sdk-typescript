@@ -134,22 +134,21 @@ function assertSameIdentity(
   when: string,
 ): void {
   assertStableIdentity(path, actual)
-  if (shouldCompareFileId() && (actual.dev !== expected.dev || actual.ino !== expected.ino)) {
+  if (
+    shouldComparePosixIdentity() &&
+    (actual.dev !== expected.dev || actual.ino !== expected.ino)
+  ) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
-  if (shouldCompareCtime() && actual.ctimeMs !== expected.ctimeMs) {
+  if (shouldComparePosixIdentity() && actual.ctimeMs !== expected.ctimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
 }
 
-function shouldCompareFileId(): boolean {
-  return !isWindows()
-}
-
-function shouldCompareCtime(): boolean {
+function shouldComparePosixIdentity(): boolean {
   return !isWindows()
 }
 
@@ -207,7 +206,10 @@ async function readFileRange(
   offset: number,
   size: number,
 ): Promise<Uint8Array> {
-  if (size === 0) return new Uint8Array(0)
+  if (size === 0) {
+    await verifyFileIdentityForEmptyRead(path, identity)
+    return new Uint8Array(0)
+  }
 
   const file = await openValidatedFile(path, identity)
   const data = new Uint8Array(size)
@@ -221,6 +223,19 @@ async function readFileRange(
     const stats = await file.stat()
     assertSameIdentity(path, identity, stats, 'while being read')
     return data
+  } finally {
+    /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
+    await file.close().catch(() => {})
+  }
+}
+
+async function verifyFileIdentityForEmptyRead(
+  path: FileSourcePath,
+  identity: FileIdentity,
+): Promise<void> {
+  const file = await openValidatedFile(path, identity)
+  try {
+    return
   } finally {
     /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
     await file.close().catch(() => {})
@@ -479,11 +494,16 @@ abstract class FileRangeSource implements ContentSource {
     const identity = this.identity
     let position = this.offset
     let remaining = this.size
+    let verifiedEmpty = false
 
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
         try {
           if (remaining === 0) {
+            if (!verifiedEmpty) {
+              verifiedEmpty = true
+              await verifyFileIdentityForEmptyRead(path, identity)
+            }
             controller.close()
             return
           }

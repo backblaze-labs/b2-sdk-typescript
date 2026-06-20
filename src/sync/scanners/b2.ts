@@ -9,6 +9,7 @@ import {
 } from '../filters.ts'
 import { isAbortError } from '../local-sha1.ts'
 import { compareCodeUnits, compareSyncRelativePaths } from '../path-order.ts'
+import { assertSyncPathAllowed } from '../paths.ts'
 import {
   asRawB2KeyPrefix,
   b2KeyToRelativePathUnderPrefix,
@@ -201,6 +202,7 @@ export class B2Folder implements SyncFolder {
 
     for (const { relativePath, versions, selectedVersion } of sorted) {
       if (scanIsAborted(options)) return
+      assertSyncPathAllowed(relativePath)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
         relativePath,

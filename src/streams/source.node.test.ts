@@ -129,6 +129,28 @@ describe('FileSource', () => {
     expect(await readStream(source.stream())).toEqual(new Uint8Array())
   })
 
+  it('rejects a replaced empty file before reading it as a buffer', async () => {
+    const path = join(tmpDir, 'empty-replaced-buffer.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+    await writeFile(path, 'replacement')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read|changed before read/)
+  })
+
+  it('rejects a replaced empty file before streaming it', async () => {
+    const path = join(tmpDir, 'empty-replaced-stream.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+    await writeFile(path, 'replacement')
+
+    await expect(readStream(source.stream())).rejects.toThrow(
+      /modified before read|changed before read/,
+    )
+  })
+
   it('rejects non-regular files', () => {
     expect(() => new FileSource(tmpDir)).toThrow(/not a regular file/)
   })

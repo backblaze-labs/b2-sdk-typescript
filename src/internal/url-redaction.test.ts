@@ -8,6 +8,10 @@ describe('redactUrlForError', () => {
     )
   })
 
+  it('redacts a single path segment', () => {
+    expect(redactUrlForError('https://example.com/secret-token')).toBe('https://example.com/...')
+  })
+
   it('resolves relative URLs against a base URL before redacting', () => {
     expect(
       redactUrlForError('../object?Authorization=secret', { baseUrl: 'https://f.example/b/' }),
