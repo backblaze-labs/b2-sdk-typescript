@@ -3,36 +3,44 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const CRYPTO_UNAVAILABLE_MESSAGE =
   'SHA-256 and HMAC-SHA256 require globalThis.crypto.subtle or Node.js node:crypto.'
 
+const hasVitestModuleMocks = typeof vi.doMock === 'function' && typeof vi.doUnmock === 'function'
+
 const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
 
 describe('crypto runtime fallback', () => {
   afterEach(() => {
-    vi.doUnmock('node:crypto')
+    if (hasVitestModuleMocks) vi.doUnmock('node:crypto')
     restoreCrypto()
-    vi.resetModules()
+    if (typeof vi.resetModules === 'function') vi.resetModules()
   })
 
-  it('throws a clear error when SHA-256 crypto is unavailable', async () => {
-    hideWebCrypto()
-    vi.doMock('node:crypto', () => {
-      throw new Error('node crypto unavailable')
-    })
+  it.skipIf(!hasVitestModuleMocks)(
+    'throws a clear error when SHA-256 crypto is unavailable',
+    async () => {
+      hideWebCrypto()
+      vi.doMock('node:crypto', () => {
+        throw new Error('node crypto unavailable')
+      })
 
-    const { sha256Hex } = await import('./crypto.ts')
+      const { sha256Hex } = await import('./crypto.ts')
 
-    await expect(sha256Hex('data')).rejects.toThrow(CRYPTO_UNAVAILABLE_MESSAGE)
-  })
+      await expect(sha256Hex('data')).rejects.toThrow(CRYPTO_UNAVAILABLE_MESSAGE)
+    },
+  )
 
-  it('throws a clear error when HMAC-SHA256 crypto is unavailable', async () => {
-    hideWebCrypto()
-    vi.doMock('node:crypto', () => {
-      throw new Error('node crypto unavailable')
-    })
+  it.skipIf(!hasVitestModuleMocks)(
+    'throws a clear error when HMAC-SHA256 crypto is unavailable',
+    async () => {
+      hideWebCrypto()
+      vi.doMock('node:crypto', () => {
+        throw new Error('node crypto unavailable')
+      })
 
-    const { hmacSha256 } = await import('./crypto.ts')
+      const { hmacSha256 } = await import('./crypto.ts')
 
-    await expect(hmacSha256('key', 'data')).rejects.toThrow(CRYPTO_UNAVAILABLE_MESSAGE)
-  })
+      await expect(hmacSha256('key', 'data')).rejects.toThrow(CRYPTO_UNAVAILABLE_MESSAGE)
+    },
+  )
 
   it('uses Node crypto for SHA-256 when WebCrypto is unavailable', async () => {
     hideWebCrypto()
