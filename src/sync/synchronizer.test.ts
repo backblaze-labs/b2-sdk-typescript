@@ -5,6 +5,7 @@ import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { compareSyncPathNames } from './path-order.ts'
 import { LocalFolder } from './scanners/local.ts'
 import type {
   SynchronizerConfig,
@@ -79,7 +80,7 @@ function makeMemoryFolder(files: SyncPath[], type: 'local' | 'b2' = 'local'): Sy
   return {
     type,
     async *scan() {
-      const sorted = [...files].sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+      const sorted = [...files].sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
       for (const f of sorted) yield f
     },
   }

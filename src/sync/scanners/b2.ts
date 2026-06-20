@@ -1,11 +1,13 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
+import { compareSyncPathNames } from '../path-order.ts'
 import { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
  * Scans a B2 bucket (optionally filtered by prefix) and yields {@link B2SyncPath} entries
- * sorted by file name. Hidden files are excluded. All versions are fetched and grouped.
+ * sorted by deterministic file-name order. Hidden files are excluded. All versions are fetched
+ * and grouped.
  */
 export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
@@ -64,7 +66,7 @@ export class B2Folder implements SyncFolder {
       startFileId = listing.nextFileId as string | undefined
     }
 
-    const sorted = [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    const sorted = [...grouped.entries()].sort((a, b) => compareSyncPathNames(a[0], b[0]))
 
     for (const [fileName, versions] of sorted) {
       if (options.signal?.aborted) return

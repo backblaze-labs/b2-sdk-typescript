@@ -55,12 +55,18 @@ describe('LocalFolder', () => {
   it('scans a flat directory and yields entries sorted by relative path', async () => {
     await writeFile(join(tmpDir, 'charlie.txt'), 'c')
     await writeFile(join(tmpDir, 'alpha.txt'), 'a')
+    await writeFile(join(tmpDir, 'Zed.txt'), 'z')
     await writeFile(join(tmpDir, 'bravo.txt'), 'b')
 
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['alpha.txt', 'bravo.txt', 'charlie.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual([
+      'Zed.txt',
+      'alpha.txt',
+      'bravo.txt',
+      'charlie.txt',
+    ])
 
     // Verify each entry has the expected properties
     for (const entry of entries) {
@@ -199,6 +205,8 @@ describe('B2Folder', () => {
     // Upload in non-alphabetical order
     await bucket.upload({ fileName: 'zebra.txt', source: new BufferSource(enc.encode('z')) })
     tick()
+    await bucket.upload({ fileName: 'Zebra.txt', source: new BufferSource(enc.encode('Z')) })
+    tick()
     await bucket.upload({ fileName: 'apple.txt', source: new BufferSource(enc.encode('a')) })
     tick()
     await bucket.upload({ fileName: 'mango.txt', source: new BufferSource(enc.encode('m')) })
@@ -206,7 +214,12 @@ describe('B2Folder', () => {
     const folder = new B2Folder(bucket)
     const entries = await collect<B2SyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['apple.txt', 'mango.txt', 'zebra.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual([
+      'Zebra.txt',
+      'apple.txt',
+      'mango.txt',
+      'zebra.txt',
+    ])
 
     // Verify each entry has the expected properties
     for (const entry of entries) {

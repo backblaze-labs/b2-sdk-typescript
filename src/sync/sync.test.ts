@@ -4,6 +4,7 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
+import { compareSyncPathNames } from './path-order.ts'
 import {
   filesAreDifferent,
   preparePairForCompare,
@@ -85,7 +86,7 @@ function makeMemoryFolder(files: SyncPath[]): SyncFolder {
   return {
     type: 'local',
     async *scan() {
-      const sorted = [...files].sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+      const sorted = [...files].sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
       for (const f of sorted) yield f
     },
   }

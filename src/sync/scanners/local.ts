@@ -1,10 +1,11 @@
 import { readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
+import { compareSyncPathNames } from '../path-order.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
  * Scans a local directory tree and yields {@link LocalSyncPath} entries
- * sorted by relative path. Unreadable files and directories abort the scan with
+ * sorted by deterministic relative path order. Unreadable files and directories abort the scan with
  * an error diagnostic so they cannot be mistaken for absent source files.
  */
 export class LocalFolder implements SyncFolder {
@@ -21,13 +22,13 @@ export class LocalFolder implements SyncFolder {
   }
 
   /**
-   * Recursively walks the directory and yields files sorted by relative path.
+   * Recursively walks the directory and yields files in sync path order.
    * @param options - Optional scan controls.
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
     const collected: LocalSyncPath[] = []
     await this.walk(this.root, collected, options)
-    collected.sort((a, b) => a.relativePath.localeCompare(b.relativePath))
+    collected.sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
     for (const entry of collected) {
       if (options.signal?.aborted) return
       yield entry

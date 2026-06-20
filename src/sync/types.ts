@@ -189,10 +189,10 @@ export interface SyncEncryptionProvider {
   getSettingForDownload(fileVersion: FileVersion): EncryptionSetting | undefined
 }
 
-/** A scannable folder (local or B2) that yields files in sorted order. */
+/** A scannable folder (local or B2) that yields files in deterministic string order. */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
-  /** Scans the folder and yields files sorted by relative path. */
+  /** Scans the folder and yields files sorted by relative path using JavaScript `<`/`>` order. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

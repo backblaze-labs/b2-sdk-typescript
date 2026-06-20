@@ -1,3 +1,4 @@
+import { compareSyncPathNames } from './path-order.ts'
 import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
@@ -33,16 +34,19 @@ export async function* zipFolders(
     } else if (d === null) {
       yield [s, null]
       sourceResult = await sourceIter.next()
-    } else if (s.relativePath < d.relativePath) {
-      yield [s, null]
-      sourceResult = await sourceIter.next()
-    } else if (d.relativePath < s.relativePath) {
-      yield [null, d]
-      destResult = await destIter.next()
     } else {
-      yield [s, d]
-      sourceResult = await sourceIter.next()
-      destResult = await destIter.next()
+      const order = compareSyncPathNames(s.relativePath, d.relativePath)
+      if (order < 0) {
+        yield [s, null]
+        sourceResult = await sourceIter.next()
+      } else if (order > 0) {
+        yield [null, d]
+        destResult = await destIter.next()
+      } else {
+        yield [s, d]
+        sourceResult = await sourceIter.next()
+        destResult = await destIter.next()
+      }
     }
   }
 }
