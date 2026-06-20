@@ -46,3 +46,93 @@ describe('RawClient list cancellation', () => {
     expect(requests[1]?.signal).toBe(controller.signal)
   })
 })
+
+describe('RawClient upload URL request controls', () => {
+  it('keeps legacy positional signal and retry support for upload URL methods', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        if (request.url.endsWith('/b2_get_upload_part_url')) {
+          return jsonResponse({
+            fileId: 'large-file',
+            uploadUrl: 'https://upload.example.test/part',
+            authorizationToken: 'part-token',
+          })
+        }
+        return jsonResponse({
+          bucketId: 'bucket',
+          uploadUrl: 'https://upload.example.test/file',
+          authorizationToken: 'file-token',
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+    const controller = new AbortController()
+    const retry = { maxRetries: 0 }
+
+    await raw.getUploadUrl(
+      'https://api.example.test',
+      'auth',
+      { bucketId: 'bucket' as never },
+      controller.signal,
+      retry,
+    )
+    await raw.getUploadPartUrl(
+      'https://api.example.test',
+      'auth',
+      { fileId: 'large-file' as never },
+      controller.signal,
+      retry,
+    )
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.signal).toBe(controller.signal)
+    expect(requests[0]?.retry).toBe(retry)
+    expect(requests[1]?.signal).toBe(controller.signal)
+    expect(requests[1]?.retry).toBe(retry)
+  })
+
+  it('accepts the options bag for upload URL methods', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        if (request.url.endsWith('/b2_get_upload_part_url')) {
+          return jsonResponse({
+            fileId: 'large-file',
+            uploadUrl: 'https://upload.example.test/part',
+            authorizationToken: 'part-token',
+          })
+        }
+        return jsonResponse({
+          bucketId: 'bucket',
+          uploadUrl: 'https://upload.example.test/file',
+          authorizationToken: 'file-token',
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+    const controller = new AbortController()
+    const retry = { maxRetries: 1 }
+
+    await raw.getUploadUrl(
+      'https://api.example.test',
+      'auth',
+      { bucketId: 'bucket' as never },
+      { signal: controller.signal, retry },
+    )
+    await raw.getUploadPartUrl(
+      'https://api.example.test',
+      'auth',
+      { fileId: 'large-file' as never },
+      { signal: controller.signal, retry },
+    )
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.signal).toBe(controller.signal)
+    expect(requests[0]?.retry).toBe(retry)
+    expect(requests[1]?.signal).toBe(controller.signal)
+    expect(requests[1]?.retry).toBe(retry)
+  })
+})

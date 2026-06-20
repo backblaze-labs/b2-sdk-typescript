@@ -456,7 +456,7 @@ interface SplitResumeFileInfo {
 }
 
 function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileInfo {
-  const userFileInfo: Record<string, string> = {}
+  const userFileInfo: Record<string, string> = Object.create(null) as Record<string, string>
   let sourceSize: string | undefined
   let partSize: string | undefined
   for (const [key, value] of Object.entries(fileInfo)) {
