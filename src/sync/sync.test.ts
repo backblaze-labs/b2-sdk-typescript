@@ -427,6 +427,60 @@ describe('preparePairForCompare', () => {
     expect(result.pair[1]?.contentSha1).toBe(sha1)
   })
 
+  it('returns aborted when the signal is already aborted before local hashing', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readLocalSha1: async () => {
+        throw new Error('should not hash')
+      },
+    })
+
+    expect(result.aborted).toBe(true)
+    expect(result.events).toEqual([])
+  })
+
+  it('passes local sha1 read timeout options to the reader', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const optionsSeen: unknown[] = []
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      sha1ReadTimeoutMillis: 1234,
+      readLocalSha1: async (_path, _signal, options) => {
+        optionsSeen.push(options)
+        return sha1
+      },
+    })
+
+    expect(optionsSeen).toEqual([{ timeoutMillis: 1234 }])
+    expect(result.skipActionGeneration).toBe(false)
+    expect(result.bytesHashed).toBe(100)
+  })
+
+  it('returns aborted when destination local sha1 hashing observes an abort signal', async () => {
+    const controller = new AbortController()
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('source.txt', 1000, 100, sha1)
+    const dest = makeLocalSyncPath('dest.txt', 1000, 100)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readLocalSha1: async () => {
+        controller.abort()
+        throw new DOMException('aborted', 'AbortError')
+      },
+    })
+
+    expect(result.aborted).toBe(true)
+    expect(result.events).toEqual([])
+  })
+
   it('returns an error event when source B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)

@@ -2368,6 +2368,68 @@ describe('synchronize', () => {
   })
 
   describe('abort signal mid-flight', () => {
+    it('aborts sha1 sync before queuing a pair when signal flips during scan', async () => {
+      const controller = new AbortController()
+      const mockBucket = makeMockBucket()
+      const sourceFile = makeB2SyncPath('cloud.txt', 1000, 10, undefined, 'a'.repeat(40))
+      const source: SyncFolder = {
+        type: 'b2',
+        async *scan() {
+          controller.abort()
+          yield sourceFile
+        },
+      }
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'sha1', keepMode: 'no-delete', signal: controller.signal },
+        bucket: mockBucket as unknown as Bucket,
+      } satisfies SynchronizerConfig & { readonly bucket: Bucket }
+
+      const events = await collectEvents(config)
+
+      expect(events).toEqual([])
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
+
+    it('aborts sha1 sync after yielding a compare event from the final batch', async () => {
+      const controller = new AbortController()
+      const mockBucket = makeMockBucket()
+      const source = makeMemoryFolder(
+        [makeB2SyncPath('cloud.txt', 1000, 10, undefined, 'a'.repeat(40))],
+        'b2',
+      )
+      const dest = makeMemoryFolder(
+        [makeB2SyncPath('cloud.txt', 1000, 10, undefined, 'b'.repeat(40))],
+        'b2',
+      )
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'sha1', keepMode: 'no-delete', signal: controller.signal },
+        bucket: mockBucket as unknown as Bucket,
+      } satisfies SynchronizerConfig & { readonly bucket: Bucket }
+
+      const gen = synchronize(config)
+      const first = await gen.next()
+      expect(first.done).toBe(false)
+      expect(first.value?.type).toBe('compare')
+
+      controller.abort()
+      const rest: SyncEvent[] = []
+      while (true) {
+        const next = await gen.next()
+        if (next.done) break
+        rest.push(next.value)
+      }
+
+      expect(rest).toEqual([])
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
+
     it('aborts before executing any action when signal flips during scan', async () => {
       const controller = new AbortController()
       const mockBucket = makeMockBucket()
