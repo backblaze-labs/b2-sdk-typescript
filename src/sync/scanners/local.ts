@@ -1,4 +1,4 @@
-import { readdir, stat } from 'node:fs/promises'
+import { lstat, readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import { compareSyncPathNames } from '../path-order.ts'
@@ -64,12 +64,22 @@ export class LocalFolder implements SyncFolder {
         await this.walk(fullPath, out, options)
       } else if (entry.isFile()) {
         try {
-          const s = await stat(fullPath)
+          const s = await lstat(fullPath)
+          if (!s.isFile()) {
+            this.emitScanError(options, rel, 'file', new Error('not a regular file'))
+            continue
+          }
           out.push({
             relativePath: rel,
             absolutePath: fullPath,
             modTimeMillis: Math.floor(s.mtimeMs),
             size: s.size,
+            fileIdentity: {
+              deviceId: s.dev,
+              inode: s.ino,
+              size: s.size,
+              modTimeMillis: Math.floor(s.mtimeMs),
+            },
           })
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */

@@ -1,7 +1,23 @@
 import type { FileVersion } from '../types/file.ts'
 import { normalizeVerifiableSha1 } from '../util/sha1.ts'
 
-const unverifiedSha1Prefix = 'unverified:'
+/** Prefix used to mark SHA-1 metadata that must not prove equality without byte verification. */
+export const untrustedSha1Prefix = 'unverified:'
+
+/**
+ * Marks a verifiable SHA-1 digest as untrusted provider metadata.
+ *
+ * @param sha1 - Verifiable 40-character hexadecimal SHA-1 digest.
+ *
+ * @returns The untrusted SHA-1 sentinel value.
+ *
+ * @throws When the supplied value is not a verifiable SHA-1 digest.
+ */
+export function untrustedSha1(sha1: string): string {
+  const normalized = normalizeVerifiableSha1(sha1)
+  if (normalized === null) throw new Error('untrusted SHA-1 metadata must be verifiable')
+  return `${untrustedSha1Prefix}${normalized}`
+}
 
 /**
  * Extracts the best comparable SHA-1 value from a B2 file version.
@@ -20,11 +36,11 @@ export function selectB2ComparableSha1(version: FileVersion): string | null {
   if (typeof originalContentSha1 === 'string') {
     if (isUntrustedSha1(originalContentSha1)) return originalContentSha1.toLowerCase()
     const contentSha1 = normalizeVerifiableSha1(originalContentSha1)
-    return contentSha1 ?? String(originalContentSha1).toLowerCase()
+    return contentSha1 ?? originalContentSha1.toLowerCase()
   }
 
   const largeFileSha1 = normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
-  return largeFileSha1 === null ? null : `${unverifiedSha1Prefix}${largeFileSha1}`
+  return largeFileSha1 === null ? null : untrustedSha1(largeFileSha1)
 }
 
 /**
@@ -34,6 +50,6 @@ export function selectB2ComparableSha1(version: FileVersion): string | null {
  *
  * @returns True when the value carries B2's unverified sentinel prefix.
  */
-export function isUntrustedSha1(sha1: string | null | undefined): sha1 is string {
-  return sha1?.toLowerCase().startsWith(unverifiedSha1Prefix) ?? false
+export function isUntrustedSha1(sha1: string | null | undefined): boolean {
+  return sha1?.toLowerCase().startsWith(untrustedSha1Prefix) ?? false
 }

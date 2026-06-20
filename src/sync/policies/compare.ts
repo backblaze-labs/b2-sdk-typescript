@@ -3,7 +3,7 @@ import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
 import { formatHashError, isAbortError, type LocalSha1Reader } from '../local-sha1.ts'
 import type { SyncPair } from '../pairing.ts'
-import { isUntrustedSha1, selectB2ComparableSha1 } from '../sha1-metadata.ts'
+import { isUntrustedSha1, selectB2ComparableSha1, untrustedSha1Prefix } from '../sha1-metadata.ts'
 import type {
   B2SyncPath,
   CompareMode,
@@ -15,8 +15,19 @@ import type {
 
 export { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 
+/** Result from a B2 SHA-1 verification read. */
+export interface B2Sha1ReadResult {
+  /** SHA-1 digest of the selected B2 bytes, or null when unavailable. */
+  readonly contentSha1: string | null
+  /** Number of B2 bytes downloaded and hashed while verifying. */
+  readonly bytesRead: number
+}
+
 /** Reads a B2 file and returns the SHA-1 digest of its actual bytes, or null when unavailable. */
-export type B2Sha1Reader = (path: B2SyncPath, signal?: AbortSignal) => Promise<string | null>
+export type B2Sha1Reader = (
+  path: B2SyncPath,
+  signal?: AbortSignal,
+) => Promise<string | null | B2Sha1ReadResult>
 
 /** Options for preparing a file pair before comparison. */
 export interface PreparePairForCompareOptions {
@@ -46,6 +57,8 @@ export interface ComparePreparationResult {
   readonly errors: readonly Error[]
   /** Local file bytes read for hashing while preparing this pair. */
   readonly bytesHashed: number
+  /** B2 bytes read for untrusted metadata verification while preparing this pair. */
+  readonly bytesVerified: number
   /** Whether action generation should be skipped for this pair. */
   readonly skipActionGeneration: boolean
   /** Whether preparation stopped because the abort signal fired. */
@@ -233,6 +246,7 @@ type Sha1State =
 interface PreparedPath {
   readonly path: SyncPath
   readonly bytesHashed: number
+  readonly bytesVerified: number
   readonly event?: SyncEvent
   readonly error?: Error
   readonly aborted: boolean
@@ -243,10 +257,10 @@ async function prepareLocalPathSha1(
   options: PreparePairForCompareOptions,
 ): Promise<PreparedPath> {
   if (!isLocalSyncPath(path)) {
-    return { path, bytesHashed: 0, aborted: false }
+    return { path, bytesHashed: 0, bytesVerified: 0, aborted: false }
   }
 
-  if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
+  if (options.signal?.aborted) return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
 
   try {
     const readLocalSha1 = options.readLocalSha1
@@ -254,6 +268,7 @@ async function prepareLocalPathSha1(
       return {
         path: { ...path, contentSha1: path.contentSha1 ?? null },
         bytesHashed: 0,
+        bytesVerified: 0,
         aborted: false,
       }
     }
@@ -268,10 +283,13 @@ async function prepareLocalPathSha1(
         contentSha1,
       },
       bytesHashed: normalizeVerifiableSha1(contentSha1) === null ? 0 : path.size,
+      bytesVerified: 0,
       aborted: false,
     }
   } catch (err) {
-    if (options.signal?.aborted || isAbortError(err)) return { path, bytesHashed: 0, aborted: true }
+    if (options.signal?.aborted || isAbortError(err)) {
+      return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
+    }
     const error = toError(err)
     return {
       path,
@@ -283,6 +301,7 @@ async function prepareLocalPathSha1(
         message: `failed to hash local file for sha1 comparison: ${formatHashError(error)}`,
       },
       error,
+      bytesVerified: 0,
       aborted: false,
     }
   }
@@ -298,12 +317,14 @@ async function verifyB2Sha1Bytes(
   if (source === null || dest === null) return readyComparePair(pair, bytesHashed)
 
   const sourceResult = await prepareUntrustedB2PathSha1(source, options)
+  const sourceBytesVerified = sourceResult.bytesVerified
   if (sourceResult.aborted) return aborted(pair)
   if (sourceResult.event) {
-    return skipped(pair, sourceResult.event, sourceResult.error, bytesHashed)
+    return skipped(pair, sourceResult.event, sourceResult.error, bytesHashed, sourceBytesVerified)
   }
 
   const destResult = await prepareUntrustedB2PathSha1(dest, options)
+  const bytesVerified = sourceBytesVerified + destResult.bytesVerified
   /* v8 ignore next -- destination abort mirrors the covered source abort path */
   if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
   if (destResult.event) {
@@ -312,10 +333,11 @@ async function verifyB2Sha1Bytes(
       destResult.event,
       destResult.error,
       bytesHashed,
+      bytesVerified,
     )
   }
 
-  return readyComparePair([sourceResult.path, destResult.path], bytesHashed)
+  return readyComparePair([sourceResult.path, destResult.path], bytesHashed, bytesVerified)
 }
 
 async function prepareUntrustedB2PathSha1(
@@ -323,7 +345,7 @@ async function prepareUntrustedB2PathSha1(
   options: PreparePairForCompareOptions & { readonly readB2Sha1: B2Sha1Reader },
 ): Promise<PreparedPath> {
   if (!isB2SyncPath(path) || comparableSha1(path).kind !== 'untrusted') {
-    return { path, bytesHashed: 0, aborted: false }
+    return { path, bytesHashed: 0, bytesVerified: 0, aborted: false }
   }
   return prepareB2PathSha1(path, options)
 }
@@ -333,23 +355,31 @@ async function prepareB2PathSha1(
   options: PreparePairForCompareOptions & { readonly readB2Sha1: B2Sha1Reader },
 ): Promise<PreparedPath> {
   /* v8 ignore next -- pre-aborted B2 reads are covered at pair level */
-  if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
+  if (options.signal?.aborted) return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
 
   try {
+    const result = await options.readB2Sha1(path, options.signal)
+    const contentSha1 = typeof result === 'object' && result !== null ? result.contentSha1 : result
+    const bytesVerified =
+      typeof result === 'object' && result !== null ? Math.max(0, result.bytesRead) : 0
     return {
       path: {
         ...path,
-        contentSha1: await options.readB2Sha1(path, options.signal),
+        contentSha1,
       },
       bytesHashed: 0,
+      bytesVerified,
       aborted: false,
     }
   } catch (err) {
-    if (options.signal?.aborted || isAbortError(err)) return { path, bytesHashed: 0, aborted: true }
+    if (options.signal?.aborted || isAbortError(err)) {
+      return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
+    }
     const error = toError(err)
     return {
       path,
       bytesHashed: 0,
+      bytesVerified: 0,
       event: {
         type: 'error',
         path: path.relativePath,
@@ -368,7 +398,7 @@ function comparableSha1(path: SyncPath): Sha1State {
   if (isUntrustedSha1(candidate)) {
     return {
       kind: 'untrusted',
-      value: normalizeVerifiableSha1(candidate.slice('unverified:'.length)),
+      value: normalizeVerifiableSha1(candidate.slice(untrustedSha1Prefix.length)),
     }
   }
 
@@ -425,15 +455,21 @@ function isLocalSyncPath(path: SyncPath): path is LocalSyncPath {
  *
  * @param pair - Source/destination pair from {@link zipFolders}.
  * @param bytesHashed - Local file bytes read while preparing the pair.
+ * @param bytesVerified - B2 bytes read while verifying untrusted SHA-1 metadata.
  *
  * @returns A ready preparation result that allows action generation.
  */
-export function readyComparePair(pair: SyncPair, bytesHashed = 0): ComparePreparationResult {
+export function readyComparePair(
+  pair: SyncPair,
+  bytesHashed = 0,
+  bytesVerified = 0,
+): ComparePreparationResult {
   return {
     pair,
     events: [],
     errors: [],
     bytesHashed,
+    bytesVerified,
     skipActionGeneration: false,
     aborted: false,
   }
@@ -444,12 +480,14 @@ function skipped(
   event: SyncEvent,
   error?: Error,
   bytesHashed = 0,
+  bytesVerified = 0,
 ): ComparePreparationResult {
   return {
     pair,
     events: [event],
     errors: error !== undefined ? [error] : [],
     bytesHashed,
+    bytesVerified,
     skipActionGeneration: true,
     aborted: false,
   }
@@ -461,6 +499,7 @@ function aborted(pair: SyncPair): ComparePreparationResult {
     events: [],
     errors: [],
     bytesHashed: 0,
+    bytesVerified: 0,
     skipActionGeneration: true,
     aborted: true,
   }

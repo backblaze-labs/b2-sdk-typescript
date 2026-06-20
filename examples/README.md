@@ -96,18 +96,22 @@ version's bytes. It is useful for accidental drift detection, not as a cryptogra
 guarantee. Files without any comparable remote SHA-1 are skipped with a surfaced event instead of
 being transferred repeatedly.
 
-SHA-1 comparison reads matching-size local files in full before transfers are executed. Untrusted
-B2 metadata also causes a selected-version download so the SDK can hash real B2 bytes before
-treating the pair as equal. `SYNC_CONCURRENCY` bounds SHA-1 comparison workers, transfer workers,
-and queued transfer promises, but hashing and transfer do not fully overlap. Changed uploads may
-read the same file again for transfer. `SYNC_DRY_RUN=true` still performs those comparison reads.
-The example logs `compare.bytesHashed` so you can distinguish a long hash pass from a hung sync.
+SHA-1 comparison reads matching-size local files in full before transfers are executed. In normal
+runs, untrusted B2 metadata also causes a selected-version download so the SDK can hash real B2
+bytes before treating the pair as equal. Dry-runs avoid those B2 content downloads and instead plan
+conservative transfer actions when untrusted metadata cannot prove equality. `SYNC_CONCURRENCY`
+bounds SHA-1 comparison workers, transfer workers, and queued transfer promises, but hashing and
+transfer do not fully overlap. Changed uploads may read the same file again for transfer.
+`SYNC_DRY_RUN=true` still performs local comparison reads. The example logs `compare.bytesHashed`
+and `compare.bytesVerified` so you can distinguish hash and B2 verification work from a hung sync.
 Incorrect or adversarial size-matching, hash-mismatching metadata can force a full hash pass and
-transfers in `sha1` mode. The SDK bounds local and B2 SHA-1 reads with an idle/no-progress timeout,
-adds an absolute deadline to untrusted B2 verification downloads, rejects non-regular local files,
-and bounds local reads to the scanned size. Untrusted B2 verification also refuses to read more
-bytes than the selected version's `contentLength`; set `sha1VerificationMaxBytes` in code when you
-need a lower absolute ceiling for large-object verification.
+transfers in `sha1` mode. To keep total disk and network work within `SYNC_CONCURRENCY`, SHA-1
+batch preparation waits for prior transfer actions to drain instead of overlapping both phases.
+The SDK bounds local and B2 SHA-1 reads with an idle/no-progress timeout, adds an absolute deadline
+to untrusted B2 verification downloads, rejects non-regular local files, and bounds local reads to
+the scanned size. Untrusted B2 verification also refuses to read more bytes than the selected
+version's `contentLength`; set `sha1VerificationMaxBytes` in code when you need a lower per-file
+ceiling for large-object verification.
 
 ### Upload with a progress bar
 

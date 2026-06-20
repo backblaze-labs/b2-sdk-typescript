@@ -8,8 +8,9 @@ import type { FileVersion } from '../types/file.ts'
  * detector. Digest case is normalized before comparison. Missing, null, unavailable, or
  * non-verifiable metadata cannot prove equality: the high-level synchronizer either transfers
  * conservatively for untrusted metadata or skips action generation with a surfaced event when a
- * B2 file has no comparable digest. This is not a cryptographic integrity or tamper-proofing
- * guarantee, because SHA-1 collisions are possible.
+ * B2 file has no comparable digest. Untrusted B2 metadata may require downloading the selected
+ * B2 version to hash its bytes before equality can be trusted. This is not a cryptographic
+ * integrity or tamper-proofing guarantee, because SHA-1 collisions are possible.
  */
 export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
@@ -40,10 +41,24 @@ export interface SyncPath {
   readonly contentSha1?: string | null
 }
 
+/** Filesystem identity captured while scanning a local file. */
+export interface LocalFileIdentity {
+  /** Device ID from the local filesystem. */
+  readonly deviceId: number
+  /** Inode number from the local filesystem. */
+  readonly inode: number
+  /** Size observed during the scan. */
+  readonly size: number
+  /** Modification time observed during the scan, floored to milliseconds. */
+  readonly modTimeMillis: number
+}
+
 /** A file on the local filesystem discovered during a scan. */
 export interface LocalSyncPath extends SyncPath {
   /** Absolute filesystem path to the file. */
   readonly absolutePath: string
+  /** Optional filesystem identity used to reject scan-to-read races. */
+  readonly fileIdentity?: LocalFileIdentity
 }
 
 /** A file in a B2 bucket discovered during a scan. */
@@ -84,6 +99,7 @@ export type SyncActionEventType =
   | 'hide'
   | 'delete-remote'
   | 'delete-local'
+  | 'compare'
 
 /**
  * Per-action progress event (transfer or metadata change). All
@@ -97,6 +113,10 @@ export interface SyncActionEvent {
   readonly path: string
   /** Size in bytes of the file involved, or `0` for metadata-only actions. */
   readonly size: number
+  /** Local file bytes hashed for compare events. */
+  readonly bytesHashed?: number
+  /** B2 bytes verified for compare events. */
+  readonly bytesVerified?: number
 }
 
 /** Per-file comparison progress event. */
@@ -108,7 +128,9 @@ export interface SyncCompareEvent {
   /** Reserved for compatibility with earlier metadata-only compare events. */
   readonly size: 0
   /** Local file bytes hashed while preparing this comparison, if any. */
-  readonly bytesHashed: number
+  readonly bytesHashed?: number
+  /** B2 bytes downloaded and hashed while verifying untrusted SHA-1 metadata, if any. */
+  readonly bytesVerified?: number
 }
 
 /**
@@ -171,7 +193,13 @@ export interface SyncOptions {
   readonly sha1ReadTimeoutMillis?: number
   /** Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads. */
   readonly sha1VerificationTimeoutMillis?: number
-  /** Optional absolute byte ceiling for untrusted B2 SHA-1 verification reads. */
+  /**
+   * Optional per-file byte ceiling for untrusted B2 SHA-1 verification reads.
+   *
+   * By default, verifying untrusted B2 metadata may download the selected version's full
+   * `contentLength` each run. Set this to a lower value to fail such verification before a
+   * large object can be fully read.
+   */
   readonly sha1VerificationMaxBytes?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider

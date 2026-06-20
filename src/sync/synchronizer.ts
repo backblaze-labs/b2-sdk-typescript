@@ -21,6 +21,7 @@ import { type SyncPair, zipFolders } from './pairing.ts'
 import {
   assertSupportedCompareMode,
   type B2Sha1Reader,
+  type ComparePreparationResult,
   preparePairsForCompare,
   readyComparePair,
 } from './policies/compare.ts'
@@ -125,7 +126,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const nowMillis = Date.now()
 
   const factory = createActionFactory(config)
-  const readB2Sha1 = createB2Sha1Reader(config)
+  const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
 
   const queuedEvents: SyncEvent[] = []
   let errorCount = 0
@@ -189,6 +190,9 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   async function* emitSha1Batch(batch: readonly SyncPair[]): AsyncGenerator<SyncEvent, boolean> {
     if (batch.length === 0) return false
 
+    // Keep SHA-1 hashing / B2 verification and transfer actions under one effective
+    // concurrency ceiling. This intentionally creates a batch barrier instead of
+    // overlapping compare reads with prior transfers.
     await drainActions()
     yield* emitQueuedEvents()
 
@@ -244,16 +248,17 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   function planPreparedPair(
     pair: SyncPair,
-    prepared: ReturnType<typeof readyComparePair>,
+    prepared: ComparePreparationResult,
   ): PreparedActionPlan {
     const event: SyncEvent = {
       type: 'compare',
       path: (pair[0] ?? pair[1])?.relativePath ?? '',
       size: 0,
       bytesHashed: prepared.bytesHashed,
+      ...(prepared.bytesVerified > 0 ? { bytesVerified: prepared.bytesVerified } : {}),
     }
 
-    for (const event of prepared.events) queueEvent(event)
+    for (const preparedEvent of prepared.events) queueEvent(preparedEvent)
     errorCount += prepared.errors.length
     if (prepared.skipActionGeneration) return { event, actions: [] }
     if (scanHadError && prepared.pair[0] === null && prepared.pair[1] !== null) {
@@ -376,11 +381,12 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             signal: deadlineSignal,
           })
-        return hashReadableStreamSha1(result.body, deadlineSignal, {
+        const verified = await hashReadableStreamSha1(result.body, deadlineSignal, {
           idleTimeoutMillis,
           maxBytes,
           expectedBytes: path.selectedVersion.contentLength,
         })
+        return { contentSha1: verified.contentSha1, bytesRead: verified.bytesRead }
       },
     )
   }
@@ -394,7 +400,7 @@ async function hashReadableStreamSha1(
     readonly maxBytes: number
     readonly expectedBytes: number
   },
-): Promise<string> {
+): Promise<{ readonly contentSha1: string; readonly bytesRead: number }> {
   const hash = new IncrementalSha1()
   const reader = body.getReader()
   const idleTimeoutMillis = options?.idleTimeoutMillis ?? normalizeSha1TimeoutMillis(undefined)
@@ -415,9 +421,9 @@ async function hashReadableStreamSha1(
     if (expectedBytes !== undefined && bytesRead !== expectedBytes) {
       throw new Error(`sha1 B2 read ended after ${bytesRead} bytes, expected ${expectedBytes}`)
     }
-    return hash.digest()
+    return { contentSha1: await hash.digest(), bytesRead }
   } catch (err) {
-    await reader.cancel(err).catch(() => {})
+    void reader.cancel(err).catch(() => {})
     throw err
   } finally {
     reader.releaseLock()
@@ -480,6 +486,136 @@ function normalizeSha1VerificationMaxBytes(
   if (ceiling === undefined) return contentBudget
   if (!Number.isFinite(ceiling) || ceiling < 0) return contentBudget
   return Math.min(contentBudget, Math.floor(ceiling))
+}
+
+async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
+  const { constants } = await import('node:fs')
+  const { open } = await import('node:fs/promises')
+  const handle = await open(path.absolutePath, constants.O_RDONLY | noFollowFlag(constants)).catch(
+    (err: unknown) => {
+      if (hasErrorCode(err, 'ELOOP')) {
+        throw new Error('local file changed before upload: not a regular file')
+      }
+      throw new Error('local file changed before upload: could not open scanned file')
+    },
+  )
+  try {
+    const stats = await handle.stat()
+    assertSameScannedRegularFile(stats, path)
+    const data = await handle.readFile()
+    if (data.byteLength !== path.size) {
+      throw new Error('local file changed before upload: size changed while reading')
+    }
+    return new Uint8Array(data)
+  } finally {
+    await handle.close()
+  }
+}
+
+function assertSameScannedRegularFile(
+  stats: {
+    isFile(): boolean
+    readonly dev: number
+    readonly ino: number
+    readonly mtimeMs: number
+    readonly size: number
+  },
+  path: LocalSyncPath,
+): void {
+  if (!stats.isFile()) {
+    throw new Error('local file changed before upload: not a regular file')
+  }
+  if (stats.size !== path.size) {
+    throw new Error('local file changed before upload: size changed')
+  }
+
+  const identity = path.fileIdentity
+  if (identity === undefined) return
+
+  if (
+    stats.dev !== identity.deviceId ||
+    stats.ino !== identity.inode ||
+    stats.size !== identity.size ||
+    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
+  ) {
+    throw new Error('local file changed before upload')
+  }
+}
+
+async function writeLocalFileInsideRoot(
+  root: string,
+  relPath: string,
+  data: Uint8Array,
+): Promise<void> {
+  const { constants } = await import('node:fs')
+  const { lstat, mkdir, open, realpath } = await import('node:fs/promises')
+  const path = await import('node:path')
+  const segments = safeRelativePathSegments(relPath)
+  const rootRealPath = await realpath(root)
+
+  let current = rootRealPath
+  for (const segment of segments.slice(0, -1)) {
+    current = path.join(current, segment)
+    try {
+      await mkdir(current)
+    } catch (err) {
+      if (!hasErrorCode(err, 'EEXIST')) throw err
+    }
+    const stats = await lstat(current)
+    if (!stats.isDirectory()) {
+      throw new Error('unsafe local destination path: parent is not a directory')
+    }
+  }
+
+  const destPath = path.join(rootRealPath, ...segments)
+  assertPathInsideRoot(rootRealPath, destPath, path)
+  const handle = await open(
+    destPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | noFollowFlag(constants),
+    0o666,
+  )
+  try {
+    await handle.writeFile(data)
+  } finally {
+    await handle.close()
+  }
+}
+
+function safeRelativePathSegments(relPath: string): string[] {
+  if (
+    relPath.length === 0 ||
+    relPath.includes('\0') ||
+    relPath.includes('\\') ||
+    relPath.startsWith('/') ||
+    /^[A-Za-z]:/.test(relPath)
+  ) {
+    throw new Error('unsafe local destination path')
+  }
+
+  const segments = relPath.split('/')
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error('unsafe local destination path')
+  }
+  return segments
+}
+
+function assertPathInsideRoot(
+  root: string,
+  target: string,
+  path: typeof import('node:path'),
+): void {
+  const relative = path.relative(root, target)
+  if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('unsafe local destination path')
+  }
+}
+
+function noFollowFlag(constants: { readonly O_NOFOLLOW?: number }): number {
+  return constants.O_NOFOLLOW ?? 0
+}
+
+function hasErrorCode(err: unknown, code: string): boolean {
+  return (err as { readonly code?: unknown }).code === code
 }
 
 /**
@@ -564,8 +700,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         source.absolutePath,
         source.size,
         async (absPath, relPath) => {
-          const { readFile } = await import('node:fs/promises')
-          const data = await readFile(absPath)
+          const data = await readScannedLocalFile({ ...source, absolutePath: absPath })
           const fileName = `${prefix}${relPath}`
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -587,12 +722,15 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
+        safeRelativePathSegments(relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
-        const result = await bucket.download(source.selectedVersion.fileName, {
-          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-        })
+        const result = await bucket
+          .file(source.selectedVersion.fileName)
+          .downloadById(source.selectedVersion.fileId, {
+            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+          })
         const reader = result.body.getReader()
         let combined: Uint8Array
         try {
@@ -617,11 +755,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           reader.releaseLock()
         }
 
-        const { mkdir, writeFile } = await import('node:fs/promises')
-        const { dirname, join } = await import('node:path')
-        const destPath = join(root, relPath)
-        await mkdir(dirname(destPath), { recursive: true })
-        await writeFile(destPath, combined)
+        await writeLocalFileInsideRoot(root, relPath, combined)
       })
     },
 

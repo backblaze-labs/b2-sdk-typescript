@@ -88,9 +88,12 @@ async function main() {
         console.error(`  ERROR: ${event.path}: ${event.message}`)
         break
       case 'compare':
-        if (compareMode === 'sha1' && event.bytesHashed > 0) {
-          hashedBytes += event.bytesHashed
-          console.log(`  compared ${event.path} (${event.bytesHashed} bytes hashed)`)
+        if (compareMode === 'sha1' && (event.bytesHashed ?? 0) > 0) {
+          hashedBytes += event.bytesHashed ?? 0
+          console.log(`  compared ${event.path} (${event.bytesHashed ?? 0} bytes hashed)`)
+        }
+        if (compareMode === 'sha1' && (event.bytesVerified ?? 0) > 0) {
+          console.log(`  verified ${event.path} (${event.bytesVerified ?? 0} B2 bytes)`)
         }
         break
       default:
