@@ -212,11 +212,6 @@ async function readFileRange(
   }
 }
 
-async function closeFileBestEffort(file: FileHandleLike | null): Promise<void> {
-  /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
-  await file?.close().catch(() => {})
-}
-
 function asyncIterableToReadableStream(
   iterable: AsyncIterable<Uint8Array>,
 ): ReadableStream<Uint8Array> {
@@ -457,9 +452,10 @@ abstract class FileRangeSource implements ContentSource {
   /**
    * Open this file range as a Web ReadableStream.
    *
-   * The stream opens the file lazily on first pull, keeps the descriptor for the
-   * stream lifetime, and closes it when the range is fully read, cancelled, or
-   * errors. For very large local-file uploads, pass `FileSource` directly to
+   * The stream opens and closes the file for each chunk so callers that abandon
+   * a partially consumed public stream do not leave a descriptor open. Chunks
+   * are read in large units to avoid the 64 KiB syscall overhead of older
+   * versions. For very large local-file uploads, pass `FileSource` directly to
    * `bucket.upload()` so the multipart engine can use ranged `toArrayBuffer()`
    * reads instead.
    *
@@ -470,59 +466,20 @@ abstract class FileRangeSource implements ContentSource {
     const identity = this.identity
     let position = this.offset
     let remaining = this.size
-    let file: FileHandleLike | null = null
-
-    const getFile = async (): Promise<FileHandleLike> => {
-      file ??= await openValidatedFile(path, identity)
-      return file
-    }
-
-    const closeFile = async (): Promise<void> => {
-      const openFile = file
-      file = null
-      await closeFileBestEffort(openFile)
-    }
-
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        try {
-          if (remaining === 0) {
-            await closeFile()
-            controller.close()
-            return
-          }
-
-          const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
-          const data = new Uint8Array(length)
-          const openFile = await getFile()
-          let filled = 0
-          while (filled < data.byteLength) {
-            const { bytesRead } = await openFile.read(
-              data,
-              filled,
-              data.byteLength - filled,
-              position + filled,
-            )
-            if (bytesRead === 0) throw rangeEndedEarlyError(path, position, length)
-            filled += bytesRead
-          }
-          const stats = await openFile.stat()
-          assertSameIdentity(path, identity, stats, 'while being streamed')
-
-          position += data.byteLength
-          remaining -= data.byteLength
-          controller.enqueue(data)
-          if (remaining === 0) {
-            await closeFile()
-            controller.close()
-          }
-        } catch (err) {
-          await closeFile()
-          throw err
+        if (remaining === 0) {
+          controller.close()
+          return
         }
-      },
-      async cancel() {
-        await closeFile()
+
+        const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
+        const data = await readFileRange(path, identity, position, length)
+
+        position += data.byteLength
+        remaining -= data.byteLength
+        controller.enqueue(data)
+        if (remaining === 0) controller.close()
       },
     })
   }

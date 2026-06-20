@@ -616,6 +616,26 @@ export class NetworkError extends Error {
   }
 }
 
+/**
+ * Thrown when an upload POST returned a response but its body could not be
+ * read. The upload may already have been stored by B2, so retrying this error
+ * can create duplicate file versions or parts.
+ */
+export class UploadResponseBodyError extends Error {
+  /**
+   * Creates a new UploadResponseBodyError instance.
+   * @param message - Human-readable description of the response read failure.
+   * @param cause - The underlying response body error.
+   */
+  constructor(
+    message: string,
+    public override readonly cause?: unknown,
+  ) {
+    super(message, { cause })
+    this.name = 'UploadResponseBodyError'
+  }
+}
+
 function isTransient(status: number, code: B2ErrorCode): boolean {
   // Request timeout + rate limit.
   if (status === 408 || status === 429) return true
