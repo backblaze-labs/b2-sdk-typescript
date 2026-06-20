@@ -449,6 +449,10 @@ import {
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
 
+`createS3ClientConfig()` is for `@aws-sdk/client-s3`; install that optional peer
+before constructing an AWS `S3Client`. The presign helpers sign internally and
+do not require AWS presigner packages.
+
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
 ## Custom transport

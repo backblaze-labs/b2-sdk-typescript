@@ -2,11 +2,9 @@
  * Return an ArrayBuffer containing exactly the bytes visible through a
  * Uint8Array view.
  *
- * The explicit `slice(byteOffset, byteOffset + byteLength)` defends against a
- * Uint8Array view that points at a subset of a larger buffer. Casting to
- * `ArrayBuffer` is needed because TypeScript types Uint8Array's buffer as
- * `ArrayBufferLike`, which includes `SharedArrayBuffer`. Web Crypto APIs only
- * accept the plain `ArrayBuffer` variant.
+ * Exact `ArrayBuffer` views are returned directly. Subarray and
+ * `SharedArrayBuffer`-backed views are copied with `Uint8Array.slice()` so Web
+ * Crypto receives a plain `ArrayBuffer` containing only the visible bytes.
  *
  * @param bytes - The byte view to copy.
  *
