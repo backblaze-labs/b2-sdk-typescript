@@ -1,6 +1,10 @@
-import { isAbsolute, resolve, sep } from 'node:path'
-
 const RESERVED_SYNC_TEMP_FILE_RE = /^\.b2sdk-[0-9a-f]{24}-[^/\\]+-[0-9a-f]{32}\.partial$/i
+
+interface PathOperations {
+  isAbsolute(path: string): boolean
+  resolve(...paths: string[]): string
+  readonly sep: string
+}
 
 /**
  * Rejects sync paths whose basename is reserved for SDK-owned temporary files.
@@ -25,14 +29,18 @@ export function assertSyncPathAllowed(relativePath: string): void {
  *
  * @throws If the path is absolute, escapes the root, or uses a reserved basename.
  */
-export function resolveSafeLocalPath(root: string, relativePath: string): string {
+export function resolveSafeLocalPath(
+  root: string,
+  relativePath: string,
+  path: PathOperations,
+): string {
   assertSyncPathAllowed(relativePath)
-  if (isAbsolute(relativePath)) {
+  if (path.isAbsolute(relativePath)) {
     throw new Error(`Sync path must be relative: ${relativePath}`)
   }
-  const fullPath = resolve(root, relativePath)
-  const rootPath = resolve(root)
-  if (fullPath !== rootPath && !fullPath.startsWith(`${rootPath}${sep}`)) {
+  const fullPath = path.resolve(root, relativePath)
+  const rootPath = path.resolve(root)
+  if (fullPath !== rootPath && !fullPath.startsWith(`${rootPath}${path.sep}`)) {
     throw new Error(`Sync path escapes the local root: ${relativePath}`)
   }
   return fullPath
