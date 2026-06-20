@@ -651,6 +651,71 @@ describe('zipFolders', () => {
       ['c.txt', 'c.txt'],
     ])
   })
+
+  it('closes source and dest scans when the consumer stops early', async () => {
+    let sourceClosed = false
+    let destClosed = false
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 20)
+        } finally {
+          sourceClosed = true
+        }
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 20)
+        } finally {
+          destClosed = true
+        }
+      },
+    }
+
+    for await (const _pair of zipFolders(source, dest)) {
+      break
+    }
+
+    expect(sourceClosed).toBe(true)
+    expect(destClosed).toBe(true)
+  })
+
+  it('closes the other scan when one scan throws', async () => {
+    let destClosed = false
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        yield makeSyncPath('a.txt', 1000, 10)
+        throw new Error('source scan failed')
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 20)
+        } finally {
+          destClosed = true
+        }
+      },
+    }
+
+    const consume = (async () => {
+      for await (const _pair of zipFolders(source, dest)) {
+        // Consume until the source scan throws.
+      }
+    })()
+
+    await expect(consume).rejects.toThrow('source scan failed')
+    expect(destClosed).toBe(true)
+  })
 })
 
 describe('generateActions', () => {

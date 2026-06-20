@@ -432,6 +432,61 @@ describe('synchronize', () => {
       expect(summaryIndex).toBeGreaterThan(scanErrorIndex)
     })
 
+    it('drains in-flight actions before rethrowing scan errors without diagnostics', async () => {
+      const sourceFile = makeB2SyncPath('copied.txt', 2000, 50)
+      const source: SyncFolder = {
+        type: 'b2',
+        async *scan() {
+          yield sourceFile
+          throw new Error('scan exploded')
+        },
+      }
+      const dest = makeMemoryFolder([], 'b2')
+      const mockBucket = makeMockBucket()
+      let finishCopy = () => {}
+      const copyMayFinish = new Promise<void>((resolve) => {
+        finishCopy = resolve
+      })
+      mockBucket.copyFile.mockImplementation(async () => {
+        await copyMayFinish
+      })
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency: 4 },
+        bucket: mockBucket as unknown as Bucket,
+      } satisfies SynchronizerConfig & { readonly bucket: Bucket }
+
+      const run = collectEvents(config)
+      let settled = false
+      let rejection: unknown
+      const observed = run.then(
+        () => {
+          settled = true
+        },
+        (err: unknown) => {
+          settled = true
+          rejection = err
+        },
+      )
+
+      for (
+        let attempts = 0;
+        mockBucket.copyFile.mock.calls.length === 0 && attempts < 10;
+        attempts++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+
+      finishCopy()
+      await observed
+      expect(rejection).toBeInstanceOf(Error)
+      expect((rejection as Error).message).toBe('scan exploded')
+    })
+
     it('keeps recent files with keep-days mode', async () => {
       const now = Date.now()
       const recentTime = now - 6 * 60 * 60 * 1000 // 6 hours ago (within 7 day retention)

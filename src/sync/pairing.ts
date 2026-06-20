@@ -21,32 +21,45 @@ export async function* zipFolders(
   const sourceIter = source.scan(options)[Symbol.asyncIterator]()
   const destIter = dest.scan(options)[Symbol.asyncIterator]()
 
-  let sourceResult = await sourceIter.next()
-  let destResult = await destIter.next()
+  try {
+    let sourceResult = await sourceIter.next()
+    let destResult = await destIter.next()
 
-  while (!sourceResult.done || !destResult.done) {
-    const s = sourceResult.done ? null : sourceResult.value
-    const d = destResult.done ? null : destResult.value
+    while (!sourceResult.done || !destResult.done) {
+      const s = sourceResult.done ? null : sourceResult.value
+      const d = destResult.done ? null : destResult.value
 
-    if (s === null) {
-      yield [null, d]
-      destResult = await destIter.next()
-    } else if (d === null) {
-      yield [s, null]
-      sourceResult = await sourceIter.next()
-    } else {
-      const order = compareSyncPathNames(s.relativePath, d.relativePath)
-      if (order < 0) {
-        yield [s, null]
-        sourceResult = await sourceIter.next()
-      } else if (order > 0) {
+      if (s === null) {
         yield [null, d]
         destResult = await destIter.next()
-      } else {
-        yield [s, d]
+      } else if (d === null) {
+        yield [s, null]
         sourceResult = await sourceIter.next()
-        destResult = await destIter.next()
+      } else {
+        const order = compareSyncPathNames(s.relativePath, d.relativePath)
+        if (order < 0) {
+          yield [s, null]
+          sourceResult = await sourceIter.next()
+        } else if (order > 0) {
+          yield [null, d]
+          destResult = await destIter.next()
+        } else {
+          yield [s, d]
+          sourceResult = await sourceIter.next()
+          destResult = await destIter.next()
+        }
       }
     }
+  } finally {
+    await closeScanIterator(sourceIter)
+    await closeScanIterator(destIter)
+  }
+}
+
+async function closeScanIterator(iterator: AsyncIterator<SyncPath>): Promise<void> {
+  try {
+    await iterator.return?.()
+  } catch {
+    // Best-effort scanner cleanup should not mask the original stop reason.
   }
 }

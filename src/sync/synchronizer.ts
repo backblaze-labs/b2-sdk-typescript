@@ -174,9 +174,9 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       }
     }
   } catch (err) {
+    await drainActions()
     if (scanEvents.length === 0) throw err
 
-    await drainActions()
     const errorValue = toError(err)
     errors.push(errorValue)
     for (const event of results) yield event
