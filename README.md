@@ -405,7 +405,7 @@ if (accountInfo.getAuth() === null) {
 }
 ```
 
-`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
+`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk. `FileAccountInfo` serializes writes inside one process but does not lock across processes; if multiple versions, realms, or application keys share one cache path during a rolling deploy, mismatched auth is ignored in memory without truncating the other process's file. Pass `onDiscard` or `onWriteError` to observe cache churn, or use one cache path per resolved realm and key.
 
 ## Subpath exports
 
@@ -520,7 +520,7 @@ new B2Client({
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
-Automatic redirect following is disabled by default so redirected URLs cannot bypass the guard with credential-bearing headers. If your deployment expects download GET/HEAD redirects on the same origin, pass `followSameHostRedirects: true`; each redirected target is checked by the guard before it is requested, and POST redirects remain blocked.
+Automatic redirect following is disabled by default so redirected URLs cannot bypass the guard with credential-bearing headers. If your deployment expects download GET/HEAD redirects on the same origin, pass `followSameHostRedirects: true`; each redirected target is checked by the guard before it is requested, and POST redirects remain blocked. Browser and edge fetch implementations may expose manual cross-origin redirects only as opaque redirects with no readable `Location`, so those redirects remain blocked even when this option is enabled.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 

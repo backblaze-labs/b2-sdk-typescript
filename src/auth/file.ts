@@ -18,6 +18,48 @@ interface PersistedAuthState {
   }
 }
 
+/** Reason a loaded auth cache entry was ignored for the current client. */
+export type FileAccountInfoDiscardReason =
+  | 'realm_mismatch'
+  | 'application_key_mismatch'
+  | 'endpoint_mismatch'
+
+/** Event emitted when a loaded cache entry is ignored without modifying disk. */
+export interface FileAccountInfoDiscardEvent {
+  /** Absolute path of the auth cache file. */
+  readonly path: string
+  /** Why the loaded auth entry could not be reused. */
+  readonly reason: FileAccountInfoDiscardReason
+  /** Realm URL stored in the cache metadata, or null for legacy entries. */
+  readonly cachedRealmUrl: string | null | undefined
+  /** Realm URL configured on the current client, if already bound. */
+  readonly expectedRealmUrl: string | undefined
+  /** Application key ID stored in cache metadata, or null for legacy entries. */
+  readonly cachedApplicationKeyId: string | null | undefined
+  /** Application key ID configured on the current client, if already bound. */
+  readonly expectedApplicationKeyId: string | undefined
+}
+
+/** Event emitted when an asynchronous auth-cache write fails. */
+export interface FileAccountInfoWriteErrorEvent {
+  /** Absolute path of the auth cache file. */
+  readonly path: string
+  /** Underlying filesystem or serialization error. */
+  readonly error: unknown
+}
+
+/** Optional observers for file-backed auth cache behavior. */
+export interface FileAccountInfoOptions {
+  /**
+   * Called when loaded auth is ignored because its metadata or cached
+   * endpoints are unsafe for this client. The on-disk file is left untouched
+   * so another process using a different realm/key is not clobbered.
+   */
+  readonly onDiscard?: (event: FileAccountInfoDiscardEvent) => void
+  /** Called when an asynchronous auth-cache write fails. */
+  readonly onWriteError?: (event: FileAccountInfoWriteErrorEvent) => void
+}
+
 function readPersistedAuthState(value: unknown): {
   auth: AuthorizeAccountResponse
   realmUrl: string | null
@@ -26,6 +68,12 @@ function readPersistedAuthState(value: unknown): {
   if (value === null || typeof value !== 'object') return null
 
   const maybeState = value as PersistedAuthState
+  if (
+    maybeState._b2sdk?.version !== undefined &&
+    maybeState._b2sdk.version !== PERSISTED_AUTH_VERSION
+  ) {
+    return null
+  }
   const realmUrl =
     maybeState._b2sdk !== undefined && typeof maybeState._b2sdk.realmUrl === 'string'
       ? maybeState._b2sdk.realmUrl
@@ -60,18 +108,67 @@ function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
   }
 }
 
+function realmEndpointSuffix(realmUrl: string): string | null {
+  try {
+    const host = new URL(realmUrl).hostname.toLowerCase()
+    return host === 'backblazeb2.com' || host.endsWith('.backblazeb2.com')
+      ? 'backblazeb2.com'
+      : host
+  } catch {
+    return null
+  }
+}
+
+function isEndpointInRealm(url: string, realmUrl: string): boolean {
+  const suffix = realmEndpointSuffix(realmUrl)
+  if (suffix === null) return false
+  try {
+    const host = new URL(url).hostname.toLowerCase()
+    if (isLoopbackEndpointHost(host)) return true
+    return host === suffix || host.endsWith(`.${suffix}`)
+  } catch {
+    return false
+  }
+}
+
+function isLoopbackEndpointHost(host: string): boolean {
+  if (host === 'localhost' || host === '::1' || host === '[::1]') return true
+
+  const parts = host.split('.')
+  return (
+    parts.length === 4 &&
+    parts[0] === '127' &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  )
+}
+
+function authEndpointsMatchRealm(auth: AuthorizeAccountResponse, realmUrl: string): boolean {
+  try {
+    const storageApi = auth.apiInfo.storageApi
+    return [storageApi.apiUrl, storageApi.downloadUrl, storageApi.s3ApiUrl].every((url) =>
+      isEndpointInRealm(url, realmUrl),
+    )
+  } catch {
+    return false
+  }
+}
+
 /**
  * Node-only {@link AccountInfo} backend that persists the authorization
  * response to a JSON file. Upload URL pools remain in memory because URLs are
  * short-lived and shouldn't be shared across processes.
  * The JSON file contains a live B2 authorization token, so treat it as
  * sensitive and keep it out of shared or world-readable locations.
+ * `FileAccountInfo` serializes writes within one process but does not provide
+ * inter-process locking. If multiple processes share one path, use
+ * {@link FileAccountInfoOptions.onDiscard} and {@link FileAccountInfoOptions.onWriteError}
+ * to observe cache churn, or prefer one cache path per resolved realm and key.
  *
  * On instantiation, call {@link FileAccountInfo.load} to populate state from
  * disk (or start fresh if the file is missing or corrupt). The authorization
  * response is written back to disk on every {@link setAuth} or {@link clear}
  * call so a process restart can resume without re-authorizing.
- * Cache files without an SDK metadata application-key binding are cleared once
+ * Cache files without an SDK metadata application-key binding are ignored once
  * bound to a `B2Client`, because the SDK cannot verify which key wrote them.
  *
  * This module imports `node:fs/promises`; do not load it in browser bundles.
@@ -90,8 +187,12 @@ export class FileAccountInfo implements AccountInfo {
    * {@link load}.
    *
    * @param path - Absolute path to the JSON file that backs this account info.
+   * @param options - Optional discard and write-error observers.
    */
-  constructor(public readonly path: string) {}
+  constructor(
+    public readonly path: string,
+    private readonly options: FileAccountInfoOptions = {},
+  ) {}
 
   /**
    * Reads the JSON file at the configured path and populates in-memory state.
@@ -142,6 +243,23 @@ export class FileAccountInfo implements AccountInfo {
     const auth = this.inner.getAuth()
     if (auth === null) return
 
+    const reason = this.mismatchReason(auth)
+    if (reason === null) return
+
+    this.inner.clear()
+    this.options.onDiscard?.({
+      path: this.path,
+      reason,
+      cachedRealmUrl: this.loadedAuthRealmUrl,
+      expectedRealmUrl: this.realmUrl,
+      cachedApplicationKeyId: this.loadedAuthApplicationKeyId,
+      expectedApplicationKeyId: this.applicationKeyId,
+    })
+    this.loadedAuthRealmUrl = undefined
+    this.loadedAuthApplicationKeyId = undefined
+  }
+
+  private mismatchReason(auth: AuthorizeAccountResponse): FileAccountInfoDiscardReason | null {
     const realmMatches =
       this.realmUrl === undefined ||
       this.loadedAuthRealmUrl === this.realmUrl ||
@@ -151,9 +269,13 @@ export class FileAccountInfo implements AccountInfo {
     const applicationKeyMatches =
       this.applicationKeyId === undefined ||
       this.loadedAuthApplicationKeyId === this.applicationKeyId
-    if (realmMatches && applicationKeyMatches) return
+    if (!realmMatches) return 'realm_mismatch'
+    if (!applicationKeyMatches) return 'application_key_mismatch'
+    if (this.realmUrl !== undefined && !authEndpointsMatchRealm(auth, this.realmUrl)) {
+      return 'endpoint_mismatch'
+    }
 
-    this.clear()
+    return null
   }
 
   /**
@@ -188,7 +310,9 @@ export class FileAccountInfo implements AccountInfo {
           : JSON.stringify(auth)
       await this.writePrivateFileAtomically(contents)
     })
-    this.writeQueue = next.catch(() => {})
+    this.writeQueue = next.catch((error: unknown) => {
+      this.options.onWriteError?.({ path: this.path, error })
+    })
     return next
   }
 

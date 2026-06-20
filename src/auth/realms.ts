@@ -1,4 +1,5 @@
 import { B2RealmConfigurationError } from '../errors/index.ts'
+import { redactUrlForError } from '../internal/url-redaction.ts'
 
 /** Name of a verified built-in auth realm alias. */
 export type RealmName = 'production' | 'staging'
@@ -18,6 +19,8 @@ const VERIFIED_REALM_URLS = {
  */
 export const REALM_URLS: Record<string, string> = VERIFIED_REALM_URLS
 
+// `new URL('https:example.com')` normalizes to `https://example.com/`;
+// require the raw URL to use authority syntax before credentials are sent.
 const HTTP_REALM_URL_WITH_HOST = /^https?:\/\/[^/?#]/i
 
 function parseAbsoluteRealmUrl(realmUrl: string): URL | null {
@@ -29,13 +32,7 @@ function parseAbsoluteRealmUrl(realmUrl: string): URL | null {
 }
 
 function realmUrlForError(realmUrl: string, url = parseAbsoluteRealmUrl(realmUrl)): string {
-  if (url === null) return '<invalid realm URL>'
-  const redacted = new URL(url)
-  redacted.username = ''
-  redacted.password = ''
-  redacted.search = ''
-  redacted.hash = ''
-  return redacted.toString()
+  return redactUrlForError(url ?? realmUrl, { invalidUrlLabel: '<invalid realm URL>' })
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -108,22 +105,13 @@ function isRealmName(realm: string): realm is RealmName {
 }
 
 /**
- * Resolve a realm name to its base API URL.
- * If the realm is not a known name, it must be a direct base URL. Accepted
- * custom HTTPS hosts receive the application key during authorize; do not
- * derive custom realm URLs from untrusted input. Direct URLs must not include
- * userinfo, query strings, or fragments.
+ * Resolve a realm name to its base API URL. Unknown strings are returned
+ * unchanged so callers can resolve custom aliases before authorization.
  *
  * @param realm - The realm name or direct URL to resolve.
  *
- * @returns The base API URL for the given realm.
- *
- * @throws B2RealmConfigurationError when the resolved realm URL is not
- * absolute, is not a base URL, uses an unsupported scheme, or uses
- * non-loopback plaintext HTTP.
+ * @returns The mapped base API URL for a known realm, otherwise `realm`.
  */
 export function getRealmUrl(realm: string): string {
-  const url = isRealmName(realm) ? VERIFIED_REALM_URLS[realm] : realm
-  assertSecureRealmUrl(url)
-  return url
+  return isRealmName(realm) ? VERIFIED_REALM_URLS[realm] : realm
 }

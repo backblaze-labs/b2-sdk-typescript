@@ -163,18 +163,20 @@ describe('B2Client with simulator', () => {
 // --- SSRF guard integration ---
 
 describe('B2Client SSRF guard', () => {
-  it('rejects non-loopback plaintext realms before transport sees credentials', () => {
+  it('defers invalid realm validation until authorize before transport sees credentials', async () => {
     const { seenUrls, transport } = recordingTransport()
 
-    expect(
-      () =>
-        new B2Client({
-          applicationKeyId: 'test-key-id',
-          applicationKey: 'test-key',
-          realm: 'http://attacker.example',
-          transport,
-        }),
-    ).toThrow('refusing to send credentials over plaintext HTTP realm')
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'http://attacker.example',
+      transport,
+    })
+
+    expect(seenUrls).toEqual([])
+    await expect(client.authorize()).rejects.toThrow(
+      'refusing to send credentials over plaintext HTTP realm',
+    )
     expect(seenUrls).toEqual([])
   })
 

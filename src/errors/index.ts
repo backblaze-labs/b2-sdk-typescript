@@ -21,6 +21,7 @@
  * @packageDocumentation
  */
 
+import { redactUrlForError } from '../internal/url-redaction.ts'
 import {
   type B2ErrorCode,
   type B2ErrorResponse,
@@ -539,19 +540,6 @@ export class B2RealmConfigurationError extends B2Error {
   }
 }
 
-function sanitizeUrlForError(url: string, baseUrl?: string): string {
-  try {
-    const parsed = baseUrl !== undefined ? new URL(url, baseUrl) : new URL(url)
-    parsed.username = ''
-    parsed.password = ''
-    parsed.search = ''
-    parsed.hash = ''
-    return parsed.toString()
-  } catch {
-    return '<invalid URL>'
-  }
-}
-
 /** Thrown when the SDK refuses to follow an HTTP redirect automatically. */
 export class B2RedirectError extends Error {
   /** Always `false` because a blocked redirect is deterministic. */
@@ -571,8 +559,8 @@ export class B2RedirectError extends Error {
    * @param location - Redirect Location header, if present.
    */
   constructor(url: string, status: number, location: string | null) {
-    const safeUrl = sanitizeUrlForError(url)
-    const safeLocation = location !== null ? sanitizeUrlForError(location, url) : null
+    const safeUrl = redactUrlForError(url)
+    const safeLocation = location !== null ? redactUrlForError(location, { baseUrl: url }) : null
     super(
       safeLocation !== null
         ? `HTTP ${status} redirect blocked for ${safeUrl} to ${safeLocation}`

@@ -173,6 +173,47 @@ describe('FetchTransport', () => {
     )
   })
 
+  it('does not follow cross-origin redirects when same-host redirects are enabled', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: 'https://evil.backblazeb2.com/file/bucket/object' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameHostRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
+        headers: { Authorization: 'token-123' },
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow POST redirects when same-host redirects are enabled', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 307,
+        headers: { Location: '/b2api/v3/b2_list_buckets' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameHostRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',
+        method: 'POST',
+        headers: { Authorization: 'token-123' },
+        body: '{}',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('blocks opaque redirects returned by browser fetch implementations', async () => {
     fetchSpy.mockResolvedValue({
       status: 0,

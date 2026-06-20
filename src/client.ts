@@ -145,6 +145,9 @@ export class B2Client {
       onReauth: () => this.reauthorize(),
     })
 
+    const cachedAuth = this.accountInfo.getAuth()
+    if (cachedAuth !== null) this.lockUrlGuard(cachedAuth)
+
     this.raw = new RawClient({ transport: retryTransport })
   }
   /**
@@ -159,8 +162,11 @@ export class B2Client {
       this.realmUrl,
     )
     this.accountInfo.setAuth(auth)
-    // Lock the SSRF guard to the realm's hosts (plus any user additions).
-    // No-op when the caller supplied a custom transport: their threat model.
+    this.lockUrlGuard(auth)
+    return auth
+  }
+
+  private lockUrlGuard(auth: AuthorizeAccountResponse): void {
     if (this.urlGuard !== null) {
       const derived = deriveAllowedSuffixes(auth.apiInfo.storageApi)
       const merged =
@@ -171,7 +177,6 @@ export class B2Client {
           : derived
       this.urlGuard.setAllowedSuffixes(merged)
     }
-    return auth
   }
 
   /**

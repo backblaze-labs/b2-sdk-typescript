@@ -4,7 +4,7 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
-import { getRealmUrl, REALM_URLS } from './realms.ts'
+import { assertSecureRealmUrl, getRealmUrl, REALM_URLS } from './realms.ts'
 import { UploadUrlPool } from './upload-url-pool.ts'
 
 const mockAuth: AuthorizeAccountResponse = {
@@ -389,12 +389,12 @@ describe('getRealmUrl', () => {
     expect(getRealmUrl(customUrl)).toBe(customUrl)
   })
 
-  it('rejects an unknown non-URL realm name', () => {
-    expect(() => getRealmUrl('sandbox')).toThrow(B2RealmConfigurationError)
+  it('returns unknown realm names unchanged so callers can resolve custom aliases', () => {
+    expect(getRealmUrl('sandbox')).toBe('sandbox')
   })
 
   it('rejects non-loopback plaintext HTTP realms', () => {
-    expect(() => getRealmUrl('http://attacker.example')).toThrow(
+    expect(() => assertSecureRealmUrl('http://attacker.example')).toThrow(
       'refusing to send credentials over plaintext HTTP realm',
     )
   })
@@ -402,7 +402,9 @@ describe('getRealmUrl', () => {
   it('redacts URL userinfo from realm validation errors', () => {
     let thrown: unknown
     try {
-      getRealmUrl('http://user:secret@attacker.example/realm?token=query-secret#fragment-secret')
+      assertSecureRealmUrl(
+        'http://user:secret@attacker.example/realm?token=query-secret#fragment-secret',
+      )
     } catch (err) {
       thrown = err
     }
@@ -421,7 +423,7 @@ describe('getRealmUrl', () => {
   ])('rejects realm URLs with non-base components %s', (realm) => {
     let thrown: unknown
     try {
-      getRealmUrl(realm)
+      assertSecureRealmUrl(realm)
     } catch (err) {
       thrown = err
     }
@@ -435,13 +437,13 @@ describe('getRealmUrl', () => {
   })
 
   it('rejects unsupported realm URL schemes', () => {
-    expect(() => getRealmUrl('ftp://attacker.example')).toThrow(
+    expect(() => assertSecureRealmUrl('ftp://attacker.example')).toThrow(
       'realm URL must use HTTPS or loopback IP HTTP for authorization',
     )
   })
 
   it.each(['https:example.com', 'https:///path'])('rejects malformed realm URL %s', (realm) => {
-    expect(() => getRealmUrl(realm)).toThrow(
+    expect(() => assertSecureRealmUrl(realm)).toThrow(
       'realm URL must be an absolute HTTP(S) URL with a hostname for authorization',
     )
   })
@@ -451,14 +453,14 @@ describe('getRealmUrl', () => {
     'http://127.0.0.2:8180',
     'http://[::1]:8180',
   ])('allows loopback IP plaintext HTTP realm %s', (realm) => {
-    expect(getRealmUrl(realm)).toBe(realm)
+    expect(() => assertSecureRealmUrl(realm)).not.toThrow()
   })
 
   it.each([
     'http://localhost:8180',
     'http://foo.localhost:8180',
   ])('rejects loopback hostname plaintext HTTP realm %s', (realm) => {
-    expect(() => getRealmUrl(realm)).toThrow(
+    expect(() => assertSecureRealmUrl(realm)).toThrow(
       'refusing to send credentials over plaintext HTTP realm',
     )
   })

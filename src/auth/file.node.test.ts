@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
@@ -98,6 +98,24 @@ describe('FileAccountInfo', () => {
 
   it('load() returns silently on corrupt JSON', async () => {
     await writeFile(storePath, 'not valid json', 'utf8')
+    const accountInfo = new FileAccountInfo(storePath)
+    await accountInfo.load()
+    expect(accountInfo.getAuth()).toBeNull()
+  })
+
+  it('ignores cache files with an unsupported SDK metadata version', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth(),
+        _b2sdk: {
+          version: 2,
+          realmUrl: 'https://api.backblazeb2.com',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
     const accountInfo = new FileAccountInfo(storePath)
     await accountInfo.load()
     expect(accountInfo.getAuth()).toBeNull()
@@ -215,9 +233,13 @@ describe('FileAccountInfo', () => {
     expect(loaded.getAuth()).toBeTruthy()
   })
 
-  it('clears a legacy production cache when bound to the staging realm', async () => {
-    await writeFile(storePath, JSON.stringify(makeCachedAuth()), 'utf8')
-    const accountInfo = new FileAccountInfo(storePath)
+  it('ignores a legacy cache when bound to a client key without clobbering disk', async () => {
+    const cached = JSON.stringify(makeCachedAuth())
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
     await accountInfo.load()
     expect(accountInfo.getAuth()).not.toBeNull()
 
@@ -232,6 +254,8 @@ describe('FileAccountInfo', () => {
     expect(client.accountInfo).toBe(accountInfo)
     expect(accountInfo.getAuth()).toBeNull()
     await accountInfo.flushed()
+    expect(discards).toEqual(['application_key_mismatch'])
+    expect(await readFile(storePath, 'utf8')).toBe(cached)
   })
 
   it('retains a legacy production cache only when endpoints match production', async () => {
@@ -244,19 +268,19 @@ describe('FileAccountInfo', () => {
     expect(accountInfo.getAuth()).not.toBeNull()
   })
 
-  it('clears a legacy custom-realm cache when bound to production', async () => {
-    await writeFile(
-      storePath,
-      JSON.stringify(
-        makeCachedAuth({
-          apiUrl: 'https://api.custom.example',
-          downloadUrl: 'https://download.custom.example',
-          s3ApiUrl: 'https://s3.custom.example',
-        }),
-      ),
-      'utf8',
+  it('ignores a legacy custom-realm cache when bound to production', async () => {
+    const cached = JSON.stringify(
+      makeCachedAuth({
+        apiUrl: 'https://api.custom.example',
+        downloadUrl: 'https://download.custom.example',
+        s3ApiUrl: 'https://s3.custom.example',
+      }),
     )
-    const accountInfo = new FileAccountInfo(storePath)
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
     await accountInfo.load()
     expect(accountInfo.getAuth()).not.toBeNull()
 
@@ -264,9 +288,149 @@ describe('FileAccountInfo', () => {
 
     expect(accountInfo.getAuth()).toBeNull()
     await accountInfo.flushed()
+    expect(discards).toEqual(['realm_mismatch'])
+    expect(await readFile(storePath, 'utf8')).toBe(cached)
   })
 
-  it('clears a persisted auth cache when the stored realm differs', async () => {
+  it('ignores a persisted auth cache when the stored realm differs without clobbering disk', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth(),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://api.backblazeb2.com',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'staging',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo).toBe(accountInfo)
+    expect(accountInfo.getAuth()).toBeNull()
+    await accountInfo.flushed()
+    expect(discards).toEqual(['realm_mismatch'])
+    expect(await readFile(storePath, 'utf8')).toBe(cached)
+  })
+
+  it('ignores a persisted auth cache when the stored application key differs', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth(),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://api.backblazeb2.com',
+        applicationKeyId: 'privileged-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+    expect(accountInfo.getAuth()).not.toBeNull()
+
+    const client = new B2Client({
+      applicationKeyId: 'restricted-key-id',
+      applicationKey: 'test-key',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo).toBe(accountInfo)
+    expect(accountInfo.getAuth()).toBeNull()
+    await accountInfo.flushed()
+    expect(discards).toEqual(['application_key_mismatch'])
+    expect(await readFile(storePath, 'utf8')).toBe(cached)
+  })
+
+  it('does not let a staging-bound client clobber a production cache from another process', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth(),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://api.backblazeb2.com',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+
+    const stagingAccountInfo = new FileAccountInfo(storePath)
+    await stagingAccountInfo.load()
+    const stagingClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'staging',
+      transport: new B2Simulator().transport(),
+      accountInfo: stagingAccountInfo,
+    })
+
+    expect(stagingClient.accountInfo.getAuth()).toBeNull()
+    expect(await readFile(storePath, 'utf8')).toBe(cached)
+
+    const productionAccountInfo = new FileAccountInfo(storePath)
+    await productionAccountInfo.load()
+    const productionClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: new B2Simulator().transport(),
+      accountInfo: productionAccountInfo,
+    })
+
+    expect(productionClient.accountInfo.getAuth()).not.toBeNull()
+  })
+
+  it('ignores a matching-metadata cache whose endpoints do not match the realm', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth({
+        apiUrl: 'https://attacker.example/api',
+        downloadUrl: 'https://attacker.example/download',
+        s3ApiUrl: 'https://attacker.example/s3',
+      }),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://api.backblazeb2.com',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(() => client.accountInfo.getApiUrl()).toThrow('Not authorized')
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await readFile(storePath, 'utf8')).toBe(cached)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('locks the default URL guard from retained cached auth', async () => {
     await writeFile(
       storePath,
       JSON.stringify({
@@ -285,43 +449,11 @@ describe('FileAccountInfo', () => {
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      realm: 'staging',
-      transport: new B2Simulator().transport(),
       accountInfo,
     })
 
-    expect(client.accountInfo).toBe(accountInfo)
-    expect(accountInfo.getAuth()).toBeNull()
-    await accountInfo.flushed()
-  })
-
-  it('clears a persisted auth cache when the stored application key differs', async () => {
-    await writeFile(
-      storePath,
-      JSON.stringify({
-        ...makeCachedAuth(),
-        _b2sdk: {
-          version: 1,
-          realmUrl: 'https://api.backblazeb2.com',
-          applicationKeyId: 'privileged-key-id',
-        },
-      }),
-      'utf8',
-    )
-    const accountInfo = new FileAccountInfo(storePath)
-    await accountInfo.load()
-    expect(accountInfo.getAuth()).not.toBeNull()
-
-    const client = new B2Client({
-      applicationKeyId: 'restricted-key-id',
-      applicationKey: 'test-key',
-      transport: new B2Simulator().transport(),
-      accountInfo,
-    })
-
-    expect(client.accountInfo).toBe(accountInfo)
-    expect(accountInfo.getAuth()).toBeNull()
-    await accountInfo.flushed()
+    expect(client.accountInfo.getAuth()).not.toBeNull()
+    expect(client.urlGuard?.getAllowedSuffixes()).toContain('backblazeb2.com')
   })
 
   it('delegates every AccountInfo getter to the in-memory backing', async () => {
