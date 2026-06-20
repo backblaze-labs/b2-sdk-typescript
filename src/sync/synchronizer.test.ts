@@ -1355,6 +1355,41 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode)(
+      'allows downloads when the local root already ends in a separator',
+      async () => {
+        const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join, parse, relative } = await import('node:path')
+        const tempRoot = await mkdtemp(join(tmpdir(), 'b2sdk-sync-root-sep-'))
+        const targetPath = join(tempRoot, 'download.txt')
+        const parsed = parse(targetPath)
+        const separator = parsed.root.includes('\\') ? '\\' : '/'
+        const relativePath = relative(parsed.root, targetPath).split(separator).join('/')
+        try {
+          const source = makeMemoryFolder([makeB2SyncPath(relativePath, 1000, 3)], 'b2')
+          const dest = makeMemoryFolder([], 'local')
+          const mockBucket = makeMockBucket()
+
+          const config: SynchronizerDownConfig = {
+            source: { ...source, type: 'b2' },
+            dest: { ...dest, type: 'local', root: parsed.root },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events.some((event) => event.type === 'error')).toBe(false)
+          await expect(readFile(targetPath).then((data) => Array.from(data))).resolves.toEqual([
+            1, 2, 3,
+          ])
+        } finally {
+          await rm(tempRoot, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('encryptionProvider', () => {

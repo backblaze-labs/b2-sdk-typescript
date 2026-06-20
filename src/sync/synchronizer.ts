@@ -674,12 +674,13 @@ async function resolveContainedLocalPath(
     throw new Error('Local sync root required for filesystem mutation')
   }
 
-  const { resolve, sep } = await import('node:path')
+  const { isAbsolute, relative, resolve } = await import('node:path')
   const safeRoot = resolve(root)
   const target =
     absolutePath === undefined ? resolve(safeRoot, relativePath) : resolve(absolutePath)
+  const pathFromRoot = relative(safeRoot, target)
 
-  if (target !== safeRoot && !target.startsWith(`${safeRoot}${sep}`)) {
+  if (pathFromRoot !== '' && (pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot))) {
     throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
   }
 
