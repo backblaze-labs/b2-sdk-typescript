@@ -1,4 +1,4 @@
-import { appendFile, chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -221,11 +221,13 @@ describe('FileSource', () => {
 
   it('rejects a path replaced by another file', async () => {
     const path = join(tmpDir, 'replaced.txt')
+    const replacementPath = join(tmpDir, 'replacement.txt')
     await writeFile(path, 'safe payload')
+    await writeFile(replacementPath, 'evil payload')
 
     const source = new FileSource(path)
     await rm(path)
-    await writeFile(path, 'evil payload')
+    await rename(replacementPath, path)
 
     await expect(source.assertUnchanged('during test')).rejects.toThrow(/changed during test/)
   })
