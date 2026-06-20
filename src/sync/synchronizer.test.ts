@@ -1288,6 +1288,40 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('allows downloads inside dot-prefixed local directories', async () => {
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dot-prefix-'))
+      try {
+        const source = makeMemoryFolder(
+          [makeB2SyncPath('.../file.txt', 1000, 3), makeB2SyncPath('..foo/file.txt', 1000, 3)],
+          'b2',
+        )
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(false)
+        await expect(
+          readFile(join(root, '...', 'file.txt')).then((data) => Array.from(data)),
+        ).resolves.toEqual([1, 2, 3])
+        await expect(
+          readFile(join(root, '..foo', 'file.txt')).then((data) => Array.from(data)),
+        ).resolves.toEqual([1, 2, 3])
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode || isWindows)('rejects symlinked local parents on download', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')
