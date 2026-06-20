@@ -84,10 +84,9 @@ export type SyncActionEventType =
   | 'hide'
   | 'delete-remote'
   | 'delete-local'
-  | 'compare'
 
 /**
- * Per-action progress event (transfer, metadata change, comparison). All
+ * Per-action progress event (transfer or metadata change). All
  * action-event variants share the same shape; the `type` tag distinguishes
  * them.
  */
@@ -96,11 +95,20 @@ export interface SyncActionEvent {
   readonly type: SyncActionEventType
   /** Relative path of the file this event concerns. */
   readonly path: string
-  /**
-   * Size in bytes of the file involved. For `compare` events, this is local bytes hashed in
-   * `sha1` mode, not bytes transferred.
-   */
+  /** Size in bytes of the file involved. */
   readonly size: number
+}
+
+/** Per-file comparison progress event. */
+export interface SyncCompareEvent {
+  /** Discriminant tag (always the literal string `'compare'`). */
+  readonly type: 'compare'
+  /** Relative path of the compared file. */
+  readonly path: string
+  /** Reserved for compatibility with earlier metadata-only compare events. */
+  readonly size: 0
+  /** Local file bytes hashed while preparing this comparison, if any. */
+  readonly bytesHashed: number
 }
 
 /**
@@ -141,7 +149,7 @@ export interface SyncErrorEvent {
  * `case 'error':` (or `'skip':`) to narrow into a variant with `message`
  * guaranteed non-optional.
  */
-export type SyncEvent = SyncActionEvent | SyncSkipEvent | SyncErrorEvent
+export type SyncEvent = SyncActionEvent | SyncCompareEvent | SyncSkipEvent | SyncErrorEvent
 
 /** Configuration options for a sync operation. */
 export interface SyncOptions {
@@ -157,12 +165,20 @@ export interface SyncOptions {
   readonly dryRun?: boolean
   /** Tolerance for comparison (bytes for size, milliseconds for modtime). */
   readonly compareThreshold?: number
-  /** Signal to abort the sync operation, including in-progress local SHA-1 reads. */
+  /** Signal to abort the sync operation, including scans and in-progress SHA-1 reads. */
   readonly signal?: AbortSignal
-  /** Optional idle/no-progress timeout in milliseconds for local SHA-1 reads in `sha1` mode. */
+  /** Optional idle/no-progress timeout in milliseconds for SHA-1 reads in `sha1` mode. */
   readonly sha1ReadTimeoutMillis?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
+}
+
+/** Options passed to folder scanners by the sync engine. */
+export interface SyncScanOptions {
+  /** Signal used to stop a scan before it runs to completion. */
+  readonly signal?: AbortSignal
+  /** Receives scan diagnostics before the scanner aborts. */
+  readonly onError?: (event: SyncErrorEvent) => void
 }
 
 /** Supplies encryption settings on a per-file basis during sync. */
@@ -178,5 +194,5 @@ export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
   /** Scans the folder and yields files sorted by relative path. */
-  scan(): AsyncIterable<SyncPath>
+  scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

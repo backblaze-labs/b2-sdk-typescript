@@ -1,7 +1,7 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import { selectB2ComparableSha1 } from '../sha1-metadata.ts'
-import type { B2SyncPath, SyncFolder } from '../types.ts'
+import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
  * Scans a B2 bucket (optionally filtered by prefix) and yields {@link B2SyncPath} entries
@@ -22,23 +22,35 @@ export class B2Folder implements SyncFolder {
     this.prefix = prefix
   }
 
-  /** Lists all file versions in the bucket, groups by name, and yields the latest visible version. */
-  async *scan(): AsyncGenerator<B2SyncPath> {
+  /**
+   * Lists all file versions in the bucket, groups by name, and yields the latest visible version.
+   * @param options - Optional scan controls.
+   */
+  async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
     const grouped = new Map<string, FileVersion[]>()
 
     let startFileName: string | undefined
     let startFileId: string | undefined
 
     while (true) {
-      const listing = await this.bucket.listFileVersions({
-        ...(this.prefix !== '' ? { prefix: this.prefix } : {}),
-        ...(startFileName !== undefined ? { startFileName } : {}),
-        ...(startFileId !== undefined
-          ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
-          : {}),
-      })
+      if (options.signal?.aborted) return
+
+      let listing: Awaited<ReturnType<Bucket['listFileVersions']>>
+      try {
+        listing = await this.bucket.listFileVersions({
+          ...(this.prefix !== '' ? { prefix: this.prefix } : {}),
+          ...(startFileName !== undefined ? { startFileName } : {}),
+          ...(startFileId !== undefined
+            ? { startFileId: startFileId as import('../../types/ids.ts').FileId }
+            : {}),
+        })
+      } catch (err) {
+        throw emitScanError(options, 'failed to scan B2 file versions', err)
+      }
 
       for (const fv of listing.files) {
+        if (options.signal?.aborted) return
+
         const existing = grouped.get(fv.fileName)
         if (existing) {
           existing.push(fv)
@@ -55,6 +67,8 @@ export class B2Folder implements SyncFolder {
     const sorted = [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))
 
     for (const [fileName, versions] of sorted) {
+      if (options.signal?.aborted) return
+
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const selected = versions[0]
       if (!selected || selected.action === FileAction.Hide) continue
@@ -71,4 +85,26 @@ export class B2Folder implements SyncFolder {
       }
     }
   }
+}
+
+function emitScanError(options: SyncScanOptions, message: string, err: unknown): Error {
+  const event: SyncErrorEvent = {
+    type: 'error',
+    path: '',
+    size: 0,
+    message: `${message}: ${formatScanError(err)}`,
+  }
+  options.onError?.(event)
+  return new Error(event.message)
+}
+
+function formatScanError(err: unknown): string {
+  if (err instanceof Error) {
+    const code = (err as { readonly code?: unknown }).code
+    if (typeof code === 'string' && code.length > 0) return code
+    const message = err.message.trim()
+    if (message.length > 0 && !/[\\/]/.test(message)) return message
+    if (err.name.length > 0) return err.name
+  }
+  return 'Error'
 }

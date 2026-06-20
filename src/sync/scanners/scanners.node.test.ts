@@ -93,11 +93,24 @@ describe('LocalFolder', () => {
     expect(entries).toEqual([])
   })
 
-  it('handles non-existent root gracefully', async () => {
+  it('surfaces non-existent root scan errors', async () => {
     const folder = new LocalFolder(join(tmpDir, 'does-not-exist'))
-    const entries = await collect<LocalSyncPath>(folder.scan())
+    const errors: unknown[] = []
 
-    expect(entries).toEqual([])
+    await expect(
+      collect<LocalSyncPath>(
+        folder.scan({
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('failed to scan local directory')
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        path: '',
+        message: expect.stringContaining('failed to scan local directory'),
+      }),
+    )
   })
 
   it('uses forward slashes in relative paths even on the current platform', async () => {
@@ -140,6 +153,20 @@ describe('B2Folder', () => {
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries).toEqual([])
+  })
+
+  it('stops B2 pagination when aborted after a page', async () => {
+    const controller = new AbortController()
+    const listFileVersions = vi.fn().mockImplementation(async () => {
+      controller.abort()
+      return { files: [], nextFileName: 'next', nextFileId: 'next-id' }
+    })
+    const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
+
+    const entries = await collect<B2SyncPath>(folder.scan({ signal: controller.signal }))
+
+    expect(entries).toEqual([])
+    expect(listFileVersions).toHaveBeenCalledTimes(1)
   })
 
   it('scans a bucket with files and yields them sorted by name', async () => {

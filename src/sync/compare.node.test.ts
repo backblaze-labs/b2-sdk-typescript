@@ -6,6 +6,7 @@ import { sha1Hex } from '../streams/hash.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { readLocalSha1File } from './local-sha1.ts'
 import { preparePairForCompare } from './policies/compare.ts'
 import type { B2SyncPath, LocalSyncPath } from './types.ts'
 
@@ -56,7 +57,9 @@ describe('preparePairForCompare default local SHA-1 reader', () => {
       const source = makeLocalSyncPath('empty.txt', filePath, 0)
       const dest = makeB2SyncPath('empty.txt', 0, digest)
 
-      const result = await preparePairForCompare([source, dest], 'sha1')
+      const result = await preparePairForCompare([source, dest], 'sha1', {
+        readLocalSha1: readLocalSha1File,
+      })
 
       expect(result.skipActionGeneration).toBe(false)
       expect(result.bytesHashed).toBe(0)
@@ -75,7 +78,9 @@ describe('preparePairForCompare default local SHA-1 reader', () => {
       const source = makeLocalSyncPath('directory', directoryPath, 0)
       const dest = makeB2SyncPath('directory', 0, 'a'.repeat(40))
 
-      const result = await preparePairForCompare([source, dest], 'sha1')
+      const result = await preparePairForCompare([source, dest], 'sha1', {
+        readLocalSha1: readLocalSha1File,
+      })
 
       expect(result.skipActionGeneration).toBe(true)
       expect(result.events[0]).toMatchObject({
@@ -97,7 +102,9 @@ describe('preparePairForCompare default local SHA-1 reader', () => {
       const source = makeLocalSyncPath('changed.txt', filePath, 3)
       const dest = makeB2SyncPath('changed.txt', 3, 'a'.repeat(40))
 
-      const result = await preparePairForCompare([source, dest], 'sha1')
+      const result = await preparePairForCompare([source, dest], 'sha1', {
+        readLocalSha1: readLocalSha1File,
+      })
 
       expect(result.skipActionGeneration).toBe(true)
       expect(result.events[0]).toMatchObject({

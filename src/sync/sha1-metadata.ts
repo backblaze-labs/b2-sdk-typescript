@@ -6,10 +6,10 @@ const unverifiedSha1Prefix = 'unverified:'
 /**
  * Extracts the best comparable SHA-1 value from a B2 file version.
  *
- * Large/multipart B2 files report `contentSha1: null`; when a whole-file digest is available in
- * `fileInfo.large_file_sha1`, that value is used as a comparable hint. B2-provided hashes are
- * treated as metadata hints by the high-level synchronizer, which downloads and hashes B2 bytes
- * before using a metadata match to prove equality.
+ * B2's primary `contentSha1` is authoritative for single-part uploads when it is a verifiable
+ * digest. Large/multipart B2 files report `contentSha1: null`; `fileInfo.large_file_sha1` is
+ * caller-provided metadata, so it is returned as an untrusted hint that cannot prove equality
+ * until the high-level synchronizer hashes the selected version's bytes.
  *
  * @param version - B2 file version metadata.
  *
@@ -17,10 +17,11 @@ const unverifiedSha1Prefix = 'unverified:'
  */
 export function selectB2ComparableSha1(version: FileVersion): string | null {
   if (isUntrustedSha1(version.contentSha1)) return version.contentSha1.toLowerCase()
-  return (
-    normalizeVerifiableSha1(version.contentSha1) ??
-    normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
-  )
+  const contentSha1 = normalizeVerifiableSha1(version.contentSha1)
+  if (contentSha1 !== null) return contentSha1
+
+  const largeFileSha1 = normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
+  return largeFileSha1 === null ? null : `${unverifiedSha1Prefix}${largeFileSha1}`
 }
 
 /**

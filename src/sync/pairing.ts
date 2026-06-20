@@ -1,4 +1,4 @@
-import type { SyncFolder, SyncPath } from './types.ts'
+import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
 export type SyncPair = readonly [SyncPath | null, SyncPath | null]
@@ -10,10 +10,15 @@ export type SyncPair = readonly [SyncPath | null, SyncPath | null]
  *
  * @param source - The source folder to scan.
  * @param dest - The destination folder to scan.
+ * @param options - Optional scan controls shared by both folders.
  */
-export async function* zipFolders(source: SyncFolder, dest: SyncFolder): AsyncGenerator<SyncPair> {
-  const sourceIter = source.scan()[Symbol.asyncIterator]()
-  const destIter = dest.scan()[Symbol.asyncIterator]()
+export async function* zipFolders(
+  source: SyncFolder,
+  dest: SyncFolder,
+  options: SyncScanOptions = {},
+): AsyncGenerator<SyncPair> {
+  const sourceIter = source.scan(options)[Symbol.asyncIterator]()
+  const destIter = dest.scan(options)[Symbol.asyncIterator]()
 
   let sourceResult = await sourceIter.next()
   let destResult = await destIter.next()

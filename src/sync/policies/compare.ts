@@ -1,12 +1,7 @@
 import { mapConcurrent } from '../../upload/concurrency.ts'
 import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
-import {
-  formatHashError,
-  isAbortError,
-  type LocalSha1Reader,
-  readLocalSha1File,
-} from '../local-sha1.ts'
+import { formatHashError, isAbortError, type LocalSha1Reader } from '../local-sha1.ts'
 import type { SyncPair } from '../pairing.ts'
 import { isUntrustedSha1, selectB2ComparableSha1 } from '../sha1-metadata.ts'
 import type {
@@ -131,9 +126,9 @@ function sha1ValuesAreDifferent(source: SyncPath, dest: SyncPath): boolean {
 /**
  * Prepares a pair for the selected compare mode.
  *
- * For `sha1`, this fills missing B2 hashes from comparable metadata, hashes the local side only
- * when size cannot already prove a difference, and converts local hash I/O failures into
- * per-file sync events instead of aborting the whole run.
+ * For `sha1`, this fills missing B2 hashes from comparable metadata and, when an explicit local
+ * reader is supplied, hashes the local side only when size cannot already prove a difference.
+ * Reader failures are converted into per-file sync events instead of aborting the whole run.
  *
  * @param pair - Source/destination pair from {@link zipFolders}.
  * @param compareMode - The comparison strategy.
@@ -189,12 +184,7 @@ export async function preparePairForCompare(
     return skipped(preparedPair, unavailableSha1Event(preparedPair), undefined, bytesHashed)
   }
 
-  const metadataMatches =
-    sourceState.kind === 'verified' &&
-    destState.kind === 'verified' &&
-    sourceState.value === destState.value
-  const shouldVerifyB2Bytes =
-    sourceState.kind === 'untrusted' || destState.kind === 'untrusted' || metadataMatches
+  const shouldVerifyB2Bytes = sourceState.kind === 'untrusted' || destState.kind === 'untrusted'
   if (shouldVerifyB2Bytes && hasB2Path(preparedPair) && options.readB2Sha1 !== undefined) {
     return verifyB2Sha1Bytes(preparedPair, options, bytesHashed)
   }
@@ -254,7 +244,14 @@ async function prepareLocalPathSha1(
   if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
 
   try {
-    const readLocalSha1 = options.readLocalSha1 ?? readLocalSha1File
+    const readLocalSha1 = options.readLocalSha1
+    if (readLocalSha1 === undefined) {
+      return {
+        path: { ...path, contentSha1: path.contentSha1 ?? null },
+        bytesHashed: 0,
+        aborted: false,
+      }
+    }
     return {
       path: {
         ...path,

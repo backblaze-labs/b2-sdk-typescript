@@ -9,7 +9,7 @@ import type {
   SyncDirection,
   SyncPath,
 } from '../types.ts'
-import { filesAreDifferent } from './compare.ts'
+import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 
 /** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {
@@ -63,6 +63,8 @@ export function* generateActions(
   factory: ActionFactory,
   compareThreshold: number,
 ): Generator<SyncAction> {
+  assertSupportedCompareMode(compareMode)
+
   const [source, dest] = pair
 
   if (source !== null && dest === null) {

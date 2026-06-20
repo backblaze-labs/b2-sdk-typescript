@@ -42,6 +42,7 @@ export type {
   LocalSyncPath,
   SyncActionEvent,
   SyncActionEventType,
+  SyncCompareEvent,
   SyncDirection,
   SyncEncryptionProvider,
   SyncErrorEvent,
@@ -50,5 +51,6 @@ export type {
   SyncFolder,
   SyncOptions,
   SyncPath,
+  SyncScanOptions,
   SyncSkipEvent,
 } from './types.ts'

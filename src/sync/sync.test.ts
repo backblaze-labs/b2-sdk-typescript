@@ -186,12 +186,12 @@ describe('filesAreDifferent', () => {
 })
 
 describe('selectB2ComparableSha1', () => {
-  it('uses fileInfo.large_file_sha1 when contentSha1 is unavailable', () => {
+  it('uses fileInfo.large_file_sha1 as untrusted metadata when contentSha1 is unavailable', () => {
     const sha1 = 'a'.repeat(40)
     const file = makeB2SyncPath('large.bin', 1000, 100, null, {
       large_file_sha1: sha1.toUpperCase(),
     })
-    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(sha1)
+    expect(selectB2ComparableSha1(file.selectedVersion)).toBe(`unverified:${sha1}`)
   })
 
   it('preserves unverified sentinels as untrusted metadata', () => {
@@ -412,7 +412,7 @@ describe('preparePairForCompare', () => {
 
   it('returns an error event when source B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
-    const source = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
     const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
@@ -433,7 +433,7 @@ describe('preparePairForCompare', () => {
   it('returns an error event when destination B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeB2SyncPath('source.txt', 1000, 100, sha1)
-    const dest = makeB2SyncPath('dest.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('dest.txt', 1000, 100, `unverified:${sha1}`)
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
       readB2Sha1: async (path) => {
@@ -454,7 +454,7 @@ describe('preparePairForCompare', () => {
   it('returns aborted when B2 byte hashing observes an abort signal', async () => {
     const controller = new AbortController()
     const sha1 = 'a'.repeat(40)
-    const source = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
     const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
@@ -671,6 +671,40 @@ describe('generateActions', () => {
     const dest = makeB2SyncPath('changed.txt', 1000, 100)
     const actions = [
       ...generateActions([source, dest], 'local-to-b2', 'modtime', 'no-delete', 0, now, factory, 0),
+    ]
+    expect(actions).toHaveLength(1)
+    expect(actions[0]?.type).toBe('upload')
+  })
+
+  it('throws for an unsupported compare mode before source-only actions', () => {
+    const source = makeLocalSyncPath('new.txt', now, 100)
+    expect(() => [
+      ...generateActions(
+        [source, null],
+        'local-to-b2',
+        'sha256' as never,
+        'no-delete',
+        0,
+        now,
+        factory,
+        0,
+      ),
+    ]).toThrow('Unsupported compare mode')
+  })
+
+  it('does not let untrusted large_file_sha1 suppress upload actions', () => {
+    const sha1 = 'a'.repeat(40)
+    const source = { ...makeLocalSyncPath('large.bin', now, 100), contentSha1: sha1 }
+    const dest = makeB2SyncPath(
+      'large.bin',
+      now,
+      100,
+      null,
+      { large_file_sha1: sha1 },
+      `unverified:${sha1}`,
+    )
+    const actions = [
+      ...generateActions([source, dest], 'local-to-b2', 'sha1', 'no-delete', 0, now, factory, 0),
     ]
     expect(actions).toHaveLength(1)
     expect(actions[0]?.type).toBe('upload')

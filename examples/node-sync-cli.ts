@@ -12,7 +12,7 @@
  *
  * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee. It hashes
  * matching-size local files before transfers; SYNC_CONCURRENCY bounds both hashing and transfers,
- * but the two phases do not overlap. Dry-runs still hash matching-size local files.
+ * but the two phases do not fully overlap. Dry-runs still hash matching-size local files.
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'
@@ -88,9 +88,9 @@ async function main() {
         console.error(`  ERROR: ${event.path}: ${event.message}`)
         break
       case 'compare':
-        if (compareMode === 'sha1' && event.size > 0) {
-          hashedBytes += event.size
-          console.log(`  compared ${event.path} (${event.size} bytes hashed)`)
+        if (compareMode === 'sha1' && event.bytesHashed > 0) {
+          hashedBytes += event.bytesHashed
+          console.log(`  compared ${event.path} (${event.bytesHashed} bytes hashed)`)
         }
         break
       default:

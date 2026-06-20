@@ -4,7 +4,6 @@ import { IncrementalSha1 } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
-import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
 import type { SyncAction } from './actions/index.ts'
@@ -16,6 +15,7 @@ import {
   HideAction,
   UploadAction,
 } from './actions/index.ts'
+import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import {
   assertSupportedCompareMode,
@@ -32,7 +32,10 @@ import type {
   SyncEvent,
   SyncFolder,
   SyncOptions,
+  SyncScanOptions,
 } from './types.ts'
+
+const DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS = 30_000
 
 /** Base configuration for a sync operation. */
 export interface SynchronizerConfig {
@@ -80,6 +83,11 @@ export interface SynchronizerDownConfig extends SynchronizerConfig {
   readonly bucket: Bucket
 }
 
+interface PreparedActionPlan {
+  readonly event: SyncEvent
+  readonly actions: readonly SyncAction[]
+}
+
 /**
  * Infers the sync direction from the source and destination folder types.
  * @param source - The folder to read files from.
@@ -103,6 +111,7 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  *
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this generator keeps scan, compare, scheduling, and terminal events in one ordered flow.
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
   assertSupportedCompareMode(options.compareMode)
@@ -116,89 +125,130 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const factory = createActionFactory(config)
   const readB2Sha1 = createB2Sha1Reader(config)
 
-  const actions: SyncAction[] = []
   const results: SyncEvent[] = []
   const errors: Error[] = []
+  const scanEvents: SyncEvent[] = []
+  const runningActions = new Set<Promise<void>>()
+  const scanOptions: SyncScanOptions = {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    onError: (event) => {
+      scanEvents.push(event)
+    },
+  }
 
-  if (options.compareMode === 'sha1') {
-    const compareBatchSize = concurrency
-    let batch: SyncPair[] = []
-    for await (const pair of zipFolders(source, dest)) {
-      if (options.signal?.aborted) return
-      batch.push(pair)
-      if (batch.length >= compareBatchSize) {
-        const preparedBatch = await processPreparedBatch(batch)
-        for (const event of preparedBatch.events) yield event
-        if (preparedBatch.aborted) return
-        batch = []
+  try {
+    if (options.compareMode === 'sha1') {
+      const compareBatchSize = concurrency
+      let batch: SyncPair[] = []
+      for await (const pair of zipFolders(source, dest, scanOptions)) {
+        if (options.signal?.aborted) return
+        batch.push(pair)
+        if (batch.length >= compareBatchSize) {
+          const preparedBatch = await processPreparedBatch(batch)
+          for (const item of preparedBatch.items) {
+            yield item.event
+            if (options.signal?.aborted) return
+            for (const action of item.actions) await scheduleAction(action)
+          }
+          if (preparedBatch.aborted) return
+          batch = []
+        }
+      }
+
+      const preparedBatch = await processPreparedBatch(batch)
+      for (const item of preparedBatch.items) {
+        yield item.event
+        if (options.signal?.aborted) return
+        for (const action of item.actions) await scheduleAction(action)
+      }
+      if (preparedBatch.aborted) return
+    } else {
+      for await (const pair of zipFolders(source, dest, scanOptions)) {
+        if (options.signal?.aborted) return
+        const item = planPreparedPair(pair, readyComparePair(pair))
+        yield item.event
+        if (options.signal?.aborted) return
+        for (const action of item.actions) await scheduleAction(action)
       }
     }
+  } catch (err) {
+    if (scanEvents.length === 0) throw err
 
-    const preparedBatch = await processPreparedBatch(batch)
-    for (const event of preparedBatch.events) yield event
-    if (preparedBatch.aborted) return
-  } else {
-    for await (const pair of zipFolders(source, dest)) {
-      if (options.signal?.aborted) return
-      yield enqueuePreparedPair(pair, readyComparePair(pair))
+    await drainActions()
+    const errorValue = toError(err)
+    errors.push(errorValue)
+    for (const event of scanEvents) yield event
+    yield {
+      type: 'error',
+      path: '',
+      size: 0,
+      message: `${errors.length} sync error(s) occurred`,
     }
+    return
   }
 
   async function processPreparedBatch(
     batch: readonly SyncPair[],
-  ): Promise<{ readonly events: SyncEvent[]; readonly aborted: boolean }> {
-    if (batch.length === 0) return { events: [], aborted: false }
+  ): Promise<{ readonly items: readonly PreparedActionPlan[]; readonly aborted: boolean }> {
+    if (batch.length === 0) return { items: [], aborted: false }
     const preparedPairs = await preparePairsForCompare(batch, 'sha1', {
       concurrency,
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
       ...(options.sha1ReadTimeoutMillis !== undefined
         ? { sha1ReadTimeoutMillis: options.sha1ReadTimeoutMillis }
         : {}),
+      readLocalSha1: readLocalSha1File,
       ...(readB2Sha1 !== undefined ? { readB2Sha1 } : {}),
     })
 
-    const events: SyncEvent[] = []
+    const items: PreparedActionPlan[] = []
     for (const { originalPair, prepared } of preparedPairs) {
-      if (prepared.aborted || options.signal?.aborted) return { events, aborted: true }
-      events.push(enqueuePreparedPair(originalPair, prepared))
+      if (prepared.aborted || options.signal?.aborted) return { items, aborted: true }
+      items.push(planPreparedPair(originalPair, prepared))
     }
-    return { events, aborted: false }
+    return { items, aborted: false }
   }
 
-  function enqueuePreparedPair(
+  function planPreparedPair(
     pair: SyncPair,
     prepared: ReturnType<typeof readyComparePair>,
-  ): SyncEvent {
+  ): PreparedActionPlan {
     const event: SyncEvent = {
       type: 'compare',
       path: (pair[0] ?? pair[1])?.relativePath ?? '',
-      size: prepared.bytesHashed,
+      size: 0,
+      bytesHashed: prepared.bytesHashed,
     }
 
     results.push(...prepared.events)
     errors.push(...prepared.errors)
-    if (prepared.skipActionGeneration) return event
+    if (prepared.skipActionGeneration) return { event, actions: [] }
 
-    for (const action of generateActions(
-      prepared.pair,
-      direction,
-      options.compareMode,
-      options.keepMode,
-      keepDays,
-      nowMillis,
-      factory,
-      compareThreshold,
-    )) {
-      actions.push(action)
-    }
+    const actions = [
+      ...generateActions(
+        prepared.pair,
+        direction,
+        options.compareMode,
+        options.keepMode,
+        keepDays,
+        nowMillis,
+        factory,
+        compareThreshold,
+      ),
+    ]
 
-    return event
+    return { event, actions }
   }
 
-  const sem = new Semaphore(concurrency)
+  async function scheduleAction(action: SyncAction): Promise<void> {
+    const task = executeAction(action).finally(() => {
+      runningActions.delete(task)
+    })
+    runningActions.add(task)
+    if (runningActions.size >= concurrency) await Promise.race(runningActions)
+  }
 
-  const promises = actions.map(async (action) => {
-    await sem.acquire()
+  async function executeAction(action: SyncAction): Promise<void> {
     try {
       if (options.signal?.aborted) return
       const event = await action.execute(dryRun)
@@ -212,12 +262,16 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         size: 0,
         message: errorValue.message,
       })
-    } finally {
-      sem.release()
     }
-  })
+  }
 
-  await Promise.all(promises)
+  async function drainActions(): Promise<void> {
+    while (runningActions.size > 0) {
+      await Promise.race(runningActions)
+    }
+  }
+
+  await drainActions()
 
   for (const event of results) {
     yield event
@@ -251,29 +305,33 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
   const downConfig = config as Partial<SynchronizerDownConfig>
   const bucket = upConfig.bucket ?? downConfig.bucket
   if (bucket === undefined) return undefined
+  const timeoutMillis = normalizeSha1ReadTimeout(config.options.sha1ReadTimeoutMillis)
 
   return async (path, signal) => {
     const serverSideEncryption = toSseCDownloadKey(
       config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),
     )
-    const result = await bucket.download(path.selectedVersion.fileName, {
-      ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-      ...(signal !== undefined ? { signal } : {}),
-    })
-    return hashReadableStreamSha1(result.body, signal)
+    const result = await bucket
+      .file(path.selectedVersion.fileName)
+      .downloadById(path.selectedVersion.fileId, {
+        ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+        ...(signal !== undefined ? { signal } : {}),
+      })
+    return hashReadableStreamSha1(result.body, signal, timeoutMillis)
   }
 }
 
 async function hashReadableStreamSha1(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  timeoutMillis = DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS,
 ): Promise<string> {
   const hash = new IncrementalSha1()
   const reader = body.getReader()
   try {
     while (true) {
       signal?.throwIfAborted()
-      const { done, value } = await reader.read()
+      const { done, value } = await readStreamChunkWithTimeout(reader, timeoutMillis)
       if (done) break
       await hash.update(value)
     }
@@ -284,6 +342,32 @@ async function hashReadableStreamSha1(
   } finally {
     reader.releaseLock()
   }
+}
+
+async function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMillis: number,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`sha1 B2 read stalled for ${timeoutMillis} ms`))
+        }, timeoutMillis)
+      }),
+    ])
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+  }
+}
+
+function normalizeSha1ReadTimeout(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value) || value < 1) {
+    return DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS
+  }
+  return Math.floor(value)
 }
 
 /**
