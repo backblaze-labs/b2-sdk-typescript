@@ -466,6 +466,25 @@ describe('preparePairForCompare', () => {
     expect(result.errors).toHaveLength(1)
   })
 
+  it('only hashes B2 sides with untrusted sha1 metadata', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('source.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('dest.txt', 1000, 100, `unverified:${sha1}`)
+    const hashedPaths: string[] = []
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readB2Sha1: async (path) => {
+        hashedPaths.push(path.relativePath)
+        return sha1
+      },
+    })
+
+    expect(hashedPaths).toEqual(['dest.txt'])
+    expect(result.events).toEqual([])
+    expect(result.pair[0]?.contentSha1).toBe(sha1)
+    expect(result.pair[1]?.contentSha1).toBe(sha1)
+  })
+
   it('returns aborted when B2 byte hashing observes an abort signal', async () => {
     const controller = new AbortController()
     const sha1 = 'a'.repeat(40)

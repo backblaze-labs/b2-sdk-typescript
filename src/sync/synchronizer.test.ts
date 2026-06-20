@@ -19,6 +19,7 @@ import type {
   SyncEvent,
   SyncFolder,
   SyncPath,
+  SyncScanOptions,
 } from './types.ts'
 
 const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'undefined'
@@ -389,6 +390,45 @@ describe('synchronize', () => {
       } finally {
         await rm(root, { recursive: true, force: true })
       }
+    })
+
+    it('reports completed actions when a later scan error aborts the sync', async () => {
+      const sourceFile = makeLocalSyncPath('uploaded.txt', 2000, 50)
+      const source: SyncFolder = {
+        type: 'local',
+        async *scan(options: SyncScanOptions = {}) {
+          yield sourceFile
+          const event: SyncEvent = {
+            type: 'error',
+            path: 'later.txt',
+            size: 0,
+            message: 'failed to scan local file: EIO',
+          }
+          options.onError?.(event)
+          throw new Error(event.message)
+        },
+      }
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', dryRun: true },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+      const uploadIndex = events.findIndex((event) => event.type === 'upload-done')
+      const scanErrorIndex = events.findIndex(
+        (event) => event.type === 'error' && event.path === 'later.txt',
+      )
+      const summaryIndex = events.findIndex((event) => event.type === 'error' && event.path === '')
+
+      expect(events[0]).toMatchObject({ type: 'compare', path: 'uploaded.txt' })
+      expect(uploadIndex).toBeGreaterThan(0)
+      expect(scanErrorIndex).toBeGreaterThan(uploadIndex)
+      expect(summaryIndex).toBeGreaterThan(scanErrorIndex)
     })
 
     it('keeps recent files with keep-days mode', async () => {

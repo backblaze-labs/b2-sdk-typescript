@@ -179,6 +179,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     await drainActions()
     const errorValue = toError(err)
     errors.push(errorValue)
+    for (const event of results) yield event
     for (const event of scanEvents) yield event
     yield {
       type: 'error',

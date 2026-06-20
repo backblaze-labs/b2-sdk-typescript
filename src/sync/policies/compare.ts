@@ -185,8 +185,9 @@ export async function preparePairForCompare(
   }
 
   const shouldVerifyB2Bytes = sourceState.kind === 'untrusted' || destState.kind === 'untrusted'
-  if (shouldVerifyB2Bytes && hasB2Path(preparedPair) && options.readB2Sha1 !== undefined) {
-    return verifyB2Sha1Bytes(preparedPair, options, bytesHashed)
+  const readB2Sha1 = options.readB2Sha1
+  if (shouldVerifyB2Bytes && hasB2Path(preparedPair) && readB2Sha1 !== undefined) {
+    return verifyB2Sha1Bytes(preparedPair, { ...options, readB2Sha1 }, bytesHashed)
   }
 
   return readyComparePair(preparedPair, bytesHashed)
@@ -284,20 +285,20 @@ async function prepareLocalPathSha1(
 
 async function verifyB2Sha1Bytes(
   pair: SyncPair,
-  options: PreparePairForCompareOptions,
+  options: PreparePairForCompareOptions & { readonly readB2Sha1: B2Sha1Reader },
   bytesHashed: number,
 ): Promise<ComparePreparationResult> {
   const [source, dest] = pair
   /* v8 ignore next -- callers only verify B2 bytes for paired compare results */
   if (source === null || dest === null) return readyComparePair(pair, bytesHashed)
 
-  const sourceResult = await prepareB2PathSha1(source, options)
+  const sourceResult = await prepareUntrustedB2PathSha1(source, options)
   if (sourceResult.aborted) return aborted(pair)
   if (sourceResult.event) {
     return skipped(pair, sourceResult.event, sourceResult.error, bytesHashed)
   }
 
-  const destResult = await prepareB2PathSha1(dest, options)
+  const destResult = await prepareUntrustedB2PathSha1(dest, options)
   /* v8 ignore next -- destination abort mirrors the covered source abort path */
   if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
   if (destResult.event) {
@@ -312,14 +313,20 @@ async function verifyB2Sha1Bytes(
   return readyComparePair([sourceResult.path, destResult.path], bytesHashed)
 }
 
-async function prepareB2PathSha1(
+async function prepareUntrustedB2PathSha1(
   path: SyncPath,
-  options: PreparePairForCompareOptions,
+  options: PreparePairForCompareOptions & { readonly readB2Sha1: B2Sha1Reader },
 ): Promise<PreparedPath> {
-  if (!isB2SyncPath(path) || options.readB2Sha1 === undefined) {
+  if (!isB2SyncPath(path) || comparableSha1(path).kind !== 'untrusted') {
     return { path, bytesHashed: 0, aborted: false }
   }
+  return prepareB2PathSha1(path, options)
+}
 
+async function prepareB2PathSha1(
+  path: B2SyncPath,
+  options: PreparePairForCompareOptions & { readonly readB2Sha1: B2Sha1Reader },
+): Promise<PreparedPath> {
   /* v8 ignore next -- pre-aborted B2 reads are covered at pair level */
   if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
 
