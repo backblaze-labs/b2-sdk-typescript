@@ -409,7 +409,28 @@ describe('getRealmUrl', () => {
     expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
     expect((thrown as Error).message).toContain('http://attacker.example/realm')
     expect((thrown as Error).message).not.toContain('secret')
-    expect((thrown as Error).message).not.toContain('user')
+    expect((thrown as Error).message).not.toContain('user:')
+    expect((thrown as Error).message).not.toContain('@')
+    expect((thrown as Error).message).not.toContain('token=')
+  })
+
+  it.each([
+    'https://user:secret@api.example.com',
+    'https://api.example.com?token=query-secret',
+    'https://api.example.com#fragment-secret',
+  ])('rejects realm URLs with non-base components %s', (realm) => {
+    let thrown: unknown
+    try {
+      getRealmUrl(realm)
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
+    expect((thrown as Error).message).toContain(
+      'realm URL must not include userinfo, query, or fragment for authorization',
+    )
+    expect((thrown as Error).message).not.toContain('secret')
     expect((thrown as Error).message).not.toContain('token=')
   })
 

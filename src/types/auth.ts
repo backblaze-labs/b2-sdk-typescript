@@ -160,7 +160,8 @@ export interface AuthorizeAccountRequest {
    * testing only; application-key credentials are sent unencrypted over
    * loopback HTTP. Unsupported schemes, malformed URLs, non-URL strings,
    * plaintext HTTP hostnames such as `localhost`, and non-loopback plaintext
-   * HTTP are rejected before credentials are sent. Defaults to production.
+   * HTTP are rejected before credentials are sent. URL values must not include
+   * userinfo, query strings, or fragments. Defaults to production.
    */
   readonly realm?: string
 }

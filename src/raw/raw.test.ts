@@ -36,4 +36,18 @@ describe('RawClient authorizeAccount', () => {
     )
     expect(seenUrls).toEqual([])
   })
+
+  it.each([
+    'https://user:secret@api.example.com',
+    'https://api.example.com?token=query-secret',
+    'https://api.example.com#fragment-secret',
+  ])('rejects realm URL with non-base components %s before sending credentials', async (realmUrl) => {
+    const { seenUrls, transport } = recordingTransport()
+    const raw = new RawClient({ transport })
+
+    await expect(raw.authorizeAccount('key-id', 'key-secret', realmUrl)).rejects.toThrow(
+      'realm URL must not include userinfo, query, or fragment for authorization',
+    )
+    expect(seenUrls).toEqual([])
+  })
 })

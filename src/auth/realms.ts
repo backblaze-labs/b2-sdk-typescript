@@ -71,17 +71,25 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
   )
 }
 
+function assertRealmBaseUrl(realmUrl: string, url: URL): void {
+  if (url.username === '' && url.password === '' && url.search === '' && url.hash === '') return
+  throw new B2RealmConfigurationError(
+    `realm URL must not include userinfo, query, or fragment for authorization: ${realmUrlForError(realmUrl, url)}`,
+  )
+}
+
 /**
  * Validate a realm URL before it is used for credential-bearing authorization.
  * Any accepted custom HTTPS host receives the application key during authorize;
- * do not derive custom realm URLs from untrusted input.
+ * do not derive custom realm URLs from untrusted input. Realm URLs must be base
+ * URLs without userinfo, query strings, or fragments.
  *
  * @param realmUrl - The resolved realm URL to validate.
  *
- * @throws B2RealmConfigurationError when the realm URL is not absolute, uses an
- * unsupported scheme, or uses non-loopback plaintext HTTP. Loopback IP HTTP is
- * accepted only for local testing and sends the application key unencrypted to
- * whichever process is listening on that address and port.
+ * @throws B2RealmConfigurationError when the realm URL is not absolute, is not
+ * a base URL, uses an unsupported scheme, or uses non-loopback plaintext HTTP.
+ * Loopback IP HTTP is accepted only for local testing and sends the application
+ * key unencrypted to whichever process is listening on that address and port.
  */
 export function assertSecureRealmUrl(realmUrl: string): void {
   const url = parseAbsoluteRealmUrl(realmUrl)
@@ -91,6 +99,7 @@ export function assertSecureRealmUrl(realmUrl: string): void {
     )
   }
 
+  assertRealmBaseUrl(realmUrl, url)
   assertAuthorizableRealmScheme(realmUrl, url)
 }
 
@@ -102,14 +111,16 @@ function isRealmName(realm: string): realm is RealmName {
  * Resolve a realm name to its base API URL.
  * If the realm is not a known name, it must be a direct base URL. Accepted
  * custom HTTPS hosts receive the application key during authorize; do not
- * derive custom realm URLs from untrusted input.
+ * derive custom realm URLs from untrusted input. Direct URLs must not include
+ * userinfo, query strings, or fragments.
  *
  * @param realm - The realm name or direct URL to resolve.
  *
  * @returns The base API URL for the given realm.
  *
  * @throws B2RealmConfigurationError when the resolved realm URL is not
- * absolute, uses an unsupported scheme, or uses non-loopback plaintext HTTP.
+ * absolute, is not a base URL, uses an unsupported scheme, or uses
+ * non-loopback plaintext HTTP.
  */
 export function getRealmUrl(realm: string): string {
   const url = isRealmName(realm) ? VERIFIED_REALM_URLS[realm] : realm
