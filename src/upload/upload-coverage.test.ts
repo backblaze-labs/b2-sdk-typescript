@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
-import { B2Error, B2SsrfError } from '../errors/index.ts'
+import { B2Error, B2SsrfError, NetworkError, TooManyRequestsError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
@@ -807,6 +807,108 @@ describe('upload fresh-URL retry', () => {
 
     expect(getUploadUrlCalls).toBe(1)
     expect(guardedUploadAttempts).toBe(1)
+  })
+
+  it('does not retry network errors caused by blocked upload URLs', async () => {
+    let uploadAttempts = 0
+    let evictedEntries = 0
+    let retryEvents = 0
+    const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
+    const ssrfError = new B2SsrfError(
+      'literal IP host not allowed by SSRF guard',
+      'http://169.254.169.254/latest/meta-data',
+    )
+    const networkError = new NetworkError('upload URL rejected', ssrfError)
+
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'blocked-url.txt',
+        partNumber: null,
+        retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        checkout: () => entry,
+        fetchFresh: () => Promise.resolve(entry),
+        returnEntry: () => {},
+        evictEntry: () => {
+          evictedEntries += 1
+        },
+        upload: () => {
+          uploadAttempts += 1
+          return Promise.reject(networkError)
+        },
+        onUploadRetry: () => {
+          retryEvents += 1
+        },
+      }),
+    ).rejects.toBe(networkError)
+
+    expect(uploadAttempts).toBe(1)
+    expect(evictedEntries).toBe(1)
+    expect(retryEvents).toBe(0)
+  })
+
+  it('throws retryable upload errors after the final retry attempt', async () => {
+    let uploadAttempts = 0
+    let freshFetches = 0
+    const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
+    const networkError = new NetworkError('socket closed')
+
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'retry-budget.txt',
+        partNumber: null,
+        retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        checkout: () => entry,
+        fetchFresh: () => {
+          freshFetches += 1
+          return Promise.resolve(entry)
+        },
+        returnEntry: () => {},
+        evictEntry: () => {},
+        upload: () => {
+          uploadAttempts += 1
+          return Promise.reject(networkError)
+        },
+      }),
+    ).rejects.toBe(networkError)
+
+    expect(uploadAttempts).toBe(1)
+    expect(freshFetches).toBe(0)
+  })
+
+  it('returns upload URLs before surfacing upload-layer rate limits', async () => {
+    let uploadAttempts = 0
+    let returnedEntries = 0
+    let evictedEntries = 0
+    const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
+    const rateLimitError = new TooManyRequestsError({
+      status: 429,
+      code: 'too_many_requests',
+      message: 'slow down',
+    })
+
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'rate-limited.txt',
+        partNumber: null,
+        retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        checkout: () => entry,
+        fetchFresh: () => Promise.resolve(entry),
+        returnEntry: () => {
+          returnedEntries += 1
+        },
+        evictEntry: () => {
+          evictedEntries += 1
+        },
+        upload: () => {
+          uploadAttempts += 1
+          return Promise.reject(rateLimitError)
+        },
+      }),
+    ).rejects.toBe(rateLimitError)
+
+    expect(uploadAttempts).toBe(1)
+    expect(returnedEntries).toBe(1)
+    expect(evictedEntries).toBe(0)
   })
 
   it('refreshes a stale pooled upload URL reported as bad_request', async () => {

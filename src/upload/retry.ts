@@ -184,9 +184,10 @@ export function uploadPartWithFreshUrl(
  * Runs an upload operation with B2's documented retry flow: evict the failed
  * upload URL, back off, fetch a fresh upload URL, and retry there.
  *
- * Sending the POST again after a lost success response can create a duplicate
- * file version; this is the idempotency tradeoff B2 documents for upload
- * retries.
+ * For single-request file uploads, sending the POST again after a lost success
+ * response can create a duplicate file version. Multipart retries re-send the
+ * same part number instead. Response-body retries are disabled by default and
+ * require `retryResponseBodyFailures: true`.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
