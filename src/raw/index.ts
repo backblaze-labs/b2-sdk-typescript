@@ -86,31 +86,6 @@ export interface RawRequestOptions {
   readonly retry?: Partial<RetryOptions>
 }
 
-function normalizeRawRequestOptions(
-  optionsOrSignal?: RawRequestOptions | AbortSignal,
-  retry?: Partial<RetryOptions>,
-): RawRequestOptions | undefined {
-  if (optionsOrSignal === undefined) {
-    return retry === undefined ? undefined : { retry }
-  }
-  if (isAbortSignal(optionsOrSignal)) {
-    return {
-      signal: optionsOrSignal,
-      ...(retry !== undefined ? { retry } : {}),
-    }
-  }
-  return retry === undefined ? optionsOrSignal : { ...optionsOrSignal, retry }
-}
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'aborted' in value &&
-    typeof (value as AbortSignal).addEventListener === 'function'
-  )
-}
-
 /**
  * Low-level client providing 1:1 bindings to all B2 native API endpoints.
  *
@@ -238,47 +213,13 @@ export class RawClient {
     authToken: string,
     request: GetUploadUrlRequest,
     options?: RawRequestOptions,
-  ): Promise<GetUploadUrlResponse>
-  /**
-   * Calls `b2_get_upload_url` with legacy positional request controls.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param signal - Optional abort signal for cancellation.
-   * @param retry - Optional per-request retry override.
-   *
-   * @returns The upload URL and authorization token.
-   */
-  async getUploadUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadUrlRequest,
-    signal?: AbortSignal,
-    retry?: Partial<RetryOptions>,
-  ): Promise<GetUploadUrlResponse>
-  /**
-   * Implementation for both upload URL request-control signatures.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param optionsOrSignal - Options bag or legacy abort signal.
-   * @param retry - Optional legacy per-request retry override.
-   *
-   * @returns The upload URL and authorization token.
-   */
-  async getUploadUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadUrlRequest,
-    optionsOrSignal?: RawRequestOptions | AbortSignal,
-    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadUrlResponse> {
     return this.postJson<GetUploadUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_url',
       request,
-      normalizeRawRequestOptions(optionsOrSignal, retry),
+      options,
     )
   }
 
@@ -524,47 +465,13 @@ export class RawClient {
     authToken: string,
     request: GetUploadPartUrlRequest,
     options?: RawRequestOptions,
-  ): Promise<GetUploadPartUrlResponse>
-  /**
-   * Calls `b2_get_upload_part_url` with legacy positional request controls.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param signal - Optional abort signal for cancellation.
-   * @param retry - Optional per-request retry override.
-   *
-   * @returns The upload part URL and authorization token.
-   */
-  async getUploadPartUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadPartUrlRequest,
-    signal?: AbortSignal,
-    retry?: Partial<RetryOptions>,
-  ): Promise<GetUploadPartUrlResponse>
-  /**
-   * Implementation for both upload part URL request-control signatures.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param optionsOrSignal - Options bag or legacy abort signal.
-   * @param retry - Optional legacy per-request retry override.
-   *
-   * @returns The upload part URL and authorization token.
-   */
-  async getUploadPartUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadPartUrlRequest,
-    optionsOrSignal?: RawRequestOptions | AbortSignal,
-    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadPartUrlResponse> {
     return this.postJson<GetUploadPartUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_part_url',
       request,
-      normalizeRawRequestOptions(optionsOrSignal, retry),
+      options,
     )
   }
 
