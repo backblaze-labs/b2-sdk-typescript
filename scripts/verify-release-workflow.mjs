@@ -102,7 +102,7 @@ for (const packageKey of forbiddenLockPackages) {
   }
 }
 
-const workflow = await read('.github/workflows/release.yml')
+const workflow = (await read('.github/workflows/release.yml')).replace(/\r\n?/g, '\n')
 const buildJob = extractJob(workflow, 'build')
 const packageTypeJob = extractJob(workflow, 'package-type-analysis')
 const publishJob = extractJob(workflow, 'publish')
