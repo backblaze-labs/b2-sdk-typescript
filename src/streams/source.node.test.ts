@@ -1,5 +1,4 @@
 import {
-  chmod,
   mkdtemp,
   readFile,
   rename,
@@ -165,9 +164,12 @@ describe('FileSource', () => {
       const filePath = join(root, 'data.bin')
       const payload = new TextEncoder().encode('safe')
       await writeFile(filePath, payload)
+      const originalTime = new Date('2024-01-01T00:00:00.000Z')
+      await utimes(filePath, originalTime, originalTime)
 
       const source = await FileSource.fromPath(filePath)
-      await chmod(filePath, 0o600)
+      await writeFile(filePath, payload)
+      await utimes(filePath, originalTime, originalTime)
 
       const bytes = new Uint8Array(await source.toArrayBuffer())
       expect(bytes).toEqual(payload)
