@@ -253,16 +253,17 @@ async function prepareLocalPathSha1(
         aborted: false,
       }
     }
+    const contentSha1 = await readLocalSha1(path, options.signal, {
+      ...(options.sha1ReadTimeoutMillis !== undefined
+        ? { timeoutMillis: options.sha1ReadTimeoutMillis }
+        : {}),
+    })
     return {
       path: {
         ...path,
-        contentSha1: await readLocalSha1(path, options.signal, {
-          ...(options.sha1ReadTimeoutMillis !== undefined
-            ? { timeoutMillis: options.sha1ReadTimeoutMillis }
-            : {}),
-        }),
+        contentSha1,
       },
-      bytesHashed: path.size,
+      bytesHashed: normalizeVerifiableSha1(contentSha1) === null ? 0 : path.size,
       aborted: false,
     }
   } catch (err) {

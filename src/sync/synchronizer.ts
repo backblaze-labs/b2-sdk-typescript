@@ -291,7 +291,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 }
 
 /**
- * Normalizes user-provided sync concurrency before it reaches semaphore construction.
+ * Normalizes user-provided sync concurrency before it controls compare batches and transfers.
  *
  * @param value - Optional concurrency value from sync options.
  *
@@ -352,9 +352,10 @@ async function readStreamChunkWithTimeout(
   timeoutMillis: number,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timeout: ReturnType<typeof setTimeout> | undefined
+  const readPromise = reader.read()
   try {
     return await Promise.race([
-      reader.read(),
+      readPromise,
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           reject(new Error(`sha1 B2 read stalled for ${timeoutMillis} ms`))
@@ -363,6 +364,7 @@ async function readStreamChunkWithTimeout(
     ])
   } finally {
     if (timeout !== undefined) clearTimeout(timeout)
+    void readPromise.catch(() => {})
   }
 }
 

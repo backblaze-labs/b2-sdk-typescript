@@ -316,6 +316,7 @@ describe('preparePairForCompare', () => {
     })
 
     expect(result.skipActionGeneration).toBe(true)
+    expect(result.bytesHashed).toBe(0)
     expect(result.events[0]).toMatchObject({
       type: 'skip',
       path: 'file.txt',
