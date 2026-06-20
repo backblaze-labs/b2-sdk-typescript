@@ -22,6 +22,7 @@ export {
 } from './actions/index.ts'
 export type { SyncPair } from './pairing.ts'
 export { zipFolders } from './pairing.ts'
+export { compareSyncRelativePaths } from './path-order.ts'
 export { filesAreDifferent } from './policies/compare.ts'
 export type { ActionFactory } from './policies/index.ts'
 export { generateActions } from './policies/index.ts'

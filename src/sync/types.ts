@@ -296,7 +296,7 @@ export interface SyncEncryptionProvider {
 }
 
 /**
- * A scannable folder (local or B2) that yields files in sorted order.
+ * A scannable folder (local or B2) that yields files in `compareSyncRelativePaths` order.
  *
  * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
  * require memory proportional to the scanned entries; B2 scans also group listed versions before
@@ -307,6 +307,6 @@ export interface SyncFolder {
   readonly type: 'local' | 'b2'
   /** True when `scan(filters)` already enforces include/exclude filters itself. */
   readonly appliesScanFilters?: true
-  /** Scans the folder and yields files sorted by relative path. */
+  /** Scans the folder and yields files sorted by `compareSyncRelativePaths`. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }
