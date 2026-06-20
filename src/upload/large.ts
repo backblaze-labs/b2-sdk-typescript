@@ -125,7 +125,12 @@ export async function uploadLargeFile(
   const totalSize = options.source.size
 
   const parts = planRanges(totalSize, partSize)
-  const fileInfo: Record<string, string> = { ...options.fileInfo }
+  const fileInfo: Record<string, string> = Object.create(null)
+  if (options.fileInfo !== undefined) {
+    for (const [key, value] of Object.entries(options.fileInfo)) {
+      fileInfo[key] = value
+    }
+  }
 
   // Construct the `b2_start_large_file` request body once so the two
   // non-resume branches below (no `resume`, resume-but-no-candidate)
