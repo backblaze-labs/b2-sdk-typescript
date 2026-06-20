@@ -101,7 +101,9 @@ export function filesAreDifferent(
  *
  * @throws When `compareMode` is not one of the supported values.
  */
-export function assertSupportedCompareMode(compareMode: CompareMode): void {
+export function assertSupportedCompareMode(
+  compareMode: unknown,
+): asserts compareMode is CompareMode {
   switch (compareMode) {
     case 'none':
     case 'size':

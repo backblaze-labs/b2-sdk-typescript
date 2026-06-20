@@ -70,9 +70,9 @@ export type SyncEventType =
   | 'compare'
 
 /**
- * Action event types: per-file outcomes (transfer / metadata change /
- * skip) that always carry a `path` and a `size`. These never carry a
- * `message` because the type tag already says what happened.
+ * Action event types: per-file transfer or metadata-change outcomes that
+ * always carry a `path` and a `size`. Skips are reported separately as
+ * {@link SyncSkipEvent} because they carry a diagnostic `message`.
  */
 export type SyncActionEventType =
   | 'upload-start'
