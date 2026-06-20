@@ -134,7 +134,7 @@ function assertSameIdentity(
   when: string,
 ): void {
   assertStableIdentity(path, actual)
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
+  if (shouldCompareFileId() && (actual.dev !== expected.dev || actual.ino !== expected.ino)) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
@@ -145,9 +145,17 @@ function assertSameIdentity(
   }
 }
 
+function shouldCompareFileId(): boolean {
+  return !isWindows()
+}
+
 function shouldCompareCtime(): boolean {
+  return !isWindows()
+}
+
+function isWindows(): boolean {
   const processLike = (globalThis as { process?: { platform?: string } }).process
-  return processLike?.platform !== 'win32'
+  return processLike?.platform === 'win32'
 }
 
 /* v8 ignore start -- Requires a file to pass identity checks and still EOF mid-range. */

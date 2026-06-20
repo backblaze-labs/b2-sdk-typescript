@@ -741,7 +741,7 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs the full suite on Node 22.13 and 24 across Linux, Windows, and macOS. |
+| Node.js | 22.3+ | Primary target. CI runs the full suite on Node 22.18 and 24 across Linux, Windows, and macOS. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |

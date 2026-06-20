@@ -137,9 +137,9 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 
 ### Added — CI & examples
 
-- **`real-examples` CI job** runs every documented `npx tsx examples/...` command against a real B2 account after the integration suite passes (Node 22.13 + 24, serialised). The runner asserts content round-trip equality for both `node-download` and `node-backup-cli restore`. A renamed flag, swapped argument order, or stale README command fails CI before reaching users.
+- **`real-examples` CI job** runs every documented `npx tsx examples/...` command against a real B2 account after the integration suite passes (Node 22.18 + 24, serialised). The runner asserts content round-trip equality for both `node-download` and `node-backup-cli restore`. A renamed flag, swapped argument order, or stale README command fails CI before reaching users.
 - **`smoke-examples` CI job** runs the same examples against an in-memory `B2Simulator` on every push and PR — zero credentials, zero network, zero cost. Exercises the `npx tsx`/`exports`-map resolution path the same way an `npm install`-ed consumer would.
-- **Real-B2 integration workflow** (`.github/workflows/integration.yml`) runs the integration suite sequentially across Node 22.13 + 24 with `max-parallel: 1`, on push, PR, weekly schedule, and `workflow_dispatch`. Defensive `sdk-test-*` bucket sweep at startup absorbs leftovers from crashed runs.
+- **Real-B2 integration workflow** (`.github/workflows/integration.yml`) runs the integration suite sequentially across Node 22.18 + 24 with `max-parallel: 1`, on push, PR, weekly schedule, and `workflow_dispatch`. Defensive `sdk-test-*` bucket sweep at startup absorbs leftovers from crashed runs.
 - **Examples Deno + Bun typecheck jobs.** `bunx tsc --noEmit -p examples/tsconfig.json` and `deno check` (via `examples/deno.json` import map) run on every push.
 
 ### Changed — lint gate
