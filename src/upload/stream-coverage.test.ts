@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes, makeClient } from '../test-utils/index.ts'
@@ -483,6 +484,56 @@ describe('createWriteStream branch coverage', () => {
 
     await expect(done).rejects.toThrow('drain before cancel')
     expect(events).toEqual(['part-aborted', 'part-settled', 'cancel'])
+  })
+
+  it('does not cancel when finish response body is ambiguous', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
+    const inner = sim.transport()
+    let cancelCalls = 0
+    const ambiguousFinish: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        const response = await inner.send(req)
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+        if (req.url.includes('b2_finish_large_file')) {
+          return {
+            ...response,
+            json: () => Promise.reject(new SyntaxError('malformed stream finish body')),
+          }
+        }
+        return response
+      },
+    }
+    const failClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: ambiguousFinish,
+      retry: { maxRetries: 0 },
+    })
+    await failClient.authorize()
+    const failBucket = await failClient.createBucket({
+      bucketName: 'stream-finish-body-lost',
+      bucketType: BucketType.AllPrivate,
+    })
+    const cleanupFailures: string[] = []
+
+    const { writable, done } = failBucket.file('ambiguous-stream.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      onCleanupFailure: (event) => {
+        expect(event.reason).toBe('finish-ambiguous')
+        cleanupFailures.push(event.fileId)
+      },
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+
+    await expect(writer.close()).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+    await expect(done).rejects.toMatchObject({
+      bucketId: failBucket.id,
+      fileName: 'ambiguous-stream.bin',
+    })
+    expect(cancelCalls).toBe(0)
+    expect(cleanupFailures).toHaveLength(1)
   })
 })
 

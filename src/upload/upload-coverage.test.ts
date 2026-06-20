@@ -1067,6 +1067,61 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
   })
 
+  it('does not cancel a forward-only upload with an ambiguous finish response', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          const response = await inner.send(req)
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            return {
+              ...response,
+              json: () => Promise.reject(new SyntaxError('malformed forward-only finish body')),
+            }
+          }
+          return response
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'forward-only-finish-body-lost',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    async function* chunks(): AsyncIterable<Uint8Array> {
+      yield deterministicBytes(partSize)
+      yield deterministicBytes(partSize)
+    }
+    const cleanupFailures: string[] = []
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'forward-only-ambiguous-finish.bin',
+        source: toContentSource(chunks(), partSize * 2),
+        partSize,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          expect(event.reason).toBe('finish-ambiguous')
+          cleanupFailures.push(event.fileId)
+        },
+      }),
+    ).rejects.toMatchObject({
+      bucketId: bucket.id,
+      fileName: 'forward-only-ambiguous-finish.bin',
+    })
+
+    expect(cancelCalls).toBe(0)
+    expect(cleanupFailures).toHaveLength(1)
+  })
+
   it('aborts and drains parallel part work before cancelling the large file', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
@@ -2174,6 +2229,53 @@ describe('upload fresh-URL retry', () => {
     })
 
     expect(result.fileName).toBe('retry-network.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+  })
+
+  it('retries upload DOMException failures with a fresh URL', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&dom=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          if (uploadAttempts === 1) {
+            throw new DOMException('upload timed out', 'TimeoutError')
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'retry-domexception',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'retry-domexception.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+
+    expect(result.fileName).toBe('retry-domexception.txt')
     expect(uploadAttempts).toBe(2)
     expect(getUploadUrlCalls).toBe(2)
   })
