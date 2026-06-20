@@ -6353,6 +6353,41 @@ describe('synchronize', () => {
       // throws via the assertBucket guard.
       await expect(collectEvents(config)).rejects.toThrow('Bucket required for delete actions')
     })
+
+    it('throws when upload direction has no local source root', async () => {
+      const sourceFile = makeLocalSyncPath('x.txt', 1000, 10)
+      const source = makeMemoryFolder([sourceFile], 'local')
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'local' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Local source root required for upload actions',
+      )
+    })
+
+    it('throws when download direction has no local destination root', async () => {
+      const sourceFile = makeB2SyncPath('y.txt', 1000, 10)
+      const source = makeMemoryFolder([sourceFile], 'b2')
+      const dest = makeMemoryFolder([], 'local')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'local' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: makeMockBucket() as unknown as Bucket,
+      } as unknown as SynchronizerDownConfig
+
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Local destination root required for download actions',
+      )
+    })
   })
 
   describe('upload direction execute (Node-only)', () => {

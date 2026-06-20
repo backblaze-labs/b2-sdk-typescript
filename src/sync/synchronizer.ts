@@ -606,6 +606,29 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
 }
 
 /**
+ * Returns the root for a local sync folder required by an action.
+ *
+ * @param folder - The configured folder to validate.
+ * @param role - Whether the local folder is the source or destination.
+ * @param context - Short verb describing the action being constructed.
+ *
+ * @returns The local filesystem root.
+ *
+ * @throws `Error` when the folder is not local or has no root.
+ */
+function requireLocalRoot(
+  folder: SyncFolder | undefined,
+  role: 'source' | 'destination',
+  context: string,
+): string {
+  const root = folder?.type === 'local' ? (folder as Partial<LocalSyncFolder>).root : undefined
+  if (typeof root !== 'string' || root === '') {
+    throw new Error(`Local ${role} root required for ${context} actions`)
+  }
+  return root
+}
+
+/**
  * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
  *
  * @param setting - Provider-supplied encryption setting, or undefined.
@@ -665,8 +688,8 @@ function createActionFactory(
   const factory: ActionFactory = {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
-      const root = localSyncRoot(upConfig.source)
       assertBucket(bucket, 'upload')
+      const root = requireLocalRoot(upConfig.source, 'source', 'upload')
 
       return new UploadAction(
         source.relativePath,
@@ -699,8 +722,8 @@ function createActionFactory(
 
     download(source: B2SyncPath): SyncAction {
       const bucket = downConfig.bucket
-      const root = localSyncRoot(downConfig.dest)
       assertBucket(bucket, 'download')
+      const root = requireLocalRoot(downConfig.dest, 'destination', 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
         safeRelativePathSegments(relPath)
