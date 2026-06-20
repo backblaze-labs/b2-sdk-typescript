@@ -24,6 +24,7 @@ export function assertSyncPathAllowed(relativePath: string): void {
  * or SDK-reserved temporary-file names.
  * @param root - Absolute local sync root.
  * @param relativePath - Sync-relative path to resolve.
+ * @param path - Node path operations for the local platform.
  *
  * @returns The absolute local filesystem path.
  *
