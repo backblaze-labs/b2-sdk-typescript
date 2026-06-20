@@ -212,6 +212,18 @@ describe('LocalFolder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
     await expect(access(tempPath)).rejects.toThrow()
   })
+
+  it('scans directories with SDK partial download names', async () => {
+    const partialDir = join(tmpDir, '.b2sdk-directory.partial')
+    await mkdir(partialDir)
+    await writeFile(join(partialDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-directory.partial/keep.txt'])
+    await expect(access(partialDir)).resolves.toBeUndefined()
+  })
 })
 
 // ---------------------------------------------------------------------------

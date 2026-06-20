@@ -30,8 +30,8 @@ export async function removeSyncDownloadTempFiles(directory: string): Promise<vo
   const { join } = await import('node:path')
   await Promise.all(
     entries
-      .filter((entry) => isSyncDownloadTempName(entry.name))
-      .map((entry) => rm(join(directory, entry.name), { recursive: true, force: true })),
+      .filter((entry) => entry.isFile() && isSyncDownloadTempName(entry.name))
+      .map((entry) => rm(join(directory, entry.name), { force: true })),
   )
 }
 

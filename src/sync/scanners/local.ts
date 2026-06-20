@@ -78,8 +78,8 @@ export class LocalFolder implements SyncFolder {
 
       const fullPath = join(dir, entry.name)
       const rel = relativePath(this.root, fullPath)
-      if (isSyncDownloadTempName(entry.name)) {
-        await rm(fullPath, { recursive: true, force: true }).catch(() => undefined)
+      if (entry.isFile() && isSyncDownloadTempName(entry.name)) {
+        await rm(fullPath, { force: true }).catch(() => undefined)
         continue
       }
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.

@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -37,6 +37,15 @@ describe('sync temp files', () => {
     await expect(access(keepPath)).resolves.toBeUndefined()
   })
 
+  it('does not remove directories with SDK partial download names', async () => {
+    const partialDir = join(tmpDir, '.b2sdk-directory.partial')
+    await mkdir(partialDir)
+
+    await removeSyncDownloadTempFiles(tmpDir)
+
+    await expect(access(partialDir)).resolves.toBeUndefined()
+  })
+
   it('ignores missing directories', async () => {
     await expect(removeSyncDownloadTempFiles(join(tmpDir, 'missing'))).resolves.toBeUndefined()
   })
@@ -56,7 +65,9 @@ describe('sync temp files', () => {
 
   it('retries once-per-process sweeps after a failed sweep', async () => {
     vi.resetModules()
-    const readdir = vi.fn().mockResolvedValue([{ name: '.b2sdk-locked.partial' }])
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ isFile: () => true, name: '.b2sdk-locked.partial' }])
     const rm = vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValueOnce(undefined)
     vi.doMock('node:fs/promises', () => ({ readdir, rm }))
     try {
