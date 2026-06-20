@@ -6,7 +6,6 @@ import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { compareSyncPathNames } from './path-order.ts'
-import { LocalFolder } from './scanners/local.ts'
 import type {
   SynchronizerConfig,
   SynchronizerDownConfig,
@@ -368,6 +367,7 @@ describe('synchronize', () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm } = await import('node:fs/promises')
       const { join } = await import('node:path')
+      const { LocalFolder } = await import('./scanners/local.ts')
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-scan-error-'))
       const missingRoot = join(root, 'missing-source')
       try {
