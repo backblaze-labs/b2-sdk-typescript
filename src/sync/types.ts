@@ -34,8 +34,8 @@ export interface SyncPath {
    * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
    * - 40-character hex string: known verifiable digest.
    * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
-   *   consumers must not treat it as proof that bytes match, and `sha1` mode treats it as
-   *   different.
+   *   consumers must not treat it as proof that bytes match. The `sha1` synchronizer must
+   *   verify untrusted B2 bytes before using them for equality, or transfer conservatively.
    */
   readonly contentSha1?: string | null
 }

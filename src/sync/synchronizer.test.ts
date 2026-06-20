@@ -2256,9 +2256,10 @@ describe('synchronize', () => {
       const controller = new AbortController()
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sha1-abort-'))
       try {
+        const abortHashFileSize = 32 * 1024 * 1024
         const filePath = join(root, 'large.bin')
         const file = await open(filePath, 'w')
-        await file.truncate(512 * 1024 * 1024)
+        await file.truncate(abortHashFileSize)
         await file.close()
 
         const mockBucket = makeMockBucket()
@@ -2266,12 +2267,12 @@ describe('synchronize', () => {
           relativePath: 'large.bin',
           absolutePath: filePath,
           modTimeMillis: 1000,
-          size: 512 * 1024 * 1024,
+          size: abortHashFileSize,
         }
         const destFile = makeB2SyncPath(
           'large.bin',
           1000,
-          512 * 1024 * 1024,
+          abortHashFileSize,
           undefined,
           'a'.repeat(40),
         )

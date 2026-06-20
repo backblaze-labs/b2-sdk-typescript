@@ -224,6 +224,15 @@ describe('preparePairForCompare', () => {
     expect(result.bytesHashed).toBe(0)
   })
 
+  it('throws for unsupported runtime compare modes', async () => {
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+
+    await expect(preparePairForCompare([source, dest], 'sha256' as never)).rejects.toThrow(
+      'Unsupported compare mode',
+    )
+  })
+
   it('returns a ready result for unpaired sha1 files', async () => {
     const source = makeLocalSyncPath('file.txt', 1000, 100)
 
@@ -598,6 +607,19 @@ describe('preparePairsForCompare', () => {
     expect(results).toHaveLength(1)
     expect(results[0]?.originalPair).toEqual(pairs[0])
     expect(results[0]?.prepared.skipActionGeneration).toBe(false)
+  })
+
+  it('throws for unsupported runtime compare modes', async () => {
+    const pairs: [LocalSyncPath, B2SyncPath][] = [
+      [
+        makeLocalSyncPath('file.txt', 1000, 100),
+        makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40)),
+      ],
+    ]
+
+    await expect(preparePairsForCompare(pairs, 'sha256' as never)).rejects.toThrow(
+      'Unsupported compare mode',
+    )
   })
 
   it('prepares sha1 pairs with bounded concurrency', async () => {

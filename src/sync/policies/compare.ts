@@ -143,6 +143,7 @@ export async function preparePairForCompare(
   compareMode: CompareMode,
   options: PreparePairForCompareOptions = {},
 ): Promise<ComparePreparationResult> {
+  assertSupportedCompareMode(compareMode)
   if (compareMode !== 'sha1') return readyComparePair(pair)
 
   const [source, dest] = pair
@@ -209,6 +210,7 @@ export async function preparePairsForCompare(
   compareMode: CompareMode,
   options: PreparePairsForCompareOptions = {},
 ): Promise<PreparedComparePair[]> {
+  assertSupportedCompareMode(compareMode)
   if (compareMode !== 'sha1') {
     return pairs.map((pair) => ({ originalPair: pair, prepared: readyComparePair(pair) }))
   }
