@@ -32,12 +32,10 @@ export interface UploadRetryEvent {
 /** Callback invoked before an upload retry fetches a fresh upload URL. */
 export type UploadRetryListener = (event: UploadRetryEvent) => void
 
-/** Internal options for upload-layer fresh-URL retries. */
-interface UploadLayerRetryOptions {
+/** Shared public options for upload-layer fresh-URL retries. */
+export interface UploadRetryOptions {
   /** Retry settings shared with the main transport retry configuration. */
   readonly retry?: Partial<RetryOptions> | undefined
-  /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
-  readonly signal?: AbortSignal | undefined
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
@@ -45,6 +43,11 @@ interface UploadLayerRetryOptions {
    * The caller resolves its public default before entering this helper.
    */
   readonly retryResponseBodyFailures: boolean
+}
+
+interface UploadLayerRetryOptions extends UploadRetryOptions {
+  /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
+  readonly signal?: AbortSignal | undefined
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
@@ -196,6 +199,7 @@ export function uploadPartWithFreshUrl(
         },
         options.data,
         options.signal,
+        options.retry,
       ),
   })
 }

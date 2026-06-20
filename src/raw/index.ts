@@ -124,12 +124,6 @@ function uploadResponseBodyError(err: unknown): UploadResponseBodyError {
   return new UploadResponseBodyError(message, err)
 }
 
-function finishLargeFileResponseBodyError(err: unknown): FinishLargeFileResponseBodyError {
-  const message =
-    err instanceof Error ? err.message : 'Finish large file response body could not be read'
-  return new FinishLargeFileResponseBodyError(message, err)
-}
-
 /**
  * Low-level client providing 1:1 bindings to all B2 native API endpoints.
  *
@@ -312,6 +306,7 @@ export class RawClient {
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
    * @param signal - An optional abort signal for cancellation.
+   * @param retry - Optional per-request retry override.
    *
    * @returns The uploaded file version metadata.
    */
@@ -320,6 +315,7 @@ export class RawClient {
     headers: UploadFileHeaders,
     body: BodyInit,
     signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<FileVersion> {
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
@@ -359,6 +355,7 @@ export class RawClient {
       headers: reqHeaders,
       body,
       ...(signal !== undefined ? { signal } : {}),
+      ...(retry !== undefined ? { retry } : {}),
     })
     try {
       return normalizeFileVersionSha1(await response.json<FileVersion>())
@@ -612,6 +609,7 @@ export class RawClient {
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
    * @param signal - An optional abort signal for cancellation.
+   * @param retry - Optional per-request retry override.
    *
    * @returns The uploaded part metadata.
    */
@@ -620,6 +618,7 @@ export class RawClient {
     headers: UploadPartHeaders,
     body: BodyInit,
     signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<UploadPartResponse> {
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
@@ -636,6 +635,7 @@ export class RawClient {
       headers: reqHeaders,
       body,
       ...(signal !== undefined ? { signal } : {}),
+      ...(retry !== undefined ? { retry } : {}),
     })
     try {
       return await response.json<UploadPartResponse>()
@@ -675,7 +675,10 @@ export class RawClient {
     try {
       fileVersion = await response.json<FileVersion>()
     } catch (err) {
-      throw finishLargeFileResponseBodyError(err)
+      throw new FinishLargeFileResponseBodyError(
+        err instanceof Error ? err.message : 'Finish large file response body could not be read',
+        { cause: err, fileId: request.fileId },
+      )
     }
     return normalizeFileVersionSha1(fileVersion)
   }

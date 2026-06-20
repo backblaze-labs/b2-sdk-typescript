@@ -630,15 +630,23 @@ describe('UploadResponseBodyError', () => {
 })
 
 describe('FinishLargeFileResponseBodyError', () => {
-  it('extends Error and stores the cause', () => {
+  it('extends Error and stores reconciliation metadata', () => {
     const cause = new TypeError('finish body lost')
-    const err = new FinishLargeFileResponseBodyError('finish body lost', cause)
+    const err = new FinishLargeFileResponseBodyError('finish body lost', {
+      cause,
+      fileId: '4_z_file' as never,
+      bucketId: 'bucket' as never,
+      fileName: 'file.bin',
+    })
 
     expect(err).toBeInstanceOf(Error)
     expect(err).not.toBeInstanceOf(B2Error)
     expect(err.name).toBe('FinishLargeFileResponseBodyError')
     expect(err.message).toBe('finish body lost')
     expect(err.cause).toBe(cause)
+    expect(err.fileId).toBe('4_z_file')
+    expect(err.bucketId).toBe('bucket')
+    expect(err.fileName).toBe('file.bin')
   })
 })
 

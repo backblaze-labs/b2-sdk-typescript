@@ -1042,6 +1042,7 @@ describe('uploadLargeFile cleanup paths', () => {
     })
     const partSize = 100_000
 
+    let finishError: unknown
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
         bucketId: bucket.id,
@@ -1049,11 +1050,20 @@ describe('uploadLargeFile cleanup paths', () => {
         source: new BufferSource(deterministicBytes(partSize * 2)),
         partSize,
         concurrency: 1,
+        onCleanupFailure: (event) => {
+          finishError = event.error
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.fileId).toMatch(/^4_z/)
+        },
       }),
     ).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
 
     expect(finishCalls).toBe(1)
     expect(cancelCalls).toBe(0)
+    expect(finishError).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((finishError as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((finishError as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((finishError as FinishLargeFileResponseBodyError).fileName).toBe('ambiguous-finish.bin')
     expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
   })
 
@@ -1412,6 +1422,34 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(maxRetries + 1)
     expect(retryEvents.map((event) => event.attempt)).toEqual([1, 2])
     expect(await countFileVersions(bucket, 'duplicate.txt')).toBe(maxRetries + 1)
+  })
+
+  it('continues fresh-URL retry when the retry observer throws', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'throwing-retry-observer',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'observer.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      onUploadRetry: () => {
+        throw new Error('metrics sink failed')
+      },
+    })
+
+    expect(result.fileName).toBe('observer.txt')
+    expect(harness.uploadFileAttempts).toBe(2)
+    expect(harness.getUploadUrlCalls).toBe(2)
   })
 
   it('shares the retry budget with fresh upload URL fetch failures', async () => {
@@ -3426,6 +3464,28 @@ describe('uploadLargeFile control-plane aborts', () => {
     ).rejects.toThrow('part failed')
 
     expect(cancelSignal?.aborted).toBe(false)
+  })
+
+  it('rejects an unknown explicit resumeFileId before inspecting or uploading parts', async () => {
+    const partSize = 100_000
+    const listParts = vi.spyOn(client.raw, 'listParts')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucketId as never,
+        fileName: 'unknown-resume.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        resumeFileId: '4_z_unknown' as never,
+      }),
+    ).rejects.toThrow(/resumeFileId does not match/)
+
+    expect(listParts).not.toHaveBeenCalled()
+    expect(uploadPart).not.toHaveBeenCalled()
+    expect(finishLargeFile).not.toHaveBeenCalled()
   })
 })
 

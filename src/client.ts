@@ -1,4 +1,4 @@
-import type { AccountInfo } from './auth/account-info.ts'
+import type { AccountInfo, AuthContextAwareAccountInfo } from './auth/account-info.ts'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { getRealmUrl } from './auth/realms.ts'
 import { Bucket } from './bucket.ts'
@@ -57,7 +57,7 @@ export interface B2ClientOptions {
   readonly accountInfo?: AccountInfo
   /** Custom HTTP transport. Defaults to {@link FetchTransport}. Wrapped by {@link RetryTransport}. */
   readonly transport?: HttpTransport
-  /** Override retry behavior (max retries, backoff, jitter). */
+  /** Override retry behavior (max retries, backoff, and per-attempt timeout). */
   readonly retry?: Partial<RetryOptions>
   /** Custom user-agent string prepended to the SDK default. */
   readonly userAgent?: string
@@ -412,8 +412,19 @@ function bindAccountInfoAuthContext(
   realmUrl: string,
   applicationKeyId: string,
 ): void {
-  accountInfo.setApplicationKeyId?.(applicationKeyId)
-  accountInfo.setRealmUrl?.(realmUrl)
+  if (!isAuthContextAwareAccountInfo(accountInfo)) return
+  accountInfo.setApplicationKeyId(applicationKeyId)
+  accountInfo.setRealmUrl(realmUrl)
+}
+
+function isAuthContextAwareAccountInfo(
+  accountInfo: AccountInfo,
+): accountInfo is AccountInfo & AuthContextAwareAccountInfo {
+  const candidate = accountInfo as Partial<AuthContextAwareAccountInfo>
+  return (
+    typeof candidate.setApplicationKeyId === 'function' &&
+    typeof candidate.setRealmUrl === 'function'
+  )
 }
 
 /**

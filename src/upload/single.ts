@@ -1,5 +1,4 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
@@ -12,12 +11,12 @@ import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
 import {
   fetchFreshUploadUrl,
   resolveRetryResponseBodyFailures,
-  type UploadRetryListener,
+  type UploadRetryOptions,
   withFreshUploadUrlRetry,
 } from './retry.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
-export interface UploadFileOptions {
+export interface UploadFileOptions extends UploadRetryOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
   /** Full B2 file name including any path prefix. */
@@ -40,17 +39,6 @@ export interface UploadFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. */
   readonly signal?: AbortSignal
-  /** Retry settings for upload-layer fresh-URL retries. */
-  readonly retry?: Partial<RetryOptions>
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /**
-   * Retry when an upload response body cannot be read after B2 may have stored
-   * the file, or when the upload POST fails with an ambiguous network error.
-   * Defaults to false because re-sending a single-file upload can create a
-   * duplicate B2 file version.
-   */
-  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -122,6 +110,7 @@ export async function uploadSmallFile(
         },
         data,
         options.signal,
+        options.retry,
       ),
   })
 

@@ -131,7 +131,7 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 Single-request uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies and upload POST network errors by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
 
-Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. Each HTTP attempt has a 15 minute deadline by default; set `retry.requestTimeoutMs` higher for very slow links or to `0` to rely only on your own `AbortSignal`.
 
 `FileSource` is the Node.js-only content adapter. It is safe to import from the
 main package in browser builds, but `FileSource.fromPath()` and its read methods
@@ -625,6 +625,7 @@ const client = new B2Client({
     maxRetries: 10,
     maxRetryDelayMs: 120_000,
     initialRetryDelayMs: 500,
+    requestTimeoutMs: 30 * 60_000,
   },
 })
 ```

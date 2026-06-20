@@ -1,6 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
-import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
@@ -15,7 +14,11 @@ import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { type CleanupFailureListener, cancelLargeFileBestEffort } from './cancel.ts'
+import {
+  type CleanupFailureOptions,
+  cancelLargeFileBestEffort,
+  notifyAmbiguousLargeFileCleanupSkipped,
+} from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   findResumeCandidate,
@@ -25,7 +28,7 @@ import {
 } from './resume.ts'
 import {
   resolveRetryResponseBodyFailures,
-  type UploadRetryListener,
+  type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
 
@@ -54,7 +57,7 @@ const STREAM_EMPTY_CHUNKS_ERROR =
   'uploadLargeFile: source stream emitted too many empty chunks without data.'
 
 /** Options for uploading a large file via the multipart protocol. */
-export interface UploadLargeFileOptions {
+export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
   /** Full B2 file name including any path prefix. */
@@ -93,18 +96,6 @@ export interface UploadLargeFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. Triggers cancellation of the large file. */
   readonly signal?: AbortSignal
-  /** Retry settings for upload-layer fresh-URL retries. */
-  readonly retry?: Partial<RetryOptions>
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /** Callback invoked if best-effort large-file cleanup fails after an upload error. */
-  readonly onCleanupFailure?: CleanupFailureListener
-  /**
-   * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Upload POST network errors still retry when this is false because
-   * re-posting the same part number is idempotent. Defaults to true.
-   */
-  readonly retryResponseBodyFailures?: boolean
   /**
    * If true, look for an unfinished large file with the same bucket and file name
    * and continue uploading into it. Automatic discovery only reuses unfinished
@@ -377,7 +368,12 @@ export async function uploadLargeFile(
       )
     } catch (err) {
       abortScope.abort(err)
-      if (createdLargeFile && !(err instanceof FinishLargeFileResponseBodyError)) {
+      if (err instanceof FinishLargeFileResponseBodyError) {
+        const enriched = enrichFinishLargeFileResponseBodyError(err, largeFileId, options)
+        notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
+        throw enriched
+      }
+      if (createdLargeFile) {
         await cancelLargeFileBestEffort(
           raw,
           accountInfo,
@@ -476,7 +472,12 @@ export async function uploadLargeFile(
     return result
   } catch (err) {
     abortScope.abort(err)
-    if (createdLargeFile && !(err instanceof FinishLargeFileResponseBodyError)) {
+    if (err instanceof FinishLargeFileResponseBodyError) {
+      const enriched = enrichFinishLargeFileResponseBodyError(err, largeFileId, options)
+      notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
+      throw enriched
+    }
+    if (createdLargeFile) {
       await cancelLargeFileBestEffort(
         raw,
         accountInfo,
@@ -488,6 +489,26 @@ export async function uploadLargeFile(
   } finally {
     abortScope.dispose()
   }
+}
+
+function enrichFinishLargeFileResponseBodyError(
+  err: FinishLargeFileResponseBodyError,
+  fileId: LargeFileId,
+  options: UploadLargeFileOptions,
+): FinishLargeFileResponseBodyError {
+  if (
+    err.fileId === fileId &&
+    err.bucketId === options.bucketId &&
+    err.fileName === options.fileName
+  ) {
+    return err
+  }
+  return new FinishLargeFileResponseBodyError(err.message, {
+    cause: err.cause ?? err,
+    fileId,
+    bucketId: options.bucketId,
+    fileName: options.fileName,
+  })
 }
 
 /**
@@ -634,8 +655,7 @@ function notifyResumePartReused(
 
 function cleanupLargeFileOptions(options: UploadLargeFileOptions): {
   readonly signal?: AbortSignal
-  readonly onCleanupFailure?: CleanupFailureListener
-} {
+} & CleanupFailureOptions {
   return {
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.onCleanupFailure !== undefined

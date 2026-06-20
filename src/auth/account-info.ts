@@ -34,18 +34,6 @@ export interface AuthContextAwareAccountInfo {
  * pools of reusable upload URLs (checkout/checkin/evict pattern).
  */
 export interface AccountInfo {
-  /**
-   * Bind persistent auth caches to the resolved realm URL. Implementations that
-   * persist auth should follow {@link AuthContextAwareAccountInfo}.
-   */
-  setRealmUrl?(realmUrl: string): void
-  /**
-   * Bind persistent auth caches to the configured application key ID.
-   * Implementations that persist auth should follow
-   * {@link AuthContextAwareAccountInfo}.
-   */
-  setApplicationKeyId?(applicationKeyId: string): void
-
   /** Store a fresh authorization response, replacing any previous state. */
   setAuth(auth: AuthorizeAccountResponse): void
   /** Return the current authorization response, or null if not authorized. */

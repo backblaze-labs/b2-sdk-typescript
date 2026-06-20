@@ -9,10 +9,21 @@ export interface CleanupFailureEvent {
   readonly fileId: LargeFileId
   /** Error thrown by `b2_cancel_large_file`. */
   readonly error: unknown
+  /** Cleanup phase that produced the observable event. */
+  readonly reason?: 'cancel-failed' | 'finish-ambiguous'
 }
 
 /** Callback invoked when best-effort cleanup fails. */
 export type CleanupFailureListener = (event: CleanupFailureEvent) => void
+
+/** Shared option for observing large-file cleanup failures or skipped cleanup. */
+export interface CleanupFailureOptions {
+  /**
+   * Callback invoked if best-effort cancellation fails, or if cancellation is
+   * skipped because `b2_finish_large_file` may already have committed.
+   */
+  readonly onCleanupFailure?: CleanupFailureListener
+}
 
 /** Default wall-clock bound for best-effort cleanup calls after upload failure. */
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000
@@ -42,10 +53,7 @@ export async function cancelLargeFileBestEffort(
   raw: RawClient,
   accountInfo: AccountInfo,
   fileId: LargeFileId,
-  options?: {
-    readonly signal?: AbortSignal
-    readonly onCleanupFailure?: CleanupFailureListener
-  },
+  options?: { readonly signal?: AbortSignal } & CleanupFailureOptions,
 ): Promise<void> {
   await bestEffort(
     async () => {
@@ -58,7 +66,7 @@ export async function cancelLargeFileBestEffort(
       )
       await waitForCleanup(request, requestOptions.signal)
     },
-    (error) => options?.onCleanupFailure?.({ fileId, error }),
+    (error) => options?.onCleanupFailure?.({ fileId, error, reason: 'cancel-failed' }),
   )
 }
 
@@ -161,3 +169,23 @@ function cleanupDomException(message: string, name: string): Error {
   const error = new Error(message)
   error.name = name
   return error
+}
+
+/**
+ * Emits an observable cleanup event when cancellation is deliberately skipped
+ * because `b2_finish_large_file` may already have committed the file.
+ * @param fileId - Large file whose final state is ambiguous.
+ * @param error - Ambiguous finish error that will be thrown to the caller.
+ * @param onCleanupFailure - Optional observer for cleanup-related events.
+ */
+export function notifyAmbiguousLargeFileCleanupSkipped(
+  fileId: LargeFileId,
+  error: unknown,
+  onCleanupFailure?: CleanupFailureListener,
+): void {
+  try {
+    onCleanupFailure?.({ fileId, error, reason: 'finish-ambiguous' })
+  } catch {
+    // Observer failures are secondary and must not hide the finish ambiguity.
+  }
+}

@@ -150,6 +150,32 @@ describe('FetchTransport', () => {
     expect(response.status).toBe(304)
   })
 
+  it('aborts a stalled fetch after the configured request timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockImplementation(
+        (_url, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            const signal = init?.signal
+            signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+          }),
+      )
+
+      const transport = new FetchTransport()
+      const pending = transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 5 },
+      })
+      const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
+
+      await vi.advanceTimersByTimeAsync(5)
+      await assertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('follows guard-checked same-origin GET redirects by default', async () => {
     fetchSpy
       .mockResolvedValueOnce(
@@ -319,6 +345,7 @@ describe('FetchTransport', () => {
       url: 'https://example.com',
       method: 'GET',
       signal: controller.signal,
+      retry: { requestTimeoutMs: 0 },
     })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -329,7 +356,11 @@ describe('FetchTransport', () => {
     fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
 
     const transport = new FetchTransport()
-    await transport.send({ url: 'https://example.com', method: 'GET' })
+    await transport.send({
+      url: 'https://example.com',
+      method: 'GET',
+      retry: { requestTimeoutMs: 0 },
+    })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(init.signal).toBeUndefined()
@@ -906,6 +937,23 @@ describe('RetryTransport', () => {
       const transport = makeRetryTransport({
         transport: innerTransport,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('retries request timeout aborts as network failures', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockRejectedValueOnce(new DOMException('HTTP request timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
       const result = await transport.send(baseRequest)
 

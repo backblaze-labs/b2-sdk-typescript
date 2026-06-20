@@ -139,8 +139,12 @@ export type {
   ResumeCandidateRejectedListener,
   ResumeCandidateRejectedReason,
 } from './upload/resume.ts'
-export type { CleanupFailureEvent, CleanupFailureListener } from './upload/cancel.ts'
-export type { UploadRetryEvent, UploadRetryListener } from './upload/retry.ts'
+export type {
+  CleanupFailureEvent,
+  CleanupFailureListener,
+  CleanupFailureOptions,
+} from './upload/cancel.ts'
+export type { UploadRetryEvent, UploadRetryListener, UploadRetryOptions } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'
 // Generic pagination helpers. Most callers want the `paginateX()` method

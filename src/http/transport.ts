@@ -111,13 +111,27 @@ export class FetchTransport implements HttpTransport {
         headers.set('User-Agent', this.userAgent)
       }
 
-      const response = await fetch(currentRequest.url, {
-        method: currentRequest.method,
-        headers,
-        body: currentRequest.body ?? null,
-        redirect: 'manual',
-        ...(currentRequest.signal !== undefined ? { signal: currentRequest.signal } : {}),
-      })
+      const timeoutScope = createRequestTimeoutScope(currentRequest)
+      let response: Response
+      try {
+        response = await fetch(currentRequest.url, {
+          method: currentRequest.method,
+          headers,
+          body: currentRequest.body ?? null,
+          redirect: 'manual',
+          ...(timeoutScope.signal !== undefined ? { signal: timeoutScope.signal } : {}),
+        })
+      } catch (err) {
+        if (timeoutScope.timedOut) {
+          throw new DOMException(
+            `HTTP request timed out after ${timeoutScope.timeoutMs} ms`,
+            'TimeoutError',
+          )
+        }
+        throw err
+      } finally {
+        timeoutScope.dispose()
+      }
 
       if (isBlockedRedirect(response)) {
         const location = response.headers.get('Location')
@@ -148,6 +162,55 @@ export class FetchTransport implements HttpTransport {
         arrayBuffer: () => response.arrayBuffer(),
       }
     }
+  }
+}
+
+interface RequestTimeoutScope {
+  readonly signal?: AbortSignal
+  readonly timeoutMs: number
+  readonly timedOut: boolean
+  dispose(): void
+}
+
+function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
+  const timeoutMs = request.retry?.requestTimeoutMs ?? DEFAULT_RETRY_OPTIONS.requestTimeoutMs
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const scope: RequestTimeoutScope = {
+      timeoutMs: 0,
+      timedOut: false,
+      dispose() {},
+    }
+    if (request.signal !== undefined) return { ...scope, signal: request.signal }
+    return scope
+  }
+
+  const controller = new AbortController()
+  let timedOut = false
+  const abortFromUpstream = (): void => {
+    controller.abort(request.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+  }
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort(new DOMException('HTTP request timed out', 'TimeoutError'))
+  }, timeoutMs)
+
+  if (request.signal?.aborted === true) {
+    clearTimeout(timer)
+    abortFromUpstream()
+  } else {
+    request.signal?.addEventListener('abort', abortFromUpstream, { once: true })
+  }
+
+  return {
+    signal: controller.signal,
+    timeoutMs,
+    get timedOut() {
+      return timedOut
+    },
+    dispose() {
+      clearTimeout(timer)
+      request.signal?.removeEventListener('abort', abortFromUpstream)
+    },
   }
 }
 
@@ -308,7 +371,7 @@ export class RetryTransport implements HttpTransport {
       }
 
       try {
-        const response = await this.inner.send(request)
+        const response = await this.inner.send({ ...request, retry: retryOptions })
 
         if (response.status >= 200 && response.status < 300) {
           return response

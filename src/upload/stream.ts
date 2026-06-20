@@ -1,6 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
-import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
@@ -12,19 +11,20 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { toError } from '../util/to-error.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
 import {
-  type CleanupFailureListener,
+  type CleanupFailureOptions,
   cancelLargeFileBestEffort,
   DEFAULT_CLEANUP_TIMEOUT_MS,
+  notifyAmbiguousLargeFileCleanupSkipped,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   resolveRetryResponseBodyFailures,
-  type UploadRetryListener,
+  type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
-export interface CreateWriteStreamOptions {
+export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
   /** Destination file name in the bucket. */
@@ -47,18 +47,6 @@ export interface CreateWriteStreamOptions {
   readonly onProgress?: ProgressListener
   /** Aborts the upload and cancels the unfinished large file. */
   readonly signal?: AbortSignal
-  /** Retry settings for upload-layer fresh-URL retries. */
-  readonly retry?: Partial<RetryOptions>
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /** Callback invoked if best-effort large-file cleanup fails after a stream error. */
-  readonly onCleanupFailure?: CleanupFailureListener
-  /**
-   * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Upload POST network errors still retry when this is false because
-   * re-posting the same part number is idempotent. Defaults to true.
-   */
-  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -361,17 +349,27 @@ export function createWriteStream(
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
-        if (fileIdToCancel !== null && !(err instanceof FinishLargeFileResponseBodyError)) {
-          await cancelLargeFileBestEffort(
-            raw,
-            accountInfo,
-            fileIdToCancel,
-            cleanupWriteStreamOptions(options),
-          )
+        let finalError: Error = observedError
+        if (fileIdToCancel !== null) {
+          if (err instanceof FinishLargeFileResponseBodyError) {
+            finalError = enrichFinishLargeFileResponseBodyError(err, fileIdToCancel, options)
+            notifyAmbiguousLargeFileCleanupSkipped(
+              fileIdToCancel,
+              finalError,
+              options.onCleanupFailure,
+            )
+          } else {
+            await cancelLargeFileBestEffort(
+              raw,
+              accountInfo,
+              fileIdToCancel,
+              cleanupWriteStreamOptions(options),
+            )
+          }
         }
-        rejectDone(observedError)
+        rejectDone(finalError)
         abortScope.dispose()
-        throw observedError
+        throw finalError
       }
     },
 
@@ -405,14 +403,33 @@ export function createWriteStream(
 
 function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {
   readonly signal?: AbortSignal
-  readonly onCleanupFailure?: CleanupFailureListener
-} {
+} & CleanupFailureOptions {
   return {
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.onCleanupFailure !== undefined
       ? { onCleanupFailure: options.onCleanupFailure }
       : {}),
   }
+}
+
+function enrichFinishLargeFileResponseBodyError(
+  err: FinishLargeFileResponseBodyError,
+  fileId: LargeFileId,
+  options: CreateWriteStreamOptions,
+): FinishLargeFileResponseBodyError {
+  if (
+    err.fileId === fileId &&
+    err.bucketId === options.bucketId &&
+    err.fileName === options.fileName
+  ) {
+    return err
+  }
+  return new FinishLargeFileResponseBodyError(err.message, {
+    cause: err.cause ?? err,
+    fileId,
+    bucketId: options.bucketId,
+    fileName: options.fileName,
+  })
 }
 
 /**

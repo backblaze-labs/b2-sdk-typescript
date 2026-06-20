@@ -30,7 +30,7 @@ import {
   KNOWN_B2_ERROR_CODES,
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
-import type { LargeFileId } from '../types/ids.ts'
+import type { BucketId, LargeFileId } from '../types/ids.ts'
 
 /** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
 export class ResumeFileIdMismatchError extends Error {
@@ -643,17 +643,33 @@ export class UploadResponseBodyError extends Error {
  * upload paths do not cancel the large file after this error.
  */
 export class FinishLargeFileResponseBodyError extends Error {
+  /** Ambiguous large file ID that may already be committed server-side. */
+  readonly fileId?: LargeFileId
+  /** Bucket requested by the high-level upload, when available. */
+  readonly bucketId?: BucketId
+  /** File name requested by the high-level upload, when available. */
+  readonly fileName?: string
+
   /**
    * Creates a new FinishLargeFileResponseBodyError instance.
    * @param message - Human-readable description of the response read failure.
-   * @param cause - The underlying response body error.
+   * @param options - Optional cause and reconciliation metadata.
    */
   constructor(
     message: string,
-    public override readonly cause?: unknown,
+    options: {
+      readonly cause?: unknown
+      readonly fileId?: LargeFileId
+      readonly bucketId?: BucketId
+      readonly fileName?: string
+    } = {},
   ) {
-    super(message, { cause })
+    super(message, { cause: options.cause })
     this.name = 'FinishLargeFileResponseBodyError'
+    if (options.cause !== undefined) this.cause = options.cause
+    if (options.fileId !== undefined) this.fileId = options.fileId
+    if (options.bucketId !== undefined) this.bucketId = options.bucketId
+    if (options.fileName !== undefined) this.fileName = options.fileName
   }
 }
 
