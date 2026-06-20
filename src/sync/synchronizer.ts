@@ -200,7 +200,10 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       }
     } catch (err) {
       await drainActions()
-      if (!scanHadError) throw err
+      if (!scanHadError) {
+        yield* emitQueuedEvents()
+        throw err
+      }
 
       yield* emitQueuedEvents()
       yield {
@@ -376,8 +379,10 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
  */
 function normalizeSyncConcurrency(value: number | undefined): number {
   const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
-  if (!Number.isFinite(candidate) || candidate < 1) return DEFAULT_TRANSFER_CONCURRENCY
-  return Math.max(1, Math.floor(candidate))
+  if (!Number.isInteger(candidate) || candidate < 1) {
+    throw new RangeError('Sync concurrency must be a positive integer')
+  }
+  return candidate
 }
 
 function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {

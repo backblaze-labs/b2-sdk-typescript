@@ -4296,6 +4296,75 @@ describe('synchronize', () => {
       expect(errors[0]?.message).not.toContain('\x1b')
       expect(errors[0]?.message).not.toContain('\n')
     })
+
+    it.skipIf(!isNode)(
+      'drains in-flight action results before rethrowing scan errors',
+      async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-scan-error-'))
+        const uploadStarted = deferred()
+        const uploadDone = deferred()
+        const filePath = join(root, 'started.txt')
+
+        try {
+          await writeFile(filePath, 'started')
+          const mockBucket = makeMockBucket()
+          mockBucket.upload = vi.fn().mockImplementation(async () => {
+            uploadStarted.resolve(undefined)
+            await uploadDone.promise
+          })
+
+          const sourceFile: LocalSyncPath = {
+            relativePath: 'started.txt',
+            absolutePath: filePath,
+            modTimeMillis: 1000,
+            size: 7,
+          }
+          const source: SyncFolder = {
+            type: 'local',
+            appliesScanFilters: true,
+            async *scan() {
+              yield sourceFile
+              throw new Error('scan boom')
+            },
+          }
+          const dest = makeMemoryFolder([], 'b2')
+          const config: SynchronizerUpConfig = {
+            source: { ...source, type: 'local', root },
+            dest: { ...dest, type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events: SyncEvent[] = []
+          let runSettled = false
+          const run = (async () => {
+            try {
+              for await (const event of synchronize(config)) {
+                events.push(event)
+              }
+            } finally {
+              runSettled = true
+            }
+          })()
+          void run.catch(() => undefined)
+
+          await uploadStarted.promise
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          expect(runSettled).toBe(false)
+
+          uploadDone.resolve(undefined)
+          await expect(run).rejects.toThrow('scan boom')
+          expect(events).toContainEqual({ type: 'upload-done', path: 'started.txt', size: 7 })
+        } finally {
+          uploadDone.resolve(undefined)
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('abort signal mid-flight', () => {
@@ -4557,6 +4626,23 @@ describe('synchronize', () => {
   })
 
   describe('concurrency limit', () => {
+    it('throws for invalid concurrency values', async () => {
+      const invalidValues = [0, -1, Number.NaN, 1.5]
+      for (const concurrency of invalidValues) {
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([], 'local'), type: 'local', root: '/tmp' },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency },
+          bucket: makeMockBucket() as unknown as Bucket,
+          prefix: '',
+        }
+
+        await expect(collectEvents(config)).rejects.toThrow(
+          'Sync concurrency must be a positive integer',
+        )
+      }
+    })
+
     it('respects the configured concurrency limit (b2-to-b2 copy)', async () => {
       // Track simultaneous in-flight ops with an explicit gate.
       let inFlight = 0
