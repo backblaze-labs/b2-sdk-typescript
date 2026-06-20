@@ -193,13 +193,14 @@ async function main(): Promise<void> {
   }
 
   const bucket = await client.createBucket({ bucketName, bucketType: 'allPrivate' })
-  await waitForBucketVisible(client, bucket.name)
-  const workDir = await mkdtemp(join(tmpdir(), 'sdk-examples-'))
-
-  console.log(`\nUsing bucket: ${bucket.name}`)
-  console.log(`Working dir:  ${workDir}\n`)
+  let workDir: string | undefined
 
   try {
+    await waitForBucketVisible(client, bucket.name)
+    workDir = await mkdtemp(join(tmpdir(), 'sdk-examples-'))
+    console.log(`\nUsing bucket: ${bucket.name}`)
+    console.log(`Working dir:  ${workDir}\n`)
+
     // Fixtures.
     const samplePath = join(workDir, 'sample.txt')
     const sampleBody = `hello from real-examples CI on Node ${process.versions.node}\n`
@@ -293,10 +294,12 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error(`teardown failed: ${String(err)}`)
     }
-    try {
-      await rm(workDir, { recursive: true, force: true })
-    } catch (err) {
-      console.warn(`could not clean up ${workDir}: ${String(err)}`)
+    if (workDir !== undefined) {
+      try {
+        await rm(workDir, { recursive: true, force: true })
+      } catch (err) {
+        console.warn(`could not clean up ${workDir}: ${String(err)}`)
+      }
     }
   }
 }
