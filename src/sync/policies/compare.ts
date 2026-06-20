@@ -20,8 +20,8 @@ import type {
 
 export { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 
-/** Reads a B2 file and returns the SHA-1 digest of its actual bytes. */
-export type B2Sha1Reader = (path: B2SyncPath, signal?: AbortSignal) => Promise<string>
+/** Reads a B2 file and returns the SHA-1 digest of its actual bytes, or null when unavailable. */
+export type B2Sha1Reader = (path: B2SyncPath, signal?: AbortSignal) => Promise<string | null>
 
 /** Options for preparing a file pair before comparison. */
 export interface PreparePairForCompareOptions {

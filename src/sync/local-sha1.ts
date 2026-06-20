@@ -13,12 +13,12 @@ export interface LocalSha1ReadOptions {
   readonly timeoutMillis?: number
 }
 
-/** Reads a local file and returns its SHA-1 digest. */
+/** Reads a local file and returns its SHA-1 digest, or null when unavailable. */
 export type LocalSha1Reader = (
   path: LocalSyncPath,
   signal?: AbortSignal,
   options?: LocalSha1ReadOptions,
-) => Promise<string>
+) => Promise<string | null>
 
 /**
  * Formats a hash error for public sync events without leaking filesystem paths.

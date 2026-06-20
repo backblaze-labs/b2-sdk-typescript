@@ -312,7 +312,7 @@ describe('preparePairForCompare', () => {
     const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
 
     const result = await preparePairForCompare([source, dest], 'sha1', {
-      readLocalSha1: async () => null as unknown as string,
+      readLocalSha1: async () => null,
     })
 
     expect(result.skipActionGeneration).toBe(true)
