@@ -2405,6 +2405,61 @@ describe('synchronize', () => {
       expect(compares.length).toBeLessThanOrEqual(1)
     })
 
+    it('drains in-flight actions before returning when signal aborts during execution', async () => {
+      const controller = new AbortController()
+      const mockBucket = makeMockBucket()
+      const source = makeMemoryFolder(
+        [makeB2SyncPath('first.txt', 1000, 10), makeB2SyncPath('second.txt', 1000, 10)],
+        'b2',
+      )
+      const dest = makeMemoryFolder([], 'b2')
+      let finishCopy = () => {}
+      const copyMayFinish = new Promise<void>((resolve) => {
+        finishCopy = resolve
+      })
+      mockBucket.copyFile.mockImplementation(async () => {
+        controller.abort()
+        await copyMayFinish
+      })
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
+        bucket: mockBucket as unknown as Bucket,
+      } satisfies SynchronizerConfig & { readonly bucket: Bucket }
+
+      const run = collectEvents(config)
+      let settled = false
+      let events: SyncEvent[] = []
+      let rejection: unknown
+      const observed = run.then(
+        (value) => {
+          settled = true
+          events = value
+        },
+        (err: unknown) => {
+          settled = true
+          rejection = err
+        },
+      )
+
+      for (
+        let attempts = 0;
+        mockBucket.copyFile.mock.calls.length === 0 && attempts < 10;
+        attempts++
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(settled).toBe(false)
+
+      finishCopy()
+      await observed
+      expect(rejection).toBeUndefined()
+      expect(events.some((event) => event.type === 'copy-done')).toBe(true)
+    })
+
     it('skips action execution when signal aborts after scan completes', async () => {
       const controller = new AbortController()
       const mockBucket = makeMockBucket()

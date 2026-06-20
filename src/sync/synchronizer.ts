@@ -136,23 +136,37 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
+  async function* finishAfterAbort(): AsyncGenerator<SyncEvent> {
+    await drainActions()
+    for (const event of results) yield event
+  }
+
   try {
     if (options.compareMode === 'sha1') {
       const compareBatchSize = concurrency
       let batch: SyncPair[] = []
       for await (const pair of zipFolders(source, dest, scanOptions)) {
-        if (options.signal?.aborted) return
+        if (options.signal?.aborted) {
+          yield* finishAfterAbort()
+          return
+        }
         batch.push(pair)
         if (batch.length >= compareBatchSize) {
           const preparedBatch = await processPreparedBatch(batch)
           for (const item of preparedBatch.items) {
             yield item.event
             /* v8 ignore next -- abort between compare yield and scheduling is timing-dependent */
-            if (options.signal?.aborted) return
+            if (options.signal?.aborted) {
+              yield* finishAfterAbort()
+              return
+            }
             for (const action of item.actions) await scheduleAction(action)
           }
           /* v8 ignore next -- batch preparation abort races are covered through lower-level tests */
-          if (preparedBatch.aborted) return
+          if (preparedBatch.aborted) {
+            yield* finishAfterAbort()
+            return
+          }
           batch = []
         }
       }
@@ -160,16 +174,28 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       const preparedBatch = await processPreparedBatch(batch)
       for (const item of preparedBatch.items) {
         yield item.event
-        if (options.signal?.aborted) return
+        if (options.signal?.aborted) {
+          yield* finishAfterAbort()
+          return
+        }
         for (const action of item.actions) await scheduleAction(action)
       }
-      if (preparedBatch.aborted) return
+      if (preparedBatch.aborted) {
+        yield* finishAfterAbort()
+        return
+      }
     } else {
       for await (const pair of zipFolders(source, dest, scanOptions)) {
-        if (options.signal?.aborted) return
+        if (options.signal?.aborted) {
+          yield* finishAfterAbort()
+          return
+        }
         const item = planPreparedPair(pair, readyComparePair(pair))
         yield item.event
-        if (options.signal?.aborted) return
+        if (options.signal?.aborted) {
+          yield* finishAfterAbort()
+          return
+        }
         for (const action of item.actions) await scheduleAction(action)
       }
     }
