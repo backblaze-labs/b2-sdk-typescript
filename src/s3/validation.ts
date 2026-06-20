@@ -2,14 +2,19 @@ import { hasHttpHeaderControlCharacter } from '../util/http.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
 export const FILE_NAME_MAX_BYTES = 1024
+const BUCKET_NAME_MIN = 6
+const BUCKET_NAME_MAX = 63
+const BUCKET_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$/
+const BUCKET_NAME_RESERVED_PREFIX = 'b2-'
 
 /**
- * Validate a B2 bucket name before embedding it in a URL path.
+ * Validate a B2 bucket name before signing or embedding it in a URL path.
  *
  * @param bucketName - Bucket name supplied by the caller.
  *
  * @throws TypeError when the bucket name is empty, contains control characters,
- * is a dot-only path segment, or contains path separators.
+ * is a dot-only path segment, contains path separators, or violates B2 bucket
+ * naming rules.
  */
 export function assertSafeBucketName(bucketName: string): void {
   if (bucketName.length === 0) {
@@ -20,6 +25,19 @@ export function assertSafeBucketName(bucketName: string): void {
   }
   if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
     throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
+  }
+  if (bucketName.length < BUCKET_NAME_MIN || bucketName.length > BUCKET_NAME_MAX) {
+    throw new TypeError(`bucketName must be ${BUCKET_NAME_MIN}-${BUCKET_NAME_MAX} characters.`)
+  }
+  if (!BUCKET_NAME_REGEX.test(bucketName)) {
+    throw new TypeError(
+      'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
+    )
+  }
+  if (bucketName.startsWith(BUCKET_NAME_RESERVED_PREFIX)) {
+    throw new TypeError(
+      `bucketName cannot start with the reserved prefix "${BUCKET_NAME_RESERVED_PREFIX}".`,
+    )
   }
 }
 
@@ -44,10 +62,13 @@ export function assertNativeDownloadFileName(fileName: string): void {
 }
 
 /**
- * Validate a B2 file name before signing or composing an object URL.
+ * Validate a B2 file name for URL signing safety.
  *
- * B2 and S3 object names can contain slashes, but dot-only path segments are
- * rejected because URL parsers can normalize them before the request is sent.
+ * This is not the native download URL path-boundary guard. B2 and S3 object
+ * names can contain leading, trailing, or repeated slashes, so this guard only
+ * enforces size, control-character, and dot-segment constraints needed before
+ * signing. Dot-only path segments are rejected because URL parsers can normalize
+ * them before the request is sent.
  *
  * @param fileName - B2 file name supplied by the caller.
  *

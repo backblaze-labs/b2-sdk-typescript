@@ -29,6 +29,23 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = [
   'application/xml',
   'application/custom+xml',
 ] as const
+const B2_INVALID_BUCKET_NAMES = [
+  ['short', 'bucketName must be 6-63 characters.'],
+  ['a'.repeat(64), 'bucketName must be 6-63 characters.'],
+  [
+    '-badbucket',
+    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
+  ],
+  [
+    'badbucket-',
+    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
+  ],
+  [
+    'bad_bucket',
+    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
+  ],
+  ['b2-secret', 'bucketName cannot start with the reserved prefix "b2-".'],
+] as const
 
 /** Minimal mock of AccountInfo with only the methods used by S3 helpers. */
 function createMockAccountInfo(
@@ -384,6 +401,17 @@ describe('presignS3GetObjectUrl', () => {
         bucketName: '..',
       }),
     ).rejects.toThrow('bucketName must not be "." or ".."')
+  })
+
+  it('rejects B2-invalid bucket names before signing', async () => {
+    for (const [bucketName, message] of B2_INVALID_BUCKET_NAMES) {
+      await expect(
+        presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          bucketName,
+        }),
+      ).rejects.toThrow(message)
+    }
   })
 
   it('signs response override query parameters', async () => {
@@ -750,6 +778,17 @@ describe('presignS3PutObjectUrl', () => {
     ).rejects.toThrow('bucketName must not be "." or ".."')
   })
 
+  it('rejects B2-invalid bucket names before signing', async () => {
+    for (const [bucketName, message] of B2_INVALID_BUCKET_NAMES) {
+      await expect(
+        presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          bucketName,
+        }),
+      ).rejects.toThrow(message)
+    }
+  })
+
   it('signs metadata headers with normalized key casing', async () => {
     const url = new URL(
       await presignS3PutObjectUrl({
@@ -908,6 +947,19 @@ describe('createNativeDownloadAuthorizationUrl', () => {
           'secret-token',
         ),
       ).toThrow()
+    }
+  })
+
+  it('rejects B2-invalid bucket names before returning native URLs', () => {
+    for (const [bucketName, message] of B2_INVALID_BUCKET_NAMES) {
+      expect(() =>
+        createNativeDownloadAuthorizationUrl(
+          'https://f004.backblazeb2.com',
+          bucketName,
+          'file.txt',
+          'secret-token',
+        ),
+      ).toThrow(message)
     }
   })
 
