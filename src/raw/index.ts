@@ -649,7 +649,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation.
+   * @param options - Optional request controls such as cancellation and retry.
    *
    * @returns The list of unfinished large files and optional continuation token.
    */
@@ -657,7 +657,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListUnfinishedLargeFilesRequest,
-    options?: { readonly signal?: AbortSignal },
+    options?: RawRequestOptions,
   ): Promise<ListUnfinishedLargeFilesResponse> {
     return this.postJson<ListUnfinishedLargeFilesResponse>(
       apiUrl,
@@ -673,7 +673,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation.
+   * @param options - Optional request controls such as cancellation and retry.
    *
    * @returns The list of uploaded parts and optional continuation token.
    */
@@ -681,7 +681,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListPartsRequest,
-    options?: { readonly signal?: AbortSignal },
+    options?: RawRequestOptions,
   ): Promise<ListPartsResponse> {
     return this.postJson<ListPartsResponse>(apiUrl, authToken, 'b2_list_parts', request, options)
   }

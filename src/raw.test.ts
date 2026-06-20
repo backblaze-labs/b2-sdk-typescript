@@ -13,8 +13,8 @@ function jsonResponse(value: unknown): HttpResponse {
   }
 }
 
-describe('RawClient list cancellation', () => {
-  it('passes abort signals through listUnfinishedLargeFiles and listParts', async () => {
+describe('RawClient list request controls', () => {
+  it('passes abort signals and retry through listUnfinishedLargeFiles and listParts', async () => {
     const requests: HttpRequest[] = []
     const transport: HttpTransport = {
       async send(request) {
@@ -27,23 +27,26 @@ describe('RawClient list cancellation', () => {
     }
     const raw = new RawClient({ transport })
     const controller = new AbortController()
+    const retry = { maxRetries: 0 }
 
     await raw.listUnfinishedLargeFiles(
       'https://api.example.test',
       'auth',
       { bucketId: 'bucket' as never },
-      { signal: controller.signal },
+      { signal: controller.signal, retry },
     )
     await raw.listParts(
       'https://api.example.test',
       'auth',
       { fileId: 'large-file' as never },
-      { signal: controller.signal },
+      { signal: controller.signal, retry },
     )
 
     expect(requests).toHaveLength(2)
     expect(requests[0]?.signal).toBe(controller.signal)
+    expect(requests[0]?.retry).toBe(retry)
     expect(requests[1]?.signal).toBe(controller.signal)
+    expect(requests[1]?.retry).toBe(retry)
   })
 })
 
