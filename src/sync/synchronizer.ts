@@ -153,6 +153,8 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * each comparison and action result.
  *
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
+ *
+ * @returns An async generator that yields comparison and action events.
  */
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
