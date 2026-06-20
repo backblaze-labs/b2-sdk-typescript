@@ -1,9 +1,10 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
-import { cancelLargeFileBestEffort } from '../upload/cancel.ts'
+import { type CleanupFailureListener, cancelLargeFileBestEffort } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
@@ -31,6 +32,8 @@ export interface CopyLargeFileOptions {
   readonly destinationServerSideEncryption?: EncryptionSetting
   /** SSE-C settings used to read the source if it was uploaded with SSE-C. */
   readonly sourceServerSideEncryption?: EncryptionSetting
+  /** Callback invoked if best-effort large-file cleanup fails after a copy error. */
+  readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Optional abort signal. Checked before dispatching each part and
    * between parts; an aborted signal cancels remaining parts and rolls
@@ -157,12 +160,21 @@ export async function copyLargeFile(
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    await cancelLargeFileBestEffort(
-      raw,
-      accountInfo,
-      largeFileId,
-      options.signal === undefined ? undefined : { signal: options.signal },
-    )
+    if (!(err instanceof FinishLargeFileResponseBodyError)) {
+      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, cleanupCopyOptions(options))
+    }
     throw err
+  }
+}
+
+function cleanupCopyOptions(options: CopyLargeFileOptions): {
+  readonly signal?: AbortSignal
+  readonly onCleanupFailure?: CleanupFailureListener
+} {
+  return {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.onCleanupFailure !== undefined
+      ? { onCleanupFailure: options.onCleanupFailure }
+      : {}),
   }
 }

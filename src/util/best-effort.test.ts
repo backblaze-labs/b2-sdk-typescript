@@ -55,4 +55,20 @@ describe('bestEffort', () => {
       }),
     ).resolves.toBeUndefined()
   })
+
+  it('reports a swallowed cleanup error to the optional observer', async () => {
+    const errors: unknown[] = []
+    const cleanupError = new Error('cleanup failed')
+
+    await expect(
+      bestEffort(
+        async () => {
+          throw cleanupError
+        },
+        (error) => errors.push(error),
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(errors).toEqual([cleanupError])
+  })
 })

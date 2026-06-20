@@ -17,6 +17,7 @@ import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
+import type { CleanupFailureListener } from './upload/cancel.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import {
   type B2ObjectUploadOptions,
@@ -300,6 +301,8 @@ export class B2Object {
     onProgress?: ProgressListener
     /** Callback invoked before retrying with a fresh upload URL. */
     onUploadRetry?: UploadRetryListener
+    /** Callback invoked if best-effort multipart cleanup fails after a stream error. */
+    onCleanupFailure?: CleanupFailureListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
      * the part. Upload POST network errors still retry when this is false because

@@ -414,6 +414,36 @@ describe('StreamSource', () => {
     expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1]))
   })
 
+  it('toArrayBuffer rejects and cancels unbounded trailing empty chunks', async () => {
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(/too many empty chunks/)
+    expect(cancelled).toBe(true)
+  })
+
+  it('toArrayBuffer rejects unbounded empty chunks before data', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(/too many empty chunks/)
+  })
+
   it('toArrayBuffer throws on second call (stream consumed)', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {

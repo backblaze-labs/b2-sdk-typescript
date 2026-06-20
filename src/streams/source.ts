@@ -7,6 +7,10 @@ const FORWARD_ONLY_SIZE_REQUIRED_ERROR =
 const STREAM_SOURCE_ENDED_EARLY_ERROR = 'StreamSource ended before the advertised byte count.'
 const STREAM_SOURCE_TOO_MANY_BYTES_ERROR =
   'StreamSource emitted more bytes than the advertised byte count.'
+const STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR =
+  'StreamSource emitted too many empty chunks without data.'
+/** Maximum consecutive empty chunks tolerated from a forward-only stream. */
+export const MAX_EMPTY_STREAM_CHUNKS = 1024
 
 /** Filesystem path accepted by {@link FileSource}. */
 export type FileSourcePath = string | URL
@@ -41,6 +45,7 @@ interface FileIdentity {
   readonly ino: number
   readonly size: number
   readonly mtimeMs: number
+  readonly ctimeMs: number
 }
 
 const FILE_SOURCE_INTERNAL = Symbol('FileSource.internal')
@@ -98,6 +103,7 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
     ino: stats.ino,
     size: stats.size,
     mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
   }
 }
 
@@ -134,6 +140,14 @@ function assertSameIdentity(
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
+  if (shouldCompareCtime() && actual.ctimeMs !== expected.ctimeMs) {
+    throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
+  }
+}
+
+function shouldCompareCtime(): boolean {
+  const processLike = (globalThis as { process?: { platform?: string } }).process
+  return processLike?.platform !== 'win32'
 }
 
 /* v8 ignore start -- Requires a file to pass identity checks and still EOF mid-range. */
@@ -445,12 +459,8 @@ abstract class FileRangeSource implements ContentSource {
   /**
    * Open this file range as a Web ReadableStream.
    *
-   * The stream opens and closes the file for each chunk so callers that abandon
-   * a partially consumed public stream do not leave a descriptor open. Chunks
-   * are read in large units to avoid the 64 KiB syscall overhead of older
-   * versions. For very large local-file uploads, pass `FileSource` directly to
-   * `bucket.upload()` so the multipart engine can use ranged `toArrayBuffer()`
-   * reads instead.
+   * The stream opens the file once, verifies the captured identity before and
+   * after reading, and closes the descriptor on EOF, error, or cancellation.
    *
    * @returns A ReadableStream that reads the configured file range lazily.
    */
@@ -459,20 +469,60 @@ abstract class FileRangeSource implements ContentSource {
     const identity = this.identity
     let position = this.offset
     let remaining = this.size
+    let file: FileHandleLike | null = null
+
+    const closeFile = async (): Promise<void> => {
+      const current = file
+      file = null
+      if (current !== null) await current.close()
+    }
+
+    const getFile = async (): Promise<FileHandleLike> => {
+      if (file === null) file = await openValidatedFile(path, identity)
+      return file
+    }
+
     return new ReadableStream<Uint8Array>({
       async pull(controller) {
-        if (remaining === 0) {
-          controller.close()
-          return
+        try {
+          if (remaining === 0) {
+            controller.close()
+            return
+          }
+
+          const current = await getFile()
+          const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
+          const data = new Uint8Array(length)
+          let filled = 0
+          while (filled < data.byteLength) {
+            const { bytesRead } = await current.read(
+              data,
+              filled,
+              data.byteLength - filled,
+              position + filled,
+            )
+            if (bytesRead === 0) throw rangeEndedEarlyError(path, position, length)
+            filled += bytesRead
+          }
+
+          position += data.byteLength
+          remaining -= data.byteLength
+          controller.enqueue(data)
+          if (remaining === 0) {
+            const stats = await current.stat()
+            assertSameIdentity(path, identity, stats, 'while being read')
+            await closeFile()
+            controller.close()
+          }
+        } catch (err) {
+          /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
+          await closeFile().catch(() => {})
+          controller.error(err)
         }
-
-        const length = Math.min(FILE_READ_CHUNK_SIZE, remaining)
-        const data = await readFileRange(path, identity, position, length)
-
-        position += data.byteLength
-        remaining -= data.byteLength
-        controller.enqueue(data)
-        if (remaining === 0) controller.close()
+      },
+      async cancel() {
+        /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
+        await closeFile().catch(() => {})
       },
     })
   }
@@ -500,8 +550,8 @@ class FileSliceSource extends FileRangeSource {}
  * {@link FileSource.fromPath}. Both paths capture a best-effort regular,
  * non-symlink file identity; reads reject if the path is replaced, if the
  * filesystem cannot report stable identity, or if size/mtime changes before the
- * configured byte range is read. This is not tamper-resistant: an in-place
- * rewrite that preserves size and restores mtime can pass the check. Use an
+ * configured byte range is read. On POSIX platforms, ctime changes are also
+ * rejected so same-size rewrites that restore mtime are detected. Use an
  * independent digest when a caller must prove the bytes are unchanged. Slices
  * preserve the captured identity, so multipart uploads can read disjoint ranges
  * without materialising the whole file in memory or following later path swaps.
@@ -547,6 +597,9 @@ export class FileSource extends FileRangeSource {
 }
 
 function constructFileSourceFromIdentity(path: FileSourcePath, identity: FileIdentity): FileSource {
+  // The public overload is intentionally single-argument; Reflect.construct
+  // lets fromPath pass the module-private validated identity without exposing
+  // that constructor shape in the public type surface.
   return Reflect.construct(FileSource, [
     path,
     { key: FILE_SOURCE_INTERNAL, identity },
@@ -629,9 +682,11 @@ async function collectStreamExactly(
 
   try {
     while (total < expectedSize) {
-      const { done, value } = await reader.read()
+      const { done, value } = await readNextNonEmptyStreamChunk(
+        reader,
+        STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+      )
       if (done) throw new Error(STREAM_SOURCE_ENDED_EARLY_ERROR)
-      if (value.byteLength === 0) continue
       if (total + value.byteLength > expectedSize) {
         throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
       }
@@ -639,10 +694,10 @@ async function collectStreamExactly(
       total += value.byteLength
     }
 
-    let extra = await reader.read()
-    while (!extra.done && extra.value.byteLength === 0) {
-      extra = await reader.read()
-    }
+    const extra = await readNextNonEmptyStreamChunk(
+      reader,
+      STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+    )
     if (!extra.done) throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
 
     const result = new Uint8Array(expectedSize)
@@ -659,6 +714,28 @@ async function collectStreamExactly(
       await reader.cancel().catch(() => {})
     }
     reader.releaseLock()
+  }
+}
+
+/**
+ * Reads from a stream until it receives data, EOF, or too many consecutive empty chunks.
+ * @param reader - Locked reader for a Uint8Array stream.
+ * @param emptyChunkErrorMessage - Error message to throw when the empty-chunk limit is exceeded.
+ *
+ * @returns The next non-empty chunk or EOF result.
+ */
+export async function readNextNonEmptyStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  emptyChunkErrorMessage: string,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let emptyChunks = 0
+  while (true) {
+    const result = await reader.read()
+    if (result.done || result.value.byteLength > 0) return result
+    emptyChunks += 1
+    if (emptyChunks > MAX_EMPTY_STREAM_CHUNKS) {
+      throw new Error(emptyChunkErrorMessage)
+    }
   }
 }
 

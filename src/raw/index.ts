@@ -10,7 +10,7 @@
  */
 
 import { assertSecureRealmUrl } from '../auth/realms.ts'
-import { UploadResponseBodyError } from '../errors/index.ts'
+import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
@@ -122,6 +122,12 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 function uploadResponseBodyError(err: unknown): UploadResponseBodyError {
   const message = err instanceof Error ? err.message : 'Upload response body could not be read'
   return new UploadResponseBodyError(message, err)
+}
+
+function finishLargeFileResponseBodyError(err: unknown): FinishLargeFileResponseBodyError {
+  const message =
+    err instanceof Error ? err.message : 'Finish large file response body could not be read'
+  return new FinishLargeFileResponseBodyError(message, err)
 }
 
 /**
@@ -653,9 +659,28 @@ export class RawClient {
     request: FinishLargeFileRequest,
     options?: RawRequestOptions,
   ): Promise<FileVersion> {
-    return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request, options),
-    )
+    const response = await this.transport.send({
+      url: `${apiUrl}/b2api/v3/b2_finish_large_file`,
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+    })
+
+    let fileVersion: FileVersion
+    try {
+      fileVersion = await response.json<FileVersion>()
+    } catch (err) {
+      if (err instanceof TypeError || err instanceof DOMException) {
+        throw finishLargeFileResponseBodyError(err)
+      }
+      throw err
+    }
+    return normalizeFileVersionSha1(fileVersion)
   }
 
   /**

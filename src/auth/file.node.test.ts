@@ -63,6 +63,7 @@ describe('FileAccountInfo', () => {
     const client1 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: 'http://127.0.0.1',
       transport: sim.transport(),
       accountInfo: accountInfo1,
     })
@@ -84,6 +85,7 @@ describe('FileAccountInfo', () => {
     const client2 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: 'http://127.0.0.1',
       transport: sim.transport(),
       accountInfo: accountInfo2,
     })
@@ -491,14 +493,14 @@ describe('FileAccountInfo', () => {
     expect(discards).toEqual([])
   })
 
-  it('retains a custom-realm cache whose endpoints share the realm parent domain', async () => {
+  it('retains a custom-realm cache whose endpoints are exact realm subdomains', async () => {
     await writeFile(
       storePath,
       JSON.stringify({
         ...makeCachedAuth({
-          apiUrl: 'https://api.custom.example',
-          downloadUrl: 'https://download.custom.example',
-          s3ApiUrl: 'https://s3.custom.example',
+          apiUrl: 'https://api.auth.custom.example',
+          downloadUrl: 'https://download.auth.custom.example',
+          s3ApiUrl: 'https://s3.auth.custom.example',
         }),
         _b2sdk: {
           version: 1,
@@ -524,6 +526,83 @@ describe('FileAccountInfo', () => {
 
     expect(client.accountInfo.getAuth()).not.toBeNull()
     expect(discards).toEqual([])
+  })
+
+  it('rejects a custom-realm cache whose endpoints are sibling public-suffix hosts', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'https://attacker.ngrok-free.app/api',
+          downloadUrl: 'https://attacker.ngrok-free.app/download',
+          s3ApiUrl: 'https://attacker.ngrok-free.app/s3',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://victim.ngrok-free.app',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'https://victim.ngrok-free.app',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('rejects loopback endpoints in cached auth by default', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'http://127.0.0.1:9876/api',
+          downloadUrl: 'http://localhost:9876/download',
+          s3ApiUrl: 'http://[::1]:9876/s3',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://auth.custom.example',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'https://auth.custom.example',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo.getAuth()).toBeNull()
+    expect(discards).toEqual(['endpoint_mismatch'])
   })
 
   it('delegates every AccountInfo getter to the in-memory backing', async () => {

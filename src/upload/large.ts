@@ -1,11 +1,12 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
-import type { ContentSource } from '../streams/source.ts'
+import { type ContentSource, readNextNonEmptyStreamChunk } from '../streams/source.ts'
 import type { BucketRetentionPolicy } from '../types/bucket.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
@@ -14,7 +15,7 @@ import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort } from './cancel.ts'
+import { type CleanupFailureListener, cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   findResumeCandidate,
@@ -49,7 +50,8 @@ const STREAM_EMITTED_TOO_MANY_BYTES_ERROR =
   'uploadLargeFile: source stream emitted more bytes than advertised size.'
 const STREAM_TRAILING_EMPTY_CHUNKS_ERROR =
   'uploadLargeFile: source stream emitted too many empty chunks after advertised size.'
-const MAX_TRAILING_EMPTY_CHUNKS = 1024
+const STREAM_EMPTY_CHUNKS_ERROR =
+  'uploadLargeFile: source stream emitted too many empty chunks without data.'
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -95,6 +97,8 @@ export interface UploadLargeFileOptions {
   readonly retry?: Partial<RetryOptions>
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
+  /** Callback invoked if best-effort large-file cleanup fails after an upload error. */
+  readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
    * the part. Upload POST network errors still retry when this is false because
@@ -346,7 +350,7 @@ export async function uploadLargeFile(
         raw,
         accountInfo,
         largeFileId,
-        options.signal === undefined ? undefined : { signal: options.signal },
+        cleanupLargeFileOptions(options),
       )
       throw new Error('uploadLargeFile: resume is not supported on non-sliceable sources.')
     }
@@ -373,12 +377,12 @@ export async function uploadLargeFile(
       )
     } catch (err) {
       abortScope.abort(err)
-      if (createdLargeFile) {
+      if (createdLargeFile && !(err instanceof FinishLargeFileResponseBodyError)) {
         await cancelLargeFileBestEffort(
           raw,
           accountInfo,
           largeFileId,
-          options.signal === undefined ? undefined : { signal: options.signal },
+          cleanupLargeFileOptions(options),
         )
       }
       throw err
@@ -472,12 +476,12 @@ export async function uploadLargeFile(
     return result
   } catch (err) {
     abortScope.abort(err)
-    if (createdLargeFile) {
+    if (createdLargeFile && !(err instanceof FinishLargeFileResponseBodyError)) {
       await cancelLargeFileBestEffort(
         raw,
         accountInfo,
         largeFileId,
-        options.signal === undefined ? undefined : { signal: options.signal },
+        cleanupLargeFileOptions(options),
       )
     }
     throw err
@@ -541,13 +545,8 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await readNextNonEmptyChunk(reader, signal)
-        if (done) {
-          throw new Error(
-            `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
-          )
-        }
-        bytesRead += value.byteLength
+        const { done, value } = await readNextNonEmptyStreamChunk(reader, STREAM_EMPTY_CHUNKS_ERROR)
+        if (done) break
         const take = Math.min(value.byteLength, buf.byteLength - filled)
         buf.set(value.subarray(0, take), filled)
         filled += take
@@ -589,15 +588,7 @@ async function uploadPartsSequentially(
     if (carry !== null) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
-    let trailingEmptyChunks = 0
-    let extra = await reader.read()
-    while (!extra.done && extra.value.byteLength === 0) {
-      trailingEmptyChunks += 1
-      if (trailingEmptyChunks > MAX_TRAILING_EMPTY_CHUNKS) {
-        throw new Error(STREAM_TRAILING_EMPTY_CHUNKS_ERROR)
-      }
-      extra = await reader.read()
-    }
+    const extra = await readNextNonEmptyStreamChunk(reader, STREAM_TRAILING_EMPTY_CHUNKS_ERROR)
     if (!extra.done) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
@@ -638,5 +629,17 @@ function notifyResumePartReused(
     listener?.(event)
   } catch {
     // Diagnostic observers must not change upload success or failure.
+  }
+}
+
+function cleanupLargeFileOptions(options: UploadLargeFileOptions): {
+  readonly signal?: AbortSignal
+  readonly onCleanupFailure?: CleanupFailureListener
+} {
+  return {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.onCleanupFailure !== undefined
+      ? { onCleanupFailure: options.onCleanupFailure }
+      : {}),
   }
 }

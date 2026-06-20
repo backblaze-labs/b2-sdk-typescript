@@ -112,6 +112,9 @@ export interface ResumePartInfo {
   readonly contentLength: number
 }
 
+const RESUME_DISCOVERY_PAGE_SIZE = 100
+const MAX_RESUME_DISCOVERY_PAGES = 10
+
 /** Information about an unfinished large file eligible for resume. */
 export interface ResumeCandidate {
   /** ID of the unfinished large file. */

@@ -52,13 +52,14 @@ const endpoint = `https://s3.${process.env.B2_REGION}.backblazeb2.com`
 
 | Import path | What it contains |
 |---|---|
-| `@backblaze-labs/b2-sdk` | `B2Client`, `Bucket`, `B2Object`, `BufferSource`, all types |
-| `@backblaze-labs/b2-sdk/errors` | Typed error classes (`B2Error`, `AuthorizationError`, etc.) |
-| `@backblaze-labs/b2-sdk/streams` | `StreamSource`, `WritableStreamSink` for streaming uploads/downloads |
-| `@backblaze-labs/b2-sdk/sync` | `syncDirectory` — sync a local directory to a B2 bucket |
+| `@backblaze-labs/b2-sdk` | `B2Client`, `Bucket`, `B2Object`, `BufferSource`, `FileSource`, `toContentSource`, public types |
+| `@backblaze-labs/b2-sdk/errors` | Typed error classes (`B2Error`, `BadAuthTokenError`, `UploadResponseBodyError`, etc.) |
+| `@backblaze-labs/b2-sdk/streams` | `BufferSource`, `BlobSource`, `FileSource`, `StreamSource`, `toContentSource`, hashing helpers |
+| `@backblaze-labs/b2-sdk/sync` | `synchronize`, `LocalFolder`, `B2Folder` for local/B2 sync |
 | `@backblaze-labs/b2-sdk/raw` | Direct access to B2 native API calls |
 | `@backblaze-labs/b2-sdk/s3` | S3-compatible client helpers |
-| `@backblaze-labs/b2-sdk/auth` | Auth helpers, `AuthorizedClient` |
+| `@backblaze-labs/b2-sdk/auth` | Auth helpers, `InMemoryAccountInfo` |
+| `@backblaze-labs/b2-sdk/auth/file` | Node-only `FileAccountInfo` persistent auth cache |
 | `@backblaze-labs/b2-sdk/notifications` | Bucket event notifications |
 | `@backblaze-labs/b2-sdk/simulator` | In-process B2 simulator for tests |
 
@@ -73,9 +74,13 @@ await bucket.upload({ fileName: 'data.json', source: new BufferSource(bytes), co
 // Large file — automatic multipart with parallel parts
 await bucket.upload({ fileName: 'model.bin', source: new BufferSource(largeBuffer) })
 
-// Streaming upload
-import { StreamSource } from '@backblaze-labs/b2-sdk/streams'
-await bucket.upload({ fileName: 'stream.bin', source: new StreamSource(readableStream) })
+// Local file upload without whole-file buffering
+import { FileSource, StreamSource, toContentSource } from '@backblaze-labs/b2-sdk/streams'
+await bucket.upload({ fileName: 'backup.tar', source: await FileSource.fromPath('/tmp/backup.tar') })
+
+// Streaming upload; size is required for forward-only sources
+await bucket.upload({ fileName: 'stream.bin', source: new StreamSource(readableStream, size) })
+await bucket.upload({ fileName: 'node-stream.bin', source: toContentSource(nodeReadable, size) })
 
 // Resume a failed multipart upload
 await bucket.upload({ fileName: 'large.bin', source, resume: true })
@@ -84,14 +89,14 @@ await bucket.upload({ fileName: 'large.bin', source, resume: true })
 ### Download a file
 
 ```ts
-const obj = await bucket.getObject('hello.txt')
-const text = await obj.download().then(r => r.text())
+const result = await bucket.file('hello.txt').download()
+const text = new TextDecoder().decode(await new Response(result.body).arrayBuffer())
 ```
 
 ### List files
 
 ```ts
-for await (const file of bucket.listFiles({ prefix: 'logs/' })) {
+for await (const file of bucket.paginateFileNames({ prefix: 'logs/' })) {
   console.log(file.fileName, file.contentLength)
 }
 ```
@@ -99,17 +104,24 @@ for await (const file of bucket.listFiles({ prefix: 'logs/' })) {
 ### Delete files
 
 ```ts
-await bucket.deleteObject('hello.txt')
+const info = await bucket.getFileInfoByName('hello.txt')
+if (info) await bucket.deleteFileVersion(info.fileName, info.fileId)
 
 // Bulk delete by prefix
-await bucket.bulkDelete({ prefix: 'tmp/' })
+for await (const event of bucket.deleteAll({ prefix: 'tmp/' })) {
+  if (event.type === 'error') console.warn(event.fileName, event.message)
+}
 ```
 
 ### Server-side encryption
 
 ```ts
-import { SseMode } from '@backblaze-labs/b2-sdk'
-await bucket.upload({ fileName: 'secret.bin', source, serverSideEncryption: { mode: SseMode.SSE_B2 } })
+import { EncryptionAlgorithm, EncryptionMode } from '@backblaze-labs/b2-sdk'
+await bucket.upload({
+  fileName: 'secret.bin',
+  source,
+  serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
+})
 ```
 
 ### Application keys
@@ -131,12 +143,12 @@ await client.authorize()
 ## Error handling
 
 ```ts
-import { B2Error, AuthorizationError } from '@backblaze-labs/b2-sdk/errors'
+import { B2Error, BadAuthTokenError } from '@backblaze-labs/b2-sdk/errors'
 
 try {
   await client.authorize()
 } catch (err) {
-  if (err instanceof AuthorizationError) { /* bad credentials */ }
+  if (err instanceof BadAuthTokenError) { /* bad credentials */ }
   if (err instanceof B2Error) { console.log(err.status, err.code) }
 }
 ```

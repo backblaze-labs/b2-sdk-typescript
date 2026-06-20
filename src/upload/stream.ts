@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
@@ -10,7 +11,11 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
+import {
+  type CleanupFailureListener,
+  cancelLargeFileBestEffort,
+  DEFAULT_CLEANUP_TIMEOUT_MS,
+} from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   resolveRetryResponseBodyFailures,
@@ -46,6 +51,8 @@ export interface CreateWriteStreamOptions {
   readonly retry?: Partial<RetryOptions>
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
+  /** Callback invoked if best-effort large-file cleanup fails after a stream error. */
+  readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
    * the part. Upload POST network errors still retry when this is false because
@@ -204,7 +211,7 @@ export function createWriteStream(
           raw,
           accountInfo,
           fileId,
-          options.signal === undefined ? undefined : { signal: options.signal },
+          cleanupWriteStreamOptions(options),
         ),
       )
       .catch(() => {
@@ -354,12 +361,12 @@ export function createWriteStream(
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
-        if (fileIdToCancel !== null) {
+        if (fileIdToCancel !== null && !(err instanceof FinishLargeFileResponseBodyError)) {
           await cancelLargeFileBestEffort(
             raw,
             accountInfo,
             fileIdToCancel,
-            options.signal === undefined ? undefined : { signal: options.signal },
+            cleanupWriteStreamOptions(options),
           )
         }
         rejectDone(observedError)
@@ -385,7 +392,7 @@ export function createWriteStream(
           raw,
           accountInfo,
           fileIdToCancel,
-          options.signal === undefined ? undefined : { signal: options.signal },
+          cleanupWriteStreamOptions(options),
         )
       }
       rejectDone(abortError)
@@ -394,6 +401,18 @@ export function createWriteStream(
   })
 
   return { writable, done }
+}
+
+function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {
+  readonly signal?: AbortSignal
+  readonly onCleanupFailure?: CleanupFailureListener
+} {
+  return {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.onCleanupFailure !== undefined
+      ? { onCleanupFailure: options.onCleanupFailure }
+      : {}),
+  }
 }
 
 /**

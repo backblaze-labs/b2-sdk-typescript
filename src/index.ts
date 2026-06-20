@@ -46,6 +46,7 @@ export {
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
+  FinishLargeFileResponseBodyError,
   InternalError,
   InvalidBucketIdError,
   InvalidBucketInfoError,
@@ -138,6 +139,7 @@ export type {
   ResumeCandidateRejectedListener,
   ResumeCandidateRejectedReason,
 } from './upload/resume.ts'
+export type { CleanupFailureEvent, CleanupFailureListener } from './upload/cancel.ts'
 export type { UploadRetryEvent, UploadRetryListener } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'

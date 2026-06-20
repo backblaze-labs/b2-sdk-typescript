@@ -600,6 +600,8 @@ new B2Client({
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
+The default transport follows same-origin `GET` / `HEAD` redirects after each target passes the SSRF guard. Cross-origin redirects and `POST` redirects are blocked with `B2RedirectError`. Pass `followSameOriginRedirects: false` to the `B2Client` constructor to block same-origin redirects as well.
+
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 
 The default transport follows same-origin `GET` / `HEAD` redirects after each target passes the SSRF guard. Cross-origin redirects and `POST` redirects are blocked with `B2RedirectError`. Pass `followSameOriginRedirects: false` to the `B2Client` constructor to block same-origin redirects as well.
@@ -626,6 +628,8 @@ const client = new B2Client({
   },
 })
 ```
+
+When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe a failed cleanup with the orphaned `fileId` so operators can reconcile unfinished large files.
 
 ## Testing with the simulator
 
@@ -737,14 +741,14 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs the full suite on Node 22 and 24 across Linux, Windows, and macOS. |
+| Node.js | 22.3+ | Primary target. CI runs the full suite on Node 22.3 and 24 across Linux, Windows, and macOS. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
 | Cloudflare Workers | - | Supported. |
 | Vercel Edge | - | Supported. |
 
-Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026).
+Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path.
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 

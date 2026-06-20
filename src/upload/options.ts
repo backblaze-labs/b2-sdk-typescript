@@ -3,6 +3,7 @@ import type { ContentSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
+import type { CleanupFailureListener } from './cancel.ts'
 import type { ResumePartReusedListener } from './large.ts'
 import type { ResumeCandidateRejectedListener } from './resume.ts'
 import type { UploadRetryListener } from './retry.ts'
@@ -31,6 +32,8 @@ export interface UploadOptions {
   readonly onProgress?: ProgressListener
   /** Callback invoked before retrying with a fresh upload URL. */
   readonly onUploadRetry?: UploadRetryListener
+  /** Callback invoked if best-effort large-file cleanup fails after an upload error. */
+  readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Configure retries after B2 may have stored bytes. Single-request uploads
    * use this for unreadable response bodies and ambiguous upload POST network

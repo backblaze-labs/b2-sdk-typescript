@@ -32,6 +32,7 @@ import type {
 } from './types/notifications.ts'
 import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
+import type { CleanupFailureListener } from './upload/cancel.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import {
@@ -810,6 +811,8 @@ export class Bucket {
     destinationServerSideEncryption?: EncryptionSetting
     /** SSE-C settings for the source if it was uploaded with SSE-C. */
     sourceServerSideEncryption?: EncryptionSetting
+    /** Callback invoked if best-effort multipart cleanup fails after a copy error. */
+    onCleanupFailure?: CleanupFailureListener
     /** Part size in bytes. Defaults to the account's recommended part size. */
     partSize?: number
     /**
@@ -839,6 +842,9 @@ export class Bucket {
         : {}),
       ...(options.partSize !== undefined ? { partSize: options.partSize } : {}),
       ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+      ...(options.onCleanupFailure !== undefined
+        ? { onCleanupFailure: options.onCleanupFailure }
+        : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })
   }

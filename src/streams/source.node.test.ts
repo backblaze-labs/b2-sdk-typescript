@@ -182,15 +182,15 @@ describe('FileSource', () => {
   })
 
   it.skipIf(process.platform === 'win32')(
-    'allows metadata-only chmod changes after construction',
+    'rejects metadata-only ctime changes after construction',
     async () => {
       const path = join(tmpDir, 'chmod.txt')
       await writeFile(path, 'metadata-only')
 
       const source = new FileSource(path)
-      await chmod(path, 0o600)
+      await chmod(path, 0o400)
 
-      expect(decoder.decode(await source.toArrayBuffer())).toBe('metadata-only')
+      await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
     },
   )
 
@@ -214,18 +214,21 @@ describe('FileSource', () => {
     await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
 
-  it('documents best-effort checks do not catch restored-mtime rewrites', async () => {
-    const path = join(tmpDir, 'restored-mtime.txt')
-    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
-    await writeFile(path, 'original data')
-    await utimes(path, fixedTime, fixedTime)
+  it.skipIf(process.platform === 'win32')(
+    'detects same-size rewrites with restored mtime',
+    async () => {
+      const path = join(tmpDir, 'restored-mtime.txt')
+      const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+      await writeFile(path, 'original data')
+      await utimes(path, fixedTime, fixedTime)
 
-    const source = new FileSource(path)
-    await writeFile(path, 'tampered data')
-    await utimes(path, fixedTime, fixedTime)
+      const source = new FileSource(path)
+      await writeFile(path, 'tampered data')
+      await utimes(path, fixedTime, fixedTime)
 
-    expect(decoder.decode(await source.toArrayBuffer())).toBe('tampered data')
-  })
+      await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
+    },
+  )
 
   it.skipIf(process.platform === 'win32')('rejects a path replaced by a symlink', async () => {
     const path = join(tmpDir, 'payload.txt')

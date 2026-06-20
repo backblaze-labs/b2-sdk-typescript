@@ -480,13 +480,12 @@ describe('getRealmUrl', () => {
     expect(Object.keys(REALM_URLS)).toEqual(expect.arrayContaining(['production', 'staging']))
   })
 
-  it('keeps public REALM_URLS mutations out of internal realm resolution', () => {
-    const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
-    REALM_URLS['production'] = 'https://attacker.example'
-    try {
-      expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
-    } finally {
-      REALM_URLS['production'] = originalProduction
-    }
+  it('exposes REALM_URLS as a read-only informational map', () => {
+    expect(Object.isFrozen(REALM_URLS)).toBe(true)
+    const mutableRealmUrls = REALM_URLS as Record<string, string>
+    expect(() => {
+      mutableRealmUrls['production'] = 'https://attacker.example'
+    }).toThrow(TypeError)
+    expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
   })
 })

@@ -16,8 +16,9 @@
  * "stream consumed twice", or "called before init", use the native `Error`
  * constructor instead. The direct `Error` outliers are
  * {@link B2InsufficientCapabilityError}, {@link B2RedirectError},
- * {@link B2SsrfError}, {@link NetworkError}, and
- * {@link ResumeFileIdMismatchError}.
+ * {@link B2SsrfError}, {@link NetworkError},
+ * {@link ResumeFileIdMismatchError}, {@link UploadResponseBodyError}, and
+ * {@link FinishLargeFileResponseBodyError}.
  *
  * @packageDocumentation
  */
@@ -633,6 +634,26 @@ export class UploadResponseBodyError extends Error {
   ) {
     super(message, { cause })
     this.name = 'UploadResponseBodyError'
+  }
+}
+
+/**
+ * Thrown when `b2_finish_large_file` returned a response but its body could not
+ * be read. The large file may already be committed server-side, so high-level
+ * upload paths do not cancel the large file after this error.
+ */
+export class FinishLargeFileResponseBodyError extends Error {
+  /**
+   * Creates a new FinishLargeFileResponseBodyError instance.
+   * @param message - Human-readable description of the response read failure.
+   * @param cause - The underlying response body error.
+   */
+  constructor(
+    message: string,
+    public override readonly cause?: unknown,
+  ) {
+    super(message, { cause })
+    this.name = 'FinishLargeFileResponseBodyError'
   }
 }
 

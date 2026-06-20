@@ -3,6 +3,17 @@ import type { RawClient } from '../raw/index.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
 
+/** Event emitted when best-effort large-file cleanup fails. */
+export interface CleanupFailureEvent {
+  /** Unfinished large file that may remain orphaned. */
+  readonly fileId: LargeFileId
+  /** Error thrown by `b2_cancel_large_file`. */
+  readonly error: unknown
+}
+
+/** Callback invoked when best-effort cleanup fails. */
+export type CleanupFailureListener = (event: CleanupFailureEvent) => void
+
 /** Default wall-clock bound for best-effort cleanup calls after upload failure. */
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000
 
@@ -22,7 +33,7 @@ const fallbackCleanupDisposers = new WeakMap<AbortSignal, () => void>()
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state for the API URL + token.
  * @param fileId - The in-progress large file ID to cancel.
- * @param options - Optional request controls for bounding the cleanup call.
+ * @param options - Optional request controls and cleanup-failure observer.
  *
  * @returns A promise that always resolves, regardless of the cancel
  *   call's outcome.
@@ -31,18 +42,24 @@ export async function cancelLargeFileBestEffort(
   raw: RawClient,
   accountInfo: AccountInfo,
   fileId: LargeFileId,
-  options?: { readonly signal?: AbortSignal },
+  options?: {
+    readonly signal?: AbortSignal
+    readonly onCleanupFailure?: CleanupFailureListener
+  },
 ): Promise<void> {
-  await bestEffort(async () => {
-    const requestOptions = cleanupRequestOptions(options?.signal)
-    const request = raw.cancelLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      { fileId },
-      requestOptions,
-    )
-    await waitForCleanup(request, requestOptions.signal)
-  })
+  await bestEffort(
+    async () => {
+      const requestOptions = cleanupRequestOptions(options?.signal)
+      const request = raw.cancelLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        { fileId },
+        requestOptions,
+      )
+      await waitForCleanup(request, requestOptions.signal)
+    },
+    (error) => options?.onCleanupFailure?.({ fileId, error }),
+  )
 }
 
 /**
@@ -144,4 +161,3 @@ function cleanupDomException(message: string, name: string): Error {
   const error = new Error(message)
   error.name = name
   return error
-}

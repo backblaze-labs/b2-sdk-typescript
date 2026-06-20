@@ -5,6 +5,7 @@ import { B2Client } from '../client.ts'
 import {
   B2Error,
   B2SsrfError,
+  FinishLargeFileResponseBodyError,
   NetworkError,
   ResumeFileIdMismatchError,
   TooManyRequestsError,
@@ -993,6 +994,7 @@ describe('uploadLargeFile cleanup paths', () => {
 
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
+    const cleanupFailures: Array<{ fileId: string; error: unknown }> = []
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
         bucketId: bucket.id,
@@ -1000,8 +1002,59 @@ describe('uploadLargeFile cleanup paths', () => {
         source: new BufferSource(data),
         partSize,
         concurrency: 1,
+        onCleanupFailure: (event) =>
+          cleanupFailures.push({ fileId: event.fileId, error: event.error }),
       }),
     ).rejects.toThrow(/upload_part failure/)
+    expect(cleanupFailures).toHaveLength(1)
+    expect(cleanupFailures[0]?.fileId).toMatch(/^4_z/)
+    expect(cleanupFailures[0]?.error).toBeInstanceOf(Error)
+  })
+
+  it('does not cancel when finishLargeFile commits but its response body is lost', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let finishCalls = 0
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          const response = await inner.send(req)
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            finishCalls += 1
+            return {
+              ...response,
+              json: () => Promise.reject(new TypeError('finish response body lost')),
+            }
+          }
+          return response
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-body-lost',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'ambiguous-finish.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+
+    expect(finishCalls).toBe(1)
+    expect(cancelCalls).toBe(0)
+    expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
   })
 
   it('aborts and drains parallel part work before cancelling the large file', async () => {
@@ -4035,6 +4088,85 @@ describe('uploadSmallFile cleanup path', () => {
     )
     expect(
       unfinished.files.find((f) => f.fileName === 'stream-empty-trailer-poison.bin'),
+    ).toBeUndefined()
+  })
+
+  it('rejects unbounded empty forward-only chunks before data', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-before-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-before-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-before-poison.bin'),
+    ).toBeUndefined()
+  })
+
+  it('rejects unbounded empty forward-only chunks between parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-between-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-between-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-between-poison.bin'),
     ).toBeUndefined()
   })
 
