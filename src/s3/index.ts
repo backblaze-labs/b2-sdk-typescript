@@ -348,7 +348,7 @@ export async function presignS3PutObjectUrl(
   const headers: SignedHeader[] = []
   if (options.contentType !== undefined) {
     if (options.allowBrowserExecutableContentType === true) {
-      assertSafeHeaderValue('contentType', options.contentType, 'stored object Content-Type')
+      assertSafeContentTypeValue('contentType', options.contentType, 'stored object Content-Type')
     } else {
       assertSafePutContentType(options.contentType)
     }
@@ -593,15 +593,24 @@ function mediaTypeFor(contentType: string): string {
   return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
 }
 
+function assertSafeContentTypeValue(name: string, contentType: string, target: string): string {
+  assertSafeHeaderValue(name, contentType, target)
+
+  const mediaType = mediaTypeFor(contentType)
+  if (mediaType.length === 0) {
+    throw new TypeError(`${name} must include a non-empty media type.`)
+  }
+
+  return mediaType
+}
+
 function assertNonExecutableContentType(
   name: string,
   contentType: string,
   target: string,
   guidance: string,
 ): void {
-  assertSafeHeaderValue(name, contentType, target)
-
-  const mediaType = mediaTypeFor(contentType)
+  const mediaType = assertSafeContentTypeValue(name, contentType, target)
   if (isBrowserExecutableContentType(mediaType)) {
     throw new TypeError(`${name} "${mediaType}" can execute in browsers; ${guidance}.`)
   }

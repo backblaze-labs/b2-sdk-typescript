@@ -447,6 +447,17 @@ describe('presignS3GetObjectUrl', () => {
     }
   })
 
+  it('rejects empty response content type overrides', async () => {
+    for (const responseContentType of ['', '   ', '; charset=utf-8']) {
+      await expect(
+        presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          responseContentType,
+        }),
+      ).rejects.toThrow('responseContentType must include a non-empty media type.')
+    }
+  })
+
   it('rejects inline response content disposition overrides', async () => {
     await expect(
       presignS3GetObjectUrl({
@@ -604,6 +615,27 @@ describe('presignS3PutObjectUrl', () => {
         contentType: 'image/jpeg\nx-amz-meta-evil: yes',
       }),
     ).rejects.toThrow('contentType must not contain control characters')
+  })
+
+  it('rejects empty content type values', async () => {
+    for (const contentType of ['', '   ', '; charset=utf-8']) {
+      await expect(
+        presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          fileName: 'uploads/photo.jpg',
+          contentType,
+        }),
+      ).rejects.toThrow('contentType must include a non-empty media type.')
+    }
+
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/page.html',
+        contentType: '   ',
+        allowBrowserExecutableContentType: true,
+      }),
+    ).rejects.toThrow('contentType must include a non-empty media type.')
   })
 
   it('rejects browser-executable content types by default', async () => {
