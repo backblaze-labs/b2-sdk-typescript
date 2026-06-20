@@ -533,6 +533,25 @@ describe('preparePairForCompare', () => {
     expect(result.errors).toHaveLength(1)
   })
 
+  it('skips when B2 byte hashing returns an unavailable sha1', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readB2Sha1: async () => ({ contentSha1: null, bytesRead: 7 }),
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.bytesVerified).toBe(7)
+    expect(result.pair[0]?.contentSha1).toBeNull()
+    expect(result.events[0]).toMatchObject({
+      type: 'skip',
+      path: 'file.txt',
+      message: 'sha1 comparison skipped because a verifiable SHA-1 is unavailable',
+    })
+  })
+
   it('returns an error event when destination B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeB2SyncPath('source.txt', 1000, 100, sha1)

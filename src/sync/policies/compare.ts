@@ -320,7 +320,13 @@ async function verifyB2Sha1Bytes(
   const sourceBytesVerified = sourceResult.bytesVerified
   if (sourceResult.aborted) return aborted(pair)
   if (sourceResult.event) {
-    return skipped(pair, sourceResult.event, sourceResult.error, bytesHashed, sourceBytesVerified)
+    return skipped(
+      [sourceResult.path, dest],
+      sourceResult.event,
+      sourceResult.error,
+      bytesHashed,
+      sourceBytesVerified,
+    )
   }
 
   const destResult = await prepareUntrustedB2PathSha1(dest, options)
@@ -362,11 +368,21 @@ async function prepareB2PathSha1(
     const contentSha1 = typeof result === 'object' && result !== null ? result.contentSha1 : result
     const bytesVerified =
       typeof result === 'object' && result !== null ? Math.max(0, result.bytesRead) : 0
+    const preparedPath = {
+      ...path,
+      contentSha1,
+    }
+    if (contentSha1 === null) {
+      return {
+        path: preparedPath,
+        bytesHashed: 0,
+        bytesVerified,
+        event: unavailableSha1PathEvent(path),
+        aborted: false,
+      }
+    }
     return {
-      path: {
-        ...path,
-        contentSha1,
-      },
+      path: preparedPath,
       bytesHashed: 0,
       bytesVerified,
       aborted: false,
@@ -508,9 +524,13 @@ function aborted(pair: SyncPair): ComparePreparationResult {
 function unavailableSha1Event(pair: SyncPair): SyncSkipEvent {
   /* v8 ignore next -- unavailable SHA-1 events always have at least one side */
   const path = (pair[0] ?? pair[1])?.relativePath ?? ''
+  return unavailableSha1PathEvent({ relativePath: path })
+}
+
+function unavailableSha1PathEvent(path: Pick<SyncPath, 'relativePath'>): SyncSkipEvent {
   return {
     type: 'skip',
-    path,
+    path: path.relativePath,
     size: 0,
     message: 'sha1 comparison skipped because a verifiable SHA-1 is unavailable',
   }
