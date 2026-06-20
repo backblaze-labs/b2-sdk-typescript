@@ -1,8 +1,14 @@
-import { IncrementalSha1 } from '../../streams/hash.ts'
-import type { FileVersion } from '../../types/file.ts'
+import { mapConcurrent } from '../../upload/concurrency.ts'
 import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
+import {
+  formatHashError,
+  isAbortError,
+  type LocalSha1Reader,
+  readLocalSha1File,
+} from '../local-sha1.ts'
 import type { SyncPair } from '../pairing.ts'
+import { isUntrustedSha1, selectB2ComparableSha1 } from '../sha1-metadata.ts'
 import type {
   B2SyncPath,
   CompareMode,
@@ -12,29 +18,21 @@ import type {
   SyncSkipEvent,
 } from '../types.ts'
 
-const unverifiedSha1Prefix = 'unverified:'
+export { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 
-/** Options for reading a local file SHA-1 digest. */
-export interface LocalSha1ReadOptions {
-  /** Optional per-file timeout for local SHA-1 reads. */
-  readonly timeoutMillis?: number
-}
-
-/** Reads a local file and returns its SHA-1 digest. */
-export type LocalSha1Reader = (
-  path: LocalSyncPath,
-  signal?: AbortSignal,
-  options?: LocalSha1ReadOptions,
-) => Promise<string>
+/** Reads a B2 file and returns the SHA-1 digest of its actual bytes. */
+export type B2Sha1Reader = (path: B2SyncPath, signal?: AbortSignal) => Promise<string>
 
 /** Options for preparing a file pair before comparison. */
 export interface PreparePairForCompareOptions {
   /** Signal used to abort local file hashing. */
   readonly signal?: AbortSignal
-  /** Optional per-file timeout for local SHA-1 reads. */
+  /** Optional idle/no-progress timeout for local SHA-1 reads. */
   readonly sha1ReadTimeoutMillis?: number
   /** Optional local hashing override for tests or custom runtimes. */
   readonly readLocalSha1?: LocalSha1Reader
+  /** Optional B2 hashing override used to verify metadata matches before skipping. */
+  readonly readB2Sha1?: B2Sha1Reader
 }
 
 /** Options for preparing multiple file pairs before comparison. */
@@ -101,6 +99,25 @@ export function filesAreDifferent(
   }
 }
 
+/**
+ * Throws when a runtime compare mode value is unsupported.
+ *
+ * @param compareMode - User-supplied compare mode.
+ *
+ * @throws When `compareMode` is not one of the supported values.
+ */
+export function assertSupportedCompareMode(compareMode: CompareMode): void {
+  switch (compareMode) {
+    case 'none':
+    case 'size':
+    case 'sha1':
+    case 'modtime':
+      return
+    default:
+      throw new Error(`Unsupported compare mode: ${String(compareMode)}`)
+  }
+}
+
 function sha1ValuesAreDifferent(source: SyncPath, dest: SyncPath): boolean {
   if (source.size !== dest.size) return true
 
@@ -136,7 +153,9 @@ export async function preparePairForCompare(
   if (source.size !== dest.size) return readyComparePair(pair)
 
   const metadataPair: SyncPair = [withB2ContentSha1(source), withB2ContentSha1(dest)]
-  if (hasUntrustedSha1(metadataPair)) return readyComparePair(metadataPair)
+  if (hasUntrustedSha1(metadataPair) && options.readB2Sha1 === undefined) {
+    return readyComparePair(metadataPair)
+  }
   if (hasUnavailableB2Sha1(metadataPair)) {
     return skipped(metadataPair, unavailableSha1Event(metadataPair))
   }
@@ -144,13 +163,13 @@ export async function preparePairForCompare(
   const [metadataSource, metadataDest] = metadataPair
   if (metadataSource === null || metadataDest === null) return readyComparePair(metadataPair)
 
-  const sourceResult = await preparePathSha1(metadataSource, options)
+  const sourceResult = await prepareLocalPathSha1(metadataSource, options)
   if (sourceResult.aborted) return aborted(metadataPair)
   if (sourceResult.event) {
     return skipped(metadataPair, sourceResult.event, sourceResult.error, sourceResult.bytesHashed)
   }
 
-  const destResult = await preparePathSha1(metadataDest, options)
+  const destResult = await prepareLocalPathSha1(metadataDest, options)
   if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
   if (destResult.event) {
     return skipped(
@@ -168,6 +187,16 @@ export async function preparePairForCompare(
 
   if (sourceState.kind === 'unavailable' || destState.kind === 'unavailable') {
     return skipped(preparedPair, unavailableSha1Event(preparedPair), undefined, bytesHashed)
+  }
+
+  const metadataMatches =
+    sourceState.kind === 'verified' &&
+    destState.kind === 'verified' &&
+    sourceState.value === destState.value
+  const shouldVerifyB2Bytes =
+    sourceState.kind === 'untrusted' || destState.kind === 'untrusted' || metadataMatches
+  if (shouldVerifyB2Bytes && hasB2Path(preparedPair) && options.readB2Sha1 !== undefined) {
+    return verifyB2Sha1Bytes(preparedPair, options, bytesHashed)
   }
 
   return readyComparePair(preparedPair, bytesHashed)
@@ -192,49 +221,13 @@ export async function preparePairsForCompare(
   }
 
   const concurrency = normalizeConcurrency(options.concurrency)
-  const results = new Array<PreparedComparePair | undefined>(pairs.length)
-  let nextIndex = 0
-
-  async function worker(): Promise<void> {
-    while (true) {
-      if (options.signal?.aborted) return
-      const index = nextIndex
-      nextIndex += 1
-      if (index >= pairs.length) return
-      const pair = pairs[index]
-      if (!pair) return
-      results[index] = {
-        originalPair: pair,
-        prepared: await preparePairForCompare(pair, compareMode, options),
-      }
+  return mapConcurrent(pairs, concurrency, async (pair): Promise<PreparedComparePair> => {
+    if (options.signal?.aborted) return { originalPair: pair, prepared: aborted(pair) }
+    return {
+      originalPair: pair,
+      prepared: await preparePairForCompare(pair, compareMode, options),
     }
-  }
-
-  const workerCount = Math.min(concurrency, pairs.length)
-  await Promise.all(Array.from({ length: workerCount }, () => worker()))
-  return pairs.map(
-    (pair, index): PreparedComparePair =>
-      results[index] ?? { originalPair: pair, prepared: aborted(pair) },
-  )
-}
-
-/**
- * Extracts the best comparable SHA-1 value from a B2 file version.
- *
- * Large/multipart B2 files report `contentSha1: null`; when a whole-file digest is available in
- * `fileInfo.large_file_sha1`, that value is used as the comparable digest.
- * `unverified:<hex>` values are preserved as untrusted sentinels and never prove equality.
- *
- * @param version - B2 file version metadata.
- *
- * @returns A lowercase comparable SHA-1, an untrusted sentinel, or null when unavailable.
- */
-export function selectB2ComparableSha1(version: FileVersion): string | null {
-  if (isUntrustedSha1(version.contentSha1)) return version.contentSha1.toLowerCase()
-  return (
-    normalizeVerifiableSha1(version.contentSha1) ??
-    normalizeVerifiableSha1(version.fileInfo['large_file_sha1'])
-  )
+  })
 }
 
 type Sha1State =
@@ -250,7 +243,7 @@ interface PreparedPath {
   readonly aborted: boolean
 }
 
-async function preparePathSha1(
+async function prepareLocalPathSha1(
   path: SyncPath,
   options: PreparePairForCompareOptions,
 ): Promise<PreparedPath> {
@@ -261,7 +254,7 @@ async function preparePathSha1(
   if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
 
   try {
-    const readLocalSha1 = options.readLocalSha1 ?? sha1File
+    const readLocalSha1 = options.readLocalSha1 ?? readLocalSha1File
     return {
       path: {
         ...path,
@@ -292,6 +285,71 @@ async function preparePathSha1(
   }
 }
 
+async function verifyB2Sha1Bytes(
+  pair: SyncPair,
+  options: PreparePairForCompareOptions,
+  bytesHashed: number,
+): Promise<ComparePreparationResult> {
+  const [source, dest] = pair
+  if (source === null || dest === null) return readyComparePair(pair, bytesHashed)
+
+  const sourceResult = await prepareB2PathSha1(source, options)
+  if (sourceResult.aborted) return aborted(pair)
+  if (sourceResult.event) {
+    return skipped(pair, sourceResult.event, sourceResult.error, bytesHashed)
+  }
+
+  const destResult = await prepareB2PathSha1(dest, options)
+  if (destResult.aborted) return aborted([sourceResult.path, destResult.path])
+  if (destResult.event) {
+    return skipped(
+      [sourceResult.path, destResult.path],
+      destResult.event,
+      destResult.error,
+      bytesHashed,
+    )
+  }
+
+  return readyComparePair([sourceResult.path, destResult.path], bytesHashed)
+}
+
+async function prepareB2PathSha1(
+  path: SyncPath,
+  options: PreparePairForCompareOptions,
+): Promise<PreparedPath> {
+  if (!isB2SyncPath(path) || options.readB2Sha1 === undefined) {
+    return { path, bytesHashed: 0, aborted: false }
+  }
+
+  if (options.signal?.aborted) return { path, bytesHashed: 0, aborted: true }
+
+  try {
+    return {
+      path: {
+        ...path,
+        contentSha1: await options.readB2Sha1(path, options.signal),
+      },
+      bytesHashed: 0,
+      aborted: false,
+    }
+  } catch (err) {
+    if (options.signal?.aborted || isAbortError(err)) return { path, bytesHashed: 0, aborted: true }
+    const error = toError(err)
+    return {
+      path,
+      bytesHashed: 0,
+      event: {
+        type: 'error',
+        path: path.relativePath,
+        size: 0,
+        message: `failed to hash B2 file for sha1 comparison: ${formatHashError(error)}`,
+      },
+      error,
+      aborted: false,
+    }
+  }
+}
+
 function comparableSha1(path: SyncPath): Sha1State {
   const candidate = path.contentSha1
   if (candidate === null || candidate === undefined) return { kind: 'unavailable' }
@@ -307,14 +365,6 @@ function withB2ContentSha1(path: SyncPath): SyncPath {
   return { ...path, contentSha1: selectB2ComparableSha1(path.selectedVersion) }
 }
 
-function hasUntrustedSha1(pair: SyncPair): boolean {
-  const [source, dest] = pair
-  return (
-    (source !== null && comparableSha1(source).kind === 'untrusted') ||
-    (dest !== null && comparableSha1(dest).kind === 'untrusted')
-  )
-}
-
 function hasUnavailableB2Sha1(pair: SyncPair): boolean {
   const [source, dest] = pair
   return (
@@ -323,8 +373,17 @@ function hasUnavailableB2Sha1(pair: SyncPair): boolean {
   )
 }
 
-function isUntrustedSha1(sha1: string | null | undefined): sha1 is string {
-  return sha1?.toLowerCase().startsWith(unverifiedSha1Prefix) ?? false
+function hasUntrustedSha1(pair: SyncPair): boolean {
+  const [source, dest] = pair
+  return (
+    (source !== null && comparableSha1(source).kind === 'untrusted') ||
+    (dest !== null && comparableSha1(dest).kind === 'untrusted')
+  )
+}
+
+function hasB2Path(pair: SyncPair): boolean {
+  const [source, dest] = pair
+  return (source !== null && isB2SyncPath(source)) || (dest !== null && isB2SyncPath(dest))
 }
 
 function isB2SyncPath(path: SyncPath): path is B2SyncPath {
@@ -394,66 +453,4 @@ function unavailableSha1Event(pair: SyncPair): SyncSkipEvent {
 function normalizeConcurrency(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value) || value < 1) return 1
   return Math.max(1, Math.floor(value))
-}
-
-function formatHashError(error: Error): string {
-  const code = (error as { readonly code?: unknown }).code
-  if (typeof code === 'string' && code.length > 0) return code
-  const message = error.message.trim()
-  if (message.length > 0 && !/[\\/]/.test(message)) return message
-  if (error.name.length > 0) return error.name
-  return 'Error'
-}
-
-async function sha1File(
-  path: LocalSyncPath,
-  signal?: AbortSignal,
-  options: LocalSha1ReadOptions = {},
-): Promise<string> {
-  const { constants } = await import('node:fs')
-  const { open } = await import('node:fs/promises')
-  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
-  const file = await open(path.absolutePath, flags)
-  const hash = new IncrementalSha1()
-  let stream: ReturnType<typeof file.createReadStream> | undefined
-  let timeout: ReturnType<typeof setTimeout> | undefined
-
-  try {
-    const stat = await file.stat()
-    if (!stat.isFile()) throw new Error('not a regular file')
-    if (stat.size !== path.size) throw new Error('file size changed before sha1 comparison')
-
-    stream = file.createReadStream({
-      ...(path.size > 0 ? { start: 0, end: path.size - 1 } : {}),
-      ...(signal !== undefined ? { signal } : {}),
-    })
-
-    if (options.timeoutMillis !== undefined) {
-      timeout = setTimeout(() => {
-        stream?.destroy(new Error(`sha1 read timed out after ${options.timeoutMillis} ms`))
-      }, options.timeoutMillis)
-    }
-
-    let bytesRead = 0
-    for await (const chunk of stream) {
-      if (signal?.aborted) {
-        stream.destroy()
-        throw new Error('aborted')
-      }
-      bytesRead += chunk.byteLength
-      await hash.update(chunk)
-    }
-
-    if (bytesRead !== path.size) throw new Error('file changed during sha1 comparison')
-    return hash.digest()
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
-    stream?.destroy()
-    await file.close().catch(() => {})
-  }
-}
-
-function isAbortError(err: unknown): boolean {
-  const error = toError(err)
-  return error.name === 'AbortError'
 }

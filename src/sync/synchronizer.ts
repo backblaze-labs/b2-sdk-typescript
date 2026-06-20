@@ -1,5 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
+import { IncrementalSha1 } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
@@ -16,7 +17,12 @@ import {
   UploadAction,
 } from './actions/index.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
-import { preparePairsForCompare, readyComparePair } from './policies/compare.ts'
+import {
+  assertSupportedCompareMode,
+  type B2Sha1Reader,
+  preparePairsForCompare,
+  readyComparePair,
+} from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
 import type {
@@ -99,6 +105,7 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  */
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
+  assertSupportedCompareMode(options.compareMode)
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
@@ -107,6 +114,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const nowMillis = Date.now()
 
   const factory = createActionFactory(config)
+  const readB2Sha1 = createB2Sha1Reader(config)
 
   const actions: SyncAction[] = []
   const results: SyncEvent[] = []
@@ -132,7 +140,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   } else {
     for await (const pair of zipFolders(source, dest)) {
       if (options.signal?.aborted) return
-      yield processPreparedPair(pair, readyComparePair(pair))
+      yield enqueuePreparedPair(pair, readyComparePair(pair))
     }
   }
 
@@ -146,17 +154,18 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       ...(options.sha1ReadTimeoutMillis !== undefined
         ? { sha1ReadTimeoutMillis: options.sha1ReadTimeoutMillis }
         : {}),
+      ...(readB2Sha1 !== undefined ? { readB2Sha1 } : {}),
     })
 
     const events: SyncEvent[] = []
     for (const { originalPair, prepared } of preparedPairs) {
       if (prepared.aborted || options.signal?.aborted) return { events, aborted: true }
-      events.push(processPreparedPair(originalPair, prepared))
+      events.push(enqueuePreparedPair(originalPair, prepared))
     }
     return { events, aborted: false }
   }
 
-  function processPreparedPair(
+  function enqueuePreparedPair(
     pair: SyncPair,
     prepared: ReturnType<typeof readyComparePair>,
   ): SyncEvent {
@@ -235,6 +244,46 @@ function normalizeSyncConcurrency(value: number | undefined): number {
   const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
   if (!Number.isFinite(candidate) || candidate < 1) return DEFAULT_TRANSFER_CONCURRENCY
   return Math.max(1, Math.floor(candidate))
+}
+
+function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefined {
+  const upConfig = config as Partial<SynchronizerUpConfig>
+  const downConfig = config as Partial<SynchronizerDownConfig>
+  const bucket = upConfig.bucket ?? downConfig.bucket
+  if (bucket === undefined) return undefined
+
+  return async (path, signal) => {
+    const serverSideEncryption = toSseCDownloadKey(
+      config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),
+    )
+    const result = await bucket.download(path.selectedVersion.fileName, {
+      ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+    })
+    return hashReadableStreamSha1(result.body, signal)
+  }
+}
+
+async function hashReadableStreamSha1(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<string> {
+  const hash = new IncrementalSha1()
+  const reader = body.getReader()
+  try {
+    while (true) {
+      signal?.throwIfAborted()
+      const { done, value } = await reader.read()
+      if (done) break
+      await hash.update(value)
+    }
+    return hash.digest()
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 /**

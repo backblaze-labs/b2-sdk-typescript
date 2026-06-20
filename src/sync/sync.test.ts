@@ -409,6 +409,65 @@ describe('preparePairForCompare', () => {
     expect(result.events).toEqual([])
     expect(result.pair[1]?.contentSha1).toBe(sha1)
   })
+
+  it('returns an error event when source B2 byte hashing fails', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readB2Sha1: async () => {
+        throw new Error('download failed')
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash B2 file for sha1 comparison: download failed',
+    })
+    expect(result.errors).toHaveLength(1)
+  })
+
+  it('returns an error event when destination B2 byte hashing fails', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('source.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('dest.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      readB2Sha1: async (path) => {
+        if (path.relativePath === 'dest.txt') throw new Error('download failed')
+        return sha1
+      },
+    })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'dest.txt',
+      message: 'failed to hash B2 file for sha1 comparison: download failed',
+    })
+    expect(result.errors).toHaveLength(1)
+  })
+
+  it('returns aborted when B2 byte hashing observes an abort signal', async () => {
+    const controller = new AbortController()
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readB2Sha1: async () => {
+        controller.abort()
+        throw new DOMException('aborted', 'AbortError')
+      },
+    })
+
+    expect(result.aborted).toBe(true)
+    expect(result.events).toEqual([])
+  })
 })
 
 describe('preparePairsForCompare', () => {

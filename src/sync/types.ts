@@ -159,7 +159,7 @@ export interface SyncOptions {
   readonly compareThreshold?: number
   /** Signal to abort the sync operation, including in-progress local SHA-1 reads. */
   readonly signal?: AbortSignal
-  /** Optional per-file timeout in milliseconds for local SHA-1 reads in `sha1` mode. */
+  /** Optional idle/no-progress timeout in milliseconds for local SHA-1 reads in `sha1` mode. */
   readonly sha1ReadTimeoutMillis?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider

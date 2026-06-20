@@ -94,15 +94,15 @@ SYNC_MODE=size SYNC_DELETE=true SYNC_CONCURRENCY=8 SYNC_DRY_RUN=true \
 detection, not as a cryptographic tamper guarantee. Files without any comparable remote SHA-1 are
 skipped with a surfaced event instead of being transferred repeatedly.
 
-SHA-1 comparison reads matching-size local files in full before transfers are executed.
-`SYNC_CONCURRENCY` bounds both SHA-1 comparison workers and transfer workers, but hashing and
-transfer do not overlap. Changed uploads may read the same file again for transfer.
+SHA-1 comparison reads matching-size local files in full before transfers are executed. When B2
+metadata appears to match, the SDK downloads and hashes the B2 bytes before treating the pair as
+equal. `SYNC_CONCURRENCY` bounds both SHA-1 comparison workers and transfer workers, but hashing
+and transfer do not overlap. Changed uploads may read the same file again for transfer.
 `SYNC_DRY_RUN=true` still performs those comparison reads. The example logs `compare` events with
-the bytes hashed so you can distinguish a long hash pass from a hung sync. Incorrect or
-adversarial size-matching, hash-mismatching metadata can force a full local hash pass and
-transfers in `sha1` mode. The SDK bounds local reads to the scanned size, rejects non-regular
-files, and supports `sha1ReadTimeoutMillis` in the sync API when callers need a per-file hash
-timeout.
+the local bytes hashed so you can distinguish a long hash pass from a hung sync. Incorrect or
+adversarial size-matching, hash-mismatching metadata can force a full hash pass and transfers in
+`sha1` mode. The SDK bounds local reads to the scanned size, rejects non-regular files, and uses
+`sha1ReadTimeoutMillis` as an idle/no-progress timeout with a bounded default.
 
 ### Upload with a progress bar
 

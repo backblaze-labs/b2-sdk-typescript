@@ -29,6 +29,7 @@ deno
 denoland
 elif
 miniforge
+mkfifo
 nodenext
 pnpm
 pnpx
@@ -59,6 +60,7 @@ typeof
 typeparam
 typeparams
 unmodified
+TOCTOU
 
 # ── 3. Crypto + encoding ───────────────────────────────────────────────
 asn

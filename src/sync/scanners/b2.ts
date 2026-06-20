@@ -1,6 +1,6 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
-import { selectB2ComparableSha1 } from '../policies/compare.ts'
+import { selectB2ComparableSha1 } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncFolder } from '../types.ts'
 
 /**
