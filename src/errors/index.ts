@@ -566,7 +566,7 @@ export class B2RedirectError extends Error {
   /**
    * Creates a new B2RedirectError instance.
    *
-   * @param url - Original request URL.
+   * @param url - Request URL whose response attempted to redirect.
    * @param status - HTTP redirect status code.
    * @param location - Redirect Location header, if present.
    */
