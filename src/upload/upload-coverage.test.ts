@@ -550,6 +550,57 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'lost-body.txt')).toBe(2)
   })
 
+  it('retries a truncated 2xx upload JSON body when explicitly enabled', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    let getUploadUrlCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({ ...body, uploadUrl: `${body.uploadUrl}&json=${getUploadUrlCalls}` })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          const response = await inner.send(req)
+          if (uploadAttempts === 1) {
+            return {
+              ...response,
+              json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+            }
+          }
+          return response
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'truncated-body',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'truncated-body.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retryResponseBodyFailures: true,
+    })
+
+    expect(result.fileName).toBe('truncated-body.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'truncated-body.txt')).toBe(2)
+  })
+
   it('does not retry after a lost 2xx upload response body by default', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()

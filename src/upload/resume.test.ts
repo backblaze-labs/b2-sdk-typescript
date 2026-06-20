@@ -158,6 +158,48 @@ describe('findResumeCandidate', () => {
     expect(result).toBeNull()
   })
 
+  it('paginates unfinished files until the destination name is found', async () => {
+    const calls: Array<{ startFileId?: string; namePrefix?: string }> = []
+    const raw = {
+      async listUnfinishedLargeFiles(
+        _apiUrl: string,
+        _authToken: string,
+        req: { startFileId?: string; namePrefix?: string },
+      ) {
+        calls.push({
+          ...(req.startFileId !== undefined ? { startFileId: req.startFileId } : {}),
+          ...(req.namePrefix !== undefined ? { namePrefix: req.namePrefix } : {}),
+        })
+        if (req.startFileId === undefined) {
+          return {
+            files: [{ fileId: 'lf-first', fileName: 'wanted.bin.partial' }],
+            nextFileId: 'lf-first',
+          }
+        }
+        return {
+          files: [{ fileId: 'lf-match', fileName: 'wanted.bin' }],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called by default')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'wanted.bin',
+    )
+
+    expect(result?.fileId).toBe('lf-match' as LargeFileId)
+    expect(calls).toEqual([
+      { namePrefix: 'wanted.bin' },
+      { namePrefix: 'wanted.bin', startFileId: 'lf-first' },
+    ])
+  })
+
   it('returns the candidate without listing parts by default', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {

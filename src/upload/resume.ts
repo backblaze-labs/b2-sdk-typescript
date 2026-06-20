@@ -39,22 +39,33 @@ export async function findResumeCandidate(
   fileName: string,
   options: FindResumeCandidateOptions = {},
 ): Promise<ResumeCandidate | null> {
-  const unfinished = await raw.listUnfinishedLargeFiles(
-    accountInfo.getApiUrl(),
-    accountInfo.getAuthToken(),
-    { bucketId },
-  )
+  let startFileId: LargeFileId | undefined
 
-  const match = unfinished.files.find((f) => f.fileName === fileName)
-  if (!match) return null
+  while (true) {
+    const unfinished = await raw.listUnfinishedLargeFiles(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId,
+        namePrefix: fileName,
+        ...(startFileId !== undefined ? { startFileId } : {}),
+      },
+    )
 
-  const fileId = largeFileIdOf(match.fileId)
-  const uploadedPartSha1s =
-    options.collectUploadedPartSha1s === true
-      ? await collectPartSha1s(raw, accountInfo, fileId)
-      : new Map<number, string>()
+    const match = unfinished.files.find((f) => f.fileName === fileName)
+    if (match) {
+      const fileId = largeFileIdOf(match.fileId)
+      const uploadedPartSha1s =
+        options.collectUploadedPartSha1s === true
+          ? await collectPartSha1s(raw, accountInfo, fileId)
+          : new Map<number, string>()
 
-  return { fileId, uploadedPartSha1s }
+      return { fileId, uploadedPartSha1s }
+    }
+
+    if (unfinished.nextFileId === null) return null
+    startFileId = unfinished.nextFileId
+  }
 }
 
 /**
