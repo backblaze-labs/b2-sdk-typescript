@@ -159,8 +159,8 @@ export interface AuthorizeAccountRequest {
    * input. URL values must use HTTPS, or loopback IP literal HTTP for local
    * testing only; application-key credentials are sent unencrypted over
    * loopback HTTP. Unsupported schemes, malformed URLs, non-URL strings,
-   * hostnames such as `localhost`, and non-loopback plaintext HTTP are rejected
-   * before credentials are sent. Defaults to production.
+   * plaintext HTTP hostnames such as `localhost`, and non-loopback plaintext
+   * HTTP are rejected before credentials are sent. Defaults to production.
    */
   readonly realm?: string
 }
