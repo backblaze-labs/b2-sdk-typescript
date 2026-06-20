@@ -32,7 +32,7 @@ export function normalizeB2RelativePath(
 ): string {
   const slashPath = path.split('\\').join('/')
   const relativePath =
-    options.stripLeadingSlashes === true ? stripLeadingSlashes(slashPath) : slashPath
+    options.stripLeadingSlashes === true ? stripSingleLeadingSlash(slashPath) : slashPath
   const segments = relativePath.split('/')
   if (/^[A-Za-z]:/.test(relativePath) || segments.some((segment) => segmentIsUnsafe(segment))) {
     throw new Error('Unsafe B2 file name cannot be used as a sync relative path')
@@ -60,10 +60,6 @@ function containsControlCharacter(segment: string): boolean {
   return false
 }
 
-function stripLeadingSlashes(path: string): string {
-  let relativePath = path
-  while (relativePath.startsWith('/')) {
-    relativePath = relativePath.slice(1)
-  }
-  return relativePath
+function stripSingleLeadingSlash(path: string): string {
+  return path.startsWith('/') ? path.slice(1) : path
 }

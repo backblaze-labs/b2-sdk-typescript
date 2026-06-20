@@ -531,6 +531,54 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md', 'file.txt'])
   })
 
+  it('rejects multi-slash suffixes after a slashless raw prefix', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('backup/docs/readme.md', 1),
+            makeFileVersion('backup//docs/ambiguous.md', 2),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'backup')
+    const skips: string[] = []
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+    expect(skips).toEqual(['unsafe-name:backup//docs/ambiguous.md'])
+  })
+
   it('reports leading-slash B2 names without a raw prefix as unsafe', async () => {
     const fileVersion: FileVersion = {
       accountId: 'acc' as unknown as AccountId,
