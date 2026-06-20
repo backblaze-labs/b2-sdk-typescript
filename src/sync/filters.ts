@@ -100,10 +100,10 @@ export async function* filterSyncPaths<T extends SyncPath>(
   filters: SyncFilterOptions | undefined,
 ): AsyncGenerator<T> {
   for await (const path of paths) {
-    if (pathSkippedByRegExpInputLimit(path.relativePath, filters)) {
-      emitScannerSkip(filters, regexpInputTooLongSkip(normalizePath(path.relativePath)))
-    } else if (pathPassesSyncFilters(path.relativePath, filters)) {
+    if (pathPassesSyncFilters(path.relativePath, filters)) {
       yield path
+    } else if (pathSkippedByRegExpInputLimit(path.relativePath, filters)) {
+      emitScannerSkip(filters, regexpInputTooLongSkip(normalizePath(path.relativePath)))
     }
   }
 }

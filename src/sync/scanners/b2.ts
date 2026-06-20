@@ -121,14 +121,15 @@ export class B2Folder implements SyncFolder {
           )
           continue
         }
-        if (pathSkippedByRegExpInputLimit(relativePath, options)) {
-          this.emitSkipEvent(options, {
-            ...regexpInputTooLongSkip(relativePath),
-            b2FileName: fv.fileName,
-          })
+        if (!pathPassesSyncFilters(relativePath, options)) {
+          if (pathSkippedByRegExpInputLimit(relativePath, options)) {
+            this.emitSkipEvent(options, {
+              ...regexpInputTooLongSkip(relativePath),
+              b2FileName: fv.fileName,
+            })
+          }
           continue
         }
-        if (!pathPassesSyncFilters(relativePath, options)) continue
 
         const owner = relativePathOwners.get(relativePath)
         if (owner !== undefined && owner !== fv.fileName) {

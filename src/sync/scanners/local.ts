@@ -77,11 +77,12 @@ export class LocalFolder implements SyncFolder {
           await this.walk(fullPath, out, options)
         }
       } else if (entry.isFile()) {
-        if (pathSkippedByRegExpInputLimit(rel, options)) {
-          emitScannerSkip(options, regexpInputTooLongSkip(rel))
+        if (!pathPassesSyncFilters(rel, options)) {
+          if (pathSkippedByRegExpInputLimit(rel, options)) {
+            emitScannerSkip(options, regexpInputTooLongSkip(rel))
+          }
           continue
         }
-        if (!pathPassesSyncFilters(rel, options)) continue
         try {
           const s = await lstat(fullPath)
           /* v8 ignore start -- lstat race after a Dirent file result is not deterministic */
