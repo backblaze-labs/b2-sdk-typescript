@@ -39,6 +39,8 @@ function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
   if (host === '[::1]' || host === '::1') return true
 
+  // Intentionally excludes `localhost`: it is resolver-controlled, while this
+  // gate decides whether application-key credentials may be sent over HTTP.
   const parts = host.split('.')
   return (
     parts.length === 4 &&
@@ -71,7 +73,7 @@ function assertAuthorizableRealmScheme(realmUrl: string, url: URL): void {
 function assertRealmBaseUrl(realmUrl: string, url: URL): void {
   if (url.username === '' && url.password === '' && url.search === '' && url.hash === '') return
   throw new B2RealmConfigurationError(
-    `realm URL must not include userinfo, query, or fragment for authorization: ${realmUrlForError(realmUrl, url)}`,
+    `realm URL must not include credentials, query, or fragment for authorization: ${realmUrlForError(realmUrl, url)}`,
   )
 }
 

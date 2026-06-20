@@ -75,7 +75,7 @@ export interface B2ClientOptions {
   /**
    * Follow same-origin GET/HEAD redirects in the default fetch transport after
    * checking each target with the SSRF guard. POST redirects remain blocked.
-   * Defaults to false.
+   * Defaults to true.
    */
   readonly followSameHostRedirects?: boolean
 }

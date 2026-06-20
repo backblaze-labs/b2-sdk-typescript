@@ -417,6 +417,9 @@ describe('getRealmUrl', () => {
   })
 
   it.each([
+    'https://realm.example?x=1',
+    'https://realm.example#x',
+    'https://user:pass@realm.example',
     'https://user:secret@api.example.com',
     'https://api.example.com?token=query-secret',
     'https://api.example.com#fragment-secret',
@@ -430,9 +433,11 @@ describe('getRealmUrl', () => {
 
     expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
     expect((thrown as Error).message).toContain(
-      'realm URL must not include userinfo, query, or fragment for authorization',
+      'realm URL must not include credentials, query, or fragment for authorization',
     )
     expect((thrown as Error).message).not.toContain('secret')
+    expect((thrown as Error).message).not.toContain('user')
+    expect((thrown as Error).message).not.toContain('pass')
     expect((thrown as Error).message).not.toContain('token=')
   })
 

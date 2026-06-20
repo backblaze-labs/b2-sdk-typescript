@@ -46,7 +46,7 @@ describe('RawClient authorizeAccount', () => {
     const raw = new RawClient({ transport })
 
     await expect(raw.authorizeAccount('key-id', 'key-secret', realmUrl)).rejects.toThrow(
-      'realm URL must not include userinfo, query, or fragment for authorization',
+      'realm URL must not include credentials, query, or fragment for authorization',
     )
     expect(seenUrls).toEqual([])
   })

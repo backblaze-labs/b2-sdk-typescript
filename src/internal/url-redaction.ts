@@ -11,7 +11,8 @@ export interface RedactUrlForErrorOptions {
  * @param url - Absolute URL, relative URL, or parsed URL to redact.
  * @param options - Optional base URL and invalid-URL placeholder.
  *
- * @returns A URL string with userinfo, query string, and fragment removed.
+ * @returns A URL string with userinfo, query string, fragment, and deep path
+ * segments removed.
  */
 export function redactUrlForError(
   url: string | URL,
@@ -28,8 +29,15 @@ export function redactUrlForError(
     parsed.password = ''
     parsed.search = ''
     parsed.hash = ''
+    parsed.pathname = redactPathname(parsed.pathname)
     return parsed.toString()
   } catch {
     return options.invalidUrlLabel ?? '<invalid URL>'
   }
+}
+
+function redactPathname(pathname: string): string {
+  const parts = pathname.split('/').filter(Boolean)
+  if (parts.length <= 1) return pathname
+  return `/${parts[0]}/...`
 }

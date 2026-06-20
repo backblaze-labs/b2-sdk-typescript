@@ -81,12 +81,12 @@ export class FetchTransport implements HttpTransport {
     /**
      * Follow same-origin GET/HEAD redirects after checking the target with the
      * URL guard. POST redirects are still blocked to avoid replaying
-     * credential-bearing payloads to an unexpected endpoint.
+     * credential-bearing payloads to an unexpected endpoint. Defaults to true.
      */
     followSameHostRedirects?: boolean
   }) {
     this.userAgent = getUserAgent(options?.userAgent)
-    this.followSameHostRedirects = options?.followSameHostRedirects ?? false
+    this.followSameHostRedirects = options?.followSameHostRedirects ?? true
     this.urlGuard = options?.urlGuard ?? new UrlGuard()
   }
 

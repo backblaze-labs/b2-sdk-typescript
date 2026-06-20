@@ -547,6 +547,20 @@ describe('B2RedirectError', () => {
     expect(err.message).not.toContain('location-secret')
     expect(err.message).not.toContain('location-fragment')
   })
+
+  it('redacts secret-bearing redirect path segments', () => {
+    const err = new B2RedirectError(
+      'https://api.example.com/b2api/v3/path-secret?authorizationToken=request-secret#secret',
+      302,
+      'https://next.example.com/callback/location-secret?authorizationToken=location-secret#secret',
+    )
+
+    expect(err.url).toBe('https://api.example.com/b2api/...')
+    expect(err.location).toBe('https://next.example.com/callback/...')
+    expect(err.message).not.toContain('path-secret')
+    expect(err.message).not.toContain('location-secret')
+    expect(err.message).not.toContain('authorizationToken')
+  })
 })
 
 // ---------------------------------------------------------------------------

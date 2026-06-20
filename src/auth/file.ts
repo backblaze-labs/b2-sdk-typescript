@@ -3,12 +3,14 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
-import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
+import type { AccountInfo, AuthContextAwareAccountInfo, UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
 import { REALM_URLS } from './realms.ts'
 
 const PRIVATE_FILE_MODE = 0o600
 const PERSISTED_AUTH_VERSION = 1
+const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
+const STAGING_HOST_SUFFIX = 'backblaze.net'
 
 interface PersistedAuthState {
   readonly _b2sdk?: {
@@ -88,10 +90,7 @@ function readPersistedAuthState(value: unknown): {
 function isProductionBackblazeEndpoint(url: string): boolean {
   try {
     const parsed = new URL(url)
-    return (
-      parsed.protocol === 'https:' &&
-      (parsed.hostname === 'backblazeb2.com' || parsed.hostname.endsWith('.backblazeb2.com'))
-    )
+    return parsed.protocol === 'https:' && hasHostSuffix(parsed.hostname, PRODUCTION_HOST_SUFFIX)
   } catch {
     return false
   }
@@ -111,12 +110,23 @@ function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
 function realmEndpointSuffix(realmUrl: string): string | null {
   try {
     const host = new URL(realmUrl).hostname.toLowerCase()
-    return host === 'backblazeb2.com' || host.endsWith('.backblazeb2.com')
-      ? 'backblazeb2.com'
-      : host
+    if (hasHostSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
+    if (hasHostSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
+    return parentDomainSuffix(host)
   } catch {
     return null
   }
+}
+
+function hasHostSuffix(hostname: string, suffix: string): boolean {
+  const host = hostname.toLowerCase()
+  const lowered = suffix.toLowerCase()
+  return host === lowered || host.endsWith(`.${lowered}`)
+}
+
+function parentDomainSuffix(hostname: string): string {
+  const labels = hostname.toLowerCase().split('.')
+  return labels.length > 2 ? labels.slice(1).join('.') : hostname.toLowerCase()
 }
 
 function isEndpointInRealm(url: string, realmUrl: string): boolean {
@@ -125,13 +135,16 @@ function isEndpointInRealm(url: string, realmUrl: string): boolean {
   try {
     const host = new URL(url).hostname.toLowerCase()
     if (isLoopbackEndpointHost(host)) return true
-    return host === suffix || host.endsWith(`.${suffix}`)
+    return hasHostSuffix(host, suffix)
   } catch {
     return false
   }
 }
 
 function isLoopbackEndpointHost(host: string): boolean {
+  // Cache matching includes localhost because local simulators and custom
+  // transports persist loopback endpoints. This is not an authorization
+  // plaintext-HTTP allow-list; see realms.ts for that stricter gate.
   if (host === 'localhost' || host === '::1' || host === '[::1]') return true
 
   const parts = host.split('.')
@@ -173,7 +186,7 @@ function authEndpointsMatchRealm(auth: AuthorizeAccountResponse, realmUrl: strin
  *
  * This module imports `node:fs/promises`; do not load it in browser bundles.
  */
-export class FileAccountInfo implements AccountInfo {
+export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo {
   private readonly inner = new InMemoryAccountInfo()
   private writeQueue: Promise<void> = Promise.resolve()
   private realmUrl: string | undefined

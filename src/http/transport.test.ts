@@ -134,7 +134,7 @@ describe('FetchTransport', () => {
     await expect(
       transport.send({
         url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
-        method: 'GET',
+        method: 'POST',
       }),
     ).rejects.toBeInstanceOf(B2RedirectError)
 
@@ -150,7 +150,7 @@ describe('FetchTransport', () => {
     expect(response.status).toBe(304)
   })
 
-  it('can opt into guard-checked same-origin GET redirects', async () => {
+  it('follows guard-checked same-origin GET redirects by default', async () => {
     fetchSpy
       .mockResolvedValueOnce(
         new Response('move', {
@@ -160,7 +160,7 @@ describe('FetchTransport', () => {
       )
       .mockResolvedValueOnce(new Response('ok', { status: 200 }))
 
-    const transport = new FetchTransport({ followSameHostRedirects: true })
+    const transport = new FetchTransport()
     const response = await transport.send({
       url: 'https://f001.backblazeb2.com/file/bucket/old-object',
       method: 'GET',
@@ -171,6 +171,25 @@ describe('FetchTransport', () => {
     expect((fetchSpy.mock.calls[1] as [string, RequestInit])[0]).toBe(
       'https://f001.backblazeb2.com/file/bucket/object',
     )
+  })
+
+  it('can opt out of following same-origin GET redirects', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: '/file/bucket/object' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameHostRedirects: false })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
   it('does not follow cross-origin redirects when same-host redirects are enabled', async () => {
@@ -988,7 +1007,7 @@ describe('RetryTransport', () => {
 
       await expect(transport.send(baseRequest)).rejects.toBe(redirectErr)
       expect(redirectErr.retryable).toBe(false)
-      expect(redirectErr.location).toBe('http://169.254.169.254/latest/meta-data/')
+      expect(redirectErr.location).toBe('http://169.254.169.254/latest/...')
       expect(redirectErr.message).not.toContain('secret')
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })

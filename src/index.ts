@@ -8,7 +8,11 @@
  * @packageDocumentation
  */
 
-export type { AccountInfo, UploadUrlEntry } from './auth/account-info.ts'
+export type {
+  AccountInfo,
+  AuthContextAwareAccountInfo,
+  UploadUrlEntry,
+} from './auth/account-info.ts'
 export { InMemoryAccountInfo } from './auth/in-memory.ts'
 export {
   Bucket,

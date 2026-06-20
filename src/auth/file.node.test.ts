@@ -456,6 +456,76 @@ describe('FileAccountInfo', () => {
     expect(client.urlGuard?.getAllowedSuffixes()).toContain('backblazeb2.com')
   })
 
+  it('retains a staging cache whose endpoints are sibling staging hosts', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'https://api001.backblaze.net',
+          downloadUrl: 'https://f001.backblaze.net',
+          s3ApiUrl: 'https://s3.us-west-001.backblaze.net',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://api.backblaze.net',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'staging',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo.getAuth()).not.toBeNull()
+    expect(discards).toEqual([])
+  })
+
+  it('retains a custom-realm cache whose endpoints share the realm parent domain', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'https://api.custom.example',
+          downloadUrl: 'https://download.custom.example',
+          s3ApiUrl: 'https://s3.custom.example',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://auth.custom.example',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'https://auth.custom.example',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo.getAuth()).not.toBeNull()
+    expect(discards).toEqual([])
+  })
+
   it('delegates every AccountInfo getter to the in-memory backing', async () => {
     const sim = new B2Simulator()
     const accountInfo = new FileAccountInfo(storePath)

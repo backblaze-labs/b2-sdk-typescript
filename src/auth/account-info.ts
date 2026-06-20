@@ -10,6 +10,25 @@ export interface UploadUrlEntry {
 }
 
 /**
+ * Optional extension for persistent auth stores that need to bind cached auth
+ * to the current client configuration. `B2Client` calls these hooks during
+ * construction before it reuses any loaded auth.
+ */
+export interface AuthContextAwareAccountInfo {
+  /**
+   * Bind persistent auth caches to the resolved realm URL. Implementations that
+   * persist auth should discard loaded state written for a different realm.
+   */
+  setRealmUrl(realmUrl: string): void
+  /**
+   * Bind persistent auth caches to the configured application key ID.
+   * Implementations that persist auth should discard loaded state written for a
+   * different key ID.
+   */
+  setApplicationKeyId(applicationKeyId: string): void
+}
+
+/**
  * Stores B2 authorization state between requests.
  * Implementations cache the authorize-account response and manage
  * pools of reusable upload URLs (checkout/checkin/evict pattern).
@@ -17,13 +36,13 @@ export interface UploadUrlEntry {
 export interface AccountInfo {
   /**
    * Bind persistent auth caches to the resolved realm URL. Implementations that
-   * persist auth should discard loaded state written for a different realm.
+   * persist auth should follow {@link AuthContextAwareAccountInfo}.
    */
   setRealmUrl?(realmUrl: string): void
   /**
    * Bind persistent auth caches to the configured application key ID.
-   * Implementations that persist auth should discard loaded state written for a
-   * different key ID.
+   * Implementations that persist auth should follow
+   * {@link AuthContextAwareAccountInfo}.
    */
   setApplicationKeyId?(applicationKeyId: string): void
 
