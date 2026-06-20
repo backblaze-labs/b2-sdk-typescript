@@ -268,8 +268,12 @@ describe('FileSource', () => {
   it('rejects a path replaced by another file', async () => {
     const path = join(tmpDir, 'replaced.txt')
     const replacementPath = join(tmpDir, 'replacement.txt')
+    const originalTime = new Date('2026-01-01T00:00:00.000Z')
+    const replacementTime = new Date('2026-01-02T00:00:00.000Z')
     await writeFile(path, 'safe payload')
+    await utimes(path, originalTime, originalTime)
     await writeFile(replacementPath, 'evil payload')
+    await utimes(replacementPath, replacementTime, replacementTime)
 
     const source = new FileSource(path)
     await rm(path)
