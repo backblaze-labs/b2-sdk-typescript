@@ -1,0 +1,85 @@
+import { describe, expect, it } from 'vitest'
+
+import { presignS3Request } from './sigv4.ts'
+
+const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
+
+describe('presignS3Request', () => {
+  it('canonicalizes duplicate query parameters and signed header names', async () => {
+    const url = await presignS3Request(
+      'GET',
+      {
+        endpoint: 'https://s3.us-west-004.backblazeb2.com/root/',
+        region: 'us-west-004',
+        accessKeyId: 'key-id',
+        secretAccessKey: 'key-secret',
+        bucketName: 'my-bucket',
+        fileName: "special/!*'().txt",
+        expiresIn: 60,
+        signingDate: SIGNING_DATE,
+      },
+      [
+        ['partNumber', '1'],
+        ['partNumber', '2'],
+        ['partNumber', '1'],
+        ['special', "!*'()"],
+        ['x-id', 'GetObject'],
+      ],
+      [
+        ['X-Amz-Meta-Dupe', ' first   value '],
+        ['x-amz-meta-dupe', 'second value'],
+      ],
+    )
+
+    const parsed = new URL(url)
+    const query = parsed.search.slice(1)
+
+    expect(parsed.pathname).toBe('/root/my-bucket/special/%21%2A%27%28%29.txt')
+    expect(query).toContain('partNumber=1&partNumber=1&partNumber=2')
+    expect(query).toContain('special=%21%2A%27%28%29')
+    expect(parsed.searchParams.get('X-Amz-SignedHeaders')).toBe(
+      'host;x-amz-meta-dupe;x-amz-meta-dupe',
+    )
+    expect(parsed.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('includes non-default endpoint ports in the presigned URL', async () => {
+    const url = new URL(
+      await presignS3Request(
+        'GET',
+        {
+          endpoint: 'https://s3.us-west-004.backblazeb2.com:8443',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: 'file.txt',
+          signingDate: SIGNING_DATE,
+        },
+        [['x-id', 'GetObject']],
+        [],
+      ),
+    )
+
+    expect(url.host).toBe('s3.us-west-004.backblazeb2.com:8443')
+    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('rejects invalid signing dates and empty bucket names', async () => {
+    const options = {
+      endpoint: 'https://s3.us-west-004.backblazeb2.com',
+      region: 'us-west-004',
+      accessKeyId: 'key-id',
+      secretAccessKey: 'key-secret',
+      bucketName: 'my-bucket',
+      fileName: 'file.txt',
+    }
+
+    await expect(
+      presignS3Request('GET', { ...options, signingDate: Number.NaN }, [['x-id', 'GetObject']], []),
+    ).rejects.toThrow('signingDate must be a valid Date or timestamp')
+    await expect(
+      presignS3Request('GET', { ...options, bucketName: '' }, [['x-id', 'GetObject']], []),
+    ).rejects.toThrow('bucketName must be a non-empty string')
+  })
+})

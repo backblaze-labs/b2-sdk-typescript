@@ -33,6 +33,26 @@ describe('crypto runtime fallback', () => {
 
     await expect(hmacSha256('key', 'data')).rejects.toThrow(CRYPTO_UNAVAILABLE_MESSAGE)
   })
+
+  it('uses Node crypto for SHA-256 when WebCrypto is unavailable', async () => {
+    hideWebCrypto()
+
+    const { sha256Hex } = await import('./crypto.ts')
+
+    await expect(sha256Hex('data')).resolves.toBe(
+      '3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7',
+    )
+  })
+
+  it('uses Node crypto for HMAC-SHA256 when WebCrypto is unavailable', async () => {
+    hideWebCrypto()
+
+    const { hexEncode, hmacSha256 } = await import('./crypto.ts')
+
+    await expect(hmacSha256('key', 'data').then(hexEncode)).resolves.toBe(
+      '5031fe3d989c6d1537a013fa6e739da23463fdaec3b70137d828e36ace221bd0',
+    )
+  })
 })
 
 function hideWebCrypto(): void {
