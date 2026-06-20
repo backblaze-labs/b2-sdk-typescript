@@ -99,7 +99,6 @@ export type SyncActionEventType =
   | 'hide'
   | 'delete-remote'
   | 'delete-local'
-  | 'compare'
 
 /**
  * Per-action progress event (transfer or metadata change). All
@@ -113,10 +112,6 @@ export interface SyncActionEvent {
   readonly path: string
   /** Size in bytes of the file involved, or `0` for metadata-only actions. */
   readonly size: number
-  /** Local file bytes hashed for compare events. */
-  readonly bytesHashed?: number
-  /** B2 bytes verified for compare events. */
-  readonly bytesVerified?: number
 }
 
 /** Per-file comparison progress event. */
