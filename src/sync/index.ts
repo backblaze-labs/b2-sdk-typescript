@@ -71,4 +71,5 @@ export type {
   SyncPath,
   SyncScanOptions,
   SyncSkipEvent,
+  SyncSkipReason,
 } from './types.ts'

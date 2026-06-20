@@ -1,19 +1,26 @@
 import { lstat, readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
-import { directoryMayContainSyncPaths, pathPassesSyncFilters } from '../filters.ts'
-import { compareSyncPathNames } from '../path-order.ts'
+import {
+  directoryMayContainSyncPaths,
+  pathPassesSyncFilters,
+  pathSkippedByRegExpInputLimit,
+} from '../filters.ts'
+import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
+import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
- * Scans a local directory tree and yields {@link LocalSyncPath} entries
- * sorted by deterministic relative path order. A root directory read failure aborts the scan with
- * an error diagnostic. Per-entry file or directory failures are reported through `onError` and the
- * scan continues over readable siblings so partial results can still be synchronized.
+ * Scans a local directory tree and yields {@link LocalSyncPath} entries sorted by relative path.
+ * A root directory read failure aborts the scan with an error diagnostic. Per-entry file or
+ * directory failures are reported through `onError` and the scan continues over readable siblings.
+ * The current implementation collects matching entries before sorting, so memory usage is
+ * proportional to the number of matched files.
  */
 export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
+  readonly appliesScanFilters = true as const
   /** Absolute path to the local root directory. */
   readonly root: string
 
@@ -33,7 +40,7 @@ export class LocalFolder implements SyncFolder {
     validateSyncFilters(options)
     const collected: LocalSyncPath[] = []
     await this.walk(this.root, collected, options)
-    collected.sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
+    collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
       if (options.signal?.aborted) return
       yield entry
@@ -70,6 +77,11 @@ export class LocalFolder implements SyncFolder {
           await this.walk(fullPath, out, options)
         }
       } else if (entry.isFile()) {
+        if (pathSkippedByRegExpInputLimit(rel, options)) {
+          emitScannerSkip(options, regexpInputTooLongSkip(rel))
+          continue
+        }
+        if (!pathPassesSyncFilters(rel, options)) continue
         try {
           const s = await lstat(fullPath)
           /* v8 ignore start -- lstat race after a Dirent file result is not deterministic */
@@ -78,7 +90,6 @@ export class LocalFolder implements SyncFolder {
             continue
           }
           /* v8 ignore stop */
-          if (!pathPassesSyncFilters(rel, options)) continue
           out.push({
             relativePath: rel,
             absolutePath: fullPath,

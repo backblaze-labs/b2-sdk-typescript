@@ -3,6 +3,7 @@ import {
   regexpMatchesSyncPath,
   validateSyncFilters,
 } from './regexp-safety.ts'
+import { emitScannerSkip, regexpInputTooLongSkip } from './scan-events.ts'
 import type { SyncFilterOptions, SyncFilterPattern, SyncPath } from './types.ts'
 
 /**
@@ -20,7 +21,7 @@ export function pathPassesSyncFilters(
 ): boolean {
   validateSyncFilters(filters)
   const path = normalizePath(relativePath)
-  if (pathExceedsSafeRegExpInput(path) && filtersContainRegExp(filters)) return false
+  if (pathSkippedByRegExpInputLimit(path, filters)) return false
 
   const include = filters?.include ?? []
   const exclude = filters?.exclude ?? []
@@ -49,7 +50,7 @@ export function directoryMayContainSyncPaths(
   if (path === '') return true
 
   const exclude = filters?.exclude ?? []
-  if (exclude.some((pattern) => stringPatternMatches(path, pattern))) {
+  if (exclude.some((pattern) => stringPatternExcludesAllDescendants(path, pattern))) {
     return false
   }
 
@@ -71,7 +72,7 @@ export function literalPrefixForSyncFilters(filters: SyncFilterOptions | undefin
   let commonPrefix: string | undefined
 
   for (const pattern of include) {
-    if (typeof pattern !== 'string') return ''
+    if (patternIsRegExp(pattern)) return ''
 
     const glob = normalizePath(pattern)
     if (!glob.includes('/')) return ''
@@ -99,14 +100,34 @@ export async function* filterSyncPaths<T extends SyncPath>(
   filters: SyncFilterOptions | undefined,
 ): AsyncGenerator<T> {
   for await (const path of paths) {
-    if (pathPassesSyncFilters(path.relativePath, filters)) {
+    if (pathSkippedByRegExpInputLimit(path.relativePath, filters)) {
+      emitScannerSkip(filters, regexpInputTooLongSkip(normalizePath(path.relativePath)))
+    } else if (pathPassesSyncFilters(path.relativePath, filters)) {
       yield path
     }
   }
 }
 
+/**
+ * Tests whether a path is skipped solely because RegExp filters are configured and the normalized
+ * path exceeds the SDK RegExp input guard.
+ *
+ * @param relativePath - Folder-relative path using forward slashes.
+ * @param filters - Optional include and exclude filters.
+ *
+ * @returns True when RegExp filters are present and the path is too long to evaluate.
+ */
+export function pathSkippedByRegExpInputLimit(
+  relativePath: string,
+  filters: SyncFilterOptions | undefined,
+): boolean {
+  validateSyncFilters(filters)
+  const path = normalizePath(relativePath)
+  return pathExceedsSafeRegExpInput(path) && filtersContainRegExp(filters)
+}
+
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {
-  if (typeof pattern !== 'string') {
+  if (patternIsRegExp(pattern)) {
     return regexpMatchesSyncPath(relativePath, pattern)
   }
 
@@ -122,18 +143,32 @@ function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boole
 }
 
 function stringPatternMatches(relativePath: string, pattern: SyncFilterPattern): boolean {
-  return typeof pattern === 'string' && matchesPattern(relativePath, pattern)
+  return !patternIsRegExp(pattern) && matchesPattern(relativePath, pattern)
+}
+
+function stringPatternExcludesAllDescendants(
+  relativePath: string,
+  pattern: SyncFilterPattern,
+): boolean {
+  if (patternIsRegExp(pattern)) return false
+
+  const glob = normalizePath(pattern)
+  if (glob === '') return false
+  if (!glob.includes('/')) return stringPatternMatches(relativePath, pattern)
+
+  const globSegments = splitPath(glob)
+  return globSegments.at(-1) === '**' && matchPathGlob(splitPath(relativePath), globSegments)
 }
 
 function filtersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
   return (
-    filters?.include?.some((pattern) => typeof pattern !== 'string') === true ||
-    filters?.exclude?.some((pattern) => typeof pattern !== 'string') === true
+    filters?.include?.some(patternIsRegExp) === true ||
+    filters?.exclude?.some(patternIsRegExp) === true
   )
 }
 
 function patternMayMatchDescendant(relativePath: string, pattern: SyncFilterPattern): boolean {
-  if (typeof pattern !== 'string') return true
+  if (patternIsRegExp(pattern)) return true
 
   const glob = normalizePath(pattern)
   if (glob === '' || !glob.includes('/')) return true
@@ -249,6 +284,10 @@ function trimTrailingHighSurrogate(value: string): string {
 
 function hasGlobWildcard(glob: string): boolean {
   return glob.includes('*') || glob.includes('?')
+}
+
+function patternIsRegExp(pattern: SyncFilterPattern): pattern is RegExp {
+  return typeof pattern !== 'string'
 }
 
 function splitPath(path: string): string[] {

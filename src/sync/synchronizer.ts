@@ -48,6 +48,13 @@ import type {
   SyncScanOptions,
 } from './types.ts'
 
+const MAX_BUFFERED_SCAN_EVENTS = 100
+
+interface ScanEventBuffer {
+  readonly events: SyncEvent[]
+  dropped: number
+}
+
 /** Base configuration for a sync operation. */
 export interface SynchronizerConfig {
   /** The folder to read files from. */
@@ -82,7 +89,7 @@ export interface SynchronizerUpConfig extends SynchronizerConfig {
   readonly bucket: Bucket
   /**
    * Raw B2 key prefix for uploaded files in the bucket.
-   * Backslashes are normalized to forward slashes.
+   * Backslashes are preserved as raw B2 key characters.
    */
   readonly prefix: string
 }
@@ -134,24 +141,27 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
-
-  const factory = createActionFactory(config)
-  const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
-
   const queuedEvents: SyncEvent[] = []
   let errorCount = 0
   let scanHadError = false
   const runningActions = new Set<Promise<void>>()
+  const scanEvents: ScanEventBuffer = { events: [], dropped: 0 }
   const scanOptions: SyncScanOptions = {
     ...(options.include !== undefined ? { include: options.include } : {}),
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    onSkip(event) {
+      bufferScanEvent(scanEvents, event)
+    },
     onError: (event) => {
       scanHadError = true
       errorCount += 1
       queueEvent(event)
     },
   }
+
+  const factory = createActionFactory(config)
+  const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
 
   async function* finishAfterAbort(): AsyncGenerator<SyncEvent> {
     await drainActions()
@@ -344,6 +354,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 
   async function* emitQueuedEvents(): AsyncGenerator<SyncEvent> {
+    yield* drainScanEvents(scanEvents)
     for (const event of queuedEvents.splice(0)) yield event
   }
 
@@ -486,7 +497,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const bucketIsLocked = destBucket?.info?.fileLockConfiguration?.value?.isFileLockEnabled ?? false
 
   const factory: ActionFactory = {
-    upload(source: LocalSyncPath): SyncAction {
+    upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
       const prefix = normalizeB2FolderPrefix(upConfig.prefix ?? '')
       assertBucket(bucket, 'upload')
@@ -497,7 +508,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         source.size,
         async (absPath, relPath) => {
           const data = await readScannedLocalFile({ ...source, absolutePath: absPath })
-          const fileName = `${prefix}${relPath}`
+          const fileName = dest?.selectedVersion.fileName ?? `${prefix}${relPath}`
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
             data.byteLength,
@@ -559,17 +570,16 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       })
     },
 
-    hide(path: string): SyncAction {
+    hide(path: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket ?? downConfig.bucket
       assertBucket(bucket, 'hide')
+      const b2FileName = path.selectedVersion.fileName
 
-      return new HideAction(path, async (relPath) => {
-        const prefix = normalizeB2FolderPrefix(upConfig.prefix ?? '')
-        const fileName = `${prefix}${relPath}`
+      return new HideAction(path.relativePath, async () => {
         if (config.options.signal !== undefined) {
-          await bucket.hideFile(fileName, { signal: config.options.signal })
+          await bucket.hideFile(b2FileName, { signal: config.options.signal })
         } else {
-          await bucket.hideFile(fileName)
+          await bucket.hideFile(b2FileName)
         }
       })
     },
@@ -603,10 +613,17 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
+      const root =
+        downConfig.dest?.type === 'local' ? (downConfig.dest as { root: string }).root : ''
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
         const { unlink } = await import('node:fs/promises')
         config.options.signal?.throwIfAborted()
-        await unlink(absPath)
+        const targetPath = await resolveContainedLocalPath(root, path.relativePath)
+        const actualPath = await resolveContainedLocalPath(root, path.relativePath, absPath)
+        if (targetPath !== actualPath) {
+          throw new Error(`Refusing to delete outside sync root: ${path.relativePath}`)
+        }
+        await unlink(targetPath)
       })
     },
 
@@ -615,9 +632,56 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       // hide markers under retention; a hide is the safe choice.
       // Vanilla buckets: plain delete is the right move — hide markers
       // would just litter the version history.
-      return bucketIsLocked ? factory.hide(dest.relativePath) : factory.deleteRemote(dest)
+      return bucketIsLocked ? factory.hide(dest) : factory.deleteRemote(dest)
     },
   }
 
   return factory
+}
+
+function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
+  if (buffer.events.length < MAX_BUFFERED_SCAN_EVENTS) {
+    buffer.events.push(event)
+  } else {
+    buffer.dropped++
+  }
+}
+
+function* drainScanEvents(buffer: ScanEventBuffer): Generator<SyncEvent> {
+  while (buffer.events.length > 0) {
+    const event = buffer.events.shift()
+    if (event) yield event
+  }
+
+  if (buffer.dropped > 0) {
+    yield {
+      type: 'skip',
+      path: '',
+      size: 0,
+      reason: 'scan-skip-overflow',
+      message: `${buffer.dropped} scanner skip event(s) were omitted after ${MAX_BUFFERED_SCAN_EVENTS} buffered diagnostics`,
+    }
+    buffer.dropped = 0
+  }
+}
+
+async function resolveContainedLocalPath(
+  root: string,
+  relativePath: string,
+  absolutePath?: string,
+): Promise<string> {
+  if (root === '') {
+    throw new Error('Local sync root required for filesystem mutation')
+  }
+
+  const { resolve, sep } = await import('node:path')
+  const safeRoot = resolve(root)
+  const target =
+    absolutePath === undefined ? resolve(safeRoot, relativePath) : resolve(absolutePath)
+
+  if (target !== safeRoot && !target.startsWith(`${safeRoot}${sep}`)) {
+    throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
+  }
+
+  return target
 }

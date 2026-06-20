@@ -14,13 +14,13 @@ import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 /** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {
   /** Creates an action to upload a local file to B2. */
-  upload(source: LocalSyncPath): SyncAction
+  upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction
   /** Creates an action to download a B2 file to the local filesystem. */
   download(source: B2SyncPath): SyncAction
   /** Creates an action to server-side copy a B2 file to a new destination path. */
   copy(source: B2SyncPath, destPath: string): SyncAction
   /** Creates an action to hide a file in B2 (soft delete). */
-  hide(path: string): SyncAction
+  hide(path: B2SyncPath): SyncAction
   /** Creates an action to permanently delete a remote B2 file version. */
   deleteRemote(path: B2SyncPath): SyncAction
   /** Creates an action to delete a local file. */
@@ -151,7 +151,7 @@ function* actionsForBoth(
 
   switch (direction) {
     case 'local-to-b2':
-      yield factory.upload(source as LocalSyncPath)
+      yield factory.upload(source as LocalSyncPath, dest as B2SyncPath)
       break
     case 'b2-to-local':
       yield factory.download(source as B2SyncPath)

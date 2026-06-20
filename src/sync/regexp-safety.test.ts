@@ -46,4 +46,36 @@ describe('sync regexp safety', () => {
     expect(pathExceedsSafeRegExpInput('a'.repeat(1025))).toBe(true)
     expect(regexpMatchesSyncPath('a'.repeat(1025), /^a+$/)).toBe(false)
   })
+
+  it('rejects nested quantified groups before matching paths', () => {
+    const nestedAlpha = /((a+)){30}/
+    const nestedDigits = /(([0-9]+)){30}/
+    const nestedAlternation = /((a|b)){30}/
+
+    expect(() => validateSyncFilters({ include: [nestedAlpha] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+    expect(() => validateSyncFilters({ include: [nestedDigits] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+    expect(() => validateSyncFilters({ include: [nestedAlternation] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+  })
+
+  it('rejects high-cardinality bounded quantifiers', () => {
+    const tooLargeBound = /a{100000}/
+    const nestedLargeBound = /((a+)){500}/
+    const repeatedBounds = new RegExp('^'.concat('a{0,1000}'.repeat(5), 'b$'))
+
+    expect(() => validateSyncFilters({ include: [tooLargeBound] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+    expect(() => validateSyncFilters({ include: [nestedLargeBound] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+    expect(() => validateSyncFilters({ include: [repeatedBounds] })).toThrow(
+      'Sync filter RegExp is too complex',
+    )
+  })
 })

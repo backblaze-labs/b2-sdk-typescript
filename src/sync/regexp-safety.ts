@@ -3,8 +3,27 @@ import type { SyncFilterOptions, SyncFilterPattern } from './types.ts'
 const MAX_REGEXP_SOURCE_LENGTH = 512
 const MAX_REGEXP_INPUT_LENGTH = 1024
 const MAX_REGEXP_UNBOUNDED_QUANTIFIERS = 1
+const MAX_REGEXP_BOUNDED_QUANTIFIER = 200
+const MAX_REGEXP_BOUNDED_QUANTIFIERS = 16
+const MAX_REGEXP_BOUNDED_QUANTIFIER_PRODUCT = 10_000
 const safeRegExpCache = new WeakMap<RegExp, RegExp>()
+// Validation is memoized by object identity. Treat filter objects and their
+// include/exclude arrays as immutable after first use, otherwise new patterns
+// added later would not be revalidated through this cache.
 const validatedFilterCache = new WeakSet<SyncFilterOptions>()
+
+interface RegExpGroupState {
+  hasQuantifier: boolean
+  hasAlternation: boolean
+}
+
+type RegExpTokenState = { type: 'atom' } | ({ type: 'group' } & RegExpGroupState)
+
+interface RegExpQuantifier {
+  endIndex: number
+  maxRepetitions: number
+  unbounded: boolean
+}
 
 /**
  * Validates every RegExp filter in an include/exclude filter set.
@@ -80,16 +99,29 @@ function assertSafeRegExp(pattern: RegExp, kind: string): void {
   }
 }
 
+/**
+ * Best-effort linear RegExp guard for filters matched synchronously on attacker-controlled paths.
+ *
+ * The accepted subset intentionally rejects constructs that are hard to bound in the JavaScript
+ * RegExp engine: backreferences, unterminated escapes/classes/groups, repeated unbounded
+ * quantifiers, bounded quantifiers above {@link MAX_REGEXP_BOUNDED_QUANTIFIER}, too many bounded
+ * quantifiers or too large a bounded-quantifier product, and any quantified group whose subtree
+ * already contains a quantifier or alternation. Group state is propagated upward so nested groups
+ * cannot hide a quantified or alternated subtree before an outer bounded or unbounded quantifier.
+ *
+ * @param source - RegExp source text to inspect.
+ *
+ * @returns True when the source passes the SDK's structural safety heuristic.
+ */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: keep the regex safety scan linear.
 function regexpSourceLooksSafe(source: string): boolean {
   let escaped = false
   let inClass = false
   let unboundedQuantifiers = 0
-  const groups: Array<{ hasQuantifier: boolean; hasAlternation: boolean }> = []
-  let lastToken:
-    | { type: 'atom' }
-    | { type: 'group'; hasQuantifier: boolean; hasAlternation: boolean }
-    | null = null
+  let boundedQuantifiers = 0
+  let boundedQuantifierProduct = 1
+  const groups: RegExpGroupState[] = []
+  let lastToken: RegExpTokenState | null = null
 
   for (let i = 0; i < source.length; i++) {
     const char = source[i] ?? ''
@@ -127,6 +159,8 @@ function regexpSourceLooksSafe(source: string): boolean {
     if (char === ')') {
       const group = groups.pop()
       if (!group) return false
+      const parent = groups.at(-1)
+      if (parent) mergeGroupState(parent, group)
       lastToken = { type: 'group', ...group }
       continue
     }
@@ -138,25 +172,27 @@ function regexpSourceLooksSafe(source: string): boolean {
       continue
     }
 
-    if (lastToken !== null && isQuantifierStart(source, i)) {
+    const quantifier = lastToken !== null ? parseQuantifier(source, i) : null
+    if (lastToken !== null && quantifier !== null) {
       if (lastToken?.type === 'group' && (lastToken.hasQuantifier || lastToken.hasAlternation)) {
         return false
       }
 
-      if (isUnboundedQuantifier(source, i)) {
+      if (quantifier.unbounded) {
         unboundedQuantifiers++
         if (unboundedQuantifiers > MAX_REGEXP_UNBOUNDED_QUANTIFIERS) return false
+      } else {
+        boundedQuantifiers++
+        if (boundedQuantifiers > MAX_REGEXP_BOUNDED_QUANTIFIERS) return false
+        if (quantifier.maxRepetitions > MAX_REGEXP_BOUNDED_QUANTIFIER) return false
+        boundedQuantifierProduct *= Math.max(quantifier.maxRepetitions, 1)
+        if (boundedQuantifierProduct > MAX_REGEXP_BOUNDED_QUANTIFIER_PRODUCT) return false
       }
 
       const group = groups.at(-1)
       if (group) group.hasQuantifier = true
 
-      if (char === '{') {
-        const end = source.indexOf('}', i + 1)
-        if (end === -1) return false
-        i = end
-      }
-
+      i = quantifier.endIndex
       lastToken = null
       continue
     }
@@ -167,20 +203,34 @@ function regexpSourceLooksSafe(source: string): boolean {
   return !escaped && !inClass && groups.length === 0
 }
 
-function isQuantifierStart(source: string, index: number): boolean {
-  const char = source[index]
-  if (char === '*' || char === '+' || char === '?') return true
-  if (char !== '{') return false
-
-  const end = source.indexOf('}', index + 1)
-  return end !== -1 && /^\d+(?:,\d*)?$/.test(source.slice(index + 1, end))
+function mergeGroupState(target: RegExpGroupState, source: RegExpGroupState): void {
+  target.hasQuantifier = target.hasQuantifier || source.hasQuantifier
+  target.hasAlternation = target.hasAlternation || source.hasAlternation
 }
 
-function isUnboundedQuantifier(source: string, index: number): boolean {
+function parseQuantifier(source: string, index: number): RegExpQuantifier | null {
   const char = source[index]
-  if (char === '*' || char === '+') return true
-  if (char !== '{') return false
+  if (char === '*' || char === '+') {
+    return { endIndex: index, maxRepetitions: Number.POSITIVE_INFINITY, unbounded: true }
+  }
+  if (char === '?') {
+    return { endIndex: index, maxRepetitions: 1, unbounded: false }
+  }
+  if (char !== '{') return null
 
   const end = source.indexOf('}', index + 1)
-  return end !== -1 && source.slice(index + 1, end).endsWith(',')
+  if (end === -1) return null
+
+  const body = source.slice(index + 1, end)
+  const match = /^(\d+)(?:,(\d*))?$/.exec(body)
+  if (!match) return null
+
+  const min = Number(match[1])
+  const maxText = match[2]
+  const unbounded = body.includes(',') && maxText === ''
+  return {
+    endIndex: end,
+    maxRepetitions: unbounded ? Number.POSITIVE_INFINITY : Number(maxText ?? min),
+    unbounded,
+  }
 }

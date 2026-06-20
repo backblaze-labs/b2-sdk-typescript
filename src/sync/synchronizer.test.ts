@@ -7,6 +7,7 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-io.ts'
 import { compareSyncPathNames } from './path-order.ts'
+import { B2Folder } from './scanners/b2.ts'
 import type {
   SynchronizerConfig,
   SynchronizerDownConfig,
@@ -389,6 +390,196 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       expect(events.map((event) => event.path)).toEqual(['docs/keep.txt', 'docs/keep.txt'])
+    })
+
+    it.skipIf(!isNode)(
+      'does not delete remote descendants for exact slash-containing excludes',
+      async () => {
+        const { mkdtemp, mkdir, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-filter-'))
+        try {
+          await mkdir(join(root, 'a', 'b'), { recursive: true })
+          await writeFile(join(root, 'a', 'b', 'c.txt'), 'keep')
+
+          const mockBucket = makeMockBucket()
+          const destFile = makeB2SyncPath('a/b/c.txt', 1000, 4)
+          const dest = makeMemoryFolder([destFile], 'b2')
+
+          const config: SynchronizerUpConfig = {
+            source: new LocalFolder(root),
+            dest: { ...dest, type: 'b2' },
+            options: {
+              compareMode: 'size',
+              keepMode: 'delete',
+              exclude: ['a/b'],
+            },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+          expect(events.some((event) => event.type === 'delete-remote')).toBe(false)
+          expect(events.map((event) => event.path)).toContain('a/b/c.txt')
+          expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it('surfaces skipped B2 objects before delete decisions', async () => {
+      const fileVersion: FileVersion = {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'bucket' as unknown as BucketId,
+        contentLength: 10,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: 'fid_unsafe' as unknown as FileId,
+        fileInfo: {},
+        fileName: 'docs/./readme.md',
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: 1000,
+      }
+      const bucket = {
+        ...makeMockBucket(),
+        listFileVersions: vi.fn().mockResolvedValue({
+          files: [fileVersion],
+          nextFileName: null,
+          nextFileId: null,
+        }),
+      }
+      const source = new B2Folder(bucket as unknown as Bucket)
+      const dest = makeMemoryFolder([makeLocalSyncPath('docs/readme.md', 1000, 10)], 'local')
+
+      const config: SynchronizerDownConfig = {
+        source,
+        dest: { ...dest, type: 'local', root: '/tmp' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'delete',
+          dryRun: true,
+        },
+        bucket: bucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events[0]).toMatchObject({
+        type: 'skip',
+        path: 'docs/./readme.md',
+        reason: 'unsafe-name',
+        b2FileName: 'docs/./readme.md',
+      })
+      expect(events.some((event) => event.type === 'delete-local')).toBe(true)
+    })
+
+    it('does not delete local files when slashless B2 prefixes include slash-prefixed keys', async () => {
+      const fileVersion: FileVersion = {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'bucket' as unknown as BucketId,
+        contentLength: 10,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: 'fid_readme' as unknown as FileId,
+        fileInfo: {},
+        fileName: 'backup/docs/readme.md',
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: 1000,
+      }
+      const calls: Array<{ prefix?: string }> = []
+      const bucket = {
+        ...makeMockBucket(),
+        listFileVersions: vi.fn().mockImplementation((opts?: { prefix?: string }) => {
+          calls.push({
+            ...(opts?.prefix !== undefined ? { prefix: opts.prefix } : {}),
+          })
+          return Promise.resolve({
+            files: [fileVersion],
+            nextFileName: null,
+            nextFileId: null,
+          })
+        }),
+      }
+      const source = new B2Folder(bucket as unknown as Bucket, 'backup')
+      const dest = makeMemoryFolder([makeLocalSyncPath('docs/readme.md', 1000, 10)], 'local')
+
+      const config: SynchronizerDownConfig = {
+        source,
+        dest: { ...dest, type: 'local', root: '/tmp' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'delete',
+          include: ['docs/**'],
+          dryRun: true,
+        },
+        bucket: bucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(calls).toEqual([{ prefix: 'backup' }])
+      expect(events.some((event) => event.type === 'delete-local')).toBe(false)
+      expect(events.map((event) => event.path)).toContain('docs/readme.md')
+    })
+
+    it('bounds buffered scanner skip diagnostics before the first scan result', async () => {
+      function makeUnsafeFileVersion(index: number): FileVersion {
+        return {
+          accountId: 'acc' as unknown as AccountId,
+          action: FileAction.Upload,
+          bucketId: 'bucket' as unknown as BucketId,
+          contentLength: 1,
+          contentMd5: null,
+          contentSha1: 'sha1',
+          contentType: 'application/octet-stream',
+          fileId: `fid_${index}` as unknown as FileId,
+          fileInfo: {},
+          fileName: `docs/./unsafe-${index}.txt`,
+          fileRetention: { isClientAuthorizedToRead: true, value: null },
+          legalHold: { isClientAuthorizedToRead: true, value: null },
+          replicationStatus: null,
+          serverSideEncryption: { mode: EncryptionMode.None },
+          uploadTimestamp: index,
+        }
+      }
+
+      const bucket = {
+        ...makeMockBucket(),
+        listFileVersions: vi.fn().mockResolvedValue({
+          files: Array.from({ length: 105 }, (_, index) => makeUnsafeFileVersion(index)),
+          nextFileName: null,
+          nextFileId: null,
+        }),
+      }
+
+      const config: SynchronizerDownConfig = {
+        source: new B2Folder(bucket as unknown as Bucket),
+        dest: { ...makeMemoryFolder([], 'local'), type: 'local', root: '/tmp' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', dryRun: true },
+        bucket: bucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+      const scannerSkips = events.filter((event) => event.type === 'skip')
+
+      expect(scannerSkips).toHaveLength(101)
+      expect(scannerSkips.at(-1)).toMatchObject({
+        reason: 'scan-skip-overflow',
+        message: '5 scanner skip event(s) were omitted after 100 buffered diagnostics',
+      })
     })
   })
 
@@ -3182,6 +3373,45 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('refuses local deletes outside the sync root', async () => {
+      const { access, mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { basename, dirname, join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-root-'))
+      const outsidePath = join(dirname(root), `${basename(root)}-escape-delete.txt`)
+      try {
+        await writeFile(outsidePath, 'keep')
+        const source = makeMemoryFolder([], 'b2')
+        const destPath: LocalSyncPath = {
+          relativePath: '../escape-delete.txt',
+          absolutePath: outsidePath,
+          modTimeMillis: 1000,
+          size: 4,
+        }
+        const dest = makeMemoryFolder([destPath], 'local')
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'delete' },
+          bucket: makeMockBucket() as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: '../escape-delete.txt',
+          }),
+        )
+        await expect(access(outsidePath)).resolves.toBeUndefined()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outsidePath, { force: true })
+      }
+    })
+
     it('dry-runs a b2-to-local delete-local without touching the filesystem', async () => {
       const mockBucket = makeMockBucket()
       const destFile = makeLocalSyncPath('phantom.txt', 1000, 10)
@@ -3704,10 +3934,48 @@ describe('synchronize', () => {
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
         const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
         expect(args).toMatchObject({
-          fileName: 'pfx/nestedhello.txt',
+          fileName: 'pfx\\nestedhello.txt',
           signal: controller.signal,
         })
         expect(args).not.toHaveProperty('serverSideEncryption')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('updates scanned slash-prefixed B2 keys by authoritative name', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdir, mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-raw-prefix-'))
+      try {
+        await mkdir(join(root, 'docs'), { recursive: true })
+        const filePath = join(root, 'docs', 'readme.md')
+        await writeFile(filePath, 'updated')
+
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'docs/readme.md',
+          absolutePath: filePath,
+          modTimeMillis: 2000,
+          size: 7,
+        }
+        const destFile = makeB2SyncPath('docs/readme.md', 1000, 3, 'backup/docs/readme.md')
+        const source = makeMemoryFolder([sourceFile], 'local')
+        const dest = makeMemoryFolder([destFile], 'b2')
+
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: 'backup',
+        }
+
+        await collectEvents(config)
+
+        const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+        expect(args).toMatchObject({ fileName: 'backup/docs/readme.md' })
       } finally {
         await rm(root, { recursive: true, force: true })
       }
@@ -3758,9 +4026,7 @@ describe('synchronize', () => {
 
     it('routes orphan removal through hideFile (with prefix) on a file-lock-enabled bucket', async () => {
       // Locked bucket: `removeOrphan` picks `hide`, and the `HideAction`
-      // closure prepends the configured prefix to the file name before
-      // calling `bucket.hideFile`. This preserves the old prefix
-      // behaviour for the cases where it actually matters.
+      // closure uses the authoritative B2 key from the selected version.
       const mockBucket = makeMockBucket()
       const controller = new AbortController()
       const lockedBucket: typeof mockBucket & { info: object } = Object.assign(mockBucket, {
@@ -3768,7 +4034,7 @@ describe('synchronize', () => {
           fileLockConfiguration: { value: { isFileLockEnabled: true } },
         },
       })
-      const destFile = makeB2SyncPath('orphan.txt', 1000, 5)
+      const destFile = makeB2SyncPath('orphan.txt', 1000, 5, 'backup/orphan.txt')
       const source = makeMemoryFolder([], 'local')
       const dest = makeMemoryFolder([destFile], 'b2')
 
@@ -3785,7 +4051,7 @@ describe('synchronize', () => {
       const deletes = events.filter((e) => e.type === 'delete-remote')
       expect(hides).toHaveLength(1)
       expect(deletes).toHaveLength(0)
-      expect(mockBucket.hideFile).toHaveBeenCalledWith('backuporphan.txt', {
+      expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt', {
         signal: controller.signal,
       })
       expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()

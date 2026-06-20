@@ -179,6 +179,27 @@ describe('LocalFolder', () => {
 
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
+
+  it('does not prune descendants for exact slash-containing excludes', async () => {
+    await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
+    await mkdir(join(tmpDir, 'build', 'output'), { recursive: true })
+    await mkdir(join(tmpDir, 'build', 'other'), { recursive: true })
+    await writeFile(join(tmpDir, 'a', 'b', 'c.txt'), 'keep')
+    await writeFile(join(tmpDir, 'build', 'output', 'app.js'), 'keep')
+    await writeFile(join(tmpDir, 'build', 'other', 'app.js'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const exactExcludeEntries = await collect<LocalSyncPath>(folder.scan({ exclude: ['a/b'] }))
+    const includeExcludeEntries = await collect<LocalSyncPath>(
+      folder.scan({ include: ['build/**'], exclude: ['build/output'] }),
+    )
+
+    expect(exactExcludeEntries.map((e) => e.relativePath)).toContain('a/b/c.txt')
+    expect(includeExcludeEntries.map((e) => e.relativePath)).toEqual([
+      'build/other/app.js',
+      'build/output/app.js',
+    ])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -454,6 +475,40 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
+  it('keeps B2 descendants for exact slash-containing excludes', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'exact-exclude-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({
+      fileName: 'backup/a/b/c.txt',
+      source: new BufferSource(enc.encode('keep')),
+    })
+    tick()
+    await bucket.upload({
+      fileName: 'backup/build/output/app.js',
+      source: new BufferSource(enc.encode('keep')),
+    })
+    tick()
+    await bucket.upload({
+      fileName: 'backup/build/other/app.js',
+      source: new BufferSource(enc.encode('keep')),
+    })
+
+    const folder = new B2Folder(bucket, 'backup/')
+    const exactExcludeEntries = await collect<B2SyncPath>(folder.scan({ exclude: ['a/b'] }))
+    const includeExcludeEntries = await collect<B2SyncPath>(
+      folder.scan({ include: ['build/**'], exclude: ['build/output'] }),
+    )
+
+    expect(exactExcludeEntries.map((e) => e.relativePath)).toContain('a/b/c.txt')
+    expect(includeExcludeEntries.map((e) => e.relativePath)).toEqual([
+      'build/other/app.js',
+      'build/output/app.js',
+    ])
+  })
+
   it('does not yield leading slashes when prefix omits its trailing slash', async () => {
     const bucket = await client.createBucket({
       bucketName: 'prefix-normalize-bucket',
@@ -476,7 +531,7 @@ describe('B2Folder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md', 'file.txt'])
   })
 
-  it('does not yield leading slashes when no prefix is configured', async () => {
+  it('reports leading-slash B2 names without a raw prefix as unsafe', async () => {
     const fileVersion: FileVersion = {
       accountId: 'acc' as unknown as AccountId,
       action: FileAction.Upload,
@@ -505,12 +560,20 @@ describe('B2Folder', () => {
     }
 
     const folder = new B2Folder(mockBucket as unknown as Bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
+    const skips: string[] = []
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
+    expect(entries.map((e) => e.relativePath)).toEqual([])
+    expect(skips).toEqual(['unsafe-name:/docs\\readme.md'])
   })
 
-  it('skips odd B2 names while yielding valid files', async () => {
+  it('reports odd B2 names while yielding valid files', async () => {
     function makeFileVersion(
       fileName: string,
       uploadTimestamp: number,
@@ -546,6 +609,12 @@ describe('B2Folder', () => {
             makeFileVersion('docs/./readme.md', 5),
             makeFileVersion('.well-known/config', 6),
             makeFileVersion('hidden//marker', 7, FileAction.Hide),
+            makeFileVersion('notes.txt:hidden.exe', 8),
+            makeFileVersion('dir/C:/x', 9),
+            makeFileVersion('CON', 10),
+            makeFileVersion('trailing.', 11),
+            makeFileVersion('trailing ', 12),
+            makeFileVersion('bad\u0001name.txt', 13),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -554,9 +623,214 @@ describe('B2Folder', () => {
     }
 
     const folder = new B2Folder(mockBucket as unknown as Bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
+    const skips: string[] = []
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
 
     expect(entries.map((e) => e.relativePath)).toEqual(['.well-known/config', 'valid.txt'])
+    expect(skips).toEqual([
+      'unsafe-name:dir/',
+      'unsafe-name:a//b',
+      'unsafe-name:../secret.txt',
+      'unsafe-name:docs/./readme.md',
+      'unsafe-name:hidden//marker',
+      'unsafe-name:notes.txt:hidden.exe',
+      'unsafe-name:dir/C:/x',
+      'unsafe-name:CON',
+      'unsafe-name:trailing.',
+      'unsafe-name:trailing ',
+      'unsafe-name:bad\u0001name.txt',
+    ])
+  })
+
+  it('reports paths that are too long for RegExp filters', async () => {
+    const longRelativePath = `${'deep/'.repeat(205)}file.txt`
+    const fileVersion: FileVersion = {
+      accountId: 'acc' as unknown as AccountId,
+      action: FileAction.Upload,
+      bucketId: 'b' as unknown as BucketId,
+      contentLength: 1,
+      contentMd5: null,
+      contentSha1: 'sha1',
+      contentType: 'application/octet-stream',
+      fileId: 'fid_long' as unknown as FileId,
+      fileInfo: {},
+      fileName: longRelativePath,
+      fileRetention: { isClientAuthorizedToRead: true, value: null },
+      legalHold: { isClientAuthorizedToRead: true, value: null },
+      replicationStatus: null,
+      serverSideEncryption: { mode: EncryptionMode.None },
+      uploadTimestamp: 1,
+    }
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [fileVersion],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const skips: string[] = []
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        exclude: [/\.bak$/],
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
+
+    expect(entries).toEqual([])
+    expect(skips).toEqual([`path-too-long-for-regexp:${longRelativePath}`])
+  })
+
+  it('continues scanning when onSkip throws', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${ts}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [makeFileVersion('docs/./bad.txt', 1), makeFileVersion('valid.txt', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        onSkip() {
+          throw new Error('logging failed')
+        },
+      }),
+    )
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['valid.txt'])
+  })
+
+  it('rejects all B2 keys that collide after relative path normalization', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${ts}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('docs\\readme.md', 1),
+            makeFileVersion('docs/readme.md', 2),
+            makeFileVersion('docs\\readme.md', 3),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const skips: string[] = []
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.selectedVersion.fileName)).toEqual([])
+    expect(skips).toEqual([
+      'relative-path-collision:docs\\readme.md',
+      'relative-path-collision:docs/readme.md',
+      'relative-path-collision:docs\\readme.md',
+    ])
+  })
+
+  it('does not push include prefixes past slashless raw B2 prefixes', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const calls: Array<{ prefix?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { prefix?: string }) {
+        calls.push({
+          ...(opts?.prefix !== undefined ? { prefix: opts.prefix } : {}),
+        })
+        return {
+          files: [
+            makeFileVersion('backup/docs/readme.md', 1),
+            makeFileVersion('backupcache/other.md', 2),
+            makeFileVersion('backup/cache/skip.md', 3),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'backup')
+    const entries = await collect<B2SyncPath>(folder.scan({ include: ['docs/**'] }))
+
+    expect(calls).toEqual([{ prefix: 'backup' }])
+    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
 
   it('pushes down safe include prefixes while filtering listed names', async () => {
@@ -600,7 +874,7 @@ describe('B2Folder', () => {
       },
     }
 
-    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root\\')
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root/')
     const entries = await collect<B2SyncPath>(
       folder.scan({
         include: ['active/**'],
@@ -610,6 +884,61 @@ describe('B2Folder', () => {
 
     expect(calls).toEqual([{ prefix: 'root/active' }])
     expect(entries.map((e) => e.relativePath)).toEqual(['active', 'active/keep.txt'])
+  })
+
+  it('preserves backslashes in raw B2 prefixes', async () => {
+    function makeFileVersion(name: string, ts: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const calls: Array<{ prefix?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { prefix?: string }) {
+        calls.push({
+          ...(opts?.prefix !== undefined ? { prefix: opts.prefix } : {}),
+        })
+        return {
+          files: [
+            makeFileVersion('root\\active', 1),
+            makeFileVersion('root\\active/keep.txt', 2),
+            makeFileVersion('root/active/wrong-prefix.txt', 3),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const skips: string[] = []
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'root\\')
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        include: ['active/**'],
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
+
+    expect(calls).toEqual([{ prefix: 'root\\' }])
+    expect(entries.map((e) => e.relativePath)).toEqual(['active', 'active/keep.txt'])
+    expect(skips).toEqual(['outside-prefix:root/active/wrong-prefix.txt'])
   })
 
   // Pagination: when listFileVersions returns nextFileName, B2Folder must

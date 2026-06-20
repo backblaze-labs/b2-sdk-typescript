@@ -14,3 +14,15 @@ export function compareSyncPathNames(a: string, b: string): number {
   if (a > b) return 1
   return 0
 }
+
+/**
+ * Compares sync-relative paths using the same collation everywhere sorted scans are consumed.
+ *
+ * @param left - First sync-relative path.
+ * @param right - Second sync-relative path.
+ *
+ * @returns Negative, zero, or positive using the SDK scan collation.
+ */
+export function compareSyncRelativePaths(left: string, right: string): number {
+  return compareSyncPathNames(left, right)
+}

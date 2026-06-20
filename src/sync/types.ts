@@ -33,9 +33,13 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  * file under a `node_modules` directory. Exclude filters win over include filters.
  *
  * Regular expressions are matched against the full relative path. Global and sticky flags are
- * ignored so matching does not mutate `lastIndex`; regexes that look structurally unsafe for
- * synchronous matching are rejected. When a RegExp filter is configured, paths longer than 1024
- * code units are skipped instead of being fed to the JavaScript RegExp engine.
+ * ignored so matching does not mutate `lastIndex`. RegExp acceptance is a best-effort safety
+ * heuristic for synchronous matching, and the exact accepted subset may change as the SDK tightens
+ * protection. Current guards reject sources over 512 code units, backreferences, multiple
+ * unbounded quantifiers, bounded quantifiers above 200 repetitions, too many or too-large combined
+ * bounded quantifiers, and quantified groups whose subtree contains a quantifier or alternation.
+ * When a RegExp filter is configured, paths longer than the SDK's RegExp input guard are skipped
+ * instead of being fed to the JavaScript RegExp engine.
  */
 export type SyncFilterPattern = string | RegExp
 
@@ -56,9 +60,26 @@ export interface SyncFilterOptions {
   readonly include?: readonly SyncFilterPattern[]
   /**
    * Optional deny-list. Paths matching any exclude pattern are skipped even when they also match
-   * an include pattern. Excludes are client-side filters; they do not reduce B2 list API calls.
+   * an include pattern. Excludes are client-side filters; they do not reduce B2 list API calls or
+   * the B2 scanner's version grouping and sort memory.
    */
   readonly exclude?: readonly SyncFilterPattern[]
+}
+
+/**
+ * Options accepted by {@link SyncFolder.scan}. Includes filters plus an optional scan-level
+ * callback for paths the scanner cannot safely represent or test.
+ */
+export interface SyncScanOptions extends SyncFilterOptions {
+  /** Signal used to stop a scan before it runs to completion. */
+  readonly signal?: AbortSignal
+  /** Receives scan diagnostics before the scanner aborts. */
+  readonly onError?: (event: SyncErrorEvent) => void
+  /**
+   * Receives scanner skip diagnostics. Built-in scans isolate callback errors so diagnostics
+   * handlers cannot abort the scan.
+   */
+  readonly onSkip?: (event: SyncSkipEvent) => void
 }
 
 /** Common metadata for a file discovered during a folder scan. */
@@ -151,6 +172,14 @@ export type SyncActionEventType =
   | 'delete-remote'
   | 'delete-local'
 
+/** Machine-readable reasons emitted with scanner and diagnostic skip events. */
+export type SyncSkipReason =
+  | 'outside-prefix'
+  | 'unsafe-name'
+  | 'relative-path-collision'
+  | 'path-too-long-for-regexp'
+  | 'scan-skip-overflow'
+
 /**
  * Per-action progress event (transfer or metadata change). All
  * action-event variants share the same shape; the `type` tag distinguishes
@@ -187,12 +216,16 @@ export interface SyncCompareEvent {
 export interface SyncSkipEvent {
   /** Discriminant tag (always the literal string `'skip'`). */
   readonly type: 'skip'
-  /** Relative path of the skipped file. */
+  /** Relative path of the skipped file, or the raw B2 key when no safe relative path exists. */
   readonly path: string
   /** Size in bytes of the file involved, always 0 for skip events. */
   readonly size: number
   /** Human-readable reason for skipping this file. */
   readonly message: string
+  /** Machine-readable skip reason when emitted by a scanner or diagnostic buffer. */
+  readonly reason?: SyncSkipReason
+  /** Original B2 key when the skip came from a B2 scan. */
+  readonly b2FileName?: string
 }
 
 /**
@@ -254,14 +287,6 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly encryptionProvider?: SyncEncryptionProvider
 }
 
-/** Options passed to folder scanners by the sync engine. */
-export interface SyncScanOptions extends SyncFilterOptions {
-  /** Signal used to stop a scan before it runs to completion. */
-  readonly signal?: AbortSignal
-  /** Receives scan diagnostics before the scanner aborts. */
-  readonly onError?: (event: SyncErrorEvent) => void
-}
-
 /** Supplies encryption settings on a per-file basis during sync. */
 export interface SyncEncryptionProvider {
   /** Returns the encryption setting to use when uploading a file, or undefined for default. */
@@ -270,10 +295,18 @@ export interface SyncEncryptionProvider {
   getSettingForDownload(fileVersion: FileVersion): EncryptionSetting | undefined
 }
 
-/** A scannable folder (local or B2) that yields files in deterministic string order. */
+/**
+ * A scannable folder (local or B2) that yields files in sorted order.
+ *
+ * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
+ * require memory proportional to the scanned entries; B2 scans also group listed versions before
+ * yielding, and exclude filters or non-literal includes do not bound that listing footprint.
+ */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
-  /** Scans the folder and yields files sorted by relative path using JavaScript `<`/`>` order. */
+  /** True when `scan(filters)` already enforces include/exclude filters itself. */
+  readonly appliesScanFilters?: true
+  /** Scans the folder and yields files sorted by relative path. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

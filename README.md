@@ -455,6 +455,29 @@ do not require AWS presigner packages.
 
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
+## Sync filters
+
+`synchronize()` and the built-in `LocalFolder` / `B2Folder` scanners accept `include` and `exclude` filters for paths relative to each sync root:
+
+```ts
+await synchronize({
+  source: new LocalFolder('./site'),
+  dest: new B2Folder(bucket, 'site/'),
+  bucket,
+  prefix: 'site/',
+  options: {
+    compareMode: 'modtime',
+    keepMode: 'no-delete',
+    include: ['assets/**', '*.html'],
+    exclude: ['*.tmp', 'node_modules'],
+  },
+})
+```
+
+Glob strings use the SDK dialect: `*` and `?` stay within one path segment, a whole `**` segment crosses directories, slash-less patterns match any basename or ancestor directory, and excludes win over includes. RegExp filters are also supported, but accepted patterns are guarded by a best-effort synchronous safety heuristic whose exact subset may change as protections tighten; paths that exceed the RegExp input guard are reported with `reason: 'path-too-long-for-regexp'` when `onSkip` is configured. B2 prefixes are raw object-name prefixes; backslashes are not rewritten to `/`.
+
+`SyncFolder.scan()` implementations must yield sorted paths. The built-in local and B2 scanners currently sort before yielding, so large trees or prefixes may require memory proportional to the scanned entries. B2 scans also group listed versions before yielding; exclude filters and non-literal includes do not bound that listing footprint. Built-in B2 skip diagnostics use the `SyncSkipReason` values `outside-prefix`, `unsafe-name`, `relative-path-collision`, and `path-too-long-for-regexp`; `synchronize()` may aggregate excess scanner diagnostics with `scan-skip-overflow`.
+
 ## Custom transport
 
 The SDK uses a pluggable transport layer. The default `FetchTransport` uses the native `fetch` API. You can provide your own:

@@ -100,11 +100,11 @@ function makeMemoryFolder(files: SyncPath[]): SyncFolder {
 
 function makeNoopFactory(): ActionFactory {
   return {
-    upload: (s: LocalSyncPath) =>
+    upload: (s: LocalSyncPath, _dest?: B2SyncPath) =>
       new UploadAction(s.relativePath, s.absolutePath, s.size, async () => {}),
     download: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-download'),
     copy: (s: B2SyncPath, _dest: string) => new SkipAction(s.relativePath, 'noop-copy'),
-    hide: (path: string) => new SkipAction(path, 'noop-hide'),
+    hide: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-hide'),
     deleteRemote: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-delete-remote'),
     deleteLocal: (s: LocalSyncPath) => new SkipAction(s.relativePath, 'noop-delete-local'),
     // For the noop test factory, treat orphans as the equivalent of
@@ -925,6 +925,24 @@ describe('zipFolders', () => {
     expect(destClosed).toBe(true)
   })
 
+  it('uses scanner collation when joining mixed-case paths', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a.txt', 1000, 10),
+      makeSyncPath('B.txt', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([makeSyncPath('B.txt', 1000, 20)])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['B.txt', 'B.txt'],
+      ['a.txt', null],
+    ])
+  })
+
   it('applies include filters to both folder scans before pairing', async () => {
     const source = makeMemoryFolder([
       makeSyncPath('docs/readme.md', 1000, 10),
@@ -959,6 +977,54 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([['keep.txt', 'keep.txt']])
+  })
+
+  it('trusts folders that already apply scan filters', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanFilters: true,
+      async *scan() {
+        yield makeSyncPath('skip.tmp', 1000, 10)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['*.tmp'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['skip.tmp', null]])
+  })
+
+  it('keeps descendants of exact slash-containing excludes while pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a/b/c.txt', 1000, 10),
+      makeSyncPath('build/output/app.js', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('a/b/c.txt', 1000, 10),
+      makeSyncPath('build/output/app.js', 1000, 20),
+    ])
+
+    const exactExcludePairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['a/b'] })) {
+      exactExcludePairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    const includeExcludePairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, {
+      include: ['build/**'],
+      exclude: ['build/output'],
+    })) {
+      includeExcludePairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(exactExcludePairs).toEqual([
+      ['a/b/c.txt', 'a/b/c.txt'],
+      ['build/output/app.js', 'build/output/app.js'],
+    ])
+    expect(includeExcludePairs).toEqual([['build/output/app.js', 'build/output/app.js']])
   })
 
   it('supports regular expression filters', async () => {

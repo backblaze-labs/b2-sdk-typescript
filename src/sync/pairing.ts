@@ -1,5 +1,5 @@
 import { filterSyncPaths } from './filters.ts'
-import { compareSyncPathNames } from './path-order.ts'
+import { compareSyncRelativePaths } from './path-order.ts'
 import { validateSyncFilters } from './regexp-safety.ts'
 import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
@@ -21,11 +21,8 @@ export async function* zipFolders(
   options: SyncScanOptions = {},
 ): AsyncGenerator<SyncPair> {
   validateSyncFilters(options)
-  // Built-in folders apply filters during scan so expensive walks/listings can be pruned.
-  // The wrapper pass is intentional: third-party SyncFolder implementations may ignore
-  // scan-time filters, so pairing still enforces the public synchronize() filter contract.
-  const sourceIter = filterSyncPaths(source.scan(options), options)[Symbol.asyncIterator]()
-  const destIter = filterSyncPaths(dest.scan(options), options)[Symbol.asyncIterator]()
+  const sourceIter = scanWithFilters(source, options)[Symbol.asyncIterator]()
+  const destIter = scanWithFilters(dest, options)[Symbol.asyncIterator]()
 
   try {
     let sourceResult = await sourceIter.next()
@@ -42,7 +39,7 @@ export async function* zipFolders(
         yield [s, null]
         sourceResult = await sourceIter.next()
       } else {
-        const order = compareSyncPathNames(s.relativePath, d.relativePath)
+        const order = compareSyncRelativePaths(s.relativePath, d.relativePath)
         if (order < 0) {
           yield [s, null]
           sourceResult = await sourceIter.next()
@@ -68,4 +65,12 @@ async function closeScanIterator(iterator: AsyncIterator<SyncPath>): Promise<voi
   } catch {
     // Best-effort scanner cleanup should not mask the original stop reason.
   }
+}
+
+function scanWithFilters(
+  folder: SyncFolder,
+  filters: SyncScanOptions | undefined,
+): AsyncIterable<SyncPath> {
+  const scanned = folder.scan(filters)
+  return folder.appliesScanFilters === true ? scanned : filterSyncPaths(scanned, filters)
 }
