@@ -479,4 +479,14 @@ describe('getRealmUrl', () => {
   it('REALM_URLS contains the expected known realms', () => {
     expect(Object.keys(REALM_URLS)).toEqual(expect.arrayContaining(['production', 'staging']))
   })
+
+  it('keeps public REALM_URLS mutations out of internal realm resolution', () => {
+    const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
+    REALM_URLS['production'] = 'https://attacker.example'
+    try {
+      expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
+    } finally {
+      REALM_URLS['production'] = originalProduction
+    }
+  })
 })

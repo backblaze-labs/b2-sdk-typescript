@@ -544,7 +544,7 @@ export class B2RealmConfigurationError extends B2Error {
 export class B2RedirectError extends Error {
   /** Always `false` because a blocked redirect is deterministic. */
   readonly retryable = false
-  /** The request URL whose response attempted to redirect. */
+  /** Sanitized request URL whose response attempted to redirect. */
   readonly url: string
   /** HTTP redirect status code, or 0 for an opaque browser redirect. */
   readonly status: number
@@ -554,9 +554,9 @@ export class B2RedirectError extends Error {
   /**
    * Creates a new B2RedirectError instance.
    *
-   * @param url - Request URL whose response attempted to redirect.
+   * @param url - Request URL whose response attempted to redirect. Stored as a sanitized URL.
    * @param status - HTTP redirect status code.
-   * @param location - Redirect Location header, if present.
+   * @param location - Redirect Location header, if present. Stored as a sanitized URL.
    */
   constructor(url: string, status: number, location: string | null) {
     const safeUrl = redactUrlForError(url)

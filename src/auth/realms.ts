@@ -17,7 +17,7 @@ const VERIFIED_REALM_URLS = {
  * Region-specific API URLs are discovered from the authorize response, so
  * unverified regional aliases are intentionally omitted.
  */
-export const REALM_URLS: Record<string, string> = VERIFIED_REALM_URLS
+export const REALM_URLS: Record<string, string> = { ...VERIFIED_REALM_URLS }
 
 // `new URL('https:example.com')` normalizes to `https://example.com/`;
 // require the raw URL to use authority syntax before credentials are sent.
