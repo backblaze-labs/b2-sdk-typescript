@@ -19,8 +19,12 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = [
   'image/svg+xml',
   'application/javascript',
   'text/javascript',
+  'application/x-javascript',
+  'text/x-javascript',
   'application/ecmascript',
   'text/ecmascript',
+  'application/x-ecmascript',
+  'text/x-ecmascript',
   'text/xml',
   'application/xml',
   'application/custom+xml',
@@ -458,6 +462,17 @@ describe('presignS3GetObjectUrl', () => {
     }
   })
 
+  it('rejects malformed response content type overrides', async () => {
+    for (const responseContentType of ['text /html', 'text/html text/plain']) {
+      await expect(
+        presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          responseContentType,
+        }),
+      ).rejects.toThrow('responseContentType must include a valid media type.')
+    }
+  })
+
   it('rejects inline response content disposition overrides', async () => {
     await expect(
       presignS3GetObjectUrl({
@@ -487,6 +502,7 @@ describe('presignGetObjectUrl', () => {
     )
 
     expect(typeof url).toBe('string')
+    expect(new URL(url).pathname).toBe('/file/my-bucket/path%2Fto%2Ffile.txt')
     expect(url).toContain('/file/my-bucket/path%2Fto%2Ffile.txt')
     expect(url).toContain('Authorization=auth-token-123')
   })
@@ -503,6 +519,12 @@ describe('presignGetObjectUrl', () => {
     expect(() =>
       presignGetObjectUrl('https://f004.backblazeb2.com', '..', 'file.txt', 'auth-token-123'),
     ).toThrow('bucketName must not be "." or ".."')
+  })
+
+  it('rejects non-HTTPS native download URLs before returning bearer tokens', () => {
+    expect(() =>
+      presignGetObjectUrl('http://f004.backblazeb2.com', 'bucket', 'file.txt', 'secret-token'),
+    ).toThrow('Native download-authorization URLs require an https: downloadUrl')
   })
 
   it('rejects invalid compatibility duration values', () => {
@@ -636,6 +658,27 @@ describe('presignS3PutObjectUrl', () => {
         allowBrowserExecutableContentType: true,
       }),
     ).rejects.toThrow('contentType must include a non-empty media type.')
+  })
+
+  it('rejects malformed content type values', async () => {
+    for (const contentType of ['text /html', 'text/html text/plain']) {
+      await expect(
+        presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          fileName: 'uploads/page.html',
+          contentType,
+        }),
+      ).rejects.toThrow('contentType must include a valid media type.')
+    }
+
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/page.html',
+        contentType: 'text /html',
+        allowBrowserExecutableContentType: true,
+      }),
+    ).rejects.toThrow('contentType must include a valid media type.')
   })
 
   it('rejects browser-executable content types by default', async () => {
@@ -824,6 +867,17 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     )
 
     expect(url).toContain('Authorization=secret-token')
+  })
+
+  it('rejects non-HTTPS native download URLs before returning bearer tokens', () => {
+    expect(() =>
+      createNativeDownloadAuthorizationUrl(
+        'http://f004.backblazeb2.com',
+        'bucket',
+        'file.txt',
+        'secret-token',
+      ),
+    ).toThrow('Native download-authorization URLs require an https: downloadUrl')
   })
 
   it('rejects file names and bucket names that can normalize outside the path prefix', () => {

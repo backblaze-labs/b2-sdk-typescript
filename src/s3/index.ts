@@ -21,6 +21,7 @@ import {
 import { assertNativeDownloadFileName, assertSafeBucketName } from './validation.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+const HTTP_MEDIA_TYPE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN = 3600
 const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'text/html',
@@ -28,8 +29,12 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'image/svg+xml',
   'application/javascript',
   'text/javascript',
+  'application/x-javascript',
+  'text/x-javascript',
   'application/ecmascript',
   'text/ecmascript',
+  'application/x-ecmascript',
+  'text/x-ecmascript',
   'text/xml',
   'application/xml',
 ])
@@ -159,8 +164,8 @@ export interface PresignS3PutObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Optional user metadata to attach to the object. The generated URL signs
    * matching `x-amz-meta-*` headers, so upload clients must send the same values.
-   * Metadata keys must be valid HTTP header tokens and must not differ only by
-   * case.
+   * Pass bare metadata keys; the helper adds the `x-amz-meta-` prefix. Metadata
+   * keys must be valid HTTP header tokens and must not differ only by case.
    */
   readonly metadata?: Record<string, string>
 }
@@ -292,6 +297,8 @@ export async function presignS3GetObjectUrl(
  *
  * This deprecated helper preserves the legacy positional output contract where
  * the whole file name is encoded as one URL component, including `/` as `%2F`.
+ * It now fails closed for unsafe bucket names, path-normalizing file names,
+ * non-HTTPS download URLs, and invalid compatibility durations.
  *
  * @param downloadUrl - The B2 download URL from authorization.
  * @param bucketName - The bucket containing the file.
@@ -312,6 +319,7 @@ export function presignGetObjectUrl(
   authorizationToken: string,
   validDurationInSeconds?: number,
 ): string {
+  assertHttpsDownloadUrl(downloadUrl)
   assertSafeBucketName(bucketName)
   assertNativeDownloadFileName(fileName)
   const expires =
@@ -391,6 +399,7 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
  * token. `validDurationInSeconds` is retained only for compatibility with the
  * legacy `presignGetObjectUrl` helper's decorative `expires` query parameter;
  * changing it here does not shorten or extend access.
+ * Because the returned URL carries a bearer token, `downloadUrl` must use HTTPS.
  *
  * @param downloadUrl - The B2 download URL from authorization (e.g., `https://f004.backblazeb2.com`).
  * @param bucketName - The bucket containing the file.
@@ -407,6 +416,7 @@ export function createNativeDownloadAuthorizationUrl(
   authorizationToken: string,
   validDurationInSeconds = DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
 ): string {
+  assertHttpsDownloadUrl(downloadUrl)
   assertSafeBucketName(bucketName)
   assertNativeDownloadFileName(fileName)
   const expires =
@@ -461,6 +471,23 @@ function normalizeValidDurationInSeconds(validDurationInSeconds: number): number
 function assertNonEmptyStringOption(name: string, value: unknown): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new TypeError(`${name} must be a non-empty string.`)
+  }
+}
+
+function assertHttpsDownloadUrl(downloadUrl: string): void {
+  let base: URL
+  try {
+    base = new URL(downloadUrl)
+  } catch {
+    throw new TypeError(
+      `Native download-authorization URLs require a valid https: downloadUrl; received "${downloadUrl}".`,
+    )
+  }
+
+  if (base.protocol !== 'https:') {
+    throw new TypeError(
+      `Native download-authorization URLs require an https: downloadUrl; received "${base.origin}".`,
+    )
   }
 }
 
@@ -555,6 +582,9 @@ function assertSafeContentTypeValue(name: string, contentType: string, target: s
   const mediaType = mediaTypeFor(contentType)
   if (mediaType.length === 0) {
     throw new TypeError(`${name} must include a non-empty media type.`)
+  }
+  if (!HTTP_MEDIA_TYPE.test(mediaType)) {
+    throw new TypeError(`${name} must include a valid media type.`)
   }
 
   return mediaType

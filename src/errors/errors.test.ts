@@ -529,8 +529,8 @@ describe('B2RedirectError', () => {
     )
     expect(err.name).toBe('B2RedirectError')
     expect(err.status).toBe(301)
-    expect(err.url).toBe('https://api.example.com/b2api')
-    expect(err.location).toBe('https://next.example.com/path')
+    expect(err.url).toBe('https://api.example.com/...')
+    expect(err.location).toBe('https://next.example.com/...')
     expect(err.message).not.toContain('secret')
     expect(err.message).not.toContain('token=')
     expect(err.message).not.toContain('fragment')
@@ -543,7 +543,7 @@ describe('B2RedirectError', () => {
       '/login?token=location-secret#location-fragment',
     )
 
-    expect(err.location).toBe('https://api.example.com/login')
+    expect(err.location).toBe('https://api.example.com/...')
     expect(err.message).not.toContain('location-secret')
     expect(err.message).not.toContain('location-fragment')
   })
@@ -555,11 +555,24 @@ describe('B2RedirectError', () => {
       'https://next.example.com/callback/location-secret?authorizationToken=location-secret#secret',
     )
 
-    expect(err.url).toBe('https://api.example.com/b2api/...')
-    expect(err.location).toBe('https://next.example.com/callback/...')
+    expect(err.url).toBe('https://api.example.com/...')
+    expect(err.location).toBe('https://next.example.com/...')
     expect(err.message).not.toContain('path-secret')
     expect(err.message).not.toContain('location-secret')
     expect(err.message).not.toContain('authorizationToken')
+  })
+
+  it('redacts single-segment redirect paths', () => {
+    const err = new B2RedirectError(
+      'https://api.example.com/request-secret?token=query-secret',
+      302,
+      '/location-secret?token=location-secret',
+    )
+
+    expect(err.url).toBe('https://api.example.com/...')
+    expect(err.location).toBe('https://api.example.com/...')
+    expect(err.message).not.toContain('request-secret')
+    expect(err.message).not.toContain('location-secret')
   })
 })
 
