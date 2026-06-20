@@ -1350,6 +1350,26 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileInfo).toEqual(fileInfo)
   })
 
+  it('uses empty fileInfo with custom resume discovery limits', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'resume-empty-fileinfo.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+      resume: true,
+      resumeMaxListPages: 3,
+      resumeMaxPartCandidates: 4,
+      resumeMaxPartPages: 5,
+      onResumeCandidateRejected: () => {},
+    })
+
+    expect(result.fileInfo).toEqual({})
+  })
+
   it('skips a same-name unfinished upload with conflicting resume identity', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2 + 7)

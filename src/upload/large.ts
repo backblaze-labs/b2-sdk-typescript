@@ -284,7 +284,7 @@ export async function uploadLargeFile(
         await partSha1.update(data)
         const sha1Hex = await partSha1.digest()
 
-        // Best-effort resume dedup gate: metadata and lengths are not enough.
+        // Best-effort resume deduplication gate: metadata and lengths are not enough.
         // A SHA-1 match is not a cryptographic guarantee against malicious
         // bucket co-writers, so auto-resume is documented for mutually trusted
         // writers only.
