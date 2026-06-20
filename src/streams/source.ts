@@ -659,7 +659,7 @@ export class StreamSource implements ContentSource {
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
     const bytes = await collectStreamExactly(this.stream(), this.size)
-    return arrayBufferFor(bytes)
+    return bytes.buffer as ArrayBuffer
   }
 }
 
