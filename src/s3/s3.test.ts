@@ -225,6 +225,25 @@ describe('presignS3GetObjectUrl', () => {
     )
   })
 
+  it('omits an explicit default TLS port from the signed host header', async () => {
+    useSigningDate()
+
+    const standardUrl = new URL(await presignS3GetObjectUrl(basePresignOptions()))
+    const defaultPortUrl = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        accountInfo: createMockAccountInfo({
+          s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com:443',
+        }),
+      }),
+    )
+
+    expect(defaultPortUrl.host).toBe('s3.us-west-004.backblazeb2.com')
+    expect(defaultPortUrl.searchParams.get('X-Amz-Signature')).toBe(
+      standardUrl.searchParams.get('X-Amz-Signature'),
+    )
+  })
+
   it('rejects dot-only object key segments that URL parsers normalize', async () => {
     await expect(
       presignS3GetObjectUrl({
@@ -379,6 +398,8 @@ describe('presignS3PutObjectUrl', () => {
   })
 
   it('makes content type affect the signed URL', async () => {
+    useSigningDate()
+
     const withoutContentType = await presignS3PutObjectUrl({
       ...basePresignOptions(),
       fileName: 'uploads/photo.jpg',

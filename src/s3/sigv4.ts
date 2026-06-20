@@ -68,7 +68,7 @@ export async function presignS3Request(
   assertSafeBucketName(options.bucketName)
   assertValidB2FileName(options.fileName)
   const canonicalUri = buildCanonicalUri(endpoint.pathname, options.bucketName, options.fileName)
-  const headers = normalizeSignedHeaders([['host', endpoint.host], ...extraHeaders])
+  const headers = normalizeSignedHeaders([['host', canonicalHostHeader(endpoint)], ...extraHeaders])
   const signedHeaders = headers.map(([name]) => name).join(';')
 
   const query: QueryParam[] = [
@@ -138,6 +138,13 @@ function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: s
   const basePath =
     endpointPath === '' || endpointPath === '/' ? '' : endpointPath.replace(/\/+$/, '')
   return `${basePath}/${awsPercentEncode(bucketName)}/${encodePath(fileName)}`
+}
+
+function canonicalHostHeader(endpoint: URL): string {
+  if (endpoint.port === '' || (endpoint.protocol === 'https:' && endpoint.port === '443')) {
+    return endpoint.hostname
+  }
+  return `${endpoint.hostname}:${endpoint.port}`
 }
 
 function assertHttpsEndpoint(endpoint: URL): void {
