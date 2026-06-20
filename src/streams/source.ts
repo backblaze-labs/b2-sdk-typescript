@@ -43,12 +43,12 @@ interface FileIdentity {
   readonly mtimeMs: number
 }
 
-let pendingFileSourceIdentity:
-  | {
-      readonly path: FileSourcePath
-      readonly identity: FileIdentity
-    }
-  | undefined
+const FILE_SOURCE_INTERNAL = Symbol('FileSource.internal')
+
+interface FileSourceInternalOptions {
+  readonly key: typeof FILE_SOURCE_INTERNAL
+  readonly identity: FileIdentity
+}
 
 function getNodeFsSync(): NodeFsSync {
   // FileSource exposes `size` synchronously, so the constructor cannot use the
@@ -99,13 +99,6 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
     size: stats.size,
     mtimeMs: stats.mtimeMs,
   }
-}
-
-function takePendingFileSourceIdentity(path: FileSourcePath): FileIdentity | undefined {
-  if (pendingFileSourceIdentity?.path !== path) return undefined
-  const { identity } = pendingFileSourceIdentity
-  pendingFileSourceIdentity = undefined
-  return identity
 }
 
 function assertStableIdentity(path: FileSourcePath, stats: FileStatsLike): void {
@@ -520,10 +513,12 @@ export class FileSource extends FileRangeSource {
    * @throws If the path does not reference a regular non-symlink file.
    * @throws If the filesystem cannot report stable file identity.
    */
-  constructor(path: FileSourcePath) {
+  constructor(path: FileSourcePath)
+  constructor(path: FileSourcePath, internal?: FileSourceInternalOptions) {
     const resolvedIdentity =
-      takePendingFileSourceIdentity(path) ??
-      validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
+      internal?.key === FILE_SOURCE_INTERNAL
+        ? internal.identity
+        : validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
     super(path, resolvedIdentity, 0, resolvedIdentity.size)
   }
 
@@ -538,14 +533,7 @@ export class FileSource extends FileRangeSource {
    */
   static async fromPath(path: FileSourcePath): Promise<FileSource> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))
-    pendingFileSourceIdentity = { path, identity }
-    try {
-      return new FileSource(path)
-    } finally {
-      if (pendingFileSourceIdentity?.identity === identity) {
-        pendingFileSourceIdentity = undefined
-      }
-    }
+    return constructFileSourceFromIdentity(path, identity)
   }
 
   /**
@@ -559,6 +547,13 @@ export class FileSource extends FileRangeSource {
   assertUnchanged(when = 'after read'): Promise<void> {
     return this.verifyUnchanged(when)
   }
+}
+
+function constructFileSourceFromIdentity(path: FileSourcePath, identity: FileIdentity): FileSource {
+  return Reflect.construct(FileSource, [
+    path,
+    { key: FILE_SOURCE_INTERNAL, identity },
+  ]) as FileSource
 }
 
 /** ContentSource backed by a ReadableStream. Can only be consumed once and does not support slicing. */

@@ -41,6 +41,23 @@ describe('FileSource', () => {
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
   })
 
+  it('fromPath does not use synchronous filesystem construction', async () => {
+    const path = join(tmpDir, 'async-only-payload.txt')
+    await writeFile(path, 'hello without sync stat')
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockImplementation(() => {
+      throw new Error('sync filesystem path used')
+    })
+
+    try {
+      const source = await FileSource.fromPath(path)
+
+      expect(source.size).toBe(23)
+      expect(decoder.decode(await source.toArrayBuffer())).toBe('hello without sync stat')
+    } finally {
+      getBuiltinModule.mockRestore()
+    }
+  })
+
   it('returns ranged slices without reading unrelated bytes', async () => {
     const path = join(tmpDir, 'range.txt')
     await writeFile(path, '0123456789')

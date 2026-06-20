@@ -13,7 +13,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, StreamSource, toContentSource } from '../streams/source.ts'
+import { BufferSource, type ContentSource, StreamSource, toContentSource } from '../streams/source.ts'
 import {
   daysFromNow,
   deterministicBytes,
@@ -1002,6 +1002,95 @@ describe('uploadLargeFile cleanup paths', () => {
         concurrency: 1,
       }),
     ).rejects.toThrow(/upload_part failure/)
+  })
+
+  it('aborts and drains parallel part work before cancelling the large file', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let releasePartOneUpload: (() => void) | undefined
+    const partOneUploadStarted = new Promise<void>((resolve) => {
+      releasePartOneUpload = resolve
+    })
+    const uploadAttempts: number[] = []
+    let uploadAttemptsAfterCancel = 0
+    let cancelSeen = false
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelSeen = true
+          return inner.send(req)
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          if (cancelSeen) uploadAttemptsAfterCancel += 1
+          const partNumber = Number(req.headers?.['X-Bz-Part-Number'])
+          uploadAttempts.push(partNumber)
+          if (partNumber === 1) {
+            releasePartOneUpload?.()
+            if (req.signal?.aborted === true) throw req.signal.reason
+            await new Promise<never>((_, reject) => {
+              req.signal?.addEventListener(
+                'abort',
+                () => reject(new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              )
+            })
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'parallel-drain',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 3)
+    const source: ContentSource = {
+      canSlice: true,
+      size: data.byteLength,
+      slice(start, end) {
+        const partNumber = start / partSize + 1
+        if (partNumber === 2) {
+          return {
+            canSlice: true,
+            size: end - start,
+            slice: () => {
+              throw new Error('unexpected nested slice')
+            },
+            stream: () => new ReadableStream<Uint8Array>(),
+            toArrayBuffer: async () => {
+              await partOneUploadStarted
+              throw new Error('part 2 read failed')
+            },
+          }
+        }
+        return new BufferSource(data.slice(start, end))
+      },
+      stream: () => new ReadableStream<Uint8Array>(),
+      toArrayBuffer: async () => data.buffer as ArrayBuffer,
+    }
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'parallel-drain.bin',
+        source,
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow(/part 2 read failed/)
+
+    expect(cancelSeen).toBe(true)
+    expect(uploadAttempts).toEqual([1])
+    expect(uploadAttemptsAfterCancel).toBe(0)
   })
 })
 
