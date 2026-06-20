@@ -514,6 +514,13 @@ export class FileSource extends FileRangeSource {
    * @throws If the filesystem cannot report stable file identity.
    */
   constructor(path: FileSourcePath)
+  /**
+   * Internal constructor path for async validation.
+   * @param path - Local filesystem path or file URL.
+   * @param internal - Module-private validated identity payload.
+   *
+   * @internal
+   */
   constructor(path: FileSourcePath, internal?: FileSourceInternalOptions) {
     const resolvedIdentity =
       internal?.key === FILE_SOURCE_INTERNAL

@@ -1014,6 +1014,7 @@ describe('uploadLargeFile cleanup paths', () => {
     const uploadAttempts: number[] = []
     let uploadAttemptsAfterCancel = 0
     let cancelSeen = false
+    const controller = new AbortController()
     const transport: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
         if (req.url.includes('b2_cancel_large_file')) {
@@ -1085,6 +1086,7 @@ describe('uploadLargeFile cleanup paths', () => {
         source,
         partSize,
         concurrency: 2,
+        signal: controller.signal,
       }),
     ).rejects.toThrow(/part 2 read failed/)
 

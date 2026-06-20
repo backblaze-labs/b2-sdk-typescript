@@ -28,6 +28,7 @@ describe('FileSource', () => {
     expect(source.size).toBe(15)
     expect(source.canSlice).toBe(true)
     expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from disk')
+    await expect(source.assertUnchanged()).resolves.toBeUndefined()
   })
 
   it('can be created with asynchronous filesystem validation', async () => {
@@ -133,6 +134,16 @@ describe('FileSource', () => {
 
     try {
       expect(() => new FileSource('/unstable')).toThrow(/stable file identity/)
+    } finally {
+      getBuiltinModule.mockRestore()
+    }
+  })
+
+  it('explains when synchronous filesystem construction is unavailable', () => {
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockReturnValue(undefined)
+
+    try {
+      expect(() => new FileSource('/missing-sync-fs')).toThrow(/Node\.js 22\.3\+/)
     } finally {
       getBuiltinModule.mockRestore()
     }
