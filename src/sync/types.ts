@@ -95,7 +95,7 @@ export interface SyncActionEvent {
   readonly type: SyncActionEventType
   /** Relative path of the file this event concerns. */
   readonly path: string
-  /** Size in bytes of the file involved. */
+  /** Size in bytes of the file involved, or `0` for metadata-only actions. */
   readonly size: number
 }
 

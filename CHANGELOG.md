@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Sync error summary wording now reports total sync errors.** The terminal summary event changed from `N action(s) failed` to `N sync error(s) occurred` because SHA-1 preparation failures are surfaced alongside transfer/action failures.
-- **`compare` events now expose `bytesHashed`.** In `sha1` mode, local bytes read for hashing are reported as `compare.bytesHashed`; `compare.size` remains `0` for compatibility with the previous metadata-only compare event shape.
+- **`compare` events now expose `bytesHashed`.** In `sha1` mode, local bytes read for hashing are reported as `compare.bytesHashed`; `compare.size` remains `0` for compatibility with the previous metadata-only compare event shape. At the type level, `compare` is now represented by `SyncCompareEvent` rather than `SyncActionEventType`, so TypeScript consumers that narrow on action-event types should handle compare events separately.
 
 ### Fixed
 
