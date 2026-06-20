@@ -71,6 +71,8 @@ function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
  * disk (or start fresh if the file is missing or corrupt). The authorization
  * response is written back to disk on every {@link setAuth} or {@link clear}
  * call so a process restart can resume without re-authorizing.
+ * Cache files without an SDK metadata application-key binding are cleared once
+ * bound to a `B2Client`, because the SDK cannot verify which key wrote them.
  *
  * This module imports `node:fs/promises`; do not load it in browser bundles.
  */

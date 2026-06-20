@@ -16,9 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once bound to the new staging realm so a stale production authorization
   response is not reused. Persisted `FileAccountInfo` entries are also bound to
   the configured application key ID so a shared cache path cannot replay auth
-  written by another key. During a rolling deploy, old and new code resolve
-  `realm: 'staging'` to different hosts; avoid staging-realm traffic during the
-  upgrade window if that split matters for the deployment. Closes #34.
+  written by another key. Legacy caches without key-binding metadata are cleared
+  on upgrade and will re-authorize once. During a rolling deploy, old and new
+  code resolve `realm: 'staging'` to different hosts; avoid staging-realm
+  traffic during the upgrade window if that split matters for the deployment.
+  Closes #34.
 - **Realm URLs are validated before authorization sends credentials.** Custom
   realm values must be absolute HTTPS URLs, except loopback IP literal HTTP URLs
   used for local testing. Non-URL strings, unsupported schemes, malformed URLs,

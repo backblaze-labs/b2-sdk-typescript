@@ -101,8 +101,9 @@ export class FetchTransport implements HttpTransport {
    */
   async send(request: HttpRequest): Promise<HttpResponse> {
     let currentRequest = request
+    let redirectCount = 0
 
-    for (let redirectCount = 0; redirectCount <= MAX_SAME_HOST_REDIRECTS; redirectCount++) {
+    while (true) {
       this.urlGuard.check(currentRequest.url)
 
       const headers = new Headers(currentRequest.headers)
@@ -130,6 +131,7 @@ export class FetchTransport implements HttpTransport {
           await cancelResponseBody(response)
           this.urlGuard.check(nextUrl)
           currentRequest = { ...currentRequest, url: nextUrl }
+          redirectCount += 1
           continue
         }
 
@@ -146,8 +148,6 @@ export class FetchTransport implements HttpTransport {
         arrayBuffer: () => response.arrayBuffer(),
       }
     }
-
-    throw new B2RedirectError(currentRequest.url, 310, currentRequest.url)
   }
 }
 
