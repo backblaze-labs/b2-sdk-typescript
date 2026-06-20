@@ -4,6 +4,21 @@ import { utf8Encoder } from './text-codec.ts'
 const CRYPTO_UNAVAILABLE_MESSAGE =
   'SHA-256 and HMAC-SHA256 require globalThis.crypto.subtle or Node.js node:crypto.'
 
+type NodeHash = {
+  update(data: Uint8Array): NodeHash
+  digest(encoding: 'hex'): string
+}
+
+type NodeHmac = {
+  update(data: Uint8Array): NodeHmac
+  digest(): Uint8Array
+}
+
+type NodeCrypto = {
+  createHash(algorithm: string): NodeHash
+  createHmac(algorithm: string, key: Uint8Array): NodeHmac
+}
+
 /**
  * Convert bytes to a lowercase hex string.
  *
@@ -72,9 +87,11 @@ function bytesFor(data: string | Uint8Array): Uint8Array {
   return typeof data === 'string' ? utf8Encoder.encode(data) : data
 }
 
-async function importNodeCrypto(): Promise<typeof import('node:crypto')> {
+async function importNodeCrypto(): Promise<NodeCrypto> {
   try {
-    return await import('node:crypto')
+    // biome-ignore lint/suspicious/noTsIgnore: isomorphic import -- @ts-ignore is silent when node:crypto resolves and suppresses the error when it does not
+    // @ts-ignore -- node:crypto may not exist in browser/edge runtimes
+    return (await import('node:crypto')) as NodeCrypto
   } catch (err) {
     throw new Error(CRYPTO_UNAVAILABLE_MESSAGE, { cause: err })
   }
