@@ -1608,7 +1608,6 @@ describe('findResumeCandidate', () => {
   it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {
     const rejected: Array<{
       fileId?: LargeFileId
-      fileName: string
       requestedFileName: string
       candidateFileName?: string
       reason: string
@@ -1656,7 +1655,6 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual([
       {
         fileId: 'target-id' as LargeFileId,
-        fileName: 'wanted.bin',
         requestedFileName: 'wanted.bin',
         candidateFileName: 'foreign.bin',
         reason: 'file-name-mismatch',

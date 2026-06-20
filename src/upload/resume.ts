@@ -71,8 +71,6 @@ export type ResumeCandidateRejectedReason =
 export interface ResumeCandidateRejectedEvent {
   /** ID of the unfinished large file, when the event is candidate-specific. */
   readonly fileId?: LargeFileId
-  /** Alias of {@link requestedFileName}, retained for compatibility. */
-  readonly fileName: string
   /** Requested destination file name. */
   readonly requestedFileName: string
   /** Actual candidate file name, when the event is candidate-specific. */
@@ -209,7 +207,6 @@ export async function findResumeCandidate(
 
   if (truncated) {
     emitCandidateRejected(criteria, {
-      fileName,
       requestedFileName: fileName,
       reason: 'search-truncated',
     })
@@ -400,7 +397,6 @@ function notifyCandidateRejected(
 ): void {
   emitCandidateRejected(criteria, {
     fileId: largeFileIdOf(candidate.fileId),
-    fileName: requestedFileName,
     requestedFileName,
     candidateFileName: candidate.fileName,
     reason,
@@ -412,7 +408,7 @@ function emitCandidateRejected(
   event: ResumeCandidateRejectedEvent,
 ): void {
   try {
-    criteria?.onCandidateRejected?.(event)
+    criteria.onCandidateRejected?.(event)
   } catch {
     // Diagnostic listeners should not make an otherwise valid upload fail.
   }
