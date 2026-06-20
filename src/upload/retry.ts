@@ -42,8 +42,8 @@ interface UploadLayerRetryOptions {
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
    * Whether response-body read failures after an upload POST should be retried.
-   * Defaults to false. Set true to re-send a payload when B2 may have stored it
-   * but the success response was lost.
+   * Defaults depend on the caller: false for single-request uploads and true for
+   * multipart part uploads.
    */
   readonly retryResponseBodyFailures?: boolean | undefined
 }
@@ -185,8 +185,8 @@ export function uploadPartWithFreshUrl(
  * upload URL, back off, fetch a fresh upload URL, and retry there.
  *
  * Sending the POST again after a lost success response can create a duplicate
- * file version. That response-body retry is disabled by default and requires
- * `retryResponseBodyFailures: true`.
+ * file version; this is the idempotency tradeoff B2 documents for upload
+ * retries.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
@@ -263,7 +263,7 @@ function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOption
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
-    if (options.retryResponseBodyFailures !== true) return err
+    if (options.retryResponseBodyFailures === false) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }

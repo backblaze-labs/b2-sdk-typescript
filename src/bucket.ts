@@ -179,8 +179,11 @@ export class Bucket {
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
      * the payload. Single-request uploads default to false because re-posting can
-     * create duplicate file versions; multipart part uploads default to true
-     * because re-posting the same part number is idempotent.
+     * create duplicate file versions. If enabled for a single-request upload,
+     * file retention and legal hold settings apply to each duplicate version and
+     * can prevent deletion until retention expires or the hold is cleared.
+     * Multipart part uploads default to true because re-posting the same part
+     * number is idempotent.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */

@@ -61,7 +61,8 @@ export interface UploadLargeFileOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Defaults to false because retrying can create duplicate bytes.
+   * the part. Defaults to true because re-posting the same part number is
+   * idempotent; set false to avoid re-sending the part.
    */
   readonly retryResponseBodyFailures?: boolean
   /**
