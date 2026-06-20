@@ -9,7 +9,6 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -133,8 +132,9 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the file. Defaults to false because retrying can create duplicate
-     * versions; set true only when at-least-once upload semantics are acceptable.
+     * the payload. Single-request uploads default to false because re-posting can
+     * create duplicate file versions; multipart part uploads default to true
+     * because re-posting the same part number is idempotent.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
@@ -149,6 +149,12 @@ export class B2Object {
      * unfinished files.
      */
     resume?: boolean
+    /** Maximum `b2_list_unfinished_large_files` pages inspected during resume discovery. Defaults to 10. */
+    resumeMaxListPages?: number
+    /** Maximum metadata-compatible candidates whose parts may be listed during resume discovery. Defaults to 25. */
+    resumeMaxPartCandidates?: number
+    /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
+    resumeMaxPartPages?: number
     /**
      * Resume into a specific large-file ID, bypassing discovery.
      * Overrides the `resume` discovery path after verifying bucket, file name,
@@ -168,7 +174,7 @@ export class B2Object {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
-        retry: getClientUploadRetryOptions(this.client),
+        retry: this.client.uploadRetryOptions,
       })
     }
 
@@ -183,7 +189,7 @@ export class B2Object {
       ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.client.uploadRetryOptions,
     })
   }
 
@@ -311,8 +317,7 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the part. Defaults to false because retrying can create duplicate bytes;
-     * set true only when at-least-once upload semantics are acceptable.
+     * the part. Defaults to true; set false to avoid re-sending the part.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */
@@ -322,7 +327,7 @@ export class B2Object {
       ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.client.uploadRetryOptions,
     })
   }
 

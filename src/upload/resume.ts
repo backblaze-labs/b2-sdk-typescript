@@ -71,8 +71,12 @@ export type ResumeCandidateRejectedReason =
 export interface ResumeCandidateRejectedEvent {
   /** ID of the unfinished large file, when the event is candidate-specific. */
   readonly fileId?: LargeFileId
-  /** File name involved in resume discovery. */
+  /** Requested destination file name. */
   readonly fileName: string
+  /** Requested destination file name. */
+  readonly requestedFileName: string
+  /** Actual candidate file name, when the event is candidate-specific. */
+  readonly candidateFileName?: string
   /** Machine-readable rejection reason. */
   readonly reason: ResumeCandidateRejectedReason
 }
@@ -160,22 +164,19 @@ export async function findResumeCandidate(
   accountInfo: AccountInfo,
   bucketId: BucketId,
   fileName: string,
-  criteria?: ResumeCandidateCriteria,
+  criteria: ResumeCandidateCriteria,
 ): Promise<ResumeCandidate | null> {
   const matches: Array<{ file: UnfinishedLargeFile; sequence: number }> = []
-  const maxListPages = criteria?.maxListPages ?? DEFAULT_MAX_RESUME_LIST_PAGES
-  const maxPartCandidates =
-    criteria === undefined
-      ? Number.POSITIVE_INFINITY
-      : (criteria.maxPartCandidates ?? DEFAULT_MAX_RESUME_PART_CANDIDATES)
+  const maxListPages = criteria.maxListPages ?? DEFAULT_MAX_RESUME_LIST_PAGES
+  const maxPartCandidates = criteria.maxPartCandidates ?? DEFAULT_MAX_RESUME_PART_CANDIDATES
   let sequence = 0
   let pageCount = 0
-  const explicitResumeFileId = criteria?.resumeFileId
+  const explicitResumeFileId = criteria.resumeFileId
   let startFileId: LargeFileId | undefined = explicitResumeFileId
   let truncated = false
 
   while (pageCount < maxListPages) {
-    criteria?.signal?.throwIfAborted()
+    criteria.signal?.throwIfAborted()
     const unfinished = await raw.listUnfinishedLargeFiles(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
@@ -185,7 +186,7 @@ export async function findResumeCandidate(
         ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
-      criteria?.signal !== undefined ? { signal: criteria.signal } : undefined,
+      criteria.signal !== undefined ? { signal: criteria.signal } : undefined,
     )
     pageCount++
 
@@ -207,17 +208,19 @@ export async function findResumeCandidate(
   }
 
   if (truncated) {
-    emitCandidateRejected(criteria, { fileName, reason: 'search-truncated' })
-    return null
+    emitCandidateRejected(criteria, {
+      fileName,
+      requestedFileName: fileName,
+      reason: 'search-truncated',
+    })
   }
 
   matches.sort(compareNewestFirst)
 
   let partCandidatesInspected = 0
   for (const match of matches) {
-    criteria?.signal?.throwIfAborted()
-    const rejection =
-      criteria !== undefined ? candidateMetadataRejectReason(match.file, fileName, criteria) : null
+    criteria.signal?.throwIfAborted()
+    const rejection = candidateMetadataRejectReason(match.file, fileName, criteria)
     if (rejection !== null) {
       notifyCandidateRejected(criteria, match.file, fileName, rejection)
       continue
@@ -230,22 +233,13 @@ export async function findResumeCandidate(
 
     partCandidatesInspected++
     const fileId = largeFileIdOf(match.file.fileId)
-    const uploadedPartsResult =
-      criteria === undefined
-        ? {
-            parts: await collectPartInfo(raw, accountInfo, fileId),
-            truncated: false,
-          }
-        : await collectResumePartInfo(raw, accountInfo, fileId, {
-            maxPages: criteria.maxPartPages ?? DEFAULT_MAX_RESUME_PART_PAGES,
-            maxParts: criteria.parts.length,
-            ...(criteria.signal !== undefined ? { signal: criteria.signal } : {}),
-          })
+    const uploadedPartsResult = await collectResumePartInfo(raw, accountInfo, fileId, {
+      maxPages: criteria.maxPartPages ?? DEFAULT_MAX_RESUME_PART_PAGES,
+      maxParts: criteria.parts.length,
+      ...(criteria.signal !== undefined ? { signal: criteria.signal } : {}),
+    })
     const uploadedParts = uploadedPartsResult.parts
-    if (
-      criteria !== undefined &&
-      (uploadedPartsResult.truncated || !uploadedPartsMatchPlan(uploadedParts, criteria.parts))
-    ) {
+    if (uploadedPartsResult.truncated || !uploadedPartsMatchPlan(uploadedParts, criteria.parts)) {
       notifyCandidateRejected(criteria, match.file, fileName, 'part-length-mismatch')
       continue
     }
@@ -399,7 +393,7 @@ function candidateMetadataRejectReason(
 }
 
 function notifyCandidateRejected(
-  criteria: ResumeCandidateCriteria | undefined,
+  criteria: ResumeCandidateCriteria,
   candidate: UnfinishedLargeFile,
   requestedFileName: string,
   reason: ResumeCandidateRejectedReason,
@@ -407,12 +401,14 @@ function notifyCandidateRejected(
   emitCandidateRejected(criteria, {
     fileId: largeFileIdOf(candidate.fileId),
     fileName: requestedFileName,
+    requestedFileName,
+    candidateFileName: candidate.fileName,
     reason,
   })
 }
 
 function emitCandidateRejected(
-  criteria: ResumeCandidateCriteria | undefined,
+  criteria: ResumeCandidateCriteria,
   event: ResumeCandidateRejectedEvent,
 ): void {
   try {
@@ -532,19 +528,28 @@ function serverSideEncryptionRejectReason(
   }
 
   const normalizedExpected = normalizeEncryption(expected)
+  if (normalizedExpected?.mode === EncryptionMode.None && candidate === undefined) return null
   if (actual === undefined || normalizedExpected === undefined) return 'encryption-mismatch'
   if (actual.mode !== normalizedExpected.mode) return 'encryption-mismatch'
   if (actual.mode === EncryptionMode.None) return null
   return actual.algorithm === normalizedExpected.algorithm ? null : 'encryption-mismatch'
 }
 
+interface NormalizedEncryption {
+  readonly mode: EncryptionMode
+  readonly algorithm?: string
+}
+
 function normalizeEncryption(
   encryption: EncryptionSetting | ListedEncryption,
-): { readonly mode: EncryptionMode | string; readonly algorithm?: string } | undefined {
+): NormalizedEncryption | undefined {
   if (encryption === undefined) return undefined
   // Real B2 responses may spell no encryption as `{ mode: null, algorithm: null }`.
   if (encryption.mode === null || encryption.mode === EncryptionMode.None) {
     return { mode: EncryptionMode.None }
+  }
+  if (encryption.mode !== EncryptionMode.SseB2 && encryption.mode !== EncryptionMode.SseC) {
+    return undefined
   }
   return {
     mode: encryption.mode,

@@ -473,6 +473,58 @@ describe('B2Simulator upload SHA-1 verification', () => {
     expect(fv.contentSha1).toBe(hash)
   })
 
+  it('returns B2 null no-encryption shapes from public upload responses', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const small = await rawUpload(
+      'no-encryption-small.txt',
+      new TextEncoder().encode('plain'),
+      await sha1Hex(new TextEncoder().encode('plain')),
+    )
+    expect(small.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'no-encryption-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    expect(start.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'no-encryption-large.bin',
+    })
+    expect(unfinished.files[0]?.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId,
+    })
+    const part = new Uint8Array(1024).fill(1)
+    const uploadedPart = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part.byteLength,
+        contentSha1: await sha1Hex(part),
+      },
+      part as BodyInit,
+    )
+    expect(uploadedPart.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: start.fileId,
+      partSha1Array: [uploadedPart.contentSha1],
+    })
+    expect(finished.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const listed = await bucket.listFileNames({ prefix: 'no-encryption' })
+    expect(listed.files.map((file) => file.serverSideEncryption)).toEqual([
+      { mode: null, algorithm: null },
+      { mode: null, algorithm: null },
+    ])
+  })
+
   it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {
     const data = new TextEncoder().encode('unchecked')
     // The simulator stores 'none'; the raw client normalizes that sentinel to null.

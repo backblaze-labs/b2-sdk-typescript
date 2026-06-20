@@ -577,7 +577,47 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'abort-duplicate.txt')).toBe(1)
   })
 
-  it('retries a lost 2xx upload response body read only when explicitly enabled', async () => {
+  it('does not retry a lost 2xx upload response body read by default', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          const response = await inner.send(req)
+          return {
+            ...response,
+            json: () => Promise.reject(new TypeError('response body lost')),
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'lost-body-default',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'lost-body-default.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toThrow(/response body lost/)
+
+    expect(uploadAttempts).toBe(1)
+    expect(await countFileVersions(bucket, 'lost-body-default.txt')).toBe(1)
+  })
+
+  it('can opt into retrying a lost 2xx upload response body read with a fresh URL', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let uploadAttempts = 0
@@ -682,7 +722,7 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'truncated-body.txt')).toBe(2)
   })
 
-  it('does not retry after a lost 2xx upload response body by default', async () => {
+  it('can disable retry after a lost 2xx upload response body', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let uploadAttempts = 0
@@ -715,6 +755,7 @@ describe('upload fresh-URL retry', () => {
       bucket.upload({
         fileName: 'lost-body-disabled.txt',
         source: new BufferSource(new Uint8Array([1, 2, 3])),
+        retryResponseBodyFailures: false,
       }),
     ).rejects.toThrow(/response body lost/)
 

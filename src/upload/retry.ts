@@ -82,8 +82,10 @@ export async function fetchFreshUploadUrl(
     {
       bucketId,
     },
-    signal,
-    freshUrlRetryOverride,
+    {
+      ...(signal !== undefined ? { signal } : {}),
+      retry: freshUrlRetryOverride,
+    },
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
@@ -110,8 +112,10 @@ export async function fetchFreshPartUploadUrl(
     {
       fileId,
     },
-    signal,
-    freshUrlRetryOverride,
+    {
+      ...(signal !== undefined ? { signal } : {}),
+      retry: freshUrlRetryOverride,
+    },
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }

@@ -6,7 +6,6 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -179,8 +178,9 @@ export class Bucket {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the file. Defaults to false because retrying can create duplicate
-     * versions; set true only when at-least-once upload semantics are acceptable.
+     * the payload. Single-request uploads default to false because re-posting can
+     * create duplicate file versions; multipart part uploads default to true
+     * because re-posting the same part number is idempotent.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
@@ -197,6 +197,12 @@ export class Bucket {
      * not expose customer key identity for unfinished files.
      */
     resume?: boolean
+    /** Maximum `b2_list_unfinished_large_files` pages inspected during resume discovery. Defaults to 10. */
+    resumeMaxListPages?: number
+    /** Maximum metadata-compatible candidates whose parts may be listed during resume discovery. Defaults to 25. */
+    resumeMaxPartCandidates?: number
+    /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
+    resumeMaxPartPages?: number
     /**
      * Resume into a specific large-file ID. Overrides the `resume`
      * discovery path after verifying bucket, file name, upload options,
@@ -215,7 +221,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: getClientUploadRetryOptions(this.client),
+        retry: this.client.uploadRetryOptions,
       })
     }
 
@@ -230,7 +236,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.client.uploadRetryOptions,
     })
   }
 

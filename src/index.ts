@@ -80,6 +80,7 @@ export {
   type DownloadFileOptions,
   RawClient,
   type RawClientOptions,
+  type RawRequestOptions,
   type SseCDownloadKey,
 } from './raw/index.ts'
 export { IncrementalSha1, sha1Hex } from './streams/hash.ts'

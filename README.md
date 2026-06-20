@@ -113,9 +113,9 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version, so that specific retry is disabled by default.
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
 
-Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one. Set `retryResponseBodyFailures: true` to opt into re-sending a payload when the success response body is lost. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one. Single-request uploads do not retry lost success response bodies by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. Set `retryResponseBodyFailures: true` only when those ambiguous-success retries are acceptable and monitored. Multipart part uploads still retry lost part response bodies by default because re-posting the same `partNumber` is idempotent. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
 
 #### Resume a failed multipart upload
 
@@ -123,13 +123,15 @@ Resume requires the exact unfinished large-file ID returned by B2 when the multi
 
 Resume discovery is intentionally conservative. The SDK reuses only the newest unfinished large file whose file name, content type, caller-provided file info, encryption, Object Lock retention, legal hold, and uploaded part lengths match the current call. If those checks fail, a new large file is started instead. Caller-provided file info such as `large_file_sha1` or `src_last_modified_millis` is part of that identity, so keep it stable across retries. Discovery does not add SDK metadata to unfinished or finished file info.
 
-Automatic resume discovery trusts all writers with access to the bucket because B2 unfinished-large-file records do not identify the writer that started them. Use `resume: true` only when bucket writers are mutually trusted. The discovery scan is bounded to avoid unbounded prefix-flood work in shared buckets; when the scan is truncated before a compatible candidate is found, the SDK reports `search-truncated` and starts a new large file.
+Automatic resume discovery trusts all writers with access to the bucket because B2 unfinished-large-file records do not identify the writer that started them, and reused part integrity depends on B2's SHA-1 part checksums. SHA-1 is not collision-resistant against malicious chosen-prefix inputs, so use `resume: true` only when bucket writers are mutually trusted.
 
-Rejected candidates are left unfinished. B2 stores uploaded parts for unfinished large files until they are finished, cancelled, or removed by a lifecycle rule, so applications with strict resume matching should configure lifecycle cleanup or periodically cancel stale unfinished uploads.
+The discovery scan is bounded to avoid unbounded prefix-flood work in shared buckets. By default the SDK inspects up to 10 unfinished-file pages, up to 25 metadata-compatible candidates, and up to 10 part pages per candidate. Tune `resumeMaxListPages`, `resumeMaxPartCandidates`, and `resumeMaxPartPages` for buckets with many concurrent same-prefix uploads. If the scan is truncated, the SDK reports `search-truncated`; when a compatible candidate was already scanned, that candidate may still be reused.
+
+Rejected candidates are left unfinished. B2 stores uploaded parts for unfinished large files until they are finished, cancelled, or removed by a lifecycle rule, so stricter matching can leave billable unfinished uploads behind. Applications with strict resume matching should configure lifecycle cleanup or periodically use `listUnfinishedLargeFiles` and `cancelLargeFile` to remove stale unfinished uploads.
 
 SSE-C uploads are not resumed automatically or with `resumeFileId` because B2 does not expose a non-secret customer-key identity for unfinished files. With `resume: true`, an SSE-C retry starts a new large file. With `resumeFileId`, SSE-C fails with `ResumeFileIdMismatchError` rather than risking a finish under an unverified key.
 
-Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. If a supplied `resumeFileId` is incompatible or cannot be verified through B2's unfinished-large-file listing, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
+Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. Candidate-specific events include `requestedFileName` and `candidateFileName` so logging can distinguish the intended upload name from the rejected unfinished file. If a supplied `resumeFileId` is incompatible or cannot be verified through B2's unfinished-large-file listing, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100
@@ -412,7 +414,7 @@ if (accountInfo.getAuth() === null) {
 }
 ```
 
-`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk. `FileAccountInfo` serializes writes inside one process but does not lock across processes; if multiple versions, realms, or application keys share one cache path during a rolling deploy, mismatched auth is ignored in memory without truncating the other process's file. Pass `onDiscard` or `onWriteError` to observe cache churn, or use one cache path per resolved realm and key.
+`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
 
 ## Subpath exports
 
@@ -563,8 +565,6 @@ new B2Client({
 ```
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
-
-Same-origin GET/HEAD redirects are followed by default after each redirected target is checked by the guard. POST redirects and cross-origin redirects remain blocked so credential-bearing payloads are not replayed to unexpected endpoints. Pass `followSameOriginRedirects: false` to block even same-origin GET/HEAD redirects. Browser and edge fetch implementations may expose manual cross-origin redirects only as opaque redirects with no readable `Location`, so those redirects remain blocked.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 

@@ -76,6 +76,12 @@ export interface UploadLargeFileOptions {
    * customer key identity needed to verify a compatible unfinished file.
    */
   readonly resume?: boolean
+  /** Maximum `b2_list_unfinished_large_files` pages inspected during resume discovery. Defaults to 10. */
+  readonly resumeMaxListPages?: number
+  /** Maximum metadata-compatible candidates whose parts may be listed during resume discovery. Defaults to 25. */
+  readonly resumeMaxPartCandidates?: number
+  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
+  readonly resumeMaxPartPages?: number
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
    * after verifying that the ID belongs to the requested bucket/file name and
@@ -152,6 +158,15 @@ export async function uploadLargeFile(
       : {}),
     ...(options.onResumeCandidateRejected !== undefined
       ? { onCandidateRejected: options.onResumeCandidateRejected }
+      : {}),
+    ...(options.resumeMaxListPages !== undefined
+      ? { maxListPages: options.resumeMaxListPages }
+      : {}),
+    ...(options.resumeMaxPartCandidates !== undefined
+      ? { maxPartCandidates: options.resumeMaxPartCandidates }
+      : {}),
+    ...(options.resumeMaxPartPages !== undefined
+      ? { maxPartPages: options.resumeMaxPartPages }
       : {}),
   }
 

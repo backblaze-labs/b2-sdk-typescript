@@ -182,6 +182,9 @@ function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryp
   if (encryption.mode === EncryptionMode.SseC) {
     return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
+  if (encryption.mode === EncryptionMode.None) {
+    return { mode: null, algorithm: null }
+  }
   return encryption
 }
 

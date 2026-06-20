@@ -9,6 +9,7 @@ import {
   findResumeCandidate,
   RESUME_PART_SIZE_INFO_KEY,
   RESUME_SOURCE_SIZE_INFO_KEY,
+  type ResumeCandidateCriteria,
 } from './resume.ts'
 
 /**
@@ -25,6 +26,22 @@ function makeAccountInfo(): AccountInfo {
     getApiUrl: () => 'http://mock:0',
     getAuthToken: () => 'mock-token',
   } as unknown as AccountInfo
+}
+
+function defaultResumeCriteria(
+  overrides: Partial<ResumeCandidateCriteria> = {},
+): ResumeCandidateCriteria {
+  return {
+    contentType: 'application/octet-stream',
+    fileInfo: {},
+    sourceSize: 200,
+    partSize: 100,
+    parts: [
+      { partNumber: 1, length: 100 },
+      { partNumber: 2, length: 100 },
+    ],
+    ...overrides,
+  }
 }
 
 describe('collectPartSha1s', () => {
@@ -126,23 +143,7 @@ describe('collectPartSha1s', () => {
 })
 
 describe('findResumeCandidate', () => {
-  it('returns null without an explicit resume file ID', async () => {
-    const raw = {
-      async listUnfinishedLargeFiles() {
-        throw new Error('listUnfinishedLargeFiles should not be called without a resumeFileId')
-      },
-    } as unknown as RawClient
-
-    const result = await findResumeCandidate(
-      raw,
-      makeAccountInfo(),
-      bucketId('bucket1'),
-      'target.bin',
-    )
-    expect(result).toBeNull()
-  })
-
-  it('returns null when no unfinished file matches the destination name and file ID', async () => {
+  it('returns null when no unfinished file matches the destination name', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -161,7 +162,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'target.bin',
-      { resumeFileId: 'target-id' as LargeFileId },
+      defaultResumeCriteria(),
     )
     expect(result).toBeNull()
   })
@@ -178,87 +179,23 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'anything.bin',
-      { resumeFileId: 'missing-id' as LargeFileId },
+      defaultResumeCriteria(),
     )
     expect(result).toBeNull()
   })
 
-  it('paginates unfinished files until the destination name is found', async () => {
-    const calls: Array<{ startFileId?: string; namePrefix?: string }> = []
-    const raw = {
-      async listUnfinishedLargeFiles(
-        _apiUrl: string,
-        _authToken: string,
-        req: { startFileId?: string; namePrefix?: string },
-      ) {
-        calls.push({
-          ...(req.startFileId !== undefined ? { startFileId: req.startFileId } : {}),
-          ...(req.namePrefix !== undefined ? { namePrefix: req.namePrefix } : {}),
-        })
-        if (req.startFileId === undefined) {
-          return {
-            files: [{ fileId: 'lf-first', fileName: 'wanted.bin.partial' }],
-            nextFileId: 'lf-first',
-          }
-        }
-        return {
-          files: [{ fileId: 'lf-match', fileName: 'wanted.bin' }],
-          nextFileId: null,
-        }
-      },
-      async listParts() {
-        throw new Error('listParts should not be called by default')
-      },
-    } as unknown as RawClient
-
-    const result = await findResumeCandidate(
-      raw,
-      makeAccountInfo(),
-      bucketId('bucket1'),
-      'wanted.bin',
-      { resumeFileId: 'lf-match' as LargeFileId },
-    )
-
-    expect(result?.fileId).toBe('lf-match' as LargeFileId)
-    expect(calls).toEqual([
-      { namePrefix: 'wanted.bin' },
-      { namePrefix: 'wanted.bin', startFileId: 'lf-first' },
-    ])
-  })
-
-  it('returns the candidate without listing parts by default', async () => {
-    const raw = {
-      async listUnfinishedLargeFiles() {
-        return {
-          files: [{ fileId: 'lf-match', fileName: 'wanted.bin' }],
-          nextFileName: null,
-          nextFileId: null,
-        }
-      },
-      async listParts() {
-        throw new Error('listParts should not be called unless part SHA-1s are trusted')
-      },
-    } as unknown as RawClient
-
-    const result = await findResumeCandidate(
-      raw,
-      makeAccountInfo(),
-      bucketId('bucket1'),
-      'wanted.bin',
-      { resumeFileId: 'lf-match' as LargeFileId },
-    )
-    expect(result).not.toBeNull()
-    expect(result?.fileId).toBe('lf-match' as LargeFileId)
-    expect(result?.uploadedPartSha1s.size).toBe(0)
-  })
-
-  it('returns the candidate with collected part SHA-1s when requested', async () => {
+  it('returns the candidate with collected part SHA-1s when a match exists', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
           files: [
             { fileId: 'wrong-one', fileName: 'not-this.bin' },
-            { fileId: 'lf-match', fileName: 'wanted.bin' },
+            {
+              fileId: 'lf-match',
+              fileName: 'wanted.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
           ],
           nextFileName: null,
           nextFileId: null,
@@ -281,7 +218,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'wanted.bin',
-      { resumeFileId: 'lf-match' as LargeFileId, collectUploadedPartSha1s: true },
+      defaultResumeCriteria(),
     )
     expect(result).not.toBeNull()
     expect(result?.fileId).toBe('lf-match' as LargeFileId)
@@ -943,6 +880,52 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('none-candidate' as LargeFileId)
   })
 
+  it('accepts missing encryption metadata when explicit no encryption was requested', async () => {
+    const fileInfo = { owner: 'unit' }
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'implicit-none-candidate',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        serverSideEncryption: { mode: EncryptionMode.None },
+      },
+    )
+
+    expect(result?.fileId).toBe('implicit-none-candidate' as LargeFileId)
+  })
+
   it('accepts the B2 null no-encryption wire shape when none was requested', async () => {
     const fileInfo = { owner: 'unit' }
     const raw = {
@@ -1252,7 +1235,7 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['search-truncated'])
   })
 
-  it('does not reuse a scanned candidate when a newer page is truncated away', async () => {
+  it('uses the best scanned candidate when later pages are truncated away', async () => {
     const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -1270,7 +1253,10 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts() {
-        throw new Error('listParts should not be called after a truncated scan')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'older-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
       },
     } as unknown as RawClient
 
@@ -1293,7 +1279,8 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result).toBeNull()
+    expect(result?.fileId).toBe('older-compatible' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('older-p1')
     expect(rejected).toEqual(['search-truncated'])
   })
 
@@ -1618,8 +1605,14 @@ describe('findResumeCandidate', () => {
     expect(listCalls[0]).not.toHaveProperty('namePrefix')
   })
 
-  it('reports the requested name when an explicit resumeFileId is rejected', async () => {
-    const rejected: Array<{ fileId?: LargeFileId; fileName: string; reason: string }> = []
+  it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {
+    const rejected: Array<{
+      fileId?: LargeFileId
+      fileName: string
+      requestedFileName: string
+      candidateFileName?: string
+      reason: string
+    }> = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -1664,6 +1657,8 @@ describe('findResumeCandidate', () => {
       {
         fileId: 'target-id' as LargeFileId,
         fileName: 'wanted.bin',
+        requestedFileName: 'wanted.bin',
+        candidateFileName: 'foreign.bin',
         reason: 'file-name-mismatch',
       },
     ])
