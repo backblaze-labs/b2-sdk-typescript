@@ -12,6 +12,7 @@ import { compareSyncRelativePaths } from '../path-order.ts'
 import { asRawB2KeyPrefix, normalizeB2RelativePath } from '../prefix.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
+import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type {
   B2SyncPath,
@@ -56,6 +57,11 @@ export class B2Folder implements SyncFolder {
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
     validateSyncFilters(options)
+    const maxScanEntries = scanEntryLimit(options)
+    let listedEntries = 0
+    // Keep grouping, collision ownership, and skip emission in one loop
+    // intentionally: those structures must update atomically for each listed
+    // version, and the scanner edge-case tests cover the shared invariants.
     const grouped = new Map<string, B2ScanEntry>()
     const relativePathOwners = new Map<string, string>()
     const collidedRelativePaths = new Set<string>()
@@ -82,7 +88,8 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (options.signal?.aborted) return
-
+        listedEntries++
+        assertScanEntryLimit(listedEntries, maxScanEntries)
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
@@ -168,7 +175,7 @@ export class B2Folder implements SyncFolder {
     const sorted = [...grouped.entries()].sort(
       (a, b) =>
         compareSyncRelativePaths(a[1].relativePath, b[1].relativePath) ||
-        compareSyncRelativePaths(a[0], b[0]),
+        compareCodeUnits(a[0], b[0]),
     )
 
     for (const [, { relativePath, versions }] of sorted) {
@@ -240,4 +247,10 @@ function emitScanError(options: SyncScanOptions, message: string, err: unknown):
   }
   options.onError?.(event)
   return new Error(event.message)
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
 }

@@ -35,9 +35,9 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  * Regular expressions are matched against the full relative path. Global and sticky flags are
  * ignored so matching does not mutate `lastIndex`. RegExp acceptance is a best-effort safety
  * heuristic for synchronous matching, and the exact accepted subset may change as the SDK tightens
- * protection. Current guards reject sources over 512 code units, backreferences, multiple
- * unbounded quantifiers, bounded quantifiers above 200 repetitions, too many or too-large combined
- * bounded quantifiers, and quantified groups whose subtree contains a quantifier or alternation.
+ * protection. Current guards reject overly long sources, backreferences, multiple unbounded
+ * quantifiers, large or excessive bounded quantifiers, and quantified groups whose subtree
+ * contains a quantifier or alternation.
  * When a RegExp filter is configured, paths longer than the SDK's RegExp input guard are skipped
  * instead of being fed to the JavaScript RegExp engine.
  */
@@ -80,6 +80,11 @@ export interface SyncScanOptions extends SyncFilterOptions {
    * handlers cannot abort the scan.
    */
   readonly onSkip?: (event: SyncSkipEvent) => void
+  /**
+   * Maximum number of entries a scanner may retain before failing with a defined error instead of
+   * continuing toward unbounded heap growth. Defaults to the SDK scan limit.
+   */
+  readonly maxScanEntries?: number
 }
 
 /** Common metadata for a file discovered during a folder scan. */
@@ -242,6 +247,10 @@ export interface SyncErrorEvent {
   readonly size: number
   /** Human-readable error message; never empty. */
   readonly message: string
+  /** Number of failed actions represented by an aggregate run-level error event. */
+  readonly failureCount?: number
+  /** Relative paths of failed actions represented by an aggregate run-level error event. */
+  readonly failedPaths?: readonly string[]
 }
 
 /**
@@ -283,6 +292,10 @@ export interface SyncOptions extends SyncFilterOptions {
    * budget before they can be treated as equal.
    */
   readonly sha1VerificationMaxBytes?: number
+  /** Idle timeout in milliseconds for B2-to-local download body reads. Defaults to 60 seconds. */
+  readonly downloadIdleTimeoutMs?: number
+  /** Maximum scanner entries retained before failing with a defined scan-limit error. */
+  readonly maxScanEntries?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
 }

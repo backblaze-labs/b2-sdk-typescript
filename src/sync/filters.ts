@@ -148,10 +148,6 @@ function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boole
   return matchPathGlob(segments, splitPath(glob))
 }
 
-function stringPatternMatches(relativePath: string, pattern: SyncFilterPattern): boolean {
-  return !patternIsRegExp(pattern) && matchesPattern(relativePath, pattern)
-}
-
 function stringPatternExcludesAllDescendants(
   relativePath: string,
   pattern: SyncFilterPattern,
@@ -160,7 +156,7 @@ function stringPatternExcludesAllDescendants(
 
   const glob = normalizePath(pattern)
   if (glob === '') return false
-  if (!glob.includes('/')) return stringPatternMatches(relativePath, pattern)
+  if (!glob.includes('/')) return matchesPattern(relativePath, pattern)
 
   const globSegments = splitPath(glob)
   return globSegments.at(-1) === '**' && matchPathGlob(splitPath(relativePath), globSegments)

@@ -33,7 +33,7 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
-import { asRawB2KeyPrefix } from './prefix.ts'
+import { asRawB2KeyPrefix, normalizeB2RelativePath } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
@@ -49,6 +49,7 @@ import type {
 } from './types.ts'
 
 const MAX_BUFFERED_SCAN_EVENTS = 100
+const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
 
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
@@ -150,6 +151,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.include !== undefined ? { include: options.include } : {}),
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
     onSkip(event) {
       bufferScanEvent(scanEvents, event)
     },
@@ -336,7 +338,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   async function executeAction(action: SyncAction): Promise<void> {
     try {
       if (options.signal?.aborted) return
-      const event = await action.execute(dryRun)
+      const event = await action.execute(dryRun, options.signal)
       queueEvent(event)
     } catch (err) {
       errorCount += 1
@@ -376,6 +378,14 @@ function normalizeSyncConcurrency(value: number | undefined): number {
   const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
   if (!Number.isFinite(candidate) || candidate < 1) return DEFAULT_TRANSFER_CONCURRENCY
   return Math.max(1, Math.floor(candidate))
+}
+
+function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS
+  if (!Number.isFinite(value) || value < 1) {
+    throw new Error('downloadIdleTimeoutMs must be a positive finite number')
+  }
+  return Math.floor(value)
 }
 
 function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefined {
@@ -489,6 +499,10 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
 function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
+  const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
+  const downloadIdleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
+    config.options.downloadIdleTimeoutMs,
+  )
 
   const destBucket = upConfig.bucket ?? downConfig.bucket
   // Defensive optional chain on `info`: synchronizer tests use Bucket
@@ -499,16 +513,19 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const factory: ActionFactory = {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
-      const prefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
       assertBucket(bucket, 'upload')
 
       return new UploadAction(
         source.relativePath,
         source.absolutePath,
         source.size,
-        async (absPath, relPath) => {
+        async (absPath, relPath, signal) => {
           const data = await readScannedLocalFile({ ...source, absolutePath: absPath })
-          const fileName = dest?.selectedVersion.fileName ?? `${prefix}${relPath}`
+          const fileName =
+            dest !== undefined
+              ? validateB2SyncPathInPrefix(uploadPrefix, dest)
+              : `${uploadPrefix}${relPath}`
+          throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
             data.byteLength,
@@ -517,7 +534,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             fileName,
             source: new BufferSource(data),
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+            ...(signal !== undefined ? { signal } : {}),
           })
         },
       )
@@ -528,7 +545,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       const root = localSyncRoot(downConfig.dest)
       assertBucket(bucket, 'download')
 
-      return new DownloadAction(source.relativePath, source.size, async (relPath) => {
+      return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
         safeRelativePathSegments(relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
@@ -537,12 +554,12 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           .file(source.selectedVersion.fileName)
           .downloadById(source.selectedVersion.fileId, {
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+            ...(signal !== undefined ? { signal } : {}),
           })
         await writeLocalStreamInsideRoot(root, relPath, result.body, {
           expectedBytes: source.selectedVersion.contentLength,
-          idleTimeoutMillis: normalizeSha1TimeoutMillis(config.options.sha1ReadTimeoutMillis),
-          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+          idleTimeoutMillis: downloadIdleTimeoutMillis,
+          ...(signal !== undefined ? { signal } : {}),
         })
       })
     },
@@ -551,7 +568,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       const bucket = upConfig.bucket
       assertBucket(bucket, 'copy')
 
-      return new CopyAction(source.relativePath, source.size, async () => {
+      return new CopyAction(source.relativePath, source.size, async (_relPath, signal) => {
         const destinationServerSideEncryption =
           config.options.encryptionProvider?.getSettingForUpload(destPath, source.size)
         const sourceServerSideEncryption = toSseCEncryptionSetting(
@@ -564,7 +581,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             ? { destinationServerSideEncryption }
             : {}),
           ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
-          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+          ...(signal !== undefined ? { signal } : {}),
         })
       })
     },
@@ -572,7 +589,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     hide(path: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket ?? downConfig.bucket
       assertBucket(bucket, 'hide')
-      const b2FileName = path.selectedVersion.fileName
+      const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
 
       return new HideAction(path.relativePath, async () => {
         if (config.options.signal !== undefined) {
@@ -595,7 +612,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       // concat. Without this, syncs with a non-empty destination
       // prefix (e.g. `'site/'`) failed orphan deletion with
       // `file_not_present`.
-      const b2FileName = path.selectedVersion.fileName
+      const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
       return new DeleteRemoteAction(
         path.relativePath,
         path.selectedVersion.fileId as string,
@@ -616,16 +633,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
         const { unlink } = await import('node:fs/promises')
         config.options.signal?.throwIfAborted()
-        const targetPath = await resolveContainedLocalPath(root, path.relativePath)
-        const actualPath = await resolveContainedLocalPath(root, path.relativePath, absPath)
-        if (targetPath !== actualPath) {
-          throw new Error(`Refusing to delete outside sync root: ${path.relativePath}`)
-        }
-        const verifiedTargetPath = await resolveContainedLocalPath(
-          root,
-          path.relativePath,
-          targetPath,
-        )
+        const verifiedTargetPath = await resolveLocalDeletePath(root, path.relativePath, absPath)
         await unlink(verifiedTargetPath)
       })
     },
@@ -644,6 +652,45 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
 function localSyncRoot(folder: LocalSyncFolder | undefined): string {
   return folder?.type === 'local' ? folder.root : ''
+}
+
+function validateB2SyncPathInPrefix(prefix: string, path: B2SyncPath): string {
+  const fileName = path.selectedVersion.fileName
+  if (!fileName.startsWith(prefix)) {
+    throw new Error(`Refusing to mutate B2 key outside configured prefix: ${path.relativePath}`)
+  }
+
+  const suffix = prefix === '' ? fileName : fileName.slice(prefix.length)
+  const relativePath = normalizeB2RelativePath(suffix, {
+    stripLeadingSlashes: prefix !== '' && !prefix.endsWith('/'),
+  })
+  if (relativePath !== path.relativePath) {
+    throw new Error(`Refusing to mutate mismatched B2 key for sync path: ${path.relativePath}`)
+  }
+
+  return fileName
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+}
+
+async function resolveLocalDeletePath(
+  root: string,
+  relativePath: string,
+  scannerAbsolutePath: string,
+): Promise<string> {
+  // Derive the intended path from the relative sync path.
+  const expectedPath = await resolveContainedLocalPath(root, relativePath)
+  // Cross-check the scanner-provided absolute path against the same containment rules.
+  const scannerPath = await resolveContainedLocalPath(root, relativePath, scannerAbsolutePath)
+  if (expectedPath !== scannerPath) {
+    throw new Error(`Refusing to delete outside sync root: ${relativePath}`)
+  }
+  // Revalidate immediately before unlink so stale scanner metadata cannot reopen containment.
+  return resolveContainedLocalPath(root, relativePath, expectedPath)
 }
 
 function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
@@ -693,9 +740,23 @@ async function resolveContainedLocalPath(
     throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
   }
 
+  await assertLocalRootHasNoSymlink(safeRoot, relativePath)
   await assertPathHasNoSymlinkComponents(safeRoot, pathFromRoot, relativePath)
 
   return target
+}
+
+async function assertLocalRootHasNoSymlink(safeRoot: string, relativePath: string): Promise<void> {
+  const { lstat } = await import('node:fs/promises')
+  try {
+    const stats = await lstat(safeRoot)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
+    }
+  } catch (error) {
+    if (isNotFoundError(error)) return
+    throw error
+  }
 }
 
 async function assertPathHasNoSymlinkComponents(

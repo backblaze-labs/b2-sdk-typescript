@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -200,6 +200,18 @@ describe('LocalFolder', () => {
       'build/output/app.js',
     ])
   })
+
+  it('removes stale SDK partial download files instead of yielding them', async () => {
+    const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
+    await writeFile(tempPath, 'partial')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    await expect(access(tempPath)).rejects.toThrow()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -349,6 +361,35 @@ describe('B2Folder', () => {
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+  })
+
+  it('keeps Windows-reserved basenames available for B2 scans', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'reserved-name-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({ fileName: 'aux.txt', source: new BufferSource(enc.encode('aux')) })
+
+    const folder = new B2Folder(bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['aux.txt'])
+  })
+
+  it('fails with a defined error when the B2 scan entry limit is exceeded', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'scan-limit-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a')) })
+    await bucket.upload({ fileName: 'b.txt', source: new BufferSource(enc.encode('b')) })
+
+    const folder = new B2Folder(bucket)
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'Sync scan entry limit exceeded',
+    )
   })
 
   it('groups multiple versions and picks the latest', async () => {
@@ -680,18 +721,21 @@ describe('B2Folder', () => {
       }),
     )
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['.well-known/config', 'valid.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual([
+      '.well-known/config',
+      'CON',
+      'dir/C:/x',
+      'notes.txt:hidden.exe',
+      'trailing ',
+      'trailing.',
+      'valid.txt',
+    ])
     expect(skips).toEqual([
       'unsafe-name:dir/',
       'unsafe-name:a//b',
       'unsafe-name:../secret.txt',
       'unsafe-name:docs/./readme.md',
       'unsafe-name:hidden//marker',
-      'unsafe-name:notes.txt:hidden.exe',
-      'unsafe-name:dir/C:/x',
-      'unsafe-name:CON',
-      'unsafe-name:trailing.',
-      'unsafe-name:trailing ',
       'unsafe-name:bad\u0001name.txt',
     ])
   })

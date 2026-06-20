@@ -41,15 +41,7 @@ export function normalizeB2RelativePath(
 }
 
 function segmentIsUnsafe(segment: string): boolean {
-  return (
-    segment === '' ||
-    segment === '.' ||
-    segment === '..' ||
-    segment.includes(':') ||
-    containsControlCharacter(segment) ||
-    /[ .]$/.test(segment) ||
-    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i.test(segment)
-  )
+  return segment === '' || segment === '.' || segment === '..' || containsControlCharacter(segment)
 }
 
 function containsControlCharacter(segment: string): boolean {

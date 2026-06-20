@@ -959,6 +959,49 @@ describe('zipFolders', () => {
     ])
   })
 
+  it('normalizes old-order custom folder output before pairing', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        yield makeSyncPath('Z.txt', 1000, 10)
+        yield makeSyncPath('a.txt', 1000, 20)
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'b2',
+      async *scan() {
+        yield makeSyncPath('a.txt', 1000, 20)
+        yield makeSyncPath('Z.txt', 1000, 10)
+      },
+    }
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['a.txt', 'a.txt'],
+      ['Z.txt', 'Z.txt'],
+    ])
+  })
+
+  it('fails with a defined error when custom scan output exceeds the entry limit', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a.txt', 1000, 10),
+      makeSyncPath('b.txt', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([])
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest, { maxScanEntries: 1 })) {
+          // exhaust until the scan limit fails
+        }
+      })(),
+    ).rejects.toThrow('Sync scan entry limit exceeded')
+  })
+
   it('applies include filters to both folder scans before pairing', async () => {
     const source = makeMemoryFolder([
       makeSyncPath('docs/readme.md', 1000, 10),

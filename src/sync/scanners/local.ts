@@ -1,4 +1,4 @@
-import { lstat, readdir } from 'node:fs/promises'
+import { lstat, readdir, rm } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import {
@@ -9,6 +9,8 @@ import {
 import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
+import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
+import { isSyncDownloadTempName } from '../temp-files.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
@@ -39,7 +41,7 @@ export class LocalFolder implements SyncFolder {
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
     validateSyncFilters(options)
     const collected: LocalSyncPath[] = []
-    await this.walk(this.root, collected, options)
+    await this.walk(this.root, collected, options, scanEntryLimit(options))
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
       if (options.signal?.aborted) return
@@ -52,8 +54,14 @@ export class LocalFolder implements SyncFolder {
    * @param dir - Absolute path of the directory to scan.
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
+   * @param maxScanEntries - Maximum number of entries to retain before failing.
    */
-  private async walk(dir: string, out: LocalSyncPath[], options: SyncScanOptions): Promise<void> {
+  private async walk(
+    dir: string,
+    out: LocalSyncPath[],
+    options: SyncScanOptions,
+    maxScanEntries: number,
+  ): Promise<void> {
     if (options.signal?.aborted) return
 
     let entries: import('node:fs').Dirent[]
@@ -70,11 +78,15 @@ export class LocalFolder implements SyncFolder {
 
       const fullPath = join(dir, entry.name)
       const rel = relativePath(this.root, fullPath)
+      if (isSyncDownloadTempName(entry.name)) {
+        await rm(fullPath, { recursive: true, force: true }).catch(() => undefined)
+        continue
+      }
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
         if (directoryMayContainSyncPaths(rel, options)) {
-          await this.walk(fullPath, out, options)
+          await this.walk(fullPath, out, options, maxScanEntries)
         }
       } else if (entry.isFile()) {
         if (!pathPassesSyncFilters(rel, options)) {
@@ -103,6 +115,7 @@ export class LocalFolder implements SyncFolder {
               modTimeMillis: Math.floor(s.mtimeMs),
             },
           })
+          assertScanEntryLimit(out.length, maxScanEntries)
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
           this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)

@@ -1,6 +1,7 @@
 import { filterSyncPaths } from './filters.ts'
 import { compareSyncRelativePaths } from './path-order.ts'
 import { validateSyncFilters } from './regexp-safety.ts'
+import { assertScanEntryLimit, scanEntryLimit } from './scan-limit.ts'
 import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
@@ -25,8 +26,7 @@ export async function* zipFolders(
   const destIter = scanWithFilters(dest, options)[Symbol.asyncIterator]()
 
   try {
-    let sourceResult = await sourceIter.next()
-    let destResult = await destIter.next()
+    let [sourceResult, destResult] = await Promise.all([sourceIter.next(), destIter.next()])
 
     while (!sourceResult.done || !destResult.done) {
       const s = sourceResult.done ? null : sourceResult.value
@@ -72,5 +72,20 @@ function scanWithFilters(
   filters: SyncScanOptions | undefined,
 ): AsyncIterable<SyncPath> {
   const scanned = folder.scan(filters)
-  return folder.appliesScanFilters === true ? scanned : filterSyncPaths(scanned, filters)
+  if (folder.appliesScanFilters === true) return scanned
+  return sortSyncPaths(filterSyncPaths(scanned, filters), filters)
+}
+
+async function* sortSyncPaths(
+  paths: AsyncIterable<SyncPath>,
+  filters: SyncScanOptions | undefined,
+): AsyncGenerator<SyncPath> {
+  const maxScanEntries = scanEntryLimit(filters)
+  const collected: SyncPath[] = []
+  for await (const path of paths) {
+    collected.push(path)
+    assertScanEntryLimit(collected.length, maxScanEntries)
+  }
+  collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
+  yield* collected
 }
