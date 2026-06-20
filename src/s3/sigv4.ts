@@ -1,6 +1,8 @@
 import { hexEncode, hmacSha256, sha256Hex } from '../util/crypto.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
+import { utf8Encoder } from '../util/text-codec.ts'
 
+const FILE_NAME_MAX_BYTES = 1024
 const MAX_PRESIGN_EXPIRES_IN = 604_800
 const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD'
 const SERVICE = 's3'
@@ -8,7 +10,7 @@ const TERMINATOR = 'aws4_request'
 /** Default S3 presigned URL validity duration in seconds. */
 export const DEFAULT_PRESIGN_EXPIRES_IN = 3600
 
-/** Date input accepted by the internal SigV4 presigner. */
+/** Date input accepted by SigV4 presign internals and deterministic tests. */
 export type S3PresignDate = Date | number
 
 /** Query parameter included in the SigV4 canonical query string. */
@@ -58,11 +60,13 @@ export async function presignS3Request(
   extraHeaders: readonly SignedHeader[],
 ): Promise<string> {
   const endpoint = new URL(options.endpoint)
+  assertHttpsEndpoint(endpoint)
   const expiresIn = normalizeExpiresIn(options.expiresIn)
   const { shortDate, longDate } = formatSigningDate(options.signingDate)
   const credentialScope = `${shortDate}/${options.region}/${SERVICE}/${TERMINATOR}`
   const credential = `${options.accessKeyId}/${credentialScope}`
-  assertNoDotOnlyObjectKeySegments(options.fileName)
+  assertSafeBucketName(options.bucketName)
+  assertValidB2FileName(options.fileName)
   const canonicalUri = buildCanonicalUri(endpoint.pathname, options.bucketName, options.fileName)
   const headers = normalizeSignedHeaders([['host', endpoint.host], ...extraHeaders])
   const signedHeaders = headers.map(([name]) => name).join(';')
@@ -102,7 +106,7 @@ function normalizeExpiresIn(expiresIn: number | undefined): number {
   const value = expiresIn ?? DEFAULT_PRESIGN_EXPIRES_IN
   if (!Number.isInteger(value) || value < 1 || value > MAX_PRESIGN_EXPIRES_IN) {
     throw new RangeError(
-      `expiresIn must be an integer from 1 to ${MAX_PRESIGN_EXPIRES_IN} seconds.`,
+      `expiresIn must be an integer from 1 to ${MAX_PRESIGN_EXPIRES_IN} seconds; received ${String(value)}.`,
     )
   }
   return value
@@ -136,7 +140,46 @@ function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: s
   return `${basePath}/${awsPercentEncode(bucketName)}/${encodePath(fileName)}`
 }
 
-function assertNoDotOnlyObjectKeySegments(fileName: string): void {
+function assertHttpsEndpoint(endpoint: URL): void {
+  if (endpoint.protocol !== 'https:') {
+    throw new TypeError(
+      `S3 presigned URLs require an https: endpoint; received "${endpoint.origin}".`,
+    )
+  }
+}
+
+function assertSafeBucketName(bucketName: string): void {
+  if (bucketName.length === 0) {
+    throw new TypeError('bucketName must be a non-empty string.')
+  }
+  if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
+    throw new TypeError('bucketName must not be "." or ".." and must not contain path separators.')
+  }
+}
+
+function assertValidB2FileName(fileName: string): void {
+  if (fileName.length === 0) {
+    throw new TypeError('fileName must be a non-empty string.')
+  }
+
+  const bytes = utf8Encoder.encode(fileName)
+  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
+    throw new TypeError(
+      `fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes; received ${bytes.byteLength}.`,
+    )
+  }
+
+  for (let i = 0; i < fileName.length; i++) {
+    const code = fileName.charCodeAt(i)
+    if (code < 0x20 || code === 0x7f) {
+      throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
+    }
+  }
+
+  if (fileName.startsWith('/') || fileName.endsWith('/') || fileName.includes('//')) {
+    throw new TypeError('fileName cannot start with "/", end with "/", or contain "//".')
+  }
+
   if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
     throw new TypeError(
       'fileName must not contain dot-only path segments because URL parsers can normalize presigned S3 paths.',
@@ -169,7 +212,7 @@ function canonicalQueryString(query: readonly QueryParam[]): string {
  *
  * @returns AWS-compatible percent-encoded value.
  */
-export function awsPercentEncode(value: string): string {
+function awsPercentEncode(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,

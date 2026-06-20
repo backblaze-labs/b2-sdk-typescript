@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AccountInfo } from '../auth/account-info.ts'
 import {
@@ -8,6 +8,7 @@ import {
   presignGetObjectUrl,
   presignPutObjectUrl,
   presignS3GetObjectUrl,
+  presignS3PutObjectUrl,
 } from './index.ts'
 
 const SIGNING_DATE = new Date('2024-01-02T03:04:05Z')
@@ -52,9 +53,17 @@ function basePresignOptions() {
     bucketName: 'my-bucket',
     fileName: 'path/to/file.txt',
     expiresIn: 900,
-    signingDate: SIGNING_DATE,
   }
 }
+
+function useSigningDate(): void {
+  vi.useFakeTimers()
+  vi.setSystemTime(SIGNING_DATE)
+}
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('createS3ClientConfig', () => {
   it('extracts region from the S3 API URL', () => {
@@ -165,6 +174,8 @@ describe('createS3ClientConfig', () => {
 
 describe('presignS3GetObjectUrl', () => {
   it('generates a SigV4 GET URL for B2 S3 endpoints', async () => {
+    useSigningDate()
+
     const url = new URL(await presignS3GetObjectUrl(basePresignOptions()))
 
     expect(url.origin).toBe('https://s3.us-west-004.backblazeb2.com')
@@ -195,6 +206,8 @@ describe('presignS3GetObjectUrl', () => {
   })
 
   it('uses explicit regions for custom endpoints', async () => {
+    useSigningDate()
+
     const url = new URL(
       await presignS3GetObjectUrl({
         ...basePresignOptions(),
@@ -221,6 +234,46 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('fileName must not contain dot-only path segments')
   })
 
+  it('rejects B2-invalid object key names before signing', async () => {
+    const invalidNames = [
+      ['', 'fileName must be a non-empty string'],
+      ['/leading-slash', 'fileName cannot start with "/"'],
+      ['a//b.txt', 'fileName cannot start with "/"'],
+      ['trailing/', 'fileName cannot start with "/"'],
+      ['has\u0001ctrl.txt', 'fileName must not contain control characters'],
+      ['a'.repeat(1025), 'fileName must be at most 1024 UTF-8 bytes'],
+    ] as const
+
+    for (const [fileName, message] of invalidNames) {
+      await expect(
+        presignS3GetObjectUrl({
+          ...basePresignOptions(),
+          fileName,
+        }),
+      ).rejects.toThrow(message)
+    }
+  })
+
+  it('rejects non-HTTPS endpoints before emitting bearer URLs', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        accountInfo: createMockAccountInfo({
+          s3ApiUrl: 'http://s3.us-west-004.backblazeb2.com',
+        }),
+      }),
+    ).rejects.toThrow('S3 presigned URLs require an https: endpoint')
+  })
+
+  it('rejects bucket names that can be path-normalized', async () => {
+    await expect(
+      presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        bucketName: '..',
+      }),
+    ).rejects.toThrow('bucketName must not be "." or ".."')
+  })
+
   it('signs response override query parameters', async () => {
     const url = new URL(
       await presignS3GetObjectUrl({
@@ -242,7 +295,7 @@ describe('presignS3GetObjectUrl', () => {
         ...basePresignOptions(),
         expiresIn: 604_801,
       }),
-    ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds')
+    ).rejects.toThrow('expiresIn must be an integer from 1 to 604800 seconds; received 604801')
   })
 
   it('does not expose secrets or require AWS presigner peer modules', async () => {
@@ -295,10 +348,12 @@ describe('presignGetObjectUrl', () => {
   })
 })
 
-describe('presignPutObjectUrl', () => {
+describe('presignS3PutObjectUrl', () => {
   it('generates a SigV4 PUT URL for direct uploads', async () => {
+    useSigningDate()
+
     const url = new URL(
-      await presignPutObjectUrl({
+      await presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         contentType: 'image/jpeg',
@@ -324,11 +379,11 @@ describe('presignPutObjectUrl', () => {
   })
 
   it('makes content type affect the signed URL', async () => {
-    const withoutContentType = await presignPutObjectUrl({
+    const withoutContentType = await presignS3PutObjectUrl({
       ...basePresignOptions(),
       fileName: 'uploads/photo.jpg',
     })
-    const withContentType = await presignPutObjectUrl({
+    const withContentType = await presignS3PutObjectUrl({
       ...basePresignOptions(),
       fileName: 'uploads/photo.jpg',
       contentType: 'image/jpeg',
@@ -341,7 +396,7 @@ describe('presignPutObjectUrl', () => {
 
   it('signs content length when requested', async () => {
     const url = new URL(
-      await presignPutObjectUrl({
+      await presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         contentLength: 123,
@@ -354,28 +409,91 @@ describe('presignPutObjectUrl', () => {
   it('rejects invalid content lengths', async () => {
     for (const contentLength of [-1, 1.5, Number.NaN]) {
       await expect(
-        presignPutObjectUrl({
+        presignS3PutObjectUrl({
           ...basePresignOptions(),
           fileName: 'uploads/photo.jpg',
           contentLength,
         }),
-      ).rejects.toThrow('contentLength must be a non-negative safe integer.')
+      ).rejects.toThrow(
+        `contentLength must be a non-negative safe integer; received ${String(contentLength)}.`,
+      )
     }
   })
 
   it('rejects content type values with control characters', async () => {
     await expect(
-      presignPutObjectUrl({
+      presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         contentType: 'image/jpeg\nx-amz-meta-evil: yes',
       }),
-    ).rejects.toThrow('signed header values must not contain control characters')
+    ).rejects.toThrow('contentType must not contain control characters')
+  })
+
+  it('rejects browser-executable content types by default', async () => {
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/page.html',
+        contentType: 'text/html; charset=utf-8',
+      }),
+    ).rejects.toThrow('contentType "text/html" can execute in browsers')
+  })
+
+  it('allows browser-executable content types with explicit opt-in', async () => {
+    const url = new URL(
+      await presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/page.html',
+        contentType: 'text/html',
+        allowBrowserExecutableContentType: true,
+      }),
+    )
+
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-type;host')
+  })
+
+  it('rejects B2-invalid object key names before signing', async () => {
+    for (const fileName of [
+      '',
+      '/leading-slash',
+      'a//b.txt',
+      'trailing/',
+      'has\u0001ctrl.txt',
+      'a'.repeat(1025),
+    ]) {
+      await expect(
+        presignS3PutObjectUrl({
+          ...basePresignOptions(),
+          fileName,
+        }),
+      ).rejects.toThrow('fileName')
+    }
+  })
+
+  it('rejects non-HTTPS endpoints before emitting bearer URLs', async () => {
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        accountInfo: createMockAccountInfo({
+          s3ApiUrl: 'http://s3.us-west-004.backblazeb2.com',
+        }),
+      }),
+    ).rejects.toThrow('S3 presigned URLs require an https: endpoint')
+  })
+
+  it('rejects bucket names that can be path-normalized', async () => {
+    await expect(
+      presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        bucketName: '..',
+      }),
+    ).rejects.toThrow('bucketName must not be "." or ".."')
   })
 
   it('signs metadata headers with normalized key casing', async () => {
     const url = new URL(
-      await presignPutObjectUrl({
+      await presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         metadata: {
@@ -392,7 +510,7 @@ describe('presignPutObjectUrl', () => {
 
   it('rejects metadata keys that differ only by case', async () => {
     await expect(
-      presignPutObjectUrl({
+      presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         metadata: {
@@ -400,24 +518,24 @@ describe('presignPutObjectUrl', () => {
           foo: 'b',
         },
       }),
-    ).rejects.toThrow('metadata keys must not differ only by case.')
+    ).rejects.toThrow('metadata key "foo" must not differ only by case.')
   })
 
   it('rejects metadata keys that are not HTTP header tokens', async () => {
     await expect(
-      presignPutObjectUrl({
+      presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         metadata: {
           'bad key': 'value',
         },
       }),
-    ).rejects.toThrow('metadata keys must be non-empty valid HTTP header tokens.')
+    ).rejects.toThrow('metadata key "bad key" must be a non-empty valid HTTP header token.')
   })
 
   it('rejects metadata values with control characters', async () => {
     await expect(
-      presignPutObjectUrl({
+      presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         metadata: {
@@ -429,14 +547,28 @@ describe('presignPutObjectUrl', () => {
 
   it('rejects non-string metadata values from JavaScript callers', async () => {
     await expect(
-      presignPutObjectUrl({
+      presignS3PutObjectUrl({
         ...basePresignOptions(),
         fileName: 'uploads/photo.jpg',
         metadata: {
           count: 123,
         } as unknown as Record<string, string>,
       }),
-    ).rejects.toThrow('metadata values must be strings.')
+    ).rejects.toThrow('metadata value for "count" must be a string.')
+  })
+})
+
+describe('presignPutObjectUrl', () => {
+  it('delegates to the deprecated PUT alias', async () => {
+    const url = new URL(
+      await presignPutObjectUrl({
+        ...basePresignOptions(),
+        fileName: 'uploads/photo.jpg',
+        contentType: 'image/jpeg',
+      }),
+    )
+
+    expect(url.searchParams.get('x-id')).toBe('PutObject')
   })
 })
 

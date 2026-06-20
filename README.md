@@ -442,7 +442,7 @@ import { synchronize, LocalFolder, B2Folder } from '@backblaze-labs/b2-sdk/sync'
 import {
   createS3ClientConfig,
   presignS3GetObjectUrl,
-  presignPutObjectUrl,
+  presignS3PutObjectUrl,
 } from '@backblaze-labs/b2-sdk/s3'
 
 // In-memory B2 server for tests (no network required)
@@ -629,7 +629,9 @@ The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct acces
 - **Event notification rules** via `bucket.getNotificationRules()` and `bucket.setNotificationRules()`.
 - **Application key restrictions** (per-bucket, per-prefix, per-capability) via `client.createKey()`.
 
-When you want S3 compatibility instead — for tooling that already speaks S3, browser direct uploads, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()`, `presignS3GetObjectUrl()`, and `presignPutObjectUrl()` so the same SDK covers both surfaces.
+When you want S3 compatibility instead — for tooling that already speaks S3, browser direct uploads, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()`, `presignS3GetObjectUrl()`, and `presignS3PutObjectUrl()` so the same SDK covers both surfaces.
+
+S3 presigned URLs are bearer credentials. The helpers only emit `https:` URLs and require an explicit `region` for custom or proxied endpoints whose region cannot be derived from `s3.<region>.backblazeb2.com`. URL validity depends on the signing host's clock, so URL-generating hosts should be NTP-synced. For untrusted uploads, bind `contentType` and `contentLength` when you can; omitting `contentType` lets the uploader store any B2-accepted type, including browser-executable HTML/SVG. Bound `text/html`, `application/xhtml+xml`, and `image/svg+xml` content types are rejected unless `allowBrowserExecutableContentType` is set intentionally.
 
 ## Source isomorphism
 

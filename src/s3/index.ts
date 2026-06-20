@@ -3,7 +3,7 @@
  *
  * Provides {@link createS3ClientConfig} to derive endpoint, region, and
  * credentials from B2 authorization state, plus {@link presignS3GetObjectUrl}
- * and {@link presignPutObjectUrl} for generating AWS Signature Version 4
+ * and {@link presignS3PutObjectUrl} for generating AWS Signature Version 4
  * presigned URLs against B2's S3-compatible API.
  *
  * @packageDocumentation
@@ -13,11 +13,9 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
 import {
-  awsPercentEncode,
   DEFAULT_PRESIGN_EXPIRES_IN,
   presignS3Request,
   type QueryParam,
-  type S3PresignDate,
   type SignedHeader,
   type SigV4PresignRequestOptions,
 } from './sigv4.ts'
@@ -28,8 +26,6 @@ const DANGEROUS_RESPONSE_CONTENT_TYPES = new Set([
   'application/xhtml+xml',
   'image/svg+xml',
 ])
-
-export type { S3PresignDate } from './sigv4.ts'
 
 /**
  * Configuration for deriving S3-compatible client settings from B2 auth state.
@@ -89,11 +85,6 @@ export interface S3PresignObjectUrlOptions extends B2S3Config {
    * this as short as the calling workflow allows.
    */
   readonly expiresIn?: number
-  /**
-   * Optional signing clock override for clock-skew correction. Do not populate
-   * this from untrusted request input; it shifts the bearer URL validity window.
-   */
-  readonly signingDate?: S3PresignDate
 }
 
 /** Options for {@link presignS3GetObjectUrl}. */
@@ -137,13 +128,21 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   readonly responseExpires?: Date
 }
 
-/** Options for {@link presignPutObjectUrl}. */
-export interface PresignPutObjectUrlOptions extends S3PresignObjectUrlOptions {
+/** Options for {@link presignS3PutObjectUrl}. */
+export interface PresignS3PutObjectUrlOptions extends S3PresignObjectUrlOptions {
   /**
    * Optional content type for the uploaded object. When supplied, the generated
-   * URL signs the Content-Type header, so upload clients must send the same value.
+   * URL signs the Content-Type header, so upload clients must send the same
+   * value. Browser-executable types such as `text/html` are rejected by default.
    */
   readonly contentType?: string
+  /**
+   * Permit browser-executable `contentType` values such as `text/html`,
+   * `application/xhtml+xml`, or `image/svg+xml`. Leave this unset unless the
+   * uploaded object is intentionally meant to render active content from the
+   * storage origin.
+   */
+  readonly allowBrowserExecutableContentType?: boolean
   /**
    * Optional content length. Must be a non-negative safe integer. When
    * supplied, the generated URL signs the Content-Length header, so upload
@@ -158,6 +157,13 @@ export interface PresignPutObjectUrlOptions extends S3PresignObjectUrlOptions {
    */
   readonly metadata?: Record<string, string>
 }
+
+/**
+ * Options for {@link presignPutObjectUrl}.
+ *
+ * @deprecated Use {@link PresignS3PutObjectUrlOptions}.
+ */
+export type PresignPutObjectUrlOptions = PresignS3PutObjectUrlOptions
 
 /**
  * Derives an S3-compatible client configuration from B2 authorization state.
@@ -201,7 +207,7 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
  *
  * Custom endpoints cannot be inferred safely. Pass `region` explicitly to
  * {@link createS3ClientConfig}, {@link presignS3GetObjectUrl}, or
- * {@link presignPutObjectUrl} when this returns `null`.
+ * {@link presignS3PutObjectUrl} when this returns `null`.
  *
  * @param endpoint - The S3 endpoint URL.
  *
@@ -295,23 +301,30 @@ export function presignGetObjectUrl(
 }
 
 /**
- * Generates an AWS Signature Version 4 presigned PUT URL for browser or third-party uploads
- * through B2's S3-compatible API.
+ * Generates an AWS Signature Version 4 presigned PUT URL for browser or
+ * third-party uploads through B2's S3-compatible API.
  *
  * This helper signs internally and does not pass the B2 application key to
  * runtime peer dependencies. A presigned PUT URL is a bearer credential for
  * writing one key. If `contentType` and `contentLength` are omitted, the holder
- * can choose any content type and size accepted by B2; bind both values before
- * handing URLs to untrusted uploaders to limit financial-DoS and content-type
- * smuggling risk.
+ * can choose any content type, including browser-executable types, and any size
+ * accepted by B2; bind both values before handing URLs to untrusted uploaders
+ * to limit financial-DoS and content-type smuggling risk.
  *
  * @param options - B2 auth state, S3 credentials, target object, and signing options.
  *
  * @returns The presigned URL string.
  */
-export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): Promise<string> {
+export async function presignS3PutObjectUrl(
+  options: PresignS3PutObjectUrlOptions,
+): Promise<string> {
   const headers: SignedHeader[] = []
   if (options.contentType !== undefined) {
+    if (options.allowBrowserExecutableContentType === true) {
+      assertSafeHeaderValue('contentType', options.contentType, 'stored object Content-Type')
+    } else {
+      assertSafePutContentType(options.contentType)
+    }
     headers.push(['content-type', options.contentType])
   }
   if (options.contentLength !== undefined) {
@@ -325,6 +338,21 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
     [['x-id', 'PutObject']],
     headers,
   )
+}
+
+/**
+ * Generates an AWS Signature Version 4 presigned PUT URL for B2's
+ * S3-compatible API.
+ *
+ * @param options - B2 auth state, S3 credentials, target object, and signing options.
+ *
+ * @returns The presigned URL string.
+ *
+ * @deprecated Use {@link presignS3PutObjectUrl}; this alias is retained for
+ * pre-release callers that adopted the shorter name.
+ */
+export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): Promise<string> {
+  return await presignS3PutObjectUrl(options)
 }
 
 /**
@@ -352,7 +380,7 @@ export function createNativeDownloadAuthorizationUrl(
   validDurationInSeconds = DEFAULT_PRESIGN_EXPIRES_IN,
 ): string {
   const expires = Math.floor(Date.now() / 1000) + validDurationInSeconds
-  return `${downloadUrl}/file/${awsPercentEncode(bucketName)}/${encodeFileName(fileName)}?Authorization=${awsPercentEncode(authorizationToken)}&expires=${expires}`
+  return `${downloadUrl}/file/${encodeUrlComponent(bucketName)}/${encodeFileName(fileName)}?Authorization=${encodeUrlComponent(authorizationToken)}&expires=${expires}`
 }
 
 function deriveRequiredS3Region(endpoint: string): string {
@@ -374,13 +402,14 @@ function createSigV4PresignOptions(options: S3PresignObjectUrlOptions): SigV4Pre
     bucketName: options.bucketName,
     fileName: options.fileName,
     ...(options.expiresIn !== undefined ? { expiresIn: options.expiresIn } : {}),
-    ...(options.signingDate !== undefined ? { signingDate: options.signingDate } : {}),
   }
 }
 
 function normalizeContentLength(contentLength: number): string {
   if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
-    throw new RangeError('contentLength must be a non-negative safe integer.')
+    throw new RangeError(
+      `contentLength must be a non-negative safe integer; received ${String(contentLength)}.`,
+    )
   }
 
   return String(contentLength)
@@ -392,15 +421,15 @@ function normalizeMetadataHeaders(metadata: Record<string, string> | undefined):
 
   for (const [key, value] of Object.entries(metadata ?? {})) {
     if (!HTTP_HEADER_TOKEN.test(key)) {
-      throw new TypeError('metadata keys must be non-empty valid HTTP header tokens.')
+      throw new TypeError(`metadata key "${key}" must be a non-empty valid HTTP header token.`)
     }
     if (typeof value !== 'string') {
-      throw new TypeError('metadata values must be strings.')
+      throw new TypeError(`metadata value for "${key}" must be a string.`)
     }
 
     const lowerKey = key.toLowerCase()
     if (seenKeys.has(lowerKey)) {
-      throw new TypeError('metadata keys must not differ only by case.')
+      throw new TypeError(`metadata key "${key}" must not differ only by case.`)
     }
 
     seenKeys.add(lowerKey)
@@ -419,9 +448,13 @@ function normalizeResponseExpires(responseExpires: Date): string {
 }
 
 function assertSafeResponseOverride(name: string, value: string): void {
+  assertSafeHeaderValue(name, value, 'response header value')
+}
+
+function assertSafeHeaderValue(name: string, value: string, target: string): void {
   if (hasHttpHeaderControlCharacter(value)) {
     throw new TypeError(
-      `${name} must not contain control characters because it becomes a response header value.`,
+      `${name} must not contain control characters because it becomes a ${target}.`,
     )
   }
 }
@@ -429,10 +462,21 @@ function assertSafeResponseOverride(name: string, value: string): void {
 function assertSafeResponseContentType(contentType: string): void {
   assertSafeResponseOverride('responseContentType', contentType)
 
-  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase()
+  const mediaType = mediaTypeFor(contentType)
   if (mediaType && DANGEROUS_RESPONSE_CONTENT_TYPES.has(mediaType)) {
     throw new TypeError(
       `responseContentType "${mediaType}" can execute in browsers; allow-list a safe content type before signing response overrides.`,
+    )
+  }
+}
+
+function assertSafePutContentType(contentType: string): void {
+  assertSafeHeaderValue('contentType', contentType, 'stored object Content-Type')
+
+  const mediaType = mediaTypeFor(contentType)
+  if (mediaType && DANGEROUS_RESPONSE_CONTENT_TYPES.has(mediaType)) {
+    throw new TypeError(
+      `contentType "${mediaType}" can execute in browsers; pass allowBrowserExecutableContentType only when active content is intentional.`,
     )
   }
 }
@@ -446,4 +490,12 @@ function assertSafeResponseContentDisposition(contentDisposition: string): void 
       'responseContentDisposition must not force inline rendering; use an attachment disposition for response overrides.',
     )
   }
+}
+
+function mediaTypeFor(contentType: string): string {
+  return contentType.split(';', 1)[0]?.trim().toLowerCase() ?? ''
+}
+
+function encodeUrlComponent(value: string): string {
+  return encodeURIComponent(value)
 }
