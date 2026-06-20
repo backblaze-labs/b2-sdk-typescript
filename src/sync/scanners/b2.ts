@@ -65,7 +65,7 @@ export class B2Folder implements SyncFolder {
 
       if (!listing.nextFileName) break
       startFileName = listing.nextFileName
-      startFileId = listing.nextFileId as string | undefined
+      startFileId = listing.nextFileId ?? undefined
     }
 
     const sorted = [...grouped.entries()].sort((a, b) => compareSyncPathNames(a[0], b[0]))

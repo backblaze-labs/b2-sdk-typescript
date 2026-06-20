@@ -544,9 +544,10 @@ describe('B2Folder', () => {
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual(['a.txt', 'b.txt'])
-    // The continuation forwards startFileName; nextFileId === null propagates
-    // through, which is acceptable for the listFileVersions contract.
+    // The continuation forwards startFileName but omits startFileId when the
+    // server reports a null nextFileId.
     expect(calls[1]?.startFileName).toBe('b.txt')
+    expect(calls[1]?.startFileId).toBeUndefined()
   })
 
   it('keeps malformed B2 contentSha1 as untrusted scan metadata', async () => {
