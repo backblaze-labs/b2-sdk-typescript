@@ -12,7 +12,7 @@ import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
-const MAX_SAME_HOST_REDIRECTS = 5
+const MAX_SAME_ORIGIN_REDIRECTS = 5
 
 /** Describes an outgoing HTTP request to the B2 API. */
 export interface HttpRequest {
@@ -67,7 +67,7 @@ export class FetchTransport implements HttpTransport {
   /** User-Agent string sent with every request. */
   private readonly userAgent: string
   /** Whether same-origin GET/HEAD redirects should be followed after guard checks. */
-  private readonly followSameHostRedirects: boolean
+  private readonly followSameOriginRedirects: boolean
   /** SSRF allow-list applied to every outgoing URL. Mutable so `B2Client.authorize()` can lock it down post-auth. */
   readonly urlGuard: UrlGuard
 
@@ -83,10 +83,10 @@ export class FetchTransport implements HttpTransport {
      * URL guard. POST redirects are still blocked to avoid replaying
      * credential-bearing payloads to an unexpected endpoint. Defaults to true.
      */
-    followSameHostRedirects?: boolean
+    followSameOriginRedirects?: boolean
   }) {
     this.userAgent = getUserAgent(options?.userAgent)
-    this.followSameHostRedirects = options?.followSameHostRedirects ?? true
+    this.followSameOriginRedirects = options?.followSameOriginRedirects ?? true
     this.urlGuard = options?.urlGuard ?? new UrlGuard()
   }
 
@@ -122,10 +122,10 @@ export class FetchTransport implements HttpTransport {
       if (isBlockedRedirect(response)) {
         const location = response.headers.get('Location')
         if (
-          this.followSameHostRedirects &&
+          this.followSameOriginRedirects &&
           location !== null &&
-          redirectCount < MAX_SAME_HOST_REDIRECTS &&
-          canFollowSameHostRedirect(currentRequest, location)
+          redirectCount < MAX_SAME_ORIGIN_REDIRECTS &&
+          canFollowSameOriginRedirect(currentRequest, location)
         ) {
           const nextUrl = new URL(location, currentRequest.url).toString()
           await cancelResponseBody(response)
@@ -155,7 +155,7 @@ function isBlockedRedirect(response: Response): boolean {
   return response.type === 'opaqueredirect' || REDIRECT_STATUSES.has(response.status)
 }
 
-function canFollowSameHostRedirect(request: HttpRequest, location: string): boolean {
+function canFollowSameOriginRedirect(request: HttpRequest, location: string): boolean {
   if (request.method !== 'GET' && request.method !== 'HEAD') return false
   try {
     return new URL(request.url).origin === new URL(location, request.url).origin

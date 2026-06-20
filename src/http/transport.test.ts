@@ -181,7 +181,7 @@ describe('FetchTransport', () => {
       }),
     )
 
-    const transport = new FetchTransport({ followSameHostRedirects: false })
+    const transport = new FetchTransport({ followSameOriginRedirects: false })
     await expect(
       transport.send({
         url: 'https://f001.backblazeb2.com/file/bucket/old-object',
@@ -192,7 +192,7 @@ describe('FetchTransport', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('does not follow cross-origin redirects when same-host redirects are enabled', async () => {
+  it('does not follow cross-origin redirects when same-origin redirects are enabled', async () => {
     fetchSpy.mockResolvedValue(
       new Response('move', {
         status: 302,
@@ -200,7 +200,7 @@ describe('FetchTransport', () => {
       }),
     )
 
-    const transport = new FetchTransport({ followSameHostRedirects: true })
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
     await expect(
       transport.send({
         url: 'https://f001.backblazeb2.com/file/bucket/old-object',
@@ -212,7 +212,7 @@ describe('FetchTransport', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('does not follow POST redirects when same-host redirects are enabled', async () => {
+  it('does not follow POST redirects when same-origin redirects are enabled', async () => {
     fetchSpy.mockResolvedValue(
       new Response('move', {
         status: 307,
@@ -220,7 +220,7 @@ describe('FetchTransport', () => {
       }),
     )
 
-    const transport = new FetchTransport({ followSameHostRedirects: true })
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
     await expect(
       transport.send({
         url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',

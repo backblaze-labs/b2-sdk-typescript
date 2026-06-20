@@ -77,7 +77,7 @@ export interface B2ClientOptions {
    * checking each target with the SSRF guard. POST redirects remain blocked.
    * Defaults to true.
    */
-  readonly followSameHostRedirects?: boolean
+  readonly followSameOriginRedirects?: boolean
 }
 
 /**
@@ -132,8 +132,8 @@ export class B2Client {
       baseTransport = new FetchTransport({
         urlGuard,
         ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
-        ...(options.followSameHostRedirects !== undefined
-          ? { followSameHostRedirects: options.followSameHostRedirects }
+        ...(options.followSameOriginRedirects !== undefined
+          ? { followSameOriginRedirects: options.followSameOriginRedirects }
           : {}),
       })
       this.urlGuard = urlGuard

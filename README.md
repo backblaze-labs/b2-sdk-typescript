@@ -520,7 +520,7 @@ new B2Client({
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
-Same-origin GET/HEAD redirects are followed by default after each redirected target is checked by the guard. POST redirects and cross-origin redirects remain blocked so credential-bearing payloads are not replayed to unexpected endpoints. Pass `followSameHostRedirects: false` to block even same-origin GET/HEAD redirects. Browser and edge fetch implementations may expose manual cross-origin redirects only as opaque redirects with no readable `Location`, so those redirects remain blocked.
+Same-origin GET/HEAD redirects are followed by default after each redirected target is checked by the guard. POST redirects and cross-origin redirects remain blocked so credential-bearing payloads are not replayed to unexpected endpoints. Pass `followSameOriginRedirects: false` to block even same-origin GET/HEAD redirects. Browser and edge fetch implementations may expose manual cross-origin redirects only as opaque redirects with no readable `Location`, so those redirects remain blocked.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 

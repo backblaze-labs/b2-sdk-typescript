@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard. POST redirects and cross-origin redirects surface as non-retryable
   `B2RedirectError`, exported from the package root and
   `@backblaze-labs/b2-sdk/errors`, with request and Location URLs sanitized
-  before they appear in error messages. Pass `followSameHostRedirects: false`
+  before they appear in error messages. Pass `followSameOriginRedirects: false`
   to block even same-origin GET/HEAD redirects. Browser and edge runtimes may
   report cross-origin manual redirects as opaque redirects with no readable
   Location, so those remain blocked. Monitor or catch `B2RedirectError` during
