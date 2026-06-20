@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
-import { B2SsrfError } from '../errors/index.ts'
+import { B2Error, B2SsrfError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
@@ -17,7 +17,7 @@ import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
-import type { UploadRetryEvent } from './retry.ts'
+import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 /**
  * Branch-coverage tests for `uploadLargeFile` and `uploadSmallFile`. These
@@ -277,6 +277,35 @@ describe('uploadLargeFile cleanup paths', () => {
 })
 
 describe('upload fresh-URL retry', () => {
+  it('returns rate-limited upload URLs to the pool without retrying the payload', async () => {
+    const entry = { uploadUrl: 'https://upload.example/file', authorizationToken: 'upload-token' }
+    const rateLimitError = new B2Error({
+      status: 429,
+      code: 'too_many_requests',
+      message: 'retry later',
+    })
+    const returnEntry = vi.fn()
+    const evictEntry = vi.fn()
+
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'rate-limited.txt',
+        partNumber: null,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        checkout: () => entry,
+        fetchFresh: async () => entry,
+        returnEntry,
+        evictEntry,
+        upload: async () => {
+          throw rateLimitError
+        },
+      }),
+    ).rejects.toBe(rateLimitError)
+
+    expect(returnEntry).toHaveBeenCalledWith(entry)
+    expect(evictEntry).not.toHaveBeenCalled()
+  })
+
   it('retries a transient small-file upload failure with a fresh upload URL', async () => {
     const sim = new B2Simulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file')

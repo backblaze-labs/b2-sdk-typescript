@@ -35,8 +35,8 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
         },
       }
     }
-    /* v8 ignore next 3 -- non-Node runtime fallback, unreachable in Node tests */
   } catch {
+    /* v8 ignore next -- non-Node runtime fallback, unreachable in Node coverage. */
     nodeCreateHash = null
   }
   return nodeCreateHash
@@ -75,6 +75,7 @@ export class IncrementalSha1 {
     if (this.nodeHash) {
       this.nodeHash.update(data)
     } else {
+      /* v8 ignore next -- WebCrypto fallback is exercised by browser-mode tests. */
       this.jsHash.update(data)
     }
     this.totalLength += data.byteLength

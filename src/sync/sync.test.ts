@@ -13,6 +13,7 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
+import { assertScanEntryLimit, DEFAULT_MAX_SCAN_ENTRIES, scanEntryLimit } from './scan-limit.ts'
 import {
   isUntrustedSha1,
   parseSyncContentSha1,
@@ -798,6 +799,32 @@ describe('compareSyncRelativePaths', () => {
 
     expect(compareSyncRelativePaths(decomposed, composed)).toBeLessThan(0)
     expect(compareSyncRelativePaths(composed, decomposed)).toBeGreaterThan(0)
+  })
+})
+
+describe('scan limits', () => {
+  it('uses the default scan entry limit when unset', () => {
+    expect(scanEntryLimit(undefined)).toBe(DEFAULT_MAX_SCAN_ENTRIES)
+  })
+
+  it('allows an explicit infinite scan entry limit', () => {
+    expect(scanEntryLimit({ maxScanEntries: Number.POSITIVE_INFINITY })).toBe(
+      Number.POSITIVE_INFINITY,
+    )
+  })
+
+  it('rejects invalid scan entry limits', () => {
+    expect(() => scanEntryLimit({ maxScanEntries: 0 })).toThrow(
+      'maxScanEntries must be a positive safe integer or Infinity',
+    )
+    expect(() => scanEntryLimit({ maxScanEntries: 1.5 })).toThrow(
+      'maxScanEntries must be a positive safe integer or Infinity',
+    )
+  })
+
+  it('throws when a scanner exceeds the entry limit', () => {
+    expect(() => assertScanEntryLimit(2, 1)).toThrow('Sync scan entry limit exceeded (2 > 1)')
+    expect(() => assertScanEntryLimit(1, 1)).not.toThrow()
   })
 })
 

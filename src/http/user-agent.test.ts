@@ -112,6 +112,17 @@ describe('getUserAgent', () => {
     }
   })
 
+  it.skipIf(!isNode)('detects Bun without version metadata (defensive fallback)', () => {
+    const g = globalThis as Record<string, unknown>
+    try {
+      g['Bun'] = {}
+      const ua = getUserAgent()
+      expect(ua).toContain('; bun;')
+    } finally {
+      Reflect.deleteProperty(g, 'Bun')
+    }
+  })
+
   it.skipIf(!isNode)('detects Bun without process available (no os/arch tokens emitted)', () => {
     const g = globalThis as Record<string, unknown>
     const savedProcess = globalThis.process
@@ -123,6 +134,28 @@ describe('getUserAgent', () => {
     } finally {
       Reflect.deleteProperty(g, 'Bun')
       globalThis.process = savedProcess
+    }
+  })
+
+  it.skipIf(!isNode)('ignores process globals without a Node version', () => {
+    const savedProcess = globalThis.process
+    const navDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    try {
+      ;(globalThis as Record<string, unknown>)['process'] = { platform: 'mock', arch: 'test' }
+      if (navDescriptor) {
+        Object.defineProperty(globalThis, 'navigator', {
+          value: undefined,
+          configurable: true,
+          writable: true,
+        })
+      }
+      const ua = getUserAgent()
+      expect(ua).toContain('; unknown)')
+    } finally {
+      globalThis.process = savedProcess
+      if (navDescriptor) {
+        Object.defineProperty(globalThis, 'navigator', navDescriptor)
+      }
     }
   })
 
