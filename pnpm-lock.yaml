@@ -5,8 +5,8 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  markdown-it: ^14.1.2
-  ws: ^8.21.0
+  markdown-it: 14.2.0
+  ws: 8.21.0
 
 importers:
 
