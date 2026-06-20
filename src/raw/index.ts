@@ -84,8 +84,11 @@ export interface ListFileVersionsOptions {
   readonly signal?: AbortSignal
 }
 
-interface JsonPostOptions {
+/** Optional controls for RawClient JSON POST calls. */
+export interface JsonPostOptions {
+  /** Optional abort signal for cancellation. */
   readonly signal?: AbortSignal
+  /** Optional per-request retry override. */
   readonly retry?: Partial<RetryOptions>
 }
 
