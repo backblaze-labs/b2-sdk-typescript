@@ -93,6 +93,15 @@ describe('FileSource', () => {
     expect(decoder.decode(await slice.toArrayBuffer())).toBe('123')
   })
 
+  it('rejects non-finite slice offsets', async () => {
+    const path = join(tmpDir, 'nan-slice.txt')
+    await writeFile(path, '0123456789')
+
+    const source = new FileSource(path)
+
+    expect(() => source.slice(Number.NaN, 4)).toThrow(/slice offsets must be finite/)
+  })
+
   it('streams only the selected byte range', async () => {
     const path = join(tmpDir, 'stream.txt')
     await writeFile(path, 'prefix-body-suffix')
@@ -216,9 +225,9 @@ describe('FileSource', () => {
 
     const source = new FileSource(path)
     await rm(path)
-    await writeFile(path, 'other payload')
+    await writeFile(path, 'evil payload')
 
-    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+    await expect(source.assertUnchanged('during test')).rejects.toThrow(/changed during test/)
   })
 })
 
