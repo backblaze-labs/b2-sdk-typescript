@@ -1608,6 +1608,110 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode)(
+      'cleans up partial download files when the source stream fails',
+      async () => {
+        const { mkdtemp, readdir, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-stream-fail-'))
+        try {
+          const source = makeMemoryFolder([makeB2SyncPath('broken.txt', 1000, 3)], 'b2')
+          const dest = makeMemoryFolder([], 'local')
+          const mockBucket = {
+            ...makeMockBucket(),
+            download: vi.fn().mockResolvedValue({
+              body: new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new Uint8Array([1, 2, 3]))
+                  controller.error(new Error('stream failed'))
+                },
+              }),
+            }),
+          }
+
+          const config: SynchronizerDownConfig = {
+            source: { ...source, type: 'b2' },
+            dest: { ...dest, type: 'local', root },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'error',
+              path: 'broken.txt',
+              message: 'stream failed',
+            }),
+          )
+          const remaining = await readdir(root)
+          expect(remaining.filter((name) => name.endsWith('.partial'))).toEqual([])
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode)('reports downloads configured without a local root', async () => {
+      const source = makeMemoryFolder([makeB2SyncPath('rootless.txt', 1000, 3)], 'b2')
+      const dest = makeMemoryFolder([], 'local')
+      const mockBucket = makeMockBucket()
+
+      const config: SynchronizerDownConfig = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'local', root: '' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          path: 'rootless.txt',
+          message: 'Local sync root required for filesystem mutation',
+        }),
+      )
+    })
+
+    it.skipIf(!isNode)(
+      'reports non-ENOENT errors while checking local path components',
+      async () => {
+        const { mkdtemp, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-lstat-error-'))
+        const longSegment = 'a'.repeat(5000)
+        const relativePath = `${longSegment}/payload.txt`
+        try {
+          const source = makeMemoryFolder([makeB2SyncPath(relativePath, 1000, 3)], 'b2')
+          const dest = makeMemoryFolder([], 'local')
+          const mockBucket = makeMockBucket()
+
+          const config: SynchronizerDownConfig = {
+            source: { ...source, type: 'b2' },
+            dest: { ...dest, type: 'local', root },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'error',
+              path: relativePath,
+            }),
+          )
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('encryptionProvider', () => {
@@ -3662,6 +3766,45 @@ describe('synchronize', () => {
       } finally {
         await rm(root, { recursive: true, force: true })
         await rm(outsidePath, { force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('refuses local deletes when the scanner absolute path differs', async () => {
+      const { access, mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-mismatch-'))
+      const mismatchedPath = join(root, 'other.txt')
+      try {
+        await writeFile(mismatchedPath, 'keep')
+        const source = makeMemoryFolder([], 'b2')
+        const destPath: LocalSyncPath = {
+          relativePath: 'orphan.txt',
+          absolutePath: mismatchedPath,
+          modTimeMillis: 1000,
+          size: 4,
+        }
+        const dest = makeMemoryFolder([destPath], 'local')
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'delete' },
+          bucket: makeMockBucket() as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'orphan.txt',
+            message: 'Refusing to delete outside sync root: orphan.txt',
+          }),
+        )
+        await expect(access(mismatchedPath).then(() => true)).resolves.toBe(true)
+      } finally {
+        await rm(root, { recursive: true, force: true })
       }
     })
 

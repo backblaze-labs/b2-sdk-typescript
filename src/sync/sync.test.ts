@@ -787,6 +787,20 @@ describe('preparePairsForCompare', () => {
   })
 })
 
+describe('compareSyncRelativePaths', () => {
+  it('returns zero for identical paths', () => {
+    expect(compareSyncRelativePaths('docs/readme.txt', 'docs/readme.txt')).toBe(0)
+  })
+
+  it('uses code-unit ordering when fixed collation considers paths equal', () => {
+    const decomposed = 'cafe\u0301.txt'
+    const composed = 'café.txt'
+
+    expect(compareSyncRelativePaths(decomposed, composed)).toBeLessThan(0)
+    expect(compareSyncRelativePaths(composed, decomposed)).toBeGreaterThan(0)
+  })
+})
+
 describe('zipFolders', () => {
   it('pairs matching files from both folders', async () => {
     const source = makeMemoryFolder([
