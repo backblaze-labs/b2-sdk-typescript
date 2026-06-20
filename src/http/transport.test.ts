@@ -151,29 +151,22 @@ describe('FetchTransport', () => {
   })
 
   it('aborts a stalled fetch after the configured request timeout', async () => {
-    vi.useFakeTimers()
-    try {
-      fetchSpy.mockImplementation(
-        (_url, init) =>
-          new Promise<Response>((_resolve, reject) => {
-            const signal = init?.signal
-            signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
-          }),
-      )
+    fetchSpy.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    )
 
-      const transport = new FetchTransport()
-      const pending = transport.send({
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
         url: 'https://example.com/file',
         method: 'GET',
-        retry: { requestTimeoutMs: 5 },
-      })
-      const assertion = expect(pending).rejects.toMatchObject({ name: 'TimeoutError' })
-
-      await vi.advanceTimersByTimeAsync(5)
-      await assertion
-    } finally {
-      vi.useRealTimers()
-    }
+        retry: { requestTimeoutMs: 1 },
+      }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 
   it('follows guard-checked same-origin GET redirects by default', async () => {
