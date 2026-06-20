@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  createSyncDownloadTempFileSweeper,
   isSyncDownloadTempName,
   removeSyncDownloadTempFiles,
-  removeSyncDownloadTempFilesOnce,
 } from './temp-files.ts'
 
 describe('sync temp files', () => {
@@ -50,9 +50,10 @@ describe('sync temp files', () => {
     await expect(removeSyncDownloadTempFiles(join(tmpDir, 'missing'))).resolves.toBeUndefined()
   })
 
-  it('sweeps a directory once per process', async () => {
+  it('sweeps a directory once per sweeper', async () => {
     const firstPartialPath = join(tmpDir, '.b2sdk-first.partial')
     const secondPartialPath = join(tmpDir, '.b2sdk-second.partial')
+    const removeSyncDownloadTempFilesOnce = createSyncDownloadTempFileSweeper()
     await writeFile(firstPartialPath, 'first')
 
     await removeSyncDownloadTempFilesOnce(tmpDir)
@@ -63,7 +64,20 @@ describe('sync temp files', () => {
     await expect(access(secondPartialPath)).resolves.toBeUndefined()
   })
 
-  it('retries once-per-process sweeps after a failed sweep', async () => {
+  it('does not share sweep state across sweepers', async () => {
+    const firstPartialPath = join(tmpDir, '.b2sdk-first.partial')
+    const secondPartialPath = join(tmpDir, '.b2sdk-second.partial')
+    await writeFile(firstPartialPath, 'first')
+
+    await createSyncDownloadTempFileSweeper()(tmpDir)
+    await writeFile(secondPartialPath, 'second')
+    await createSyncDownloadTempFileSweeper()(tmpDir)
+
+    await expect(access(firstPartialPath)).rejects.toThrow()
+    await expect(access(secondPartialPath)).rejects.toThrow()
+  })
+
+  it('retries sweeps after a failed sweep', async () => {
     vi.resetModules()
     const readdir = vi
       .fn()
@@ -72,9 +86,10 @@ describe('sync temp files', () => {
     vi.doMock('node:fs/promises', () => ({ readdir, rm }))
     try {
       const tempFiles = await import('./temp-files.ts')
+      const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper()
 
-      await expect(tempFiles.removeSyncDownloadTempFilesOnce('/tmp/mock')).rejects.toThrow('locked')
-      await expect(tempFiles.removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).rejects.toThrow('locked')
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
       expect(rm).toHaveBeenCalledTimes(2)
     } finally {
       vi.doUnmock('node:fs/promises')

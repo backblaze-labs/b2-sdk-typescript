@@ -1,7 +1,7 @@
 export const SYNC_DOWNLOAD_TEMP_PREFIX = '.b2sdk-'
 export const SYNC_DOWNLOAD_TEMP_SUFFIX = '.partial'
 
-const sweptSyncDownloadTempDirectories = new Map<string, Promise<void>>()
+export type SyncDownloadTempFileSweeper = (directory: string) => Promise<void>
 
 /**
  * Checks whether a directory entry is an SDK-managed partial download file.
@@ -36,19 +36,22 @@ export async function removeSyncDownloadTempFiles(directory: string): Promise<vo
 }
 
 /**
- * Removes SDK-managed partial download files once per process for a directory.
- * @param directory - Directory to sweep.
+ * Creates a per-sync sweep cache for SDK-managed partial download files.
  *
- * @returns The shared sweep promise for the directory.
+ * @returns A function that shares one sweep promise per directory.
  */
-export function removeSyncDownloadTempFilesOnce(directory: string): Promise<void> {
-  const existing = sweptSyncDownloadTempDirectories.get(directory)
-  if (existing !== undefined) return existing
+export function createSyncDownloadTempFileSweeper(): SyncDownloadTempFileSweeper {
+  const sweptSyncDownloadTempDirectories = new Map<string, Promise<void>>()
 
-  const sweep = removeSyncDownloadTempFiles(directory).catch((error: unknown) => {
-    sweptSyncDownloadTempDirectories.delete(directory)
-    throw error
-  })
-  sweptSyncDownloadTempDirectories.set(directory, sweep)
-  return sweep
+  return function removeSyncDownloadTempFilesOnce(directory: string): Promise<void> {
+    const existing = sweptSyncDownloadTempDirectories.get(directory)
+    if (existing !== undefined) return existing
+
+    const sweep = removeSyncDownloadTempFiles(directory).catch((error: unknown) => {
+      sweptSyncDownloadTempDirectories.delete(directory)
+      throw error
+    })
+    sweptSyncDownloadTempDirectories.set(directory, sweep)
+    return sweep
+  }
 }
