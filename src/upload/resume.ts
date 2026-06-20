@@ -11,6 +11,15 @@ export interface ResumeCandidate {
   readonly uploadedPartSha1s: ReadonlyMap<number, string>
 }
 
+/** Options for unfinished large-file resume discovery. */
+export interface FindResumeCandidateOptions {
+  /**
+   * When true, list already-uploaded parts and return their server SHA-1 values.
+   * Leave false unless the caller will trust those SHA-1s to skip uploads.
+   */
+  readonly collectUploadedPartSha1s?: boolean
+}
+
 /**
  * Finds an unfinished large file matching the given bucket and file name.
  * Returns `null` when no matching candidate exists.
@@ -19,6 +28,7 @@ export interface ResumeCandidate {
  * @param accountInfo - Authorized account state.
  * @param bucketId - Target bucket of the upload.
  * @param fileName - Destination file name of the upload.
+ * @param options - Optional controls for whether uploaded part SHA-1s are listed.
  *
  * @returns A {@link ResumeCandidate} describing the candidate and its uploaded parts, or `null`.
  */
@@ -27,6 +37,7 @@ export async function findResumeCandidate(
   accountInfo: AccountInfo,
   bucketId: BucketId,
   fileName: string,
+  options: FindResumeCandidateOptions = {},
 ): Promise<ResumeCandidate | null> {
   const unfinished = await raw.listUnfinishedLargeFiles(
     accountInfo.getApiUrl(),
@@ -38,7 +49,10 @@ export async function findResumeCandidate(
   if (!match) return null
 
   const fileId = largeFileIdOf(match.fileId)
-  const uploadedPartSha1s = await collectPartSha1s(raw, accountInfo, fileId)
+  const uploadedPartSha1s =
+    options.collectUploadedPartSha1s === true
+      ? await collectPartSha1s(raw, accountInfo, fileId)
+      : new Map<number, string>()
 
   return { fileId, uploadedPartSha1s }
 }

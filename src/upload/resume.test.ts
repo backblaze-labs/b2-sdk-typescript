@@ -158,7 +158,32 @@ describe('findResumeCandidate', () => {
     expect(result).toBeNull()
   })
 
-  it('returns the candidate with collected part SHA-1s when a match exists', async () => {
+  it('returns the candidate without listing parts by default', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [{ fileId: 'lf-match', fileName: 'wanted.bin' }],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called unless part SHA-1s are trusted')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'wanted.bin',
+    )
+    expect(result).not.toBeNull()
+    expect(result?.fileId).toBe('lf-match' as LargeFileId)
+    expect(result?.uploadedPartSha1s.size).toBe(0)
+  })
+
+  it('returns the candidate with collected part SHA-1s when requested', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -187,6 +212,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'wanted.bin',
+      { collectUploadedPartSha1s: true },
     )
     expect(result).not.toBeNull()
     expect(result?.fileId).toBe('lf-match' as LargeFileId)

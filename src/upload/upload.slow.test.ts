@@ -143,6 +143,7 @@ describe('uploadLargeFile resume', () => {
       part1Data,
     )
     const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const listParts = vi.spyOn(client.raw, 'listParts')
 
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
@@ -155,6 +156,7 @@ describe('uploadLargeFile resume', () => {
 
     expect(result.fileName).toBe('resume-reupload.bin')
     expect(uploadPart).toHaveBeenCalledTimes(2)
+    expect(listParts).not.toHaveBeenCalled()
   })
 
   it('resume: true can opt into trusting matching server parts', async () => {
@@ -190,6 +192,7 @@ describe('uploadLargeFile resume', () => {
       part1Data,
     )
     const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const listParts = vi.spyOn(client.raw, 'listParts')
 
     // Step 2: resume with the same file name. Should find the unfinished file
     // via listUnfinishedLargeFiles, see part 1 already uploaded with matching SHA-1,
@@ -207,6 +210,7 @@ describe('uploadLargeFile resume', () => {
     expect(result.fileName).toBe('resumed.bin')
     expect(result.contentLength).toBe(size)
     expect(uploadPart).toHaveBeenCalledTimes(1)
+    expect(listParts).toHaveBeenCalled()
   })
 
   it('resume: true with no candidate falls back to a fresh upload', async () => {

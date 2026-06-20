@@ -125,16 +125,20 @@ export async function uploadLargeFile(
   // --- Resume discovery (M11.1) ---
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
+  const trustServerPartSha1s = options.trustServerPartSha1s === true
 
   if (options.resumeFileId !== undefined) {
     largeFileId = options.resumeFileId
-    preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
+    preUploaded = trustServerPartSha1s
+      ? await collectPartSha1s(raw, accountInfo, largeFileId)
+      : new Map<number, string>()
   } else if (options.resume === true) {
     const candidate = await findResumeCandidate(
       raw,
       accountInfo,
       options.bucketId,
       options.fileName,
+      { collectUploadedPartSha1s: trustServerPartSha1s },
     )
     if (candidate) {
       largeFileId = candidate.fileId
@@ -212,11 +216,7 @@ export async function uploadLargeFile(
 
         // Resume short-circuit: server already has this part with matching SHA-1
         const serverSha1 = preUploaded.get(part.partNumber)
-        if (
-          options.trustServerPartSha1s === true &&
-          serverSha1 !== undefined &&
-          serverSha1 === sha1Hex
-        ) {
+        if (trustServerPartSha1s && serverSha1 !== undefined && serverSha1 === sha1Hex) {
           partSha1s[part.partNumber - 1] = serverSha1
           tracker.addBytes(data.byteLength)
           tracker.completePart()
