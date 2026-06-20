@@ -1,4 +1,5 @@
 import {
+  chmod,
   mkdtemp,
   readFile,
   rename,
@@ -46,6 +47,23 @@ describe('FileSource', () => {
       await expect(new Response(source.stream()).arrayBuffer()).resolves.toHaveProperty(
         'byteLength',
         0,
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when a validated empty file grows before reading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-empty-grown-'))
+    try {
+      const filePath = join(root, 'empty.bin')
+      await writeFile(filePath, new Uint8Array())
+
+      const source = await FileSource.fromPath(filePath)
+      await writeFile(filePath, new TextEncoder().encode('grown'))
+
+      await expect(source.toArrayBuffer()).rejects.toThrow(
+        `FileSource file changed after validation: ${filePath}`,
       )
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -136,6 +154,23 @@ describe('FileSource', () => {
       await expect(source.toArrayBuffer()).rejects.toThrow(
         `FileSource file changed after validation: ${filePath}`,
       )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('allows metadata-only ctime changes before reading unchanged bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-ctime-'))
+    try {
+      const filePath = join(root, 'data.bin')
+      const payload = new TextEncoder().encode('safe')
+      await writeFile(filePath, payload)
+
+      const source = await FileSource.fromPath(filePath)
+      await chmod(filePath, 0o600)
+
+      const bytes = new Uint8Array(await source.toArrayBuffer())
+      expect(bytes).toEqual(payload)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

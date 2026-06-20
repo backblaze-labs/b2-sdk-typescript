@@ -517,6 +517,48 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it('fails a stalled download and cleans up the temp file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-stall-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      let canceled = false
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('x'))
+            },
+            cancel() {
+              canceled = true
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('stall.txt', 2)]),
+        dest: new LocalFolder(destRoot),
+        options: {
+          compareMode: 'size',
+          keepMode: 'no-delete',
+          downloadInactivityTimeoutMs: 10,
+        },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(events.some((event) => event.type === 'download-done')).toBe(false)
+      expect(canceled).toBe(true)
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+      await expect(readFile(join(destRoot, 'stall.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isBun)(
     'removes a temp file when post-open validation fails before identity capture',
     async () => {
@@ -647,6 +689,59 @@ describe('synchronize download safety', () => {
     },
   )
 
+  it.skipIf(isBun)('keeps the destination when the final rename fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-rename-fail-'))
+    const destRoot = join(root, 'dest')
+    const destPath = join(destRoot, 'keep.txt')
+    let renameFailed = false
+
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      return {
+        ...actual,
+        rename: async (...args: unknown[]) => {
+          if (String(args[1]) === destPath) {
+            renameFailed = true
+            throw new Error('simulated rename failure')
+          }
+          return actual.rename(...(args as Parameters<typeof actual.rename>))
+        },
+      }
+    })
+
+    try {
+      await mkdir(destRoot, { recursive: true })
+      await writeFile(destPath, 'old')
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('newer'))
+              controller.close()
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', 5)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(renameFailed).toBe(true)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('old')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects traversal paths before creating files inside or outside the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-traversal-'))
     try {
@@ -657,6 +752,16 @@ describe('synchronize download safety', () => {
       for (const relPath of [
         '',
         '.',
+        'dir//file.txt',
+        'dir\\file.txt',
+        'file.txt:payload',
+        'NUL',
+        'CON.txt',
+        'COM1',
+        'LPT9.log',
+        'trailing.',
+        'trailing ',
+        'dir/trailing. ',
         '../escape-posix.txt',
         '..\\escape-win.txt',
         absoluteEscapePath,
@@ -690,6 +795,45 @@ describe('synchronize download safety', () => {
       await expect(readFile(join(root, 'escape-win.txt'))).rejects.toThrow()
       await expect(readFile(absoluteEscapePath)).rejects.toThrow()
       await expect(readFile(join(root, 'escape-drive.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not alias backslash object names to slash object names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-backslash-alias-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('ok'))
+              controller.close()
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('dir/file.txt', 2), makeB2Path('dir\\file.txt', 2)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'download-done')).toBe(true)
+      expect(events.some((event) => event.type === 'error' && event.path === 'dir\\file.txt')).toBe(
+        true,
+      )
+      expect(bucket.downloadById).toHaveBeenCalledTimes(1)
+      expect(new TextDecoder().decode(await readFile(join(destRoot, 'dir', 'file.txt')))).toBe('ok')
+      if (process.platform !== 'win32') {
+        await expect(readFile(join(destRoot, 'dir\\file.txt'))).rejects.toThrow()
+      }
     } finally {
       await rm(root, { recursive: true, force: true })
     }

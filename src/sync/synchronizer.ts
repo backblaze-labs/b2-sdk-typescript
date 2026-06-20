@@ -947,7 +947,11 @@ async function createContainedScannedFileSource(
   throwIfAborted(signal)
   await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)
-  return new FileSource(targetPath, path.size)
+  const fileSource = await FileSource.fromPath(targetPath)
+  await resolveContainedLocalPath(root, path.relativePath, targetPath)
+  await assertScannedLocalFileStillCurrent(targetPath, path)
+  throwIfAborted(signal)
+  return fileSource
 }
 
 async function assertScannedLocalFileStillCurrent(

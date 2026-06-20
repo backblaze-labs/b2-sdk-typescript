@@ -119,9 +119,9 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response body was lost, retrying can create a duplicate file version.
 
-Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
+Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
 Single-request uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies and upload POST network errors by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
 
@@ -131,8 +131,10 @@ Large-file part retries are coordinated per part, not by a shared circuit breake
 main package in browser builds, but `FileSource.fromPath()` and its read methods
 need local filesystem APIs at runtime. The source records the validated file
 identity and fails with `FileSource file changed after validation` if the path is
-replaced, truncated, or modified while a multipart upload is reading it; retry
-after active writers stop changing the file.
+replaced, truncated, or content-modified while a multipart upload is reading it;
+metadata-only ctime changes do not abort unchanged bytes. On platforms without
+`O_NOFOLLOW`, leaf-symlink swaps are rejected by the post-open identity check
+rather than by the open flag. Retry after active writers stop changing the file.
 
 #### Resume a failed multipart upload
 

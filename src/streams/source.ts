@@ -10,7 +10,6 @@ interface FileIdentity {
   readonly ino: number
   readonly size: number
   readonly mtimeMs: number
-  readonly ctimeMs: number
 }
 
 interface FileStatsLike {
@@ -166,10 +165,13 @@ export class BufferSource implements ContentSource {
  * This class is import-safe in non-Node runtimes so the root and `/streams`
  * barrels remain isomorphic, but reading methods require Node filesystem APIs
  * and will reject when invoked where `node:fs` is unavailable. `FileSource`
- * opens paths with no-follow semantics where Node exposes them and validates
- * that each slice still points at the same regular-file identity captured by
- * {@link FileSource.fromPath}. Concurrent part uploads may open one descriptor
- * per in-flight part; the SDK's upload concurrency bounds that descriptor count.
+ * opens paths with no-follow semantics where Node exposes them. On platforms
+ * without `O_NOFOLLOW`, a swapped symlink is opened and then rejected by the
+ * post-open identity check. Each slice must still point at the same regular
+ * file identity, size, and mtime captured by {@link FileSource.fromPath};
+ * ctime-only metadata changes do not abort unchanged bytes. Concurrent part
+ * uploads may open one descriptor per in-flight part; the SDK's upload
+ * concurrency bounds that descriptor count.
  */
 export class FileSource implements ContentSource {
   /** Absolute or relative path to the underlying local file. */
@@ -257,6 +259,11 @@ export class FileSource implements ContentSource {
       async pull(controller) {
         try {
           if (remaining <= 0) {
+            if (handle === null) {
+              handle = await openValidatedHandle(filePath, identity)
+            } else {
+              await assertHandleReady(filePath, handle, identity)
+            }
             await closeHandle()
             controller.close()
             return
@@ -419,8 +426,7 @@ function assertSameIdentity(filePath: string, stats: FileStatsLike, identity: Fi
     stats.dev !== identity.dev ||
     stats.ino !== identity.ino ||
     stats.size !== identity.size ||
-    stats.mtimeMs !== identity.mtimeMs ||
-    stats.ctimeMs !== identity.ctimeMs
+    stats.mtimeMs !== identity.mtimeMs
   ) {
     throw new Error(`FileSource file changed after validation: ${filePath}`)
   }
@@ -432,7 +438,6 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
     ino: stats.ino,
     size: stats.size,
     mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
   }
 }
 
