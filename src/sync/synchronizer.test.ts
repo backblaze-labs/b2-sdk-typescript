@@ -1009,6 +1009,33 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('allows safe path segments that start with dots', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-dot-prefix-'))
+      try {
+        const data = new Uint8Array([8, 9])
+        const mockBucket = makeMockBucket({ 'fid_..evil/payload.txt': data })
+        const sourceFile = makeB2SyncPath('..evil/payload.txt', 2000, data.byteLength)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'download-done')).toBe(true)
+        await expect(readFile(join(root, '..evil', 'payload.txt'))).resolves.toEqual(
+          Buffer.from(data),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode || isWindows)('rejects absolute B2 names for local downloads', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm } = await import('node:fs/promises')

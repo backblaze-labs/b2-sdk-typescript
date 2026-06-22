@@ -44,7 +44,12 @@ export function assertPathInsideRoot(
   path: typeof import('node:path'),
 ): void {
   const relative = path.relative(root, target)
-  if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
+  if (
+    relative.length === 0 ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
     throw new Error('unsafe local destination path')
   }
 }
