@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { sha1Hex } from '../streams/hash.ts'
 import {
   hashReadableStreamSha1,
@@ -19,10 +19,6 @@ function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
 }
 
 describe('readStreamChunkWithTimeout', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('returns stream chunks before the idle timeout', async () => {
     const reader = streamFromChunks([textEncoder.encode('abc')]).getReader()
     try {
@@ -34,12 +30,9 @@ describe('readStreamChunkWithTimeout', () => {
   })
 
   it('rejects reads that make no progress before the timeout', async () => {
-    vi.useFakeTimers()
     const reader = new ReadableStream<Uint8Array>().getReader()
-    const promise = readStreamChunkWithTimeout(reader, 25, 'stalled')
+    const promise = readStreamChunkWithTimeout(reader, 1, 'stalled')
     const rejection = expect(promise).rejects.toThrow('stalled')
-
-    await vi.advanceTimersByTimeAsync(25)
 
     await rejection
     await reader.cancel()
@@ -98,10 +91,6 @@ describe('hashReadableStreamSha1', () => {
 })
 
 describe('withSha1VerificationDeadline', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
   it('returns the operation result before the deadline', async () => {
     await expect(
       withSha1VerificationDeadline(undefined, 1000, async (signal) => {
@@ -112,15 +101,12 @@ describe('withSha1VerificationDeadline', () => {
   })
 
   it('rejects and aborts the derived signal when the deadline expires', async () => {
-    vi.useFakeTimers()
     let derivedSignal: AbortSignal | undefined
-    const promise = withSha1VerificationDeadline(undefined, 25, (signal) => {
+    const promise = withSha1VerificationDeadline(undefined, 1, (signal) => {
       derivedSignal = signal
       return new Promise<string>(() => {})
     })
-    const rejection = expect(promise).rejects.toThrow('sha1 B2 verification exceeded 25 ms')
-
-    await vi.advanceTimersByTimeAsync(25)
+    const rejection = expect(promise).rejects.toThrow('sha1 B2 verification exceeded 1 ms')
 
     await rejection
     expect(derivedSignal?.aborted).toBe(true)
