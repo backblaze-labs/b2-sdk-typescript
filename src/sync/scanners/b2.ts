@@ -8,8 +8,13 @@ import {
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
-import { compareSyncRelativePaths } from '../path-order.ts'
-import { asRawB2KeyPrefix, normalizeB2RelativePath } from '../prefix.ts'
+import { compareCodeUnits, compareSyncRelativePaths } from '../path-order.ts'
+import {
+  asRawB2KeyPrefix,
+  localFilesystemCanonicalSyncPath,
+  localFilesystemSyncPathIsUnsafe,
+  normalizeB2RelativePath,
+} from '../prefix.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
@@ -27,6 +32,11 @@ interface B2ScanEntry {
   versions: FileVersion[]
 }
 
+interface VisibleB2ScanEntry extends B2ScanEntry {
+  fileName: string
+  selectedVersion: FileVersion
+}
+
 /**
  * Scans a B2 bucket (optionally filtered by a raw B2 key prefix) and yields
  * {@link B2SyncPath} entries sorted by file name. Hidden files are excluded.
@@ -37,6 +47,7 @@ interface B2ScanEntry {
 export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
   readonly appliesScanFilters = true as const
+  readonly appliesScanSorting = true as const
   private readonly bucket: Bucket
   private readonly prefix: string
 
@@ -58,13 +69,7 @@ export class B2Folder implements SyncFolder {
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
     validateSyncFilters(options)
     const maxScanEntries = scanEntryLimit(options)
-    let listedEntries = 0
-    // Keep grouping, collision ownership, and skip emission in one loop
-    // intentionally: those structures must update atomically for each listed
-    // version, and the scanner edge-case tests cover the shared invariants.
     const grouped = new Map<string, B2ScanEntry>()
-    const relativePathOwners = new Map<string, string>()
-    const collidedRelativePaths = new Set<string>()
     const listPrefix = this.listPrefixFor(options)
 
     let startFileName: string | undefined
@@ -88,8 +93,6 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (options.signal?.aborted) return
-        listedEntries++
-        assertScanEntryLimit(listedEntries, maxScanEntries)
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
@@ -116,16 +119,6 @@ export class B2Folder implements SyncFolder {
           continue
         }
 
-        if (collidedRelativePaths.has(relativePath)) {
-          this.emitSkip(
-            options,
-            relativePath,
-            fv.fileName,
-            'relative-path-collision',
-            'object normalizes to a relative path already rejected because of another raw B2 key',
-          )
-          continue
-        }
         if (!pathPassesSyncFilters(relativePath, options)) {
           if (pathSkippedByRegExpInputLimit(relativePath, options)) {
             emitScannerSkip(options, {
@@ -136,34 +129,12 @@ export class B2Folder implements SyncFolder {
           continue
         }
 
-        const owner = relativePathOwners.get(relativePath)
-        if (owner !== undefined && owner !== fv.fileName) {
-          grouped.delete(owner)
-          relativePathOwners.delete(relativePath)
-          collidedRelativePaths.add(relativePath)
-          this.emitSkip(
-            options,
-            relativePath,
-            owner,
-            'relative-path-collision',
-            `object normalizes to the same relative path as ${JSON.stringify(fv.fileName)}`,
-          )
-          this.emitSkip(
-            options,
-            relativePath,
-            fv.fileName,
-            'relative-path-collision',
-            `object normalizes to the same relative path as ${JSON.stringify(owner)}`,
-          )
-          continue
-        }
-
         const existing = grouped.get(fv.fileName)
         if (existing) {
           existing.versions.push(fv)
         } else {
+          assertScanEntryLimit(grouped.size + 1, maxScanEntries)
           grouped.set(fv.fileName, { relativePath, versions: [fv] })
-          relativePathOwners.set(relativePath, fv.fileName)
         }
       }
 
@@ -172,26 +143,29 @@ export class B2Folder implements SyncFolder {
       startFileId = listing.nextFileId ?? undefined
     }
 
-    const sorted = [...grouped.entries()].sort(
+    const visible = this.visibleCandidates(grouped, options)
+    const withoutRelativeCollisions = this.rejectRelativePathCollisions(visible, options)
+    const safeCandidates =
+      options.requireLocalSafePaths === true
+        ? this.rejectLocalPathCollisions(withoutRelativeCollisions, options)
+        : withoutRelativeCollisions
+    const sorted = safeCandidates.sort(
       (a, b) =>
-        compareSyncRelativePaths(a[1].relativePath, b[1].relativePath) ||
-        compareCodeUnits(a[0], b[0]),
+        compareSyncRelativePaths(a.relativePath, b.relativePath) ||
+        compareCodeUnits(a.fileName, b.fileName),
     )
 
-    for (const [, { relativePath, versions }] of sorted) {
+    for (const { relativePath, versions, selectedVersion } of sorted) {
       if (options.signal?.aborted) return
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
-      const selected = versions[0]
-      if (!selected || selected.action === FileAction.Hide) continue
-
-      const contentSha1 = selectB2ComparableSha1(selected)
+      const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
         relativePath,
-        modTimeMillis: selected.uploadTimestamp,
-        size: selected.contentLength,
+        modTimeMillis: selectedVersion.uploadTimestamp,
+        size: selectedVersion.contentLength,
         contentSha1,
         contentSha1State: syncSha1StateOf({ contentSha1 }),
-        selectedVersion: selected,
+        selectedVersion,
         allVersions: versions,
       }
     }
@@ -213,6 +187,141 @@ export class B2Folder implements SyncFolder {
     if (filterPrefix === '') return this.prefix
     if (this.prefix !== '' && !this.prefix.endsWith('/')) return this.prefix
     return `${this.prefix}${rawPrefixBeforeNormalizedSeparator(filterPrefix)}`
+  }
+
+  private visibleCandidates(
+    grouped: Map<string, B2ScanEntry>,
+    filters: SyncScanOptions | undefined,
+  ): VisibleB2ScanEntry[] {
+    const visible: VisibleB2ScanEntry[] = []
+
+    for (const [fileName, entry] of grouped) {
+      entry.versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
+      const selected = entry.versions[0]
+      if (!selected || selected.action === FileAction.Hide) continue
+
+      if (
+        filters?.requireLocalSafePaths === true &&
+        localFilesystemSyncPathIsUnsafe(entry.relativePath)
+      ) {
+        this.emitSkip(
+          filters,
+          entry.relativePath,
+          fileName,
+          'local-unsafe-name',
+          'object name is unsafe for a local filesystem destination',
+        )
+        continue
+      }
+
+      visible.push({
+        fileName,
+        relativePath: entry.relativePath,
+        versions: entry.versions,
+        selectedVersion: selected,
+      })
+    }
+
+    return visible
+  }
+
+  private rejectRelativePathCollisions(
+    candidates: VisibleB2ScanEntry[],
+    filters: SyncScanOptions | undefined,
+  ): VisibleB2ScanEntry[] {
+    const accepted: VisibleB2ScanEntry[] = []
+    const owners = new Map<string, VisibleB2ScanEntry>()
+    const collidedRelativePaths = new Set<string>()
+
+    for (const candidate of candidates) {
+      if (collidedRelativePaths.has(candidate.relativePath)) {
+        this.emitSkip(
+          filters,
+          candidate.relativePath,
+          candidate.fileName,
+          'relative-path-collision',
+          'object normalizes to a relative path already rejected because of another raw B2 key',
+        )
+        continue
+      }
+
+      const owner = owners.get(candidate.relativePath)
+      if (owner !== undefined && owner.fileName !== candidate.fileName) {
+        owners.delete(candidate.relativePath)
+        removeAcceptedCandidate(accepted, owner)
+        collidedRelativePaths.add(candidate.relativePath)
+        this.emitSkip(
+          filters,
+          candidate.relativePath,
+          owner.fileName,
+          'relative-path-collision',
+          `object normalizes to the same relative path as ${JSON.stringify(candidate.fileName)}`,
+        )
+        this.emitSkip(
+          filters,
+          candidate.relativePath,
+          candidate.fileName,
+          'relative-path-collision',
+          `object normalizes to the same relative path as ${JSON.stringify(owner.fileName)}`,
+        )
+        continue
+      }
+
+      owners.set(candidate.relativePath, candidate)
+      accepted.push(candidate)
+    }
+
+    return accepted
+  }
+
+  private rejectLocalPathCollisions(
+    candidates: VisibleB2ScanEntry[],
+    filters: SyncScanOptions | undefined,
+  ): VisibleB2ScanEntry[] {
+    const accepted: VisibleB2ScanEntry[] = []
+    const owners = new Map<string, VisibleB2ScanEntry>()
+    const collidedLocalPaths = new Set<string>()
+
+    for (const candidate of candidates) {
+      const canonicalPath = localFilesystemCanonicalSyncPath(candidate.relativePath)
+      if (collidedLocalPaths.has(canonicalPath)) {
+        this.emitSkip(
+          filters,
+          candidate.relativePath,
+          candidate.fileName,
+          'local-path-collision',
+          'object collides with another object on case-insensitive or Unicode-normalizing filesystems',
+        )
+        continue
+      }
+
+      const owner = owners.get(canonicalPath)
+      if (owner !== undefined) {
+        owners.delete(canonicalPath)
+        removeAcceptedCandidate(accepted, owner)
+        collidedLocalPaths.add(canonicalPath)
+        this.emitSkip(
+          filters,
+          owner.relativePath,
+          owner.fileName,
+          'local-path-collision',
+          `object collides with ${JSON.stringify(candidate.fileName)} on local filesystems`,
+        )
+        this.emitSkip(
+          filters,
+          candidate.relativePath,
+          candidate.fileName,
+          'local-path-collision',
+          `object collides with ${JSON.stringify(owner.fileName)} on local filesystems`,
+        )
+        continue
+      }
+
+      owners.set(canonicalPath, candidate)
+      accepted.push(candidate)
+    }
+
+    return accepted
   }
 
   private emitSkip(
@@ -249,8 +358,10 @@ function emitScanError(options: SyncScanOptions, message: string, err: unknown):
   return new Error(event.message)
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1
-  if (left > right) return 1
-  return 0
+function removeAcceptedCandidate(
+  candidates: VisibleB2ScanEntry[],
+  target: VisibleB2ScanEntry,
+): void {
+  const index = candidates.indexOf(target)
+  if (index !== -1) candidates.splice(index, 1)
 }

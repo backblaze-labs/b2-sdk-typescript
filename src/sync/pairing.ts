@@ -71,9 +71,12 @@ function scanWithFilters(
   folder: SyncFolder,
   filters: SyncScanOptions | undefined,
 ): AsyncIterable<SyncPath> {
-  const scanned = folder.scan(filters)
-  if (folder.appliesScanFilters === true) return scanned
-  return sortSyncPaths(filterSyncPaths(scanned, filters), filters)
+  let scanned = folder.scan(filters)
+  if (folder.appliesScanFilters !== true) {
+    scanned = filterSyncPaths(scanned, filters)
+  }
+  if (folder.appliesScanSorting === true) return scanned
+  return sortSyncPaths(scanned, filters)
 }
 
 async function* sortSyncPaths(

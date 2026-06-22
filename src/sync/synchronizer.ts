@@ -152,6 +152,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
+    ...(direction === 'b2-to-local' ? { requireLocalSafePaths: true } : {}),
     onSkip(event) {
       bufferScanEvent(scanEvents, event)
     },
@@ -164,6 +165,9 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   const factory = createActionFactory(config)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
+  const actionAbortController = new AbortController()
+  const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
+  let completed = false
 
   async function* finishAfterAbort(): AsyncGenerator<SyncEvent> {
     await drainActions()
@@ -227,7 +231,15 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         message: `${errorCount} sync error(s) occurred`,
       }
     }
+    completed = true
   } finally {
+    if (!completed) {
+      abortActionController(
+        actionAbortController,
+        new DOMException('Sync iterator closed', 'AbortError'),
+      )
+    }
+    removeAbortForwarder()
     await drainActions()
   }
 
@@ -340,8 +352,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   async function executeAction(action: SyncAction): Promise<void> {
     try {
-      if (options.signal?.aborted) return
-      const event = await action.execute(dryRun, options.signal)
+      if (actionAbortController.signal.aborted) return
+      const event = await action.execute(dryRun, actionAbortController.signal)
       queueEvent(event)
     } catch (err) {
       errorCount += 1
@@ -437,6 +449,27 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
         return { contentSha1: verified.contentSha1, bytesRead: verified.bytesRead }
       },
     )
+  }
+}
+
+function forwardAbortSignal(
+  source: AbortSignal | undefined,
+  controller: AbortController,
+): () => void {
+  if (source === undefined) return () => undefined
+  if (source.aborted) {
+    abortActionController(controller, source.reason)
+    return () => undefined
+  }
+
+  const abort = () => abortActionController(controller, source.reason)
+  source.addEventListener('abort', abort, { once: true })
+  return () => source.removeEventListener('abort', abort)
+}
+
+function abortActionController(controller: AbortController, reason: unknown): void {
+  if (!controller.signal.aborted) {
+    controller.abort(reason)
   }
 }
 
@@ -591,7 +624,16 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       })
     },
 
-    hide(path: B2SyncPath): SyncAction {
+    hide(path: string): SyncAction {
+      const bucket = upConfig.bucket ?? downConfig.bucket
+      assertBucket(bucket, 'hide')
+
+      return new HideAction(path, async () => {
+        await bucket.hideFile(`${uploadPrefix}${path}`)
+      })
+    },
+
+    hideB2Path(path: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket ?? downConfig.bucket
       assertBucket(bucket, 'hide')
       const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
@@ -648,7 +690,9 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       // hide markers under retention; a hide is the safe choice.
       // Vanilla buckets: plain delete is the right move — hide markers
       // would just litter the version history.
-      return bucketIsLocked ? factory.hide(dest) : factory.deleteRemote(dest)
+      return bucketIsLocked
+        ? (factory.hideB2Path?.(dest) ?? factory.hide(dest.relativePath))
+        : factory.deleteRemote(dest)
     },
   }
 

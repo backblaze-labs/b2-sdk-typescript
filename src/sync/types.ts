@@ -81,6 +81,11 @@ export interface SyncScanOptions extends SyncFilterOptions {
    */
   readonly onSkip?: (event: SyncSkipEvent) => void
   /**
+   * When true, B2 scanners skip names that cannot be written safely to a local filesystem
+   * destination and reject case/Unicode-canonical local path collisions.
+   */
+  readonly requireLocalSafePaths?: boolean
+  /**
    * Maximum number of entries a scanner may retain before failing with a defined error instead of
    * continuing toward unbounded heap growth. Defaults to the SDK scan limit.
    */
@@ -181,7 +186,10 @@ export type SyncActionEventType =
 export type SyncSkipReason =
   | 'outside-prefix'
   | 'unsafe-name'
+  | 'local-unsafe-name'
   | 'relative-path-collision'
+  | 'local-path-collision'
+  | 'filesystem-error'
   | 'path-too-long-for-regexp'
   | 'scan-skip-overflow'
 
@@ -249,8 +257,10 @@ export interface SyncErrorEvent {
   readonly message: string
   /** Number of failed actions represented by an aggregate run-level error event. */
   readonly failureCount?: number
-  /** Relative paths of failed actions represented by an aggregate run-level error event. */
+  /** Bounded relative paths of failed actions represented by an aggregate run-level error event. */
   readonly failedPaths?: readonly string[]
+  /** Number of failed action paths omitted from a bounded aggregate error event. */
+  readonly failedPathOmittedCount?: number
 }
 
 /**
@@ -309,7 +319,7 @@ export interface SyncEncryptionProvider {
 }
 
 /**
- * A scannable folder (local or B2) that yields files in `compareSyncRelativePaths` order.
+ * A scannable folder (local or B2) that yields files relative to its sync root.
  *
  * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
  * require memory proportional to the scanned entries; B2 scans also group listed versions before
@@ -322,8 +332,13 @@ export interface SyncFolder {
    * True when `scan(filters)` already enforces include/exclude filters itself.
    * Custom folders that set this should use the exported filter helpers from
    * `@backblaze-labs/b2-sdk/sync` to stay aligned with the SDK glob and RegExp dialect.
-   */
+  */
   readonly appliesScanFilters?: true
-  /** Scans the folder and yields files sorted by `compareSyncRelativePaths`. */
+  /**
+   * True when `scan(filters)` already yields entries in `compareSyncRelativePaths` order.
+   * Custom folders that omit this are sorted by `synchronize()` before pairing.
+   */
+  readonly appliesScanSorting?: true
+  /** Scans the folder and yields files relative to the folder root. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

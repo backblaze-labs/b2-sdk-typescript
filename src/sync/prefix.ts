@@ -40,8 +40,40 @@ export function normalizeB2RelativePath(
   return relativePath
 }
 
+/**
+ * Returns whether a sync path is unsafe to materialize on Windows-compatible local filesystems.
+ * B2-to-B2 syncs can preserve these object names, but B2-to-local syncs skip them before writing.
+ *
+ * @param relativePath - Folder-relative sync path.
+ *
+ * @returns True when any segment is Windows-dangerous or ambiguous.
+ */
+export function localFilesystemSyncPathIsUnsafe(relativePath: string): boolean {
+  return relativePath.split('/').some((segment) => segmentIsLocalFilesystemUnsafe(segment))
+}
+
+/**
+ * Produces an approximate Windows/macOS-style canonical key for local collision detection.
+ *
+ * @param relativePath - Folder-relative sync path.
+ *
+ * @returns A canonicalized path key for detecting case/Unicode collisions before local writes.
+ */
+export function localFilesystemCanonicalSyncPath(relativePath: string): string {
+  return relativePath
+    .split('/')
+    .map((segment) => segment.normalize('NFC').toLocaleLowerCase('en-US'))
+    .join('/')
+}
+
 function segmentIsUnsafe(segment: string): boolean {
   return segment === '' || segment === '.' || segment === '..' || containsControlCharacter(segment)
+}
+
+function segmentIsLocalFilesystemUnsafe(segment: string): boolean {
+  if (segment.includes(':') || segment.endsWith('.') || segment.endsWith(' ')) return true
+  const basename = segment.split('.')[0]?.toUpperCase()
+  return basename !== undefined && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(basename)
 }
 
 function containsControlCharacter(segment: string): boolean {

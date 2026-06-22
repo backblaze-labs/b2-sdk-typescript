@@ -201,7 +201,7 @@ describe('LocalFolder', () => {
     ])
   })
 
-  it('removes stale SDK partial download files instead of yielding them', async () => {
+  it('treats SDK partial download names as ordinary source files while scanning', async () => {
     const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
     await writeFile(tempPath, 'partial')
     await writeFile(join(tmpDir, 'keep.txt'), 'keep')
@@ -209,9 +209,29 @@ describe('LocalFolder', () => {
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
-    await expect(access(tempPath)).rejects.toThrow()
+    expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-abandoned.partial', 'keep.txt'])
+    await expect(access(tempPath)).resolves.toBeUndefined()
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'skips local filenames containing literal backslashes',
+    async () => {
+      await writeFile(join(tmpDir, 'a\\b.txt'), 'backslash')
+
+      const folder = new LocalFolder(tmpDir)
+      const skips: string[] = []
+      const entries = await collect<LocalSyncPath>(
+        folder.scan({
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries).toEqual([])
+      expect(skips).toEqual(['unsafe-name:a\\b.txt'])
+    },
+  )
 
   it('scans directories with SDK partial download names', async () => {
     const partialDir = join(tmpDir, '.b2sdk-directory.partial')
@@ -402,6 +422,23 @@ describe('B2Folder', () => {
     await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
       'Sync scan entry limit exceeded',
     )
+  })
+
+  it('counts retained B2 names, not raw listed versions, for scan limits', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'scan-limit-versions-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a1')) })
+    tick()
+    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a2')) })
+
+    const folder = new B2Folder(bucket)
+    const entries = await collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['a.txt'])
+    expect(entries[0]?.allVersions).toHaveLength(2)
   })
 
   it('groups multiple versions and picks the latest', async () => {
@@ -752,6 +789,67 @@ describe('B2Folder', () => {
     ])
   })
 
+  it('skips Windows-dangerous B2 names when local path safety is required', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('safe.txt', 1),
+            makeFileVersion('name:stream', 2),
+            makeFileVersion('AUX.txt', 3),
+            makeFileVersion('trailing.', 4),
+            makeFileVersion('trailing ', 5),
+            makeFileVersion('Readme.txt', 6),
+            makeFileVersion('README.txt', 7),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const skips: string[] = []
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        requireLocalSafePaths: true,
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.b2FileName}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['safe.txt'])
+    expect(skips).toEqual([
+      'local-unsafe-name:name:stream',
+      'local-unsafe-name:AUX.txt',
+      'local-unsafe-name:trailing.',
+      'local-unsafe-name:trailing ',
+      'local-path-collision:Readme.txt',
+      'local-path-collision:README.txt',
+    ])
+  })
+
   it('reports paths that are too long for RegExp filters', async () => {
     const longRelativePath = `${'deep/'.repeat(205)}file.txt`
     const fileVersion: FileVersion = {
@@ -887,8 +985,51 @@ describe('B2Folder', () => {
     expect(skips).toEqual([
       'relative-path-collision:docs\\readme.md',
       'relative-path-collision:docs/readme.md',
-      'relative-path-collision:docs\\readme.md',
     ])
+  })
+
+  it('does not let hidden collision markers suppress visible objects', async () => {
+    function makeFileVersion(
+      name: string,
+      ts: number,
+      action: FileAction = FileAction.Upload,
+    ): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${ts}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: ts,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('docs\\readme.md', 2, FileAction.Hide),
+            makeFileVersion('docs/readme.md', 1, FileAction.Upload),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((e) => e.selectedVersion.fileName)).toEqual(['docs/readme.md'])
   })
 
   it('does not push include prefixes past slashless raw B2 prefixes', async () => {

@@ -23,6 +23,7 @@ import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from 
 export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
+  readonly appliesScanSorting = true as const
   /** Absolute path to the local root directory. */
   readonly root: string
 
@@ -78,6 +79,16 @@ export class LocalFolder implements SyncFolder {
 
       const fullPath = join(dir, entry.name)
       const rel = relativePath(this.root, fullPath)
+      if (rel.includes('\\')) {
+        emitScannerSkip(options, {
+          type: 'skip',
+          path: rel,
+          size: 0,
+          reason: 'unsafe-name',
+          message: `Skipped local path ${JSON.stringify(rel)}: backslashes are not safe sync path characters`,
+        })
+        continue
+      }
       if (entry.isFile() && isSyncDownloadTempName(entry.name)) {
         await rm(fullPath, { force: true }).catch(() => undefined)
         continue

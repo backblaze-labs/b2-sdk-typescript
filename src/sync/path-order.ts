@@ -22,7 +22,15 @@ export function compareSyncPathNames(a: string, b: string): number {
   return compareSyncRelativePaths(a, b)
 }
 
-function compareCodeUnits(left: string, right: string): number {
+/**
+ * Compares strings by JavaScript code-unit order.
+ *
+ * @param left - First string.
+ * @param right - Second string.
+ *
+ * @returns Negative, zero, or positive using code-unit order.
+ */
+export function compareCodeUnits(left: string, right: string): number {
   if (left < right) return -1
   if (left > right) return 1
   /* v8 ignore next -- compareSyncRelativePaths only calls this for distinct strings. */

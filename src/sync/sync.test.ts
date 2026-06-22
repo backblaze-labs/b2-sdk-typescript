@@ -107,7 +107,8 @@ function makeNoopFactory(): ActionFactory {
       new UploadAction(s.relativePath, s.absolutePath, s.size, async () => {}),
     download: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-download'),
     copy: (s: B2SyncPath, _dest: string) => new SkipAction(s.relativePath, 'noop-copy'),
-    hide: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-hide'),
+    hide: (s: string) => new SkipAction(s, 'noop-hide'),
+    hideB2Path: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-hide-b2-path'),
     deleteRemote: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-delete-remote'),
     deleteLocal: (s: LocalSyncPath) => new SkipAction(s.relativePath, 'noop-delete-local'),
     // For the noop test factory, treat orphans as the equivalent of
@@ -1081,6 +1082,28 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([['skip.tmp', null]])
+  })
+
+  it('sorts custom folders that apply filters but do not declare sorted output', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanFilters: true,
+      async *scan() {
+        yield makeSyncPath('Z.txt', 1000, 10)
+        yield makeSyncPath('a.txt', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['a.txt', null],
+      ['Z.txt', null],
+    ])
   })
 
   it('keeps descendants of exact slash-containing excludes while pairing', async () => {
