@@ -218,7 +218,7 @@ export async function uploadLargeFile(
   }
 
   // --- Resume discovery (M11.1) ---
-  if (!options.source.canSlice && (options.resumeFileId !== undefined || options.resume === true)) {
+  if (!options.source.canSlice && options.resumeFileId !== undefined) {
     throw new Error(
       'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
     )
@@ -244,7 +244,7 @@ export async function uploadLargeFile(
     }
     largeFileId = candidate.fileId
     preUploaded = candidate.uploadedPartSha1s
-  } else if (options.resume === true) {
+  } else if (options.resume === true && options.source.canSlice) {
     const candidate = await findResumeCandidate(
       raw,
       accountInfo,
