@@ -5,6 +5,7 @@ import {
   noFollowFlag,
   safeRelativePathSegments,
 } from './path-safety.ts'
+import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
 
 /** @internal */
@@ -73,7 +74,7 @@ export async function writeLocalFileInsideRoot(
     }),
     {
       expectedBytes: data.byteLength,
-      idleTimeoutMillis: 30_000,
+      idleTimeoutMillis: DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS,
     },
   )
 }
