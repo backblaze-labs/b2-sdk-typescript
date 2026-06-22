@@ -753,8 +753,8 @@ async function readStreamChunk(
   let removeAbortListener: (() => void) | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
-      void reader.cancel(signal.reason).catch(() => {})
       reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      void reader.cancel(signal.reason).catch(() => {})
     }
     signal.addEventListener('abort', onAbort, { once: true })
     removeAbortListener = () => signal.removeEventListener('abort', onAbort)

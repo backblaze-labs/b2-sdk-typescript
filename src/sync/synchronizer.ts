@@ -810,7 +810,8 @@ function createActionFactory(
           // FileSource avoids whole-file buffering and rejects path swaps on a
           // best-effort basis. On Windows, callers that need tamper-resistant
           // same-size rewrite detection should use compareMode: 'sha1' or an
-          // independent digest because restored mtimes can hide local rewrites.
+          // independent digest because restored modification times can hide
+          // local rewrites.
           const fileSource = await FileSource.fromPath(targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(

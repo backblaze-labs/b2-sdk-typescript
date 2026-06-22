@@ -499,6 +499,38 @@ describe('createWriteStream branch coverage', () => {
     expect(events).toEqual(['part-aborted', 'part-settled', 'cancel'])
   })
 
+  it('does not wait for cleanup when an in-flight start later fails', async () => {
+    const startCalled = deferred<void>()
+    const releaseStart = deferred<void>()
+    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(async () => {
+      startCalled.resolve(undefined)
+      await releaseStart.promise
+      throw new Error('start failed')
+    })
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const { writable, done } = bucket.file('abort-start-fails.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(new Uint8Array(100_000))
+    await startCalled.promise
+
+    const abortPromise = writer.abort(new Error('abort while start fails'))
+    const abortResult = await Promise.race([
+      abortPromise.then(() => 'aborted' as const),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ])
+    expect(abortResult).toBe('aborted')
+    await expect(done).rejects.toThrow('abort while start fails')
+
+    releaseStart.resolve(undefined)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+  })
+
   it('does not cancel when finish response body is ambiguous', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
     const inner = sim.transport()

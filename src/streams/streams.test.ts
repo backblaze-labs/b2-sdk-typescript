@@ -3,7 +3,14 @@ import { EncryptionKey } from '../types/encryption.ts'
 import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
-import { BlobSource, BufferSource, FileSource, StreamSource, toContentSource } from './source.ts'
+import {
+  BlobSource,
+  BufferSource,
+  FileSource,
+  readNextNonEmptyStreamChunk,
+  StreamSource,
+  toContentSource,
+} from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
@@ -454,6 +461,54 @@ describe('StreamSource', () => {
     const src = new StreamSource(stream, 1)
     await src.toArrayBuffer()
     await expect(src.toArrayBuffer()).rejects.toThrow('StreamSource can only be consumed once.')
+  })
+
+  it('readNextNonEmptyStreamChunk cancels immediately when already aborted', async () => {
+    const abortReason = new Error('already aborted')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    controller.abort(abortReason)
+
+    await expect(
+      readNextNonEmptyStreamChunk(reader, 'empty chunks are not allowed', controller.signal),
+    ).rejects.toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('readNextNonEmptyStreamChunk cancels a pending read when aborted', async () => {
+    const abortReason = new Error('abort pending read')
+    let resolveReadStarted!: () => void
+    const readStarted = new Promise<void>((resolve) => {
+      resolveReadStarted = resolve
+    })
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        resolveReadStarted()
+      },
+      cancel(reason) {
+        cancelReason = reason
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    const nextChunk = readNextNonEmptyStreamChunk(
+      reader,
+      'empty chunks are not allowed',
+      controller.signal,
+    )
+
+    await readStarted
+    controller.abort(abortReason)
+
+    await expect(nextChunk).rejects.toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
   })
 })
 
