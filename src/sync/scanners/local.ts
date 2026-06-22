@@ -1,5 +1,3 @@
-import { lstat, readdir, rm } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
 import {
   directoryMayContainSyncPaths,
@@ -12,6 +10,29 @@ import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
 import { isSyncDownloadTempName } from '../temp-files.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
+
+type LocalDirent = {
+  readonly name: string
+  isDirectory(): boolean
+  isFile(): boolean
+}
+
+type LocalStats = {
+  readonly dev: number
+  readonly ino: number
+  readonly mtimeMs: number
+  readonly size: number
+  isFile(): boolean
+}
+
+type LocalNodeDeps = {
+  readdir(path: string, options: { readonly withFileTypes: true }): Promise<LocalDirent[]>
+  lstat(path: string): Promise<LocalStats>
+  rm(path: string, options: { readonly force: true }): Promise<void>
+  join(...paths: string[]): string
+  relative(from: string, to: string): string
+  sep: string
+}
 
 /**
  * Scans a local directory tree and yields {@link LocalSyncPath} entries sorted by relative path.
@@ -41,8 +62,9 @@ export class LocalFolder implements SyncFolder {
    */
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
     validateSyncFilters(options)
+    const nodeDeps = await loadLocalNodeDeps()
     const collected: LocalSyncPath[] = []
-    await this.walk(this.root, collected, options, scanEntryLimit(options))
+    await this.walk(this.root, collected, options, scanEntryLimit(options), nodeDeps)
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
       if (options.signal?.aborted) return
@@ -56,20 +78,27 @@ export class LocalFolder implements SyncFolder {
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
    * @param maxScanEntries - Maximum number of entries to retain before failing.
+   * @param nodeDeps - Lazily loaded Node filesystem and path helpers.
    */
   private async walk(
     dir: string,
     out: LocalSyncPath[],
     options: SyncScanOptions,
     maxScanEntries: number,
+    nodeDeps: LocalNodeDeps,
   ): Promise<void> {
     if (options.signal?.aborted) return
 
-    let entries: import('node:fs').Dirent[]
+    let entries: LocalDirent[]
     try {
-      entries = await readdir(dir, { withFileTypes: true })
+      entries = await nodeDeps.readdir(dir, { withFileTypes: true })
     } catch (err) {
-      const error = this.emitScanError(options, relativePath(this.root, dir), 'directory', err)
+      const error = this.emitScanError(
+        options,
+        relativePathFromRoot(this.root, dir, nodeDeps),
+        'directory',
+        err,
+      )
       if (dir === this.root) throw error
       return
     }
@@ -77,8 +106,8 @@ export class LocalFolder implements SyncFolder {
     for (const entry of entries) {
       if (options.signal?.aborted) return
 
-      const fullPath = join(dir, entry.name)
-      const rel = relativePath(this.root, fullPath)
+      const fullPath = nodeDeps.join(dir, entry.name)
+      const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
       if (rel.includes('\\')) {
         emitScannerSkip(options, {
           type: 'skip',
@@ -90,14 +119,14 @@ export class LocalFolder implements SyncFolder {
         continue
       }
       if (entry.isFile() && isSyncDownloadTempName(entry.name)) {
-        await rm(fullPath, { force: true }).catch(() => undefined)
+        await nodeDeps.rm(fullPath, { force: true }).catch(() => undefined)
         continue
       }
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
         if (directoryMayContainSyncPaths(rel, options)) {
-          await this.walk(fullPath, out, options, maxScanEntries)
+          await this.walk(fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
         if (!pathPassesSyncFilters(rel, options)) {
@@ -107,7 +136,7 @@ export class LocalFolder implements SyncFolder {
           continue
         }
         try {
-          const s = await lstat(fullPath)
+          const s = await nodeDeps.lstat(fullPath)
           /* v8 ignore start -- lstat race after a Dirent file result is not deterministic */
           if (!s.isFile()) {
             this.emitScanError(options, rel, 'file', new Error('not a regular file'))
@@ -129,7 +158,12 @@ export class LocalFolder implements SyncFolder {
           assertScanEntryLimit(out.length, maxScanEntries)
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
-          this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)
+          this.emitScanError(
+            options,
+            relativePathFromRoot(this.root, fullPath, nodeDeps),
+            'file',
+            err,
+          )
         }
       }
     }
@@ -152,6 +186,18 @@ export class LocalFolder implements SyncFolder {
   }
 }
 
-function relativePath(root: string, path: string): string {
-  return relative(root, path).split(sep).join('/')
+async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
+  const [fsPromises, path] = await Promise.all([import('node:fs/promises'), import('node:path')])
+  return {
+    readdir: fsPromises.readdir as LocalNodeDeps['readdir'],
+    lstat: fsPromises.lstat as LocalNodeDeps['lstat'],
+    rm: fsPromises.rm as LocalNodeDeps['rm'],
+    join: path.join,
+    relative: path.relative,
+    sep: path.sep,
+  }
+}
+
+function relativePathFromRoot(root: string, path: string, nodeDeps: LocalNodeDeps): string {
+  return nodeDeps.relative(root, path).split(nodeDeps.sep).join('/')
 }
