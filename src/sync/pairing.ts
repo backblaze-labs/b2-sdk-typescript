@@ -24,9 +24,13 @@ export async function* zipFolders(
   validateSyncFilters(options)
   const sourceIter = scanWithFilters(source, options)[Symbol.asyncIterator]()
   const destIter = scanWithFilters(dest, options)[Symbol.asyncIterator]()
+  let sourceDone = false
+  let destDone = false
 
   try {
     let [sourceResult, destResult] = await Promise.all([sourceIter.next(), destIter.next()])
+    sourceDone = sourceResult.done === true
+    destDone = destResult.done === true
 
     while (!sourceResult.done || !destResult.done) {
       const s = sourceResult.done ? null : sourceResult.value
@@ -35,33 +39,43 @@ export async function* zipFolders(
       if (s === null) {
         yield [null, d]
         destResult = await destIter.next()
+        destDone = destResult.done === true
       } else if (d === null) {
         yield [s, null]
         sourceResult = await sourceIter.next()
+        sourceDone = sourceResult.done === true
       } else {
-        const order = compareSyncRelativePaths(s.relativePath, d.relativePath)
-        if (order < 0) {
+        const comparison = compareSyncRelativePaths(s.relativePath, d.relativePath)
+        if (comparison < 0) {
           yield [s, null]
           sourceResult = await sourceIter.next()
-        } else if (order > 0) {
+          sourceDone = sourceResult.done === true
+        } else if (comparison > 0) {
           yield [null, d]
           destResult = await destIter.next()
+          destDone = destResult.done === true
         } else {
           yield [s, d]
           sourceResult = await sourceIter.next()
           destResult = await destIter.next()
+          sourceDone = sourceResult.done === true
+          destDone = destResult.done === true
         }
       }
     }
   } finally {
-    await closeScanIterator(sourceIter)
-    await closeScanIterator(destIter)
+    await closeScanIterator(sourceIter, sourceDone)
+    await closeScanIterator(destIter, destDone)
   }
 }
 
-async function closeScanIterator(iterator: AsyncIterator<SyncPath>): Promise<void> {
+async function closeScanIterator(
+  iterator: AsyncIterator<SyncPath>,
+  alreadyDone: boolean,
+): Promise<void> {
+  if (alreadyDone || iterator.return === undefined) return
   try {
-    await iterator.return?.()
+    await iterator.return()
   } catch {
     // Best-effort scanner cleanup should not mask the original stop reason.
   }
