@@ -848,6 +848,7 @@ async function resolveContainedLocalPath(
   const escapesRoot =
     pathFromRoot === '..' || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot)
 
+  /* v8 ignore next -- defense-in-depth after prior no-follow and symlink checks. */
   if (escapesRoot) {
     throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
   }

@@ -237,6 +237,7 @@ async function writeAll(
       data.byteLength - offset,
       position + offset,
     )
+    /* v8 ignore next -- defensive: FileHandle.write should progress for non-empty chunks. */
     if (bytesWritten <= 0) throw new Error('download write made no progress')
     offset += bytesWritten
   }

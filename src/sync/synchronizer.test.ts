@@ -1447,6 +1447,46 @@ describe('synchronize', () => {
       )
     })
 
+    it.skipIf(!isNode)('refuses local deletes through a symlinked local root', async () => {
+      const { mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-root-symlink-'))
+      const root = join(parent, 'root-link')
+      const outside = join(parent, 'outside')
+      try {
+        await mkdir(outside)
+        try {
+          await symlink(outside, root, 'dir')
+        } catch {
+          return
+        }
+
+        const source = makeMemoryFolder([], 'b2')
+        const dest = makeMemoryFolder([makeLocalSyncPath('orphan.txt', 1000, 10)], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'orphan.txt',
+            message: 'Refusing to access sync root through symlink: orphan.txt',
+          }),
+        )
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
     it('keeps recent files with keep-days mode', async () => {
       const now = Date.now()
       const recentTime = now - 6 * 60 * 60 * 1000 // 6 hours ago (within 7 day retention)
