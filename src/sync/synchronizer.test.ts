@@ -2132,6 +2132,7 @@ describe('synchronize', () => {
       const skips = events.filter((event) => event.type === 'skip')
       expect(errors).toHaveLength(0)
       expect(skips[0]?.message).toContain('sha1 B2 read exceeded 2 byte verification budget')
+      expect(mockBucket.downloadById).not.toHaveBeenCalled()
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 

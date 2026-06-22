@@ -373,14 +373,19 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
   )
 
   return async (path, signal) => {
+    const expectedBytes = Math.max(0, Math.floor(path.selectedVersion.contentLength))
     const maxBytes = normalizeSha1VerificationMaxBytes(
-      path.selectedVersion.contentLength,
+      expectedBytes,
       config.options.sha1VerificationMaxBytes,
     )
     return withSha1VerificationDeadline(
       signal,
       verificationTimeoutMillis,
       async (deadlineSignal) => {
+        deadlineSignal.throwIfAborted()
+        if (maxBytes < expectedBytes) {
+          throw new Error(`sha1 B2 read exceeded ${maxBytes} byte verification budget`)
+        }
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),
         )
@@ -393,7 +398,7 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
         const verified = await hashReadableStreamSha1(result.body, deadlineSignal, {
           idleTimeoutMillis,
           maxBytes,
-          expectedBytes: path.selectedVersion.contentLength,
+          expectedBytes,
         })
         return { contentSha1: verified.contentSha1, bytesRead: verified.bytesRead }
       },
