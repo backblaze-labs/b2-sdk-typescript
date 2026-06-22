@@ -1499,7 +1499,7 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
-  it('scans prefix pages for an explicit resumeFileId without relying on startFileId semantics', async () => {
+  it('jumps directly to an explicit resumeFileId with the inclusive cursor', async () => {
     const listCalls: Array<{ maxFileCount?: number; namePrefix?: string; startFileId?: string }> =
       []
     const raw = {
@@ -1552,9 +1552,9 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('target-id' as LargeFileId)
     expect(listCalls).toHaveLength(1)
     expect(listCalls[0]).toMatchObject({
-      maxFileCount: 100,
+      maxFileCount: 1,
+      startFileId: 'target-id',
     })
-    expect(listCalls[0]).not.toHaveProperty('startFileId')
     expect(listCalls[0]).toMatchObject({
       namePrefix: 'target.bin',
     })

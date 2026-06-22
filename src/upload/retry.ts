@@ -186,8 +186,9 @@ export function uploadPartWithFreshUrl(
  *
  * For single-request file uploads, sending the POST again after a lost success
  * response can create a duplicate file version. Multipart retries re-send the
- * same part number instead. Response-body retries are disabled by default and
- * require `retryResponseBodyFailures: true`.
+ * same part number instead. Response-body retry defaults are caller-specific:
+ * single-request uploads keep them off by default, while multipart callers can
+ * enable them by default because re-sending the same part number is idempotent.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *

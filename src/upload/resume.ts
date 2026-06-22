@@ -170,7 +170,7 @@ export async function findResumeCandidate(
   let sequence = 0
   let pageCount = 0
   const explicitResumeFileId = criteria.resumeFileId
-  let startFileId: LargeFileId | undefined
+  let startFileId: LargeFileId | undefined = explicitResumeFileId
   let truncated = false
 
   while (pageCount < maxListPages) {
@@ -180,7 +180,7 @@ export async function findResumeCandidate(
       accountInfo.getAuthToken(),
       {
         bucketId,
-        maxFileCount: 100,
+        maxFileCount: explicitResumeFileId !== undefined ? 1 : 100,
         namePrefix: fileName,
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
@@ -199,7 +199,7 @@ export async function findResumeCandidate(
       sequence++
     }
 
-    if (explicitResumeFileId !== undefined && matches.length > 0) break
+    if (explicitResumeFileId !== undefined) break
     if (unfinished.nextFileId === null) break
     startFileId = unfinished.nextFileId
     truncated = pageCount >= maxListPages
