@@ -579,6 +579,60 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
+  it('tolerates unreadable retention and legal hold when the caller did not request them', async () => {
+    const fileInfo = { owner: 'unit' }
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'restricted-compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 1000,
+              fileRetention: {
+                isClientAuthorizedToRead: false,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: false,
+                value: null,
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('restricted-compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'restricted-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo,
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('restricted-compatible' as LargeFileId)
+  })
+
   it('rejects SSE-C candidates when no encryption option was requested', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: string[] = []
@@ -683,9 +737,8 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['sse-c-unsupported'])
   })
 
-  it('rejects SSE-B2 candidates when no encryption option was requested', async () => {
+  it('accepts SSE-B2 candidates when no encryption option was requested', async () => {
     const fileInfo = { owner: 'unit' }
-    const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -706,7 +759,10 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts() {
-        throw new Error('listParts should not be called for an encryption rejection')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'good-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
       },
     } as unknown as RawClient
 
@@ -724,12 +780,10 @@ describe('findResumeCandidate', () => {
           { partNumber: 1, length: 100 },
           { partNumber: 2, length: 100 },
         ],
-        onCandidateRejected: (event) => rejected.push(event.reason),
       },
     )
 
-    expect(result).toBeNull()
-    expect(rejected).toEqual(['encryption-mismatch'])
+    expect(result?.fileId).toBe('sse-b2-candidate' as LargeFileId)
   })
 
   it('accepts an explicit none-encryption candidate when none was requested', async () => {
@@ -1445,7 +1499,7 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
-  it('jumps directly to an explicit resumeFileId and stops after that page', async () => {
+  it('scans prefix pages for an explicit resumeFileId without relying on startFileId semantics', async () => {
     const listCalls: Array<{ maxFileCount?: number; namePrefix?: string; startFileId?: string }> =
       []
     const raw = {
@@ -1498,9 +1552,9 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('target-id' as LargeFileId)
     expect(listCalls).toHaveLength(1)
     expect(listCalls[0]).toMatchObject({
-      maxFileCount: 1,
-      startFileId: 'target-id',
+      maxFileCount: 100,
     })
+    expect(listCalls[0]).not.toHaveProperty('startFileId')
     expect(listCalls[0]).toMatchObject({
       namePrefix: 'target.bin',
     })

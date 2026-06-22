@@ -1086,6 +1086,7 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
+      serverSideEncryption: bucket.info.defaultServerSideEncryption,
     })
     const stored: StoredFile = { fileVersion, data: storedData }
     const existing = bucket.files.get(fileName)
@@ -1477,7 +1478,8 @@ export class B2Simulator {
   }
 
   private getUploadUrl(req: { bucketId: string }): SimulatorJsonResponse {
-    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const bucket = this.buckets.get(req.bucketId)
+    if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     return {
       status: 200,
       body: {
@@ -1775,7 +1777,8 @@ export class B2Simulator {
     legalHold?: LegalHoldValue
     serverSideEncryption?: EncryptionSetting
   }): SimulatorJsonResponse {
-    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const bucket = this.buckets.get(req.bucketId)
+    if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
     const nameError = validateFileName(req.fileName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
@@ -1793,7 +1796,7 @@ export class B2Simulator {
       fileInfo: req.fileInfo ?? {},
       fileRetention: req.fileRetention ?? null,
       legalHold: req.legalHold ?? null,
-      serverSideEncryption: req.serverSideEncryption ?? { mode: EncryptionMode.None },
+      serverSideEncryption: req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
       uploadTimestamp: this.monotonicTimestamp(),
       parts: new Map(),
     }
@@ -1974,7 +1977,8 @@ export class B2Simulator {
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
-    // Real B2 orders unfinished large files by start time, oldest first.
+    // Real B2 orders unfinished large files by start time, oldest first;
+    // the real-B2 integration suite verifies this cursor contract.
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))

@@ -4,6 +4,7 @@ import { B2Client } from '../client.ts'
 import { B2Error, B2SsrfError, NetworkError, TooManyRequestsError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
+import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
 import {
   daysFromNow,
@@ -333,6 +334,34 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadFileAttempts).toBe(2)
     expect(harness.uploadFileUrls).toHaveLength(2)
     expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
+  })
+
+  it('continues fresh-URL recovery when the upload retry observer throws', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'retry-observer-throws',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'observer-throws.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      onUploadRetry: () => {
+        throw new Error('metrics sink failed')
+      },
+    })
+
+    expect(result.fileName).toBe('observer-throws.txt')
+    expect(harness.getUploadUrlCalls).toBe(2)
+    expect(harness.uploadFileAttempts).toBe(2)
   })
 
   it('retries a transient multipart part failure with a fresh part URL', async () => {
@@ -1371,12 +1400,14 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
 
 describe('uploadLargeFile fresh multipart metadata', () => {
   let client: B2Client
+  let sim: B2Simulator
   let bucket: Bucket
   let bucketId: string
 
   beforeEach(async () => {
-    const { client: c } = makeSmallPartClient()
+    const { client: c, sim: s } = makeSmallPartClient()
     client = c
+    sim = s
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'resume-no-candidate',
@@ -1429,6 +1460,131 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
+  })
+
+  it('resumes unfinished files that inherited the bucket default SSE-B2 setting', async () => {
+    const sseBucket = await client.createBucket({
+      bucketName: 'resume-default-sse-b2',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: {
+        mode: EncryptionMode.SseB2,
+        algorithm: EncryptionAlgorithm.Aes256,
+      },
+    })
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const start = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: sseBucket.id,
+        fileName: 'default-sse-auto.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    expect(start.serverSideEncryption).toEqual({
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    })
+
+    const partUrl = await client.raw.getUploadPartUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: start.fileId },
+    )
+    const part1 = data.slice(0, partSize)
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part1.byteLength,
+        contentSha1: await sha1Hex(part1),
+      },
+      part1,
+    )
+
+    await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: sseBucket.id,
+      fileName: 'default-sse-auto.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    const explicit = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: sseBucket.id,
+        fileName: 'default-sse-explicit.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: sseBucket.id,
+      fileName: 'default-sse-explicit.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resumeFileId: explicit.fileId,
+    })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: sseBucket.id },
+    )
+    const unfinishedIds = unfinished.files.map((file) => file.fileId)
+    expect(unfinishedIds).not.toContain(start.fileId)
+    expect(unfinishedIds).not.toContain(explicit.fileId)
+  })
+
+  it('leaves reused unfinished files available after local upload failures', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 500,
+      code: 'internal_error',
+      message: 'simulated reused upload failure',
+    })
+
+    for (const mode of ['auto', 'explicit'] as const) {
+      const fileName = `reused-failure-${mode}.bin`
+      const start = await client.raw.startLargeFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          bucketId: bucketId as never,
+          fileName,
+          contentType: 'application/octet-stream',
+        },
+      )
+
+      await expect(
+        uploadLargeFile(client.raw, client.accountInfo, {
+          bucketId: bucketId as never,
+          fileName,
+          source: new BufferSource(data),
+          contentType: 'application/octet-stream',
+          partSize,
+          concurrency: 1,
+          retry: { maxRetries: 0 },
+          ...(mode === 'auto' ? { resume: true } : { resumeFileId: start.fileId }),
+        }),
+      ).rejects.toThrow(/simulated reused upload failure/)
+
+      const unfinished = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucketId as never },
+      )
+      expect(unfinished.files.map((file) => file.fileId)).toContain(start.fileId)
+    }
   })
 
   it('keeps caller fileInfo untouched when resume is enabled', async () => {

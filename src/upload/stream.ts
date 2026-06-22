@@ -155,7 +155,7 @@ export function createWriteStream(
       retry: options.retry,
       signal: options.signal,
       onUploadRetry: options.onUploadRetry,
-      retryResponseBodyFailures: options.retryResponseBodyFailures,
+      retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
         : {}),

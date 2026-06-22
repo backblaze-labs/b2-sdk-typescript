@@ -117,7 +117,7 @@ Transient upload failures are retried with a fresh B2 upload URL, matching B2's 
 
 Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
-Single-request uploads do not retry lost success response bodies by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into that ambiguity with `retryResponseBodyFailures: true`, any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads still retry lost part response bodies by default because re-posting the same `partNumber` is idempotent.
+Single-request uploads do not retry lost success response bodies by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. Retryable 5xx responses and network failures can still re-post a single-file upload with a fresh URL, bounded by `retry.maxRetries`; set that budget to `0` for strict at-most-once upload attempts. If callers opt into response-body ambiguity with `retryResponseBodyFailures: true`, any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
 
 Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
 
@@ -131,9 +131,9 @@ Automatic resume discovery trusts all writers with access to the bucket because 
 
 The discovery scan is bounded to avoid unbounded prefix-flood work in shared buckets, but it still runs before the first upload byte. By default the SDK inspects up to 10 unfinished-file pages, up to 25 metadata-compatible candidates, and up to 10 part pages per candidate, so a worst-case resume attempt can add many sequential B2 list calls before data transfer starts. Tune `resumeMaxListPages`, `resumeMaxPartCandidates`, and `resumeMaxPartPages` for buckets with many concurrent same-prefix uploads. The SDK does not add an aggregate discovery deadline; pass an abort signal, such as `AbortSignal.timeout(...)`, when resume discovery needs a first-byte time budget. If the scan is truncated, the SDK reports `search-truncated`; when a compatible candidate was already scanned, that candidate may still be reused.
 
-Rejected candidates are left unfinished. B2 stores uploaded parts for unfinished large files until they are finished, cancelled, or removed by a lifecycle rule, so stricter matching can leave billable unfinished uploads behind. Applications with strict resume matching should configure lifecycle cleanup or periodically use `listUnfinishedLargeFiles` and `cancelLargeFile` to remove stale unfinished uploads.
+Rejected candidates and failed attempts that reused an existing unfinished file are left unfinished. B2 stores uploaded parts for unfinished large files until they are finished, cancelled, or removed by a lifecycle rule, so stricter matching or repeated prefix-flood truncation can leave billable unfinished uploads behind. Applications with strict resume matching should configure lifecycle cleanup or periodically use `listUnfinishedLargeFiles` and `cancelLargeFile` to remove stale unfinished uploads.
 
-SSE-C uploads are not resumed automatically or with `resumeFileId` because B2 does not expose a non-secret customer-key identity for unfinished files. With `resume: true`, an SSE-C retry starts a new large file. With `resumeFileId`, SSE-C fails with `ResumeFileIdMismatchError` rather than risking a finish under an unverified key.
+When the caller omits `serverSideEncryption`, resume accepts unfinished files whose encryption came from the bucket default, including default SSE-B2. Explicit `serverSideEncryption: { mode: 'none' }` still requires an unencrypted candidate. SSE-C uploads are not resumed automatically or with `resumeFileId` because B2 does not expose a non-secret customer-key identity for unfinished files. With `resume: true`, an SSE-C retry starts a new large file. With `resumeFileId`, SSE-C fails with `ResumeFileIdMismatchError` rather than risking a finish under an unverified key.
 
 Pass `onResumeCandidateRejected` to collect diagnostic events when a same-name unfinished large file is skipped, including reasons such as `file-info-mismatch`, `part-length-mismatch`, `search-truncated`, or `sse-c-unsupported`. Resume diagnostics are event-only: without this listener, a conservative resume decline falls back to a fresh upload without SDK logging or counters. Candidate-specific events include `requestedFileName` and `candidateFileName` so logging can distinguish the intended upload name from the rejected unfinished file. If a supplied `resumeFileId` is incompatible or cannot be verified through B2's unfinished-large-file listing, `ResumeFileIdMismatchError` is thrown instead of silently starting a different large file.
 
@@ -404,7 +404,10 @@ const auth = await bucket.getDownloadAuthorization('photos/', 3600)
 import { B2Client } from '@backblaze-labs/b2-sdk'
 import { FileAccountInfo } from '@backblaze-labs/b2-sdk/auth/file'
 
-const accountInfo = new FileAccountInfo('/var/cache/my-app/b2-auth.json')
+const accountInfo = new FileAccountInfo('/var/cache/my-app/b2-auth.json', {
+  onDiscard: (event) => console.warn('ignored stale B2 auth cache', event.reason),
+  onWriteError: (event) => console.warn('could not persist B2 auth cache', event.error),
+})
 await accountInfo.load() // populate from disk if the file exists
 
 const client = new B2Client({
@@ -418,7 +421,7 @@ if (accountInfo.getAuth() === null) {
 }
 ```
 
-`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
+`load()` returns silently on missing or corrupt files (a fresh `authorize()` will populate fresh state). `onDiscard` fires when a loaded cache entry is ignored because its realm, application key ID, or cached endpoints do not match the current client; `onWriteError` reports asynchronous write failures that would otherwise be best-effort. Call `await accountInfo.flushed()` before process exit if you need to guarantee the latest state has hit disk.
 
 ## Subpath exports
 
@@ -571,6 +574,8 @@ new B2Client({
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
+
+The default transport follows same-origin `GET` / `HEAD` redirects after each target passes the SSRF guard. Cross-origin redirects and `POST` redirects are blocked with `B2RedirectError`. Pass `followSameOriginRedirects: false` to the `B2Client` constructor to block same-origin redirects as well.
 
 ## Retry behavior
 

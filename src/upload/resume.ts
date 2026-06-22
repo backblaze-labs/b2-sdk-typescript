@@ -170,7 +170,7 @@ export async function findResumeCandidate(
   let sequence = 0
   let pageCount = 0
   const explicitResumeFileId = criteria.resumeFileId
-  let startFileId: LargeFileId | undefined = explicitResumeFileId
+  let startFileId: LargeFileId | undefined
   let truncated = false
 
   while (pageCount < maxListPages) {
@@ -180,7 +180,7 @@ export async function findResumeCandidate(
       accountInfo.getAuthToken(),
       {
         bucketId,
-        maxFileCount: explicitResumeFileId === undefined ? 100 : 1,
+        maxFileCount: 100,
         namePrefix: fileName,
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
@@ -199,7 +199,7 @@ export async function findResumeCandidate(
       sequence++
     }
 
-    if (explicitResumeFileId !== undefined) break
+    if (explicitResumeFileId !== undefined && matches.length > 0) break
     if (unfinished.nextFileId === null) break
     startFileId = unfinished.nextFileId
     truncated = pageCount >= maxListPages
@@ -432,7 +432,7 @@ function fileRetentionMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -455,7 +455,7 @@ function legalHoldMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -475,6 +475,7 @@ function serverSideEncryptionRejectReason(
     if (candidate === undefined) return null
     if (actual === undefined) return 'encryption-mismatch'
     if (actual.mode === EncryptionMode.None) return null
+    if (actual.mode === EncryptionMode.SseB2) return null
     return actual.mode === EncryptionMode.SseC ? 'sse-c-unsupported' : 'encryption-mismatch'
   }
 

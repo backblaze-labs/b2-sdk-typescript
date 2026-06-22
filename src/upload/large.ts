@@ -77,11 +77,11 @@ export interface UploadLargeFileOptions {
    * customer key identity needed to verify a compatible unfinished file.
    */
   readonly resume?: boolean
-  /** Maximum `b2_list_unfinished_large_files` pages inspected during resume discovery. Defaults to 10. */
+  /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10. */
   readonly resumeMaxListPages?: number
-  /** Maximum metadata-compatible candidates whose parts may be listed during resume discovery. Defaults to 25. */
+  /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25. */
   readonly resumeMaxPartCandidates?: number
-  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
+  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10. */
   readonly resumeMaxPartPages?: number
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
@@ -125,6 +125,8 @@ export async function uploadLargeFile(
   const totalSize = options.source.size
 
   const parts = planRanges(totalSize, partSize)
+  // Keep caller fileInfo on a null-prototype record so resume identity
+  // comparison only sees caller-owned enumerable keys.
   const fileInfo: Record<string, string> = Object.create(null)
   if (options.fileInfo !== undefined) {
     for (const [key, value] of Object.entries(options.fileInfo)) {
@@ -176,12 +178,6 @@ export async function uploadLargeFile(
       : {}),
   }
 
-  if (!options.source.canSlice && (options.resume === true || options.resumeFileId !== undefined)) {
-    throw new Error(
-      'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
-    )
-  }
-
   // --- Resume discovery (M11.1) ---
   if (!options.source.canSlice && (options.resumeFileId !== undefined || options.resume === true)) {
     throw new Error(
@@ -192,6 +188,7 @@ export async function uploadLargeFile(
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
   let createdLargeFile = false
+
   if (options.resumeFileId !== undefined) {
     const candidate = await findResumeCandidate(
       raw,
@@ -305,7 +302,7 @@ export async function uploadLargeFile(
           retry: options.retry,
           signal: options.signal,
           onUploadRetry: options.onUploadRetry,
-          retryResponseBodyFailures: options.retryResponseBodyFailures,
+          retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),
@@ -423,7 +420,7 @@ async function uploadPartsSequentially(
         retry: options.retry,
         signal: options.signal,
         onUploadRetry: options.onUploadRetry,
-        retryResponseBodyFailures: options.retryResponseBodyFailures,
+        retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }
           : {}),

@@ -141,10 +141,12 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the payload. Single-request uploads default to false because re-posting can
-     * create duplicate file versions. If enabled for a single-request upload,
-     * file retention and legal hold settings apply to each duplicate version and
-     * can prevent deletion until retention expires or the hold is cleared.
+     * the payload. Single-request uploads default to false because this ambiguous
+     * retry can create duplicate file versions; retryable 5xx responses and
+     * network failures may still retry unless `retry.maxRetries` is 0.
+     * If enabled for a single-request upload, file retention and legal hold
+     * settings apply to each duplicate version and can prevent deletion until
+     * retention expires or the hold is cleared.
      * Multipart part uploads default to true because re-posting the same part
      * number is idempotent.
      */
@@ -161,11 +163,11 @@ export class B2Object {
      * unfinished files.
      */
     resume?: boolean
-    /** Maximum `b2_list_unfinished_large_files` pages inspected during resume discovery. Defaults to 10. */
+    /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10. */
     resumeMaxListPages?: number
-    /** Maximum metadata-compatible candidates whose parts may be listed during resume discovery. Defaults to 25. */
+    /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25. */
     resumeMaxPartCandidates?: number
-    /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. Defaults to 10. */
+    /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10. */
     resumeMaxPartPages?: number
     /**
      * Resume into a specific large-file ID, bypassing discovery.

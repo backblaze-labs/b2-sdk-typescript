@@ -103,6 +103,8 @@ function normalizeRawRequestOptions(
 }
 
 function isAbortSignal(value: unknown): value is AbortSignal {
+  // Back-compat only: legacy upload-URL overloads accepted an AbortSignal as
+  // the fourth positional argument. Prefer the RawRequestOptions bag.
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -248,6 +250,8 @@ export class RawClient {
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload URL and authorization token.
+   *
+   * @deprecated Use the options-bag overload: `getUploadUrl(apiUrl, authToken, request, { signal, retry })`.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -534,6 +538,8 @@ export class RawClient {
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload part URL and authorization token.
+   *
+   * @deprecated Use the options-bag overload: `getUploadPartUrl(apiUrl, authToken, request, { signal, retry })`.
    */
   async getUploadPartUrl(
     apiUrl: string,

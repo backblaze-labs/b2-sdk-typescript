@@ -121,6 +121,69 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(bucket.id).toBeTruthy()
   })
 
+  it('lists unfinished large files with inclusive startFileId and start-time order', async () => {
+    const first = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'unfinished-order-z.bin',
+        contentType: 'b2/x-auto',
+      },
+    )
+    const second = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'unfinished-order-a.bin',
+        contentType: 'b2/x-auto',
+      },
+    )
+
+    try {
+      const listing = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          bucketId: bucket.id,
+          namePrefix: 'unfinished-order-',
+          maxFileCount: 100,
+        },
+      )
+      const ids = listing.files.map((file) => file.fileId)
+      expect(ids.indexOf(first.fileId)).toBeGreaterThanOrEqual(0)
+      expect(ids.indexOf(second.fileId)).toBeGreaterThanOrEqual(0)
+      expect(ids.indexOf(first.fileId)).toBeLessThan(ids.indexOf(second.fileId))
+      expect(listing.files.find((file) => file.fileId === first.fileId)?.contentType).toBe(
+        'b2/x-auto',
+      )
+
+      const fromFirst = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          bucketId: bucket.id,
+          namePrefix: 'unfinished-order-',
+          startFileId: first.fileId,
+          maxFileCount: 1,
+        },
+      )
+      expect(fromFirst.files[0]?.fileId).toBe(first.fileId)
+    } finally {
+      await client.raw
+        .cancelLargeFile(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+          fileId: first.fileId,
+        })
+        .catch(() => {})
+      await client.raw
+        .cancelLargeFile(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+          fileId: second.fileId,
+        })
+        .catch(() => {})
+    }
+  })
+
   it('uploads a small file', async () => {
     const data = new TextEncoder().encode('integration test content')
     const file = await bucket.upload({

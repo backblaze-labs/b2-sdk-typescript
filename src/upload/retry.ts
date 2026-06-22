@@ -231,7 +231,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       const retryAttempt = attempt + 1
       const retryAfter = retryError instanceof B2Error ? retryError.retryAfter : undefined
       const delayMs = computeBackoff(attempt, retryOptions, retryAfter)
-      options.onUploadRetry?.({
+      notifyUploadRetry(options, {
         fileName: options.fileName,
         partNumber: options.partNumber,
         attempt: retryAttempt,
@@ -247,6 +247,15 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
   // final failed attempt. This satisfies TypeScript's return-path analysis.
   /* v8 ignore next -- defensive return-path guard. */
   throw new NetworkError('Upload retry budget exhausted')
+}
+
+function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryEvent): void {
+  try {
+    options.onUploadRetry?.(event)
+  } catch {
+    // Telemetry observers must not replace the underlying upload failure or
+    // prevent a retry that can recover with a fresh upload URL.
+  }
 }
 
 function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
