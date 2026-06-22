@@ -126,6 +126,30 @@ export interface SynchronizerDownConfig extends SynchronizerConfig {
   readonly bucket: Bucket
 }
 
+/** Configuration for a B2-to-B2 sync (copy direction). */
+export interface SynchronizerB2Config extends SynchronizerConfig {
+  /** B2 source folder. */
+  readonly source: B2SyncFolder
+  /** B2 destination folder. */
+  readonly dest: B2SyncFolder
+  /** The B2 bucket used for copy, hide, and delete operations. */
+  readonly bucket: Bucket
+  /**
+   * Key prefix for destination-side copy, hide, and delete mutations.
+   *
+   * When omitted, the synchronizer uses `dest.rawPrefix` when the destination
+   * folder exposes one. Set this explicitly for custom B2 folders that do not
+   * expose their raw prefix.
+   */
+  readonly prefix?: string
+}
+
+/** Concrete sync configurations supported by {@link synchronize}. */
+export type SupportedSynchronizerConfig =
+  | SynchronizerUpConfig
+  | SynchronizerDownConfig
+  | SynchronizerB2Config
+
 interface PreparedActionPlan {
   readonly event: SyncEvent
   readonly actions: readonly SyncAction[]
