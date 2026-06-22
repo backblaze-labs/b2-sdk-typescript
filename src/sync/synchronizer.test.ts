@@ -109,6 +109,15 @@ function streamFromBytes(data: Uint8Array): ReadableStream<Uint8Array> {
   })
 }
 
+function streamFromChunks(chunks: readonly Uint8Array[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(chunk)
+      controller.close()
+    },
+  })
+}
+
 // A minimal mock bucket that records calls but does not perform real I/O.
 function makeMockBucket(downloads: Record<string, Uint8Array> = {}) {
   const downloadById = vi.fn().mockImplementation((fileId: string) => ({
@@ -942,6 +951,34 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode)('writes multi-chunk B2 download bodies in order', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-chunks-'))
+      try {
+        const chunks = [new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5])]
+        const mockBucket = makeMockBucket()
+        mockBucket.downloadById.mockReturnValue({ body: streamFromChunks(chunks) })
+        const sourceFile = makeB2SyncPath('remote.txt', 2000, 5)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+        expect(events.some((event) => event.type === 'download-done')).toBe(true)
+        await expect(readFile(join(root, 'remote.txt'))).resolves.toEqual(
+          Buffer.from([1, 2, 3, 4, 5]),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
 
     it.skipIf(!isNode || isWindows)('rejects B2 names that escape the local root', async () => {
       const { tmpdir } = await import('node:os')

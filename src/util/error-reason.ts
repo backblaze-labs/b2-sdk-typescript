@@ -23,9 +23,16 @@ export function sanitizeErrorReason(err: unknown): string {
 
 function cleanReason(value: string): string {
   let cleaned = ''
+  let sawNonWhitespace = false
   for (const char of value) {
     const code = char.charCodeAt(0)
-    if (code >= 0x20 && code !== 0x7f) cleaned += char
+    if (code < 0x20 || code === 0x7f) continue
+    if (!sawNonWhitespace) {
+      if (char.trim().length === 0) continue
+      sawNonWhitespace = true
+    }
+    cleaned += char
+    if (cleaned.length >= 200) break
   }
-  return cleaned.trim().slice(0, 200)
+  return cleaned.trimEnd()
 }

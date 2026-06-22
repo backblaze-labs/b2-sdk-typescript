@@ -14,5 +14,6 @@ describe('sanitizeErrorReason', () => {
   it('redacts filesystem-looking messages and bounds output length', () => {
     expect(sanitizeErrorReason(new Error("ENOENT: open '/tmp/secret.txt'"))).toBe('Error')
     expect(sanitizeErrorReason(new Error('x'.repeat(250)))).toHaveLength(200)
+    expect(sanitizeErrorReason(new Error(`   ${'x'.repeat(10_000)}`))).toHaveLength(200)
   })
 })

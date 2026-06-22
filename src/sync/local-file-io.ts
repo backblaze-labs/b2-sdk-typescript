@@ -135,7 +135,7 @@ export async function writeLocalStreamInsideRoot(
   const reader = body.getReader()
   let completed = false
   try {
-    let bytesRead = 0
+    let bytesWritten = 0
     while (true) {
       const { done, value } = await readStreamChunkWithTimeout(
         reader,
@@ -144,15 +144,15 @@ export async function writeLocalStreamInsideRoot(
         options.signal,
       )
       if (done) break
-      bytesRead += value.byteLength
-      if (bytesRead > options.expectedBytes) {
+      if (bytesWritten + value.byteLength > options.expectedBytes) {
         throw new Error(`download read exceeded ${options.expectedBytes} byte limit`)
       }
-      await handle.writeFile(value)
+      await writeAll(handle, value, bytesWritten)
+      bytesWritten += value.byteLength
     }
-    if (bytesRead !== options.expectedBytes) {
+    if (bytesWritten !== options.expectedBytes) {
       throw new Error(
-        `download read ended after ${bytesRead} bytes, expected ${options.expectedBytes}`,
+        `download read ended after ${bytesWritten} bytes, expected ${options.expectedBytes}`,
       )
     }
     await handle.close()
@@ -171,6 +171,31 @@ export async function writeLocalStreamInsideRoot(
       await handle.close().catch(() => {})
       await rm(tmpPath, { force: true }).catch(() => {})
     }
+  }
+}
+
+async function writeAll(
+  handle: {
+    write(
+      buffer: Uint8Array,
+      offset: number,
+      length: number,
+      position: number,
+    ): Promise<{ readonly bytesWritten: number }>
+  },
+  data: Uint8Array,
+  position: number,
+): Promise<void> {
+  let offset = 0
+  while (offset < data.byteLength) {
+    const { bytesWritten } = await handle.write(
+      data,
+      offset,
+      data.byteLength - offset,
+      position + offset,
+    )
+    if (bytesWritten <= 0) throw new Error('download write made no progress')
+    offset += bytesWritten
   }
 }
 
