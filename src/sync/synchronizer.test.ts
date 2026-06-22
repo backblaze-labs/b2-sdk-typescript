@@ -3194,6 +3194,73 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode || isWindows)('rejects symlinked local targets on download', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-link-target-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-link-target-out-'))
+      try {
+        await symlink(join(outside, 'payload.txt'), join(root, 'payload.txt'))
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode || isWindows)('rejects a symlinked parent swapped before write', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdir, mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-out-'))
+      const linkParent = join(root, 'safe', 'link')
+      try {
+        await mkdir(linkParent, { recursive: true })
+        const mockBucket = makeMockBucket()
+        mockBucket.downloadById.mockReturnValue({
+          body: new ReadableStream({
+            async start(controller) {
+              await rm(linkParent, { recursive: true, force: true })
+              await symlink(outside, linkParent, 'dir')
+              controller.enqueue(new Uint8Array([1, 2, 3]))
+              controller.close()
+            },
+          }),
+        })
+        const sourceFile = makeB2SyncPath('safe/link/payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('encryptionProvider', () => {

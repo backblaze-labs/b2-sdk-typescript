@@ -990,6 +990,24 @@ describe('RetryTransport', () => {
         expect((err as DOMException).name).toBe('AbortError')
       }
     })
+
+    it('does not retry when an abort signal rejects with a custom reason', async () => {
+      const controller = new AbortController()
+      innerTransport.send.mockImplementation(async () => {
+        controller.abort('caller cancelled')
+        throw new Error('transport observed abort')
+      })
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send({ ...baseRequest, signal: controller.signal })).rejects.toBe(
+        'caller cancelled',
+      )
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
   })
 
   // --------------------------------------------------------------------------

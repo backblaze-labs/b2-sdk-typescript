@@ -364,6 +364,8 @@ export class RetryTransport implements HttpTransport {
     let attempt = 0
 
     while (attempt <= retryOptions.maxRetries) {
+      throwIfSignalAborted(request.signal)
+
       if (attempt > 0 && lastError) {
         const retryAfter = lastError instanceof NetworkError ? undefined : lastError.retryAfter
         const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
@@ -372,6 +374,7 @@ export class RetryTransport implements HttpTransport {
 
       try {
         const response = await this.inner.send({ ...request, retry: retryOptions })
+        throwIfSignalAborted(request.signal)
 
         if (response.status >= 200 && response.status < 300) {
           return response
@@ -427,6 +430,7 @@ export class RetryTransport implements HttpTransport {
         lastError = error
         attempt += 1
       } catch (err) {
+        throwIfSignalAborted(request.signal)
         if (isTerminalTransportError(err)) {
           throw err
         }
@@ -446,5 +450,11 @@ export class RetryTransport implements HttpTransport {
     }
 
     throw lastError ?? new NetworkError('Max retries exceeded')
+  }
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }
 }

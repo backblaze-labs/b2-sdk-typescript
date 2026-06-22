@@ -112,6 +112,15 @@ export async function resolveSafeLocalWritePath(
     throw new Error(`Sync path escapes the local root: ${relativePath}`)
   }
 
+  try {
+    const targetStats = await lstat(fullPath)
+    if (targetStats.isSymbolicLink()) {
+      throw new Error(`Sync path has an unsafe target: ${relativePath}`)
+    }
+  } catch (err) {
+    if (!isNodeErrorCode(err, 'ENOENT')) throw err
+  }
+
   return fullPath
 }
 
