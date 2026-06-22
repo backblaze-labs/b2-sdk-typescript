@@ -4332,6 +4332,50 @@ describe('uploadSmallFile cleanup path', () => {
     ).toBeUndefined()
   })
 
+  it('aborts a stalled forward-only multipart read', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-read-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const controller = new AbortController()
+    const readStarted = Promise.withResolvers<void>()
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      pull() {
+        readStarted.resolve()
+        return new Promise<never>(() => {})
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'stream-read-abort.bin',
+      source: new StreamSource(readable, partSize),
+      partSize,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+
+    await readStarted.promise
+    controller.abort(new Error('stop stalled stream'))
+
+    await expect(upload).rejects.toThrow('stop stalled stream')
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'stream-read-abort.bin')).toBeUndefined()
+  })
+
   it('rejects a streaming-source upload when resume is requested', async () => {
     // StreamSource has no random access, so resume can't replay parts.
     // The engine bails early with a clear message and cancels the

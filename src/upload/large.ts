@@ -539,7 +539,11 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await readNextNonEmptyStreamChunk(reader, STREAM_EMPTY_CHUNKS_ERROR)
+        const { done, value } = await readNextNonEmptyStreamChunk(
+          reader,
+          STREAM_EMPTY_CHUNKS_ERROR,
+          options.signal,
+        )
         if (done) break
         const take = Math.min(value.byteLength, buf.byteLength - filled)
         buf.set(value.subarray(0, take), filled)
@@ -582,7 +586,11 @@ async function uploadPartsSequentially(
     if (carry !== null) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }
-    const extra = await readNextNonEmptyStreamChunk(reader, STREAM_TRAILING_EMPTY_CHUNKS_ERROR)
+    const extra = await readNextNonEmptyStreamChunk(
+      reader,
+      STREAM_TRAILING_EMPTY_CHUNKS_ERROR,
+      options.signal,
+    )
     if (!extra.done) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
     }

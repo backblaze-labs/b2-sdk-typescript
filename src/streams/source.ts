@@ -720,21 +720,50 @@ async function collectStreamExactly(
  * Reads from a stream until it receives data, EOF, or too many consecutive empty chunks.
  * @param reader - Locked reader for a Uint8Array stream.
  * @param emptyChunkErrorMessage - Error message to throw when the empty-chunk limit is exceeded.
+ * @param signal - Optional abort signal that cancels the reader and rejects the read.
  *
  * @returns The next non-empty chunk or EOF result.
  */
 export async function readNextNonEmptyStreamChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   emptyChunkErrorMessage: string,
+  signal?: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let emptyChunks = 0
   while (true) {
-    const result = await reader.read()
+    const result = await readStreamChunk(reader, signal)
     if (result.done || result.value.byteLength > 0) return result
     emptyChunks += 1
     if (emptyChunks > MAX_EMPTY_STREAM_CHUNKS) {
       throw new Error(emptyChunkErrorMessage)
     }
+  }
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal === undefined) return reader.read()
+  if (signal.aborted) {
+    await reader.cancel(signal.reason).catch(() => {})
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      void reader.cancel(signal.reason).catch(() => {})
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([reader.read(), abort])
+  } finally {
+    removeAbortListener?.()
   }
 }
 
