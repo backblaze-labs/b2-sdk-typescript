@@ -41,13 +41,13 @@ export function safeRelativePathSegments(relPath: string): string[] {
 const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 /**
- * Throws if {@link target} is not contained by {@link root}.
+ * Throws if {@link target} is outside {@link root} or names the root itself.
  *
  * @param root - Resolved filesystem root.
  * @param target - Candidate path to validate.
  * @param path - Node path module.
  *
- * @throws When the target is not inside the root.
+ * @throws When the target is outside the root or equal to the root.
  *
  * @internal
  */

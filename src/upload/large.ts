@@ -116,6 +116,12 @@ export async function uploadLargeFile(
   }
 
   // --- Resume discovery (M11.1) ---
+  if (!options.source.canSlice && options.resumeFileId !== undefined) {
+    throw new Error(
+      'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
+    )
+  }
+
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
   let createdLargeFile = false
@@ -144,11 +150,6 @@ export async function uploadLargeFile(
   // shipped, then dropped before the next read starts, so the peak
   // memory footprint is ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
-    if (options.resumeFileId !== undefined) {
-      throw new Error(
-        'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
-      )
-    }
     try {
       await uploadPartsSequentially(
         raw,

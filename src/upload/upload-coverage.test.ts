@@ -14,6 +14,7 @@ import {
 } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
 import type { UploadRetryEvent } from './retry.ts'
@@ -1415,6 +1416,28 @@ describe('uploadSmallFile cleanup path', () => {
     // collapses 'none' to null (see the P2 normalization regression
     // above).
     expect(result.contentSha1).toBeNull()
+  })
+
+  it('rejects resumeFileId on streaming sources before listing parts', async () => {
+    const { client } = makeSmallPartClient()
+    await client.authorize()
+    const listParts = vi.spyOn(client.raw, 'listParts')
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucketId('bucket'),
+        fileName: 'stream-resume.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+        resumeFileId: largeFileId('unfinished-large-file'),
+      }),
+    ).rejects.toThrow('resume is not supported on non-sliceable sources')
+    expect(listParts).not.toHaveBeenCalled()
   })
 
   it('forwards serverSideEncryption on each part of a streaming-source upload', async () => {
