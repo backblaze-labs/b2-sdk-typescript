@@ -1,5 +1,5 @@
 import type { Bucket } from './bucket.ts'
-import { type B2Client, getClientUploadRetryOptions } from './client.ts'
+import type { B2Client } from './client.ts'
 import { createParallelDownloadStream } from './download/parallel.ts'
 import {
   type DownloadResult,
@@ -9,7 +9,7 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { BucketRetentionPolicy } from './types/bucket.ts'
@@ -113,26 +113,18 @@ export class B2Object {
   readonly fileName: string
   private readonly client: B2Client
   private readonly bucket: Bucket
-  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param bucket - The parent Bucket this object belongs to.
    * @param fileName - The file path within the bucket.
-   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
    *
    * @internal
    */
-  constructor(
-    client: B2Client,
-    bucket: Bucket,
-    fileName: string,
-    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
-  ) {
+  constructor(client: B2Client, bucket: Bucket, fileName: string) {
     this.client = client
     this.bucket = bucket
     this.fileName = fileName
-    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -144,6 +136,7 @@ export class B2Object {
   async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
+    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options)
@@ -154,7 +147,7 @@ export class B2Object {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
-        retry: this.uploadRetryOptions,
+        retry: uploadRetryOptions,
         bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
@@ -168,7 +161,7 @@ export class B2Object {
       ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: this.uploadRetryOptions,
+      retry: uploadRetryOptions,
     })
   }
 
@@ -312,11 +305,12 @@ export class B2Object {
     /** Abort signal that cancels the upload and the unfinished large file. */
     signal?: AbortSignal
   }): UploadWriteHandle {
+    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
     return createWriteStream(this.client.raw, this.client.accountInfo, {
       ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: this.uploadRetryOptions,
+      retry: uploadRetryOptions,
     })
   }
 

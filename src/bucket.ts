@@ -1,4 +1,4 @@
-import { type B2Client, getClientUploadRetryOptions } from './client.ts'
+import type { B2Client } from './client.ts'
 import { copyLargeFile } from './copy/large.ts'
 import {
   type DownloadResult,
@@ -6,7 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
+import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
   BucketInfo,
@@ -143,25 +143,18 @@ export class Bucket {
   /** Full bucket metadata as returned by the B2 API. */
   readonly info: BucketInfo
   private readonly client: B2Client
-  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
-   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
    *
    * @internal
    */
-  constructor(
-    client: B2Client,
-    info: BucketInfo,
-    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
-  ) {
+  constructor(client: B2Client, info: BucketInfo) {
     this.client = client
     this.info = info
     this.id = info.bucketId
     this.name = info.bucketName
-    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -171,7 +164,7 @@ export class Bucket {
    * @returns A B2Object handle bound to this bucket and file name.
    */
   file(fileName: string): B2Object {
-    return new B2Object(this.client, this, fileName, this.uploadRetryOptions)
+    return new B2Object(this.client, this, fileName)
   }
 
   /**
@@ -184,6 +177,7 @@ export class Bucket {
   async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
+    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
@@ -191,7 +185,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: this.uploadRetryOptions,
+        retry: uploadRetryOptions,
         bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
@@ -204,7 +198,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: this.uploadRetryOptions,
+      retry: uploadRetryOptions,
     })
   }
 

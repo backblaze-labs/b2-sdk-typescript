@@ -6,6 +6,7 @@ import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
 import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
+import { setClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
@@ -23,8 +24,6 @@ import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './typ
 import type { ReplicationConfiguration } from './types/replication.ts'
 import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
-
-const GET_CLIENT_UPLOAD_RETRY_OPTIONS = Symbol('B2Client.getUploadRetryOptions')
 
 /** Result of {@link B2Client.hasCapabilities}. */
 export interface CapabilityCheckResult {
@@ -95,7 +94,6 @@ export interface B2ClientOptions {
  * ```
  */
 export class B2Client {
-  #uploadRetryOptions: RetryOptions
   /** Low-level client for direct B2 API calls. */
   readonly raw: RawClient
   /** Authorization state storage (tokens, URLs, capabilities). */
@@ -110,7 +108,6 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
-  readonly #uploadRetryOptions: RetryOptions
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -123,7 +120,8 @@ export class B2Client {
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
-    this.#uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    const uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    setClientUploadRetryOptions(this, uploadRetryOptions)
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -143,7 +141,7 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      retry: this.#uploadRetryOptions,
+      retry: uploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 
@@ -153,16 +151,6 @@ export class B2Client {
     this.raw = new RawClient({ transport: retryTransport })
   }
 
-  /**
-   * Returns resolved upload retry options for SDK internals.
-   *
-   * @returns Resolved retry options.
-   *
-   * @internal
-   */
-  [GET_CLIENT_UPLOAD_RETRY_OPTIONS](): RetryOptions {
-    return this.#uploadRetryOptions
-  }
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
    *
@@ -240,7 +228,7 @@ export class B2Client {
       this.accountInfo.getAuthToken(),
       request,
     )
-    return new Bucket(this, info, this.#uploadRetryOptions)
+    return new Bucket(this, info)
   }
 
   /**
@@ -265,7 +253,7 @@ export class B2Client {
         ...options,
       },
     )
-    return resp.buckets.map((info) => new Bucket(this, info, this.#uploadRetryOptions))
+    return resp.buckets.map((info) => new Bucket(this, info))
   }
 
   /**
@@ -414,16 +402,4 @@ function bindAccountInfoAuthContext(
 ): void {
   accountInfo.setApplicationKeyId?.(applicationKeyId)
   accountInfo.setRealmUrl?.(realmUrl)
-}
-
-/**
- * Returns resolved upload retry options for a B2Client instance.
- * @param client - Client instance.
- *
- * @returns Resolved retry options.
- *
- * @internal
- */
-export function getClientUploadRetryOptions(client: B2Client): RetryOptions {
-  return client[GET_CLIENT_UPLOAD_RETRY_OPTIONS]()
 }
