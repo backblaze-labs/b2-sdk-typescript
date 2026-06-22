@@ -2,7 +2,7 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
-import type { ContentSource } from '../streams/source.ts'
+import { type ContentSource, collectStreamExactly } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
@@ -62,7 +62,10 @@ export async function uploadSmallFile(
   accountInfo: AccountInfo,
   options: UploadFileOptions,
 ): Promise<FileVersion> {
-  const data = new Uint8Array(await options.source.toArrayBuffer())
+  const data = await readSmallFileSource(options.source, options.signal)
+  if (data.byteLength !== options.source.size) {
+    throw new Error('uploadSmallFile: source byte count does not match advertised size.')
+  }
   const sha1 = new IncrementalSha1()
   await sha1.update(data)
   const sha1Hex = await sha1.digest()
@@ -117,4 +120,17 @@ export async function uploadSmallFile(
   tracker.addBytes(data.byteLength)
   tracker.completePart()
   return result
+}
+
+async function readSmallFileSource(
+  source: ContentSource,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array<ArrayBuffer>> {
+  signal?.throwIfAborted()
+  if (!source.canSlice) {
+    return collectStreamExactly(source.stream(), source.size, signal)
+  }
+  const data = new Uint8Array(await source.toArrayBuffer())
+  signal?.throwIfAborted()
+  return data
 }

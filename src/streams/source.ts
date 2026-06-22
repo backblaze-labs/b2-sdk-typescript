@@ -672,10 +672,11 @@ function validateStreamSourceSize(size: number): void {
   }
 }
 
-async function collectStreamExactly(
+export async function collectStreamExactly(
   stream: ReadableStream<Uint8Array>,
   expectedSize: number,
-): Promise<Uint8Array> {
+  signal?: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer>> {
   const reader = stream.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
@@ -686,6 +687,7 @@ async function collectStreamExactly(
       const { done, value } = await readNextNonEmptyStreamChunk(
         reader,
         STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+        signal,
       )
       if (done) throw new Error(STREAM_SOURCE_ENDED_EARLY_ERROR)
       if (total + value.byteLength > expectedSize) {
@@ -698,6 +700,7 @@ async function collectStreamExactly(
     const extra = await readNextNonEmptyStreamChunk(
       reader,
       STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+      signal,
     )
     if (!extra.done) throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
 

@@ -17,6 +17,7 @@ import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource, type ContentSource, StreamSource, toContentSource } from '../streams/source.ts'
 import {
   daysFromNow,
+  deferred,
   deterministicBytes,
   jsonErrorResponse,
   jsonResponse,
@@ -3698,6 +3699,37 @@ describe('uploadSmallFile cleanup path', () => {
         resumeFileId: largeFileId('unfinished-large-file'),
       }),
     ).rejects.toThrow(/resumeFileId is only supported for multipart uploads/)
+  })
+
+  it('aborts while buffering a forward-only small-file source', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-forward-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const readStarted = deferred<void>()
+    const cancel = vi.fn()
+    const controller = new AbortController()
+    const readable = new ReadableStream<Uint8Array>({
+      pull() {
+        readStarted.resolve()
+      },
+      cancel(reason) {
+        cancel(reason)
+      },
+    })
+
+    const upload = bucket.upload({
+      fileName: 'stalled-small.bin',
+      source: new StreamSource(readable, 1),
+      signal: controller.signal,
+    })
+    await readStarted.promise
+    controller.abort('stop small upload')
+
+    await expect(upload).rejects.toBe('stop small upload')
+    expect(cancel).toHaveBeenCalledWith('stop small upload')
   })
 
   it("normalizes the wire 'none' contentSha1 sentinel to null on multipart uploads", async () => {
