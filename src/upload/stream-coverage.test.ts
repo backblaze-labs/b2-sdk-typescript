@@ -4,7 +4,7 @@ import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { B2Simulator } from '../simulator/index.ts'
-import { deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { deferred, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 
 /**

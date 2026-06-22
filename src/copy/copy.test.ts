@@ -2,24 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient, readStream } from '../test-utils/index.ts'
+import { deferred, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
-
-function deferred<T>(): {
-  readonly promise: Promise<T>
-  resolve(value: T): void
-  reject(reason?: unknown): void
-} {
-  let resolve!: (value: T) => void
-  let reject!: (reason?: unknown) => void
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-  return { promise, resolve, reject }
-}
 
 /**
  * Fast tier for `copyLargeFile`: only the small-content / mocked-transport

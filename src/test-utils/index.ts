@@ -116,6 +116,26 @@ export function deterministicBytes(size: number): Uint8Array {
 }
 
 /**
+ * Creates a promise with externally controlled resolution. Useful for tests
+ * that need to pause one async operation until another reaches a known point.
+ *
+ * @returns A promise plus its resolve and reject callbacks.
+ */
+export function deferred<T>(): {
+  readonly promise: Promise<T>
+  resolve(value: T): void
+  reject(reason?: unknown): void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
+/**
  * Returns a Unix-millisecond timestamp `n` days from now. Negative `n`
  * yields a timestamp in the past, useful for testing already-expired
  * object-lock retention windows.
