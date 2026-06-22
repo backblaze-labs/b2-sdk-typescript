@@ -1,3 +1,4 @@
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { readStreamChunkWithTimeout } from './b2-sha1-reader.ts'
 import {
   assertPathInsideRoot,
@@ -34,7 +35,9 @@ export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Ar
     if (hasErrorCode(err, 'ELOOP')) {
       throw new Error('local file changed before upload: not a regular file')
     }
-    throw new Error('local file changed before upload: could not open scanned file')
+    throw new Error(
+      `local file changed before upload: could not open scanned file: ${sanitizeErrorReason(err)}`,
+    )
   })
   try {
     const stats = await handle.stat()

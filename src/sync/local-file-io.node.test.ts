@@ -89,7 +89,7 @@ describe('readScannedLocalFile', () => {
       await rm(path.absolutePath, { force: true })
 
       await expect(readScannedLocalFile(path)).rejects.toThrow(
-        'local file changed before upload: could not open scanned file',
+        'local file changed before upload: could not open scanned file: ENOENT',
       )
     } finally {
       await rm(root, { recursive: true, force: true })
