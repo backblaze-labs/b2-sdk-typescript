@@ -1977,12 +1977,12 @@ export class B2Simulator {
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
-    // Real B2 orders unfinished large files by start time, oldest first;
-    // the real-B2 integration suite verifies this cursor contract.
+    // Real B2 orders unfinished large files by file name; resume sorts
+    // scanned exact-name matches by uploadTimestamp before selecting one.
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))
-      .sort((a, b) => a.uploadTimestamp - b.uploadTimestamp)
+      .sort((a, b) => a.fileName.localeCompare(b.fileName))
 
     // `startFileId` is the inclusive cursor returned from a prior page.
     // When present in the current listing, that entry is returned first.

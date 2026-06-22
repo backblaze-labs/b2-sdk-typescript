@@ -121,7 +121,7 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(bucket.id).toBeTruthy()
   })
 
-  it('lists unfinished large files with inclusive startFileId and start-time order', async () => {
+  it('lists unfinished large files with inclusive startFileId and file-name order', async () => {
     const first = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -159,7 +159,7 @@ describe.skipIf(skip)('B2 integration', () => {
       const ids = listing.files.map((file) => file.fileId)
       expect(ids.indexOf(first.fileId)).toBeGreaterThanOrEqual(0)
       expect(ids.indexOf(second.fileId)).toBeGreaterThanOrEqual(0)
-      expect(ids.indexOf(first.fileId)).toBeLessThan(ids.indexOf(second.fileId))
+      expect(ids.indexOf(second.fileId)).toBeLessThan(ids.indexOf(first.fileId))
       expect(listing.files.find((file) => file.fileId === first.fileId)?.contentType).toBe(
         'application/octet-stream',
       )
