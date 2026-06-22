@@ -1503,6 +1503,44 @@ describe('B2Folder', () => {
     expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual(['photos/cat.jpg'])
   })
 
+  it('skips folder marker keys that equal the normalized prefix', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [makeFileVersion('photos/', 1), makeFileVersion('photos/cat.jpg', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'photos')
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['cat.jpg'])
+    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual(['photos/cat.jpg'])
+  })
+
   it('passes scan abort signal to B2 page requests', async () => {
     const controller = new AbortController()
     const signals: Array<AbortSignal | undefined> = []
