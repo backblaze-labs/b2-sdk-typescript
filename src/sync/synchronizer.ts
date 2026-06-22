@@ -1,11 +1,10 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { IncrementalSha1 } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
-import { toError } from '../util/to-error.ts'
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import type { SyncAction } from './actions/index.ts'
 import {
   CopyAction,
@@ -16,8 +15,15 @@ import {
   SkipAction,
   UploadAction,
 } from './actions/index.ts'
+import {
+  hashReadableStreamSha1,
+  normalizeSha1VerificationMaxBytes,
+  withSha1VerificationDeadline,
+} from './b2-sha1-reader.ts'
+import { readScannedLocalFile, writeLocalStreamInsideRoot } from './local-file-io.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
+import { safeRelativePathSegments } from './path-safety.ts'
 import {
   assertSupportedCompareMode,
   type B2Sha1Reader,
@@ -147,44 +153,61 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 
   try {
-    if (options.compareMode === 'sha1') {
-      const compareBatchSize = concurrency
-      let batch: SyncPair[] = []
-      for await (const pair of zipFolders(source, dest, scanOptions)) {
-        if (options.signal?.aborted) {
-          yield* finishAfterAbort()
-          return
+    try {
+      if (options.compareMode === 'sha1') {
+        const compareBatchSize = concurrency
+        let batch: SyncPair[] = []
+        for await (const pair of zipFolders(source, dest, scanOptions)) {
+          if (options.signal?.aborted) {
+            yield* finishAfterAbort()
+            return
+          }
+          batch.push(pair)
+          if (batch.length >= compareBatchSize) {
+            if (yield* emitSha1Batch(batch)) return
+            batch = []
+          }
         }
-        batch.push(pair)
-        if (batch.length >= compareBatchSize) {
-          if (yield* emitSha1Batch(batch)) return
-          batch = []
-        }
-      }
 
-      if (yield* emitSha1Batch(batch)) return
-    } else {
-      for await (const pair of zipFolders(source, dest, scanOptions)) {
-        if (options.signal?.aborted) {
-          yield* finishAfterAbort()
-          return
+        if (yield* emitSha1Batch(batch)) return
+      } else {
+        for await (const pair of zipFolders(source, dest, scanOptions)) {
+          if (options.signal?.aborted) {
+            yield* finishAfterAbort()
+            return
+          }
+          const item = planPreparedPair(pair, readyComparePair(pair))
+          if (yield* emitPreparedItems([item])) return
         }
-        const item = planPreparedPair(pair, readyComparePair(pair))
-        if (yield* emitPreparedItems([item])) return
       }
+    } catch (err) {
+      await drainActions()
+      if (!scanHadError) throw err
+
+      yield* emitQueuedEvents()
+      yield {
+        type: 'error',
+        path: '',
+        size: 0,
+        message: `${errorCount} sync error(s) occurred`,
+      }
+      return
     }
-  } catch (err) {
+
     await drainActions()
-    if (!scanHadError) throw err
 
     yield* emitQueuedEvents()
-    yield {
-      type: 'error',
-      path: '',
-      size: 0,
-      message: `${errorCount} sync error(s) occurred`,
+
+    if (errorCount > 0) {
+      yield {
+        type: 'error',
+        path: '',
+        size: 0,
+        message: `${errorCount} sync error(s) occurred`,
+      }
     }
-    return
+  } finally {
+    await drainActions()
   }
 
   async function* emitSha1Batch(batch: readonly SyncPair[]): AsyncGenerator<SyncEvent, boolean> {
@@ -300,13 +323,12 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       const event = await action.execute(dryRun)
       queueEvent(event)
     } catch (err) {
-      const errorValue = toError(err)
       errorCount += 1
       queueEvent({
         type: 'error',
         path: action.relativePath,
         size: 0,
-        message: errorValue.message,
+        message: sanitizeErrorReason(err),
       })
     }
   }
@@ -322,19 +344,6 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   async function drainActions(): Promise<void> {
     while (runningActions.size > 0) {
       await Promise.race(runningActions)
-    }
-  }
-
-  await drainActions()
-
-  yield* emitQueuedEvents()
-
-  if (errorCount > 0) {
-    yield {
-      type: 'error',
-      path: '',
-      size: 0,
-      message: `${errorCount} sync error(s) occurred`,
     }
   }
 }
@@ -390,232 +399,6 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
       },
     )
   }
-}
-
-async function hashReadableStreamSha1(
-  body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
-  options?: {
-    readonly idleTimeoutMillis: number
-    readonly maxBytes: number
-    readonly expectedBytes: number
-  },
-): Promise<{ readonly contentSha1: string; readonly bytesRead: number }> {
-  const hash = new IncrementalSha1()
-  const reader = body.getReader()
-  const idleTimeoutMillis = options?.idleTimeoutMillis ?? normalizeSha1TimeoutMillis(undefined)
-  const maxBytes = options?.maxBytes ?? Number.POSITIVE_INFINITY
-  const expectedBytes = options?.expectedBytes
-  let bytesRead = 0
-  try {
-    while (true) {
-      signal?.throwIfAborted()
-      const { done, value } = await readStreamChunkWithTimeout(reader, idleTimeoutMillis)
-      if (done) break
-      bytesRead += value.byteLength
-      if (bytesRead > maxBytes) {
-        throw new Error(`sha1 B2 read exceeded ${maxBytes} byte verification budget`)
-      }
-      await hash.update(value)
-    }
-    if (expectedBytes !== undefined && bytesRead !== expectedBytes) {
-      throw new Error(`sha1 B2 read ended after ${bytesRead} bytes, expected ${expectedBytes}`)
-    }
-    return { contentSha1: await hash.digest(), bytesRead }
-  } catch (err) {
-    void reader.cancel(err).catch(() => {})
-    throw err
-  } finally {
-    reader.releaseLock()
-  }
-}
-
-async function withSha1VerificationDeadline<T>(
-  signal: AbortSignal | undefined,
-  timeoutMillis: number,
-  run: (signal: AbortSignal) => Promise<T>,
-): Promise<T> {
-  const controller = new AbortController()
-  const abortFromParent = () => controller.abort(signal?.reason)
-  if (signal?.aborted) abortFromParent()
-  signal?.addEventListener('abort', abortFromParent, { once: true })
-
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      controller.abort(new Error(`sha1 B2 verification exceeded ${timeoutMillis} ms`))
-      reject(new Error(`sha1 B2 verification exceeded ${timeoutMillis} ms`))
-    }, timeoutMillis)
-  })
-  const runPromise = run(controller.signal)
-  try {
-    return await Promise.race([runPromise, timeoutPromise])
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
-    signal?.removeEventListener('abort', abortFromParent)
-    void runPromise.catch(() => {})
-  }
-}
-
-async function readStreamChunkWithTimeout(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMillis: number,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const readPromise = reader.read()
-  try {
-    return await Promise.race([
-      readPromise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(new Error(`sha1 B2 read stalled for ${timeoutMillis} ms`))
-        }, timeoutMillis)
-      }),
-    ])
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
-    void readPromise.catch(() => {})
-  }
-}
-
-function normalizeSha1VerificationMaxBytes(
-  contentLength: number,
-  ceiling: number | undefined,
-): number {
-  const contentBudget = Math.max(0, Math.floor(contentLength))
-  if (ceiling === undefined) return contentBudget
-  if (!Number.isFinite(ceiling) || ceiling < 0) return contentBudget
-  return Math.min(contentBudget, Math.floor(ceiling))
-}
-
-async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
-  const { constants } = await import('node:fs')
-  const { open } = await import('node:fs/promises')
-  const handle = await open(path.absolutePath, constants.O_RDONLY | noFollowFlag(constants)).catch(
-    (err: unknown) => {
-      if (hasErrorCode(err, 'ELOOP')) {
-        throw new Error('local file changed before upload: not a regular file')
-      }
-      throw new Error('local file changed before upload: could not open scanned file')
-    },
-  )
-  try {
-    const stats = await handle.stat()
-    assertSameScannedRegularFile(stats, path)
-    const data = await handle.readFile()
-    if (data.byteLength !== path.size) {
-      throw new Error('local file changed before upload: size changed while reading')
-    }
-    return new Uint8Array(data)
-  } finally {
-    await handle.close()
-  }
-}
-
-function assertSameScannedRegularFile(
-  stats: {
-    isFile(): boolean
-    readonly dev: number
-    readonly ino: number
-    readonly mtimeMs: number
-    readonly size: number
-  },
-  path: LocalSyncPath,
-): void {
-  if (!stats.isFile()) {
-    throw new Error('local file changed before upload: not a regular file')
-  }
-  if (stats.size !== path.size) {
-    throw new Error('local file changed before upload: size changed')
-  }
-
-  const identity = path.fileIdentity
-  if (identity === undefined) return
-
-  if (
-    stats.dev !== identity.deviceId ||
-    stats.ino !== identity.inode ||
-    stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
-  ) {
-    throw new Error('local file changed before upload')
-  }
-}
-
-async function writeLocalFileInsideRoot(
-  root: string,
-  relPath: string,
-  data: Uint8Array,
-): Promise<void> {
-  const { constants } = await import('node:fs')
-  const { lstat, mkdir, open, realpath } = await import('node:fs/promises')
-  const path = await import('node:path')
-  const segments = safeRelativePathSegments(relPath)
-  const rootRealPath = await realpath(root)
-
-  let current = rootRealPath
-  for (const segment of segments.slice(0, -1)) {
-    current = path.join(current, segment)
-    try {
-      await mkdir(current)
-    } catch (err) {
-      if (!hasErrorCode(err, 'EEXIST')) throw err
-    }
-    const stats = await lstat(current)
-    if (!stats.isDirectory()) {
-      throw new Error('unsafe local destination path: parent is not a directory')
-    }
-  }
-
-  const destPath = path.join(rootRealPath, ...segments)
-  assertPathInsideRoot(rootRealPath, destPath, path)
-  const handle = await open(
-    destPath,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | noFollowFlag(constants),
-    0o666,
-  )
-  try {
-    await handle.writeFile(data)
-  } finally {
-    await handle.close()
-  }
-}
-
-function safeRelativePathSegments(relPath: string): string[] {
-  if (
-    relPath.length === 0 ||
-    relPath.includes('\0') ||
-    relPath.includes('\\') ||
-    relPath.startsWith('/') ||
-    /^[A-Za-z]:/.test(relPath)
-  ) {
-    throw new Error('unsafe local destination path')
-  }
-
-  const segments = relPath.split('/')
-  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
-    throw new Error('unsafe local destination path')
-  }
-  return segments
-}
-
-function assertPathInsideRoot(
-  root: string,
-  target: string,
-  path: typeof import('node:path'),
-): void {
-  const relative = path.relative(root, target)
-  if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new Error('unsafe local destination path')
-  }
-}
-
-function noFollowFlag(constants: { readonly O_NOFOLLOW?: number }): number {
-  return constants.O_NOFOLLOW ?? 0
-}
-
-function hasErrorCode(err: unknown, code: string): boolean {
-  return (err as { readonly code?: unknown }).code === code
 }
 
 /**
@@ -710,6 +493,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             fileName,
             source: new BufferSource(new Uint8Array(data)),
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
           })
         },
       )
@@ -730,32 +514,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           .file(source.selectedVersion.fileName)
           .downloadById(source.selectedVersion.fileId, {
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
           })
-        const reader = result.body.getReader()
-        let combined: Uint8Array
-        try {
-          const chunks: Uint8Array[] = []
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            chunks.push(value)
-          }
-          let total = 0
-          for (const c of chunks) total += c.byteLength
-          combined = new Uint8Array(total)
-          let offset = 0
-          for (const c of chunks) {
-            combined.set(c, offset)
-            offset += c.byteLength
-          }
-        } finally {
-          // Release the body stream's reader lock so a downstream
-          // writeFile failure doesn't strand the response stream half-
-          // open with the upstream HTTP connection still pumping.
-          reader.releaseLock()
-        }
-
-        await writeLocalFileInsideRoot(root, relPath, combined)
+        await writeLocalStreamInsideRoot(root, relPath, result.body, {
+          expectedBytes: source.selectedVersion.contentLength,
+          idleTimeoutMillis: normalizeSha1TimeoutMillis(config.options.sha1ReadTimeoutMillis),
+          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+        })
       })
     },
 

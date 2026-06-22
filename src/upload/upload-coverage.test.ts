@@ -27,7 +27,7 @@ import type { UploadRetryEvent } from './retry.ts'
  *     when `b2_upload_part` fails.
  *   - `uploadLargeFile` outer cleanup: `cancelLargeFile` itself failing inside
  *     the catch (best-effort swallow).
- *   - `uploadLargeFile` resume=true with no candidate: the spread branches
+ *   - `uploadLargeFile` fresh multipart start: the spread branches
  *     for `serverSideEncryption`, `fileRetention`, and `legalHold` inside
  *     the start-large-file call.
  *   - `uploadSmallFile` catch block: `accountInfo.evictUploadUrl` + rethrow.
@@ -1145,7 +1145,7 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
   })
 })
 
-describe('uploadLargeFile resume=true with no candidate', () => {
+describe('uploadLargeFile fresh multipart metadata', () => {
   let client: B2Client
   let bucketId: string
 
@@ -1160,9 +1160,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     bucketId = b.id
   })
 
-  it('forwards serverSideEncryption when no resume candidate exists', async () => {
-    // resume=true with no unfinished candidate falls through to the
-    // start_large_file branch. With SSE-B2 supplied we hit the conditional spread.
+  it('forwards serverSideEncryption when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1171,14 +1169,13 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
     })
     expect(result.fileName).toBe('resume-sse.bin')
     expect(result.contentLength).toBe(data.byteLength)
   })
 
-  it('forwards fileRetention when no resume candidate exists', async () => {
+  it('forwards fileRetention when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1187,7 +1184,6 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       fileRetention: {
         mode: RetentionMode.Governance,
         retainUntilTimestamp: daysFromNow(1),
@@ -1196,7 +1192,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     expect(result.fileName).toBe('resume-retention.bin')
   })
 
-  it('forwards legalHold when no resume candidate exists', async () => {
+  it('forwards legalHold when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1205,7 +1201,6 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
@@ -1452,12 +1447,7 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
   })
 
-  it('rejects a streaming-source upload when resume is requested', async () => {
-    // StreamSource has no random access, so resume can't replay parts.
-    // The engine bails early with a clear message and cancels the
-    // started large file rather than silently buffering the whole
-    // payload. The `resume` option lives on `uploadLargeFile` rather
-    // than the high-level `bucket.upload`, so we call it directly.
+  it('rejects automatic resume discovery', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -1483,7 +1473,7 @@ describe('uploadSmallFile cleanup path', () => {
         concurrency: 1,
         resume: true,
       }),
-    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+    ).rejects.toThrow(/resume requires an explicit resumeFileId/)
   })
 
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {

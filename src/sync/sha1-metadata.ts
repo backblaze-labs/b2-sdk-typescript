@@ -4,6 +4,13 @@ import { normalizeVerifiableSha1 } from '../util/sha1.ts'
 /** Prefix used to mark SHA-1 metadata that must not prove equality without byte verification. */
 export const untrustedSha1Prefix = 'unverified:'
 
+/** Public SHA-1 state used by sync scanners and low-level compare helpers. */
+export type SyncSha1State =
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'verified'; readonly value: string }
+  | { readonly kind: 'untrusted'; readonly value: string | null; readonly raw: string }
+
 /**
  * Marks a verifiable SHA-1 digest as untrusted provider metadata.
  *
@@ -52,4 +59,26 @@ export function selectB2ComparableSha1(version: FileVersion): string | null {
  */
 export function isUntrustedSha1(sha1: string | null | undefined): boolean {
   return sha1?.toLowerCase().startsWith(untrustedSha1Prefix) ?? false
+}
+
+/**
+ * Parses the public `SyncPath.contentSha1` value into an explicit trust/availability state.
+ *
+ * @param sha1 - The raw `contentSha1` field from a sync path.
+ *
+ * @returns A discriminated state so custom scanners do not need to decode sentinels directly.
+ */
+export function parseSyncContentSha1(sha1: string | null | undefined): SyncSha1State {
+  if (sha1 === undefined) return { kind: 'pending' }
+  if (sha1 === null) return { kind: 'unavailable' }
+  if (isUntrustedSha1(sha1)) {
+    return {
+      kind: 'untrusted',
+      raw: sha1,
+      value: normalizeVerifiableSha1(sha1.slice(untrustedSha1Prefix.length)),
+    }
+  }
+  const normalized = normalizeVerifiableSha1(sha1)
+  if (normalized === null) return { kind: 'untrusted', raw: sha1, value: null }
+  return { kind: 'verified', value: normalized }
 }

@@ -37,6 +37,9 @@ export interface SyncPath {
    * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
    *   consumers must not treat it as proof that bytes match. The `sha1` synchronizer must
    *   verify untrusted B2 bytes before using them for equality, or transfer conservatively.
+   *
+   * Use `parseSyncContentSha1`, `selectB2ComparableSha1`, and `untrustedSha1` from the sync
+   * entrypoint to construct or inspect this field without depending on sentinel strings.
    */
   readonly contentSha1?: string | null
 }

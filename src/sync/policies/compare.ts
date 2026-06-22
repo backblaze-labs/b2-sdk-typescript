@@ -164,11 +164,15 @@ export async function preparePairForCompare(
   if (source.size !== dest.size) return readyComparePair(pair)
 
   const metadataPair: SyncPair = [withB2ContentSha1(source), withB2ContentSha1(dest)]
-  if (hasUntrustedSha1(metadataPair) && options.readB2Sha1 === undefined) {
-    return readyComparePair(metadataPair)
-  }
   if (hasUnavailableB2Sha1(metadataPair)) {
     return skipped(metadataPair, unavailableSha1Event(metadataPair))
+  }
+  if (
+    options.readB2Sha1 === undefined &&
+    hasUntrustedSha1(metadataPair) &&
+    !hasVerifiableUntrustedSha1(metadataPair)
+  ) {
+    return readyComparePair(metadataPair)
   }
 
   const [metadataSource, metadataDest] = metadataPair
@@ -451,6 +455,19 @@ function hasUntrustedSha1(pair: SyncPair): boolean {
     (source !== null && comparableSha1(source).kind === 'untrusted') ||
     (dest !== null && comparableSha1(dest).kind === 'untrusted')
   )
+}
+
+function hasVerifiableUntrustedSha1(pair: SyncPair): boolean {
+  const [source, dest] = pair
+  return (
+    (source !== null && verifiableUntrustedSha1(source)) ||
+    (dest !== null && verifiableUntrustedSha1(dest))
+  )
+}
+
+function verifiableUntrustedSha1(path: SyncPath): boolean {
+  const state = comparableSha1(path)
+  return state.kind === 'untrusted' && state.value !== null
 }
 
 function hasB2Path(pair: SyncPair): boolean {

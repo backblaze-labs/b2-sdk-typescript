@@ -185,17 +185,13 @@ export class Bucket {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Resume an unfinished multipart upload for this file name when one
-     * exists. Only consulted on the large-file path (source size
-     * greater than `recommendedPartSize`). On the small-file path this
-     * option is silently ignored. Sliceable sources only — `StreamSource`
-     * rejects resume because it can't replay parts. Matching server parts are
-     * re-uploaded unless `trustServerPartSha1s` is also true.
+     * Deprecated compatibility flag. Automatic same-name resume is disabled;
+     * pass `resumeFileId` for an explicitly selected unfinished large file.
      */
     resume?: boolean
     /**
-     * Trust server-reported part SHA-1 values when resuming and skip matching
-     * parts. Only enable this for buckets where every writer is mutually trusted.
+     * Deprecated compatibility flag. Explicit `resumeFileId` uploads skip
+     * matching parts after locally recomputing each part SHA-1.
      */
     trustServerPartSha1s?: boolean
     /**
@@ -382,6 +378,7 @@ export class Bucket {
           ...(cursor !== undefined ? { startFileName: cursor } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
           ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
         })
         return { page: resp, nextCursor: resp.nextFileName ?? undefined }
       },
@@ -423,6 +420,7 @@ export class Bucket {
           ...(cursor?.fileId !== undefined ? { startFileId: cursor.fileId } : {}),
           ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
           ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
         })
         const nextCursor: Cursor | undefined =
           resp.nextFileName !== null

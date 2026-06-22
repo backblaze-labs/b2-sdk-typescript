@@ -60,6 +60,8 @@ export class LocalFolder implements SyncFolder {
 
       const fullPath = join(dir, entry.name)
       const rel = relativePath(this.root, fullPath)
+      // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
+      // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
         await this.walk(fullPath, out, options)
       } else if (entry.isFile()) {
@@ -87,8 +89,6 @@ export class LocalFolder implements SyncFolder {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
           this.emitScanError(options, relativePath(this.root, fullPath), 'file', err)
         }
-      } else {
-        this.emitScanError(options, rel, 'file', new Error('not a regular file'))
       }
     }
   }

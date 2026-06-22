@@ -13,7 +13,7 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { collectPartSha1s, findResumeCandidate } from './resume.ts'
+import { collectPartSha1s } from './resume.ts'
 import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
@@ -60,14 +60,14 @@ export interface UploadLargeFileOptions {
    */
   readonly retryResponseBodyFailures?: boolean
   /**
-   * If true, look for an unfinished large file with the same bucket and file name
-   * and reuse its file ID. Already-uploaded server parts are re-uploaded unless
-   * {@link trustServerPartSha1s} is also true.
+   * Deprecated compatibility flag. Automatic same-name resume is intentionally disabled;
+   * pass {@link resumeFileId} to resume an explicitly selected unfinished large file.
    */
   readonly resume?: boolean
   /**
-   * Trust server-reported part SHA-1 values when resuming and skip matching parts.
-   * Only enable this for buckets where every writer is mutually trusted.
+   * Deprecated compatibility flag. Resumed sliceable uploads skip a part only after
+   * locally hashing that part and matching the server-reported SHA-1 for the explicit
+   * {@link resumeFileId}.
    */
   readonly trustServerPartSha1s?: boolean
   /**
@@ -107,9 +107,8 @@ export async function uploadLargeFile(
   const parts = planRanges(totalSize, partSize)
   const fileInfo: Record<string, string> = { ...options.fileInfo }
 
-  // Construct the `b2_start_large_file` request body once so the two
-  // non-resume branches below (no `resume`, resume-but-no-candidate)
-  // can dispatch without re-spelling the conditional spreads.
+  // Construct the `b2_start_large_file` request body once so the fresh
+  // upload branch can dispatch without re-spelling the conditional spreads.
   const startLargeFileRequest = {
     bucketId: options.bucketId,
     fileName: options.fileName,
@@ -125,33 +124,11 @@ export async function uploadLargeFile(
   // --- Resume discovery (M11.1) ---
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
-  const trustServerPartSha1s = options.trustServerPartSha1s === true
-
   if (options.resumeFileId !== undefined) {
     largeFileId = options.resumeFileId
-    preUploaded = trustServerPartSha1s
-      ? await collectPartSha1s(raw, accountInfo, largeFileId)
-      : new Map<number, string>()
+    preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
   } else if (options.resume === true) {
-    const candidate = await findResumeCandidate(
-      raw,
-      accountInfo,
-      options.bucketId,
-      options.fileName,
-      { collectUploadedPartSha1s: trustServerPartSha1s },
-    )
-    if (candidate) {
-      largeFileId = candidate.fileId
-      preUploaded = candidate.uploadedPartSha1s
-    } else {
-      const startResp = await raw.startLargeFile(
-        accountInfo.getApiUrl(),
-        accountInfo.getAuthToken(),
-        startLargeFileRequest,
-      )
-      largeFileId = startResp.fileId
-      preUploaded = new Map<number, string>()
-    }
+    throw new Error('uploadLargeFile: resume requires an explicit resumeFileId')
   } else {
     const startResp = await raw.startLargeFile(
       accountInfo.getApiUrl(),
@@ -216,7 +193,7 @@ export async function uploadLargeFile(
 
         // Resume short-circuit: server already has this part with matching SHA-1
         const serverSha1 = preUploaded.get(part.partNumber)
-        if (trustServerPartSha1s && serverSha1 !== undefined && serverSha1 === sha1Hex) {
+        if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
           partSha1s[part.partNumber - 1] = serverSha1
           tracker.addBytes(data.byteLength)
           tracker.completePart()

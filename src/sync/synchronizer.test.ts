@@ -5,6 +5,7 @@ import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-io.ts'
 import { compareSyncPathNames } from './path-order.ts'
 import type {
   SynchronizerConfig,
@@ -667,7 +668,7 @@ describe('synchronize', () => {
     )
 
     it.skipIf(!isNode || isWindows)(
-      'does not delete a remote orphan when a same-name local symlink is skipped',
+      'skips local symlinks without suppressing delete-mode orphan removal',
       async () => {
         const { mkdtemp, rm, symlink, writeFile } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
@@ -690,10 +691,9 @@ describe('synchronize', () => {
 
           const events = await collectEvents(config)
           const errors = events.filter((event) => event.type === 'error')
-          expect(errors[0]?.path).toBe('linked.txt')
-          expect(errors[0]?.message).toContain('not a regular file')
+          expect(errors).toHaveLength(0)
           expect(mockBucket.hideFile).not.toHaveBeenCalled()
-          expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+          expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith('linked.txt', 'fid_linked.txt')
         } finally {
           await rm(root, { recursive: true, force: true })
         }
@@ -858,7 +858,7 @@ describe('synchronize', () => {
       try {
         const data = new Uint8Array([4, 5, 6])
         const mockBucket = makeMockBucket({ 'fid_remote.txt': data })
-        const sourceFile = makeB2SyncPath('remote.txt', 2000, 200)
+        const sourceFile = makeB2SyncPath('remote.txt', 2000, data.byteLength)
         const source = makeMemoryFolder([sourceFile], 'b2')
         const dest = makeMemoryFolder([], 'local')
 
@@ -880,6 +880,68 @@ describe('synchronize', () => {
         await rm(root, { recursive: true, force: true })
       }
     })
+
+    it.skipIf(!isNode)('passes abort signals to B2 download actions', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-abort-signal-'))
+      try {
+        const controller = new AbortController()
+        const data = new Uint8Array([4, 5, 6])
+        const mockBucket = makeMockBucket({ 'fid_remote.txt': data })
+        mockBucket.downloadById.mockImplementation((_fileId: string, callOptions?: object) => {
+          expect(callOptions).toMatchObject({ signal: controller.signal })
+          controller.abort()
+          return { body: streamFromBytes(data) }
+        })
+        const sourceFile = makeB2SyncPath('remote.txt', 2000, data.byteLength)
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            signal: controller.signal,
+          },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+        expect(events.some((event) => event.type === 'download-done')).toBe(false)
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)(
+      'rejects over-length B2 download bodies without writing final files',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-overlong-'))
+        try {
+          const mockBucket = makeMockBucket({ 'fid_remote.txt': new Uint8Array([1, 2]) })
+          const sourceFile = makeB2SyncPath('remote.txt', 2000, 1)
+          const config: SynchronizerDownConfig = {
+            source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+            dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+          const errors = events.filter((event) => event.type === 'error')
+          expect(events.some((event) => event.type === 'download-done')).toBe(false)
+          expect(errors[0]?.message).toContain('download read exceeded 1 byte limit')
+          await expect(readFile(join(root, 'remote.txt'))).rejects.toThrow()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
 
     it.skipIf(!isNode || isWindows)('rejects B2 names that escape the local root', async () => {
       const { tmpdir } = await import('node:os')
@@ -960,6 +1022,48 @@ describe('synchronize', () => {
         await rm(outside, { recursive: true, force: true })
       }
     })
+
+    it.skipIf(!isNode || isWindows)(
+      'rejects local parent symlink swaps before opening download targets',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink } = await import(
+          'node:fs/promises'
+        )
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-root-'))
+        const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-out-'))
+        try {
+          const safeDir = join(root, 'safe')
+          await mkdir(safeDir)
+          const safeDirReal = await realpath(safeDir)
+          let swapped = false
+          localFileIoTestHooks.afterParentDirectoryValidated = async (validatedPath) => {
+            if (validatedPath !== safeDirReal || swapped) return
+            swapped = true
+            await rename(safeDir, join(root, 'safe-real'))
+            await symlink(outside, safeDir, 'dir')
+          }
+
+          await expect(
+            writeLocalStreamInsideRoot(
+              root,
+              'safe/payload.txt',
+              streamFromBytes(new Uint8Array([7])),
+              {
+                expectedBytes: 1,
+                idleTimeoutMillis: 1000,
+              },
+            ),
+          ).rejects.toThrow(/unsafe local destination path/)
+          await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+        } finally {
+          delete localFileIoTestHooks.afterParentDirectoryValidated
+          await rm(root, { recursive: true, force: true })
+          await rm(outside, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('encryptionProvider', () => {
@@ -3028,9 +3132,81 @@ describe('synchronize', () => {
       expect(errors.length).toBeGreaterThanOrEqual(2)
       expect(errors[0]?.message).toBe('plain-string-failure')
     })
+
+    it('sanitizes action error messages before emitting events', async () => {
+      const mockBucket = makeMockBucket()
+      mockBucket.copyFile = vi
+        .fn()
+        .mockRejectedValue(new Error("\x1b[2J ENOENT: open '/tmp/secret.txt'\nforged"))
+
+      const sourceFile = makeB2SyncPath('sanitized.txt', 2000, 1)
+      const source = makeMemoryFolder([sourceFile], 'b2')
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      const events = await collectEvents(config)
+      const errors = events.filter((e) => e.type === 'error')
+      expect(errors[0]?.message).toBe('Error')
+      expect(errors[0]?.message).not.toContain('/tmp/secret')
+      expect(errors[0]?.message).not.toContain('\x1b')
+      expect(errors[0]?.message).not.toContain('\n')
+    })
   })
 
   describe('abort signal mid-flight', () => {
+    it('drains a pending action when the async iterator is closed', async () => {
+      const mockBucket = makeMockBucket()
+      let finishCopy = () => {}
+      const copyMayFinish = new Promise<void>((resolve) => {
+        finishCopy = resolve
+      })
+      mockBucket.copyFile.mockImplementation(async () => {
+        await copyMayFinish
+      })
+
+      const source = makeMemoryFolder(
+        [makeB2SyncPath('a.txt', 1000, 1), makeB2SyncPath('b.txt', 1000, 1)],
+        'b2',
+      )
+      const dest = makeMemoryFolder([], 'b2')
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency: 2 },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      const iterator = synchronize(config)
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'a.txt' },
+      })
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'b.txt' },
+      })
+      expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
+
+      let returned = false
+      const returnedPromise = iterator.return(undefined).then(() => {
+        returned = true
+      })
+      await Promise.resolve()
+      expect(returned).toBe(false)
+
+      finishCopy()
+      await returnedPromise
+      expect(returned).toBe(true)
+    })
+
     it('aborts sha1 sync before queuing a pair when signal flips during scan', async () => {
       const controller = new AbortController()
       const mockBucket = makeMockBucket()
@@ -3386,6 +3562,7 @@ describe('synchronize', () => {
         await writeFile(filePath, 'hello world')
 
         const mockBucket = makeMockBucket()
+        const controller = new AbortController()
         const sourceFile: LocalSyncPath = {
           relativePath: 'hello.txt',
           absolutePath: filePath,
@@ -3398,7 +3575,7 @@ describe('synchronize', () => {
         const config: SynchronizerUpConfig = {
           source: { ...source, type: 'local', root },
           dest: { ...dest, type: 'b2' },
-          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
           bucket: mockBucket as unknown as Bucket,
           prefix: 'pfx/',
         }
@@ -3408,7 +3585,7 @@ describe('synchronize', () => {
         expect(uploads).toHaveLength(1)
         expect(mockBucket.upload).toHaveBeenCalledTimes(1)
         const args = mockBucket.upload.mock.calls[0]?.[0] as Record<string, unknown> | undefined
-        expect(args).toMatchObject({ fileName: 'pfx/hello.txt' })
+        expect(args).toMatchObject({ fileName: 'pfx/hello.txt', signal: controller.signal })
         expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
