@@ -78,7 +78,7 @@ export class LocalFolder implements SyncFolder {
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
    * @param maxScanEntries - Maximum number of entries to retain before failing.
-   * @param nodeDeps - Lazily loaded Node filesystem and path helpers.
+   * @param nodeDeps - Lazy-loaded Node filesystem and path helpers.
    */
   private async walk(
     dir: string,

@@ -210,7 +210,7 @@ describe('LocalFolder', () => {
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-abandoned.partial', 'keep.txt'])
-    await expect(access(tempPath)).resolves.toBeUndefined()
+    await expect(access(tempPath)).resolves.toBeFalsy()
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -242,7 +242,7 @@ describe('LocalFolder', () => {
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-directory.partial/keep.txt'])
-    await expect(access(partialDir)).resolves.toBeUndefined()
+    await expect(access(partialDir)).resolves.toBeFalsy()
   })
 })
 

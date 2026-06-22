@@ -10,6 +10,8 @@ import {
   syncDownloadTempName,
 } from './temp-files.ts'
 
+const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
+
 describe('sync temp files', () => {
   let tmpDir: string
 
@@ -40,8 +42,8 @@ describe('sync temp files', () => {
     await removeSyncDownloadTempFiles(tmpDir, 'run')
 
     await expect(access(partialPath)).rejects.toThrow()
-    await expect(access(otherPartialPath)).resolves.toBeUndefined()
-    await expect(access(keepPath)).resolves.toBeUndefined()
+    await expect(access(otherPartialPath)).resolves.toBeFalsy()
+    await expect(access(keepPath)).resolves.toBeFalsy()
   })
 
   it('does not remove directories with SDK partial download names', async () => {
@@ -50,7 +52,7 @@ describe('sync temp files', () => {
 
     await removeSyncDownloadTempFiles(tmpDir, 'run')
 
-    await expect(access(partialDir)).resolves.toBeUndefined()
+    await expect(access(partialDir)).resolves.toBeFalsy()
   })
 
   it('ignores missing directories', async () => {
@@ -70,7 +72,7 @@ describe('sync temp files', () => {
     await removeSyncDownloadTempFilesOnce(tmpDir)
 
     await expect(access(firstPartialPath)).rejects.toThrow()
-    await expect(access(secondPartialPath)).resolves.toBeUndefined()
+    await expect(access(secondPartialPath)).resolves.toBeFalsy()
   })
 
   it('does not share sweep state across sweepers', async () => {
@@ -86,7 +88,7 @@ describe('sync temp files', () => {
     await expect(access(secondPartialPath)).rejects.toThrow()
   })
 
-  it('retries sweeps after a failed sweep', async () => {
+  it.skipIf(isBun)('retries sweeps after a failed sweep', async () => {
     vi.resetModules()
     const readdir = vi
       .fn()

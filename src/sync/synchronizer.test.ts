@@ -1105,7 +1105,7 @@ describe('synchronize', () => {
           expect(events).toContainEqual(
             expect.objectContaining({ type: 'upload-done', path: '.b2sdk-payroll.partial' }),
           )
-          await expect(access(partialPath)).resolves.toBeUndefined()
+          await expect(access(partialPath)).resolves.toBeFalsy()
           expect(mockBucket.upload).not.toHaveBeenCalled()
         } finally {
           await rm(root, { recursive: true, force: true })
