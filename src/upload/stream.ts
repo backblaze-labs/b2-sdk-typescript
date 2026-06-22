@@ -14,7 +14,7 @@ import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
   DEFAULT_CLEANUP_TIMEOUT_MS,
-  notifyAmbiguousLargeFileCleanupSkipped,
+  handleAmbiguousFinishLargeFileResponseBodyError,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
@@ -352,12 +352,12 @@ export function createWriteStream(
         let finalError: Error = observedError
         if (fileIdToCancel !== null) {
           if (err instanceof FinishLargeFileResponseBodyError) {
-            finalError = enrichFinishLargeFileResponseBodyError(err, fileIdToCancel, options)
-            notifyAmbiguousLargeFileCleanupSkipped(
-              fileIdToCancel,
-              finalError,
-              options.onCleanupFailure,
-            )
+            finalError = handleAmbiguousFinishLargeFileResponseBodyError(err, {
+              fileId: fileIdToCancel,
+              bucketId: options.bucketId,
+              fileName: options.fileName,
+              onCleanupFailure: options.onCleanupFailure,
+            })
           } else {
             await cancelLargeFileBestEffort(
               raw,
@@ -410,26 +410,6 @@ function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {
       ? { onCleanupFailure: options.onCleanupFailure }
       : {}),
   }
-}
-
-function enrichFinishLargeFileResponseBodyError(
-  err: FinishLargeFileResponseBodyError,
-  fileId: LargeFileId,
-  options: CreateWriteStreamOptions,
-): FinishLargeFileResponseBodyError {
-  if (
-    err.fileId === fileId &&
-    err.bucketId === options.bucketId &&
-    err.fileName === options.fileName
-  ) {
-    return err
-  }
-  return new FinishLargeFileResponseBodyError(err.message, {
-    cause: err.cause ?? err,
-    fileId,
-    bucketId: options.bucketId,
-    fileName: options.fileName,
-  })
 }
 
 /**

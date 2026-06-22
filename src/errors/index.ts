@@ -623,17 +623,23 @@ export class NetworkError extends Error {
  * can create duplicate file versions or parts.
  */
 export class UploadResponseBodyError extends Error {
+  /** Underlying response body error, when available. */
+  public override readonly cause?: unknown
+
   /**
    * Creates a new UploadResponseBodyError instance.
    * @param message - Human-readable description of the response read failure.
-   * @param cause - The underlying response body error.
+   * @param options - Optional cause.
    */
   constructor(
     message: string,
-    public override readonly cause?: unknown,
+    options: {
+      readonly cause?: unknown
+    } = {},
   ) {
-    super(message, { cause })
+    super(message, { cause: options.cause })
     this.name = 'UploadResponseBodyError'
+    if (options.cause !== undefined) this.cause = options.cause
   }
 }
 

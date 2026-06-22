@@ -121,7 +121,7 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 
 function uploadResponseBodyError(err: unknown): UploadResponseBodyError {
   const message = err instanceof Error ? err.message : 'Upload response body could not be read'
-  return new UploadResponseBodyError(message, err)
+  return new UploadResponseBodyError(message, { cause: err })
 }
 
 /**

@@ -605,6 +605,51 @@ describe('FileAccountInfo', () => {
     expect(discards).toEqual(['endpoint_mismatch'])
   })
 
+  it.each([
+    ['sibling IPv4', 'http://127.0.0.2:8180'],
+    ['localhost alias', 'http://localhost:8180'],
+    ['IPv6 alias', 'http://[::1]:8180'],
+    ['different port', 'http://127.0.0.1:9999'],
+  ])('rejects %s loopback endpoints for a loopback realm', async (_label, endpoint) => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth({
+        apiUrl: `${endpoint}/api`,
+        downloadUrl: `${endpoint}/download`,
+        s3ApiUrl: `${endpoint}/s3`,
+      }),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'http://127.0.0.1:8180',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'http://127.0.0.1:8180',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await readFile(storePath, 'utf8')).toBe(cached)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('delegates every AccountInfo getter to the in-memory backing', async () => {
     const sim = new B2Simulator()
     const accountInfo = new FileAccountInfo(storePath)

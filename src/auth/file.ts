@@ -130,8 +130,8 @@ function isEndpointInRealm(url: string, realmUrl: string): boolean {
     const endpoint = new URL(url)
     const endpointHost = endpoint.hostname.toLowerCase()
     const realmHost = realm.hostname.toLowerCase()
-    if (isLoopbackEndpointHost(endpointHost)) {
-      return endpoint.protocol === realm.protocol && isLoopbackEndpointHost(realmHost)
+    if (isLoopbackEndpointHost(endpointHost) || isLoopbackEndpointHost(realmHost)) {
+      return endpoint.origin === realm.origin
     }
 
     const verifiedSuffix = verifiedRealmEndpointSuffix(realmUrl)

@@ -619,7 +619,7 @@ describe('NetworkError', () => {
 describe('UploadResponseBodyError', () => {
   it('extends Error and stores the cause', () => {
     const cause = new TypeError('body lost')
-    const err = new UploadResponseBodyError('body lost', cause)
+    const err = new UploadResponseBodyError('body lost', { cause })
 
     expect(err).toBeInstanceOf(Error)
     expect(err).not.toBeInstanceOf(B2Error)

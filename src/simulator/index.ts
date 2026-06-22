@@ -786,6 +786,7 @@ export class B2Simulator {
   /**
    * Dispatches a JSON API request to the appropriate handler.
    * @param _method - The HTTP method (unused).
+   * @param origin - The request URL origin used for simulator-issued endpoints.
    * @param path - The request URL path containing the B2 endpoint name.
    * @param headers - The HTTP request headers; consulted by the
    *   strict-auth gate to look up the issued auth token.
@@ -795,6 +796,7 @@ export class B2Simulator {
    */
   async handleRequest(
     _method: string,
+    origin: string,
     path: string,
     headers: Record<string, string>,
     body: unknown,
@@ -813,7 +815,7 @@ export class B2Simulator {
 
     switch (endpoint) {
       case 'b2_authorize_account':
-        return this.authorize(headers['authorization'])
+        return this.authorize(headers['authorization'], origin)
       case 'b2_create_bucket':
         return this.createBucket(
           body as { bucketName: string; bucketType: BucketType; accountId: string },
@@ -1317,7 +1319,10 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(authzHeader?: string): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(
+    authzHeader?: string,
+    origin = 'http://localhost:0',
+  ): { status: number; body: AuthorizeAccountResponse } {
     // Master capabilities granted to the implicit "test" credential.
     // Real B2 derives the capability list from the application key the
     // caller authorized with; in permissive mode every auth call gets
@@ -1373,14 +1378,14 @@ export class B2Simulator {
         apiInfo: {
           storageApi: {
             absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: 'http://localhost:0',
+            apiUrl: origin,
             bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
             bucketName: null,
-            downloadUrl: 'http://localhost:0',
+            downloadUrl: origin,
             infoType: 'storageApi',
             namePrefix: keyForAuth?.namePrefix ?? null,
             recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: 'http://localhost:0',
+            s3ApiUrl: origin,
             allowed: {
               capabilities: keyForAuth?.capabilities ?? capabilities,
               bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
@@ -2640,7 +2645,13 @@ class SimulatorTransport implements HttpTransport {
           body = text
         }
       }
-      result = await this.sim.handleRequest(request.method, parsedUrl.pathname, headers, body)
+      result = await this.sim.handleRequest(
+        request.method,
+        parsedUrl.origin,
+        parsedUrl.pathname,
+        headers,
+        body,
+      )
     }
 
     const responseBody = JSON.stringify(result.body)

@@ -541,14 +541,19 @@ class FileSliceSource extends FileRangeSource {}
  * Node filesystem APIs only when constructed or read. The constructor performs
  * synchronous filesystem validation so `size` is immediately available; request
  * handlers, sync loops, and other latency-sensitive code should use
- * {@link FileSource.fromPath}. Both paths capture a best-effort regular,
- * non-symlink file identity; reads reject if the path is replaced, if the
- * filesystem cannot report stable identity, or if size/mtime changes before the
- * configured byte range is read. On POSIX platforms, ctime changes are also
- * rejected so same-size rewrites that restore mtime are detected. Use an
- * independent digest when a caller must prove the bytes are unchanged. Slices
- * preserve the captured identity, so multipart uploads can read disjoint ranges
- * without materialising the whole file in memory or following later path swaps.
+ * {@link FileSource.fromPath}. Both paths capture a best-effort regular file
+ * identity and reject a symlink as the final path component; parent directory
+ * symlinks are followed by the operating system, so callers that constrain
+ * paths under a trusted root should validate those parents separately. Reads
+ * reject if the path is replaced, if the filesystem cannot report stable
+ * identity, or if size/mtime changes before the configured byte range is read.
+ * On POSIX platforms, ctime changes are also rejected so same-size rewrites
+ * that restore mtime are detected. On Windows, a same-size rewrite with a
+ * restored mtime can be undetectable through Node's portable stat fields; use
+ * an independent digest when a caller must prove the bytes are unchanged.
+ * Slices preserve the captured identity, so multipart uploads can read
+ * disjoint ranges without materialising the whole file in memory or following
+ * later leaf path swaps.
  */
 export class FileSource extends FileRangeSource {
   /**

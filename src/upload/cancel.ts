@@ -1,17 +1,33 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
-import type { LargeFileId } from '../types/ids.ts'
+import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
 
-/** Event emitted when best-effort large-file cleanup fails. */
-export interface CleanupFailureEvent {
+/** Event emitted when best-effort `b2_cancel_large_file` cleanup fails. */
+export interface CancelLargeFileCleanupFailureEvent {
   /** Unfinished large file that may remain orphaned. */
   readonly fileId: LargeFileId
   /** Error thrown by `b2_cancel_large_file`. */
   readonly error: unknown
   /** Cleanup phase that produced the observable event. */
-  readonly reason?: 'cancel-failed' | 'finish-ambiguous'
+  readonly reason: 'cancel-failed'
 }
+
+/** Event emitted when cleanup is skipped because finish may have committed. */
+export interface AmbiguousFinishCleanupFailureEvent {
+  /** Large file whose final server-side state is ambiguous. */
+  readonly fileId: LargeFileId
+  /** Error thrown to the caller with reconciliation metadata. */
+  readonly error: FinishLargeFileResponseBodyError
+  /** Cleanup phase that produced the observable event. */
+  readonly reason: 'finish-ambiguous'
+}
+
+/** Event emitted when large-file cleanup fails or is deliberately skipped. */
+export type CleanupFailureEvent =
+  | CancelLargeFileCleanupFailureEvent
+  | AmbiguousFinishCleanupFailureEvent
 
 /** Callback invoked when best-effort cleanup fails. */
 export type CleanupFailureListener = (event: CleanupFailureEvent) => void
@@ -180,7 +196,7 @@ function cleanupDomException(message: string, name: string): Error {
  */
 export function notifyAmbiguousLargeFileCleanupSkipped(
   fileId: LargeFileId,
-  error: unknown,
+  error: FinishLargeFileResponseBodyError,
   onCleanupFailure?: CleanupFailureListener,
 ): void {
   try {
@@ -188,4 +204,37 @@ export function notifyAmbiguousLargeFileCleanupSkipped(
   } catch {
     // Observer failures are secondary and must not hide the finish ambiguity.
   }
+}
+
+/**
+ * Adds high-level reconciliation metadata to an ambiguous finish response-body
+ * error and notifies the cleanup observer that cancellation was skipped.
+ *
+ * @param err - Raw finish response-body error from the low-level client.
+ * @param options - Large-file context used for reconciliation.
+ *
+ * @returns The enriched {@link FinishLargeFileResponseBodyError}.
+ */
+export function handleAmbiguousFinishLargeFileResponseBodyError(
+  err: FinishLargeFileResponseBodyError,
+  options: {
+    readonly fileId: LargeFileId
+    readonly bucketId: BucketId
+    readonly fileName: string
+    readonly onCleanupFailure?: CleanupFailureListener | undefined
+  },
+): FinishLargeFileResponseBodyError {
+  const enriched =
+    err.fileId === options.fileId &&
+    err.bucketId === options.bucketId &&
+    err.fileName === options.fileName
+      ? err
+      : new FinishLargeFileResponseBodyError(err.message, {
+          cause: err.cause ?? err,
+          fileId: options.fileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+        })
+  notifyAmbiguousLargeFileCleanupSkipped(options.fileId, enriched, options.onCleanupFailure)
+  return enriched
 }

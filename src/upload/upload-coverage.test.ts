@@ -4368,6 +4368,52 @@ describe('uploadSmallFile cleanup path', () => {
     expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
   })
 
+  it('does not cancel a pre-existing unfinished file for stream resume misuse', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-resume-preserve',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const started = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'resume-stream-preserve.bin',
+        contentType: 'b2/x-auto',
+      },
+    )
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-stream-preserve.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+        concurrency: 1,
+        resumeFileId: started.fileId,
+      }),
+    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((file) => file.fileId === started.fileId)).toBeDefined()
+  })
+
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {
     // The normalization helper must NOT touch real SHA-1 hex digests:
     // small-file uploads have a real whole-file SHA-1.

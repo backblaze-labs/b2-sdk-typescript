@@ -7,7 +7,7 @@ import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import {
   type CleanupFailureListener,
   cancelLargeFileBestEffort,
-  notifyAmbiguousLargeFileCleanupSkipped,
+  handleAmbiguousFinishLargeFileResponseBodyError,
 } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -165,14 +165,12 @@ export async function copyLargeFile(
     })
   } catch (err) {
     if (err instanceof FinishLargeFileResponseBodyError) {
-      const enriched = new FinishLargeFileResponseBodyError(err.message, {
-        cause: err.cause ?? err,
+      throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
         fileId: largeFileId,
         bucketId: destBucketId,
         fileName: options.fileName,
+        onCleanupFailure: options.onCleanupFailure,
       })
-      notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
-      throw enriched
     }
     await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, cleanupCopyOptions(options))
     throw err

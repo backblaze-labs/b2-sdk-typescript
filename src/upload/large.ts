@@ -17,7 +17,7 @@ import { createUploadAbortScope } from './abort-scope.ts'
 import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
-  notifyAmbiguousLargeFileCleanupSkipped,
+  handleAmbiguousFinishLargeFileResponseBodyError,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
@@ -262,13 +262,11 @@ export async function uploadLargeFile(
     parts,
   )
 
-  // --- Resume discovery (M11.1) ---
-  if (!options.source.canSlice && options.resumeFileId !== undefined) {
-    throw new Error(
-      'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
-    )
+  if (!options.source.canSlice && (options.resume === true || options.resumeFileId !== undefined)) {
+    throw new Error('uploadLargeFile: resume is not supported on non-sliceable sources.')
   }
 
+  // --- Explicit resume file reuse (M11.1) ---
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
   let createdLargeFile = false
@@ -334,17 +332,6 @@ export async function uploadLargeFile(
   // then dropped before the next read starts, so the peak memory footprint is
   // ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
-    if (options.resume === true || options.resumeFileId !== undefined) {
-      // Cancel the unfinished large file before throwing so the caller
-      // doesn't have to clean it up themselves.
-      await cancelLargeFileBestEffort(
-        raw,
-        accountInfo,
-        largeFileId,
-        cleanupLargeFileOptions(options),
-      )
-      throw new Error('uploadLargeFile: resume is not supported on non-sliceable sources.')
-    }
     const abortScope = createUploadAbortScope(options.signal)
     try {
       await uploadPartsSequentially(
@@ -369,9 +356,12 @@ export async function uploadLargeFile(
     } catch (err) {
       abortScope.abort(err)
       if (err instanceof FinishLargeFileResponseBodyError) {
-        const enriched = enrichFinishLargeFileResponseBodyError(err, largeFileId, options)
-        notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
-        throw enriched
+        throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
+          fileId: largeFileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          onCleanupFailure: options.onCleanupFailure,
+        })
       }
       if (createdLargeFile) {
         await cancelLargeFileBestEffort(
@@ -473,9 +463,12 @@ export async function uploadLargeFile(
   } catch (err) {
     abortScope.abort(err)
     if (err instanceof FinishLargeFileResponseBodyError) {
-      const enriched = enrichFinishLargeFileResponseBodyError(err, largeFileId, options)
-      notifyAmbiguousLargeFileCleanupSkipped(largeFileId, enriched, options.onCleanupFailure)
-      throw enriched
+      throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
+        fileId: largeFileId,
+        bucketId: options.bucketId,
+        fileName: options.fileName,
+        onCleanupFailure: options.onCleanupFailure,
+      })
     }
     if (createdLargeFile) {
       await cancelLargeFileBestEffort(
@@ -489,26 +482,6 @@ export async function uploadLargeFile(
   } finally {
     abortScope.dispose()
   }
-}
-
-function enrichFinishLargeFileResponseBodyError(
-  err: FinishLargeFileResponseBodyError,
-  fileId: LargeFileId,
-  options: UploadLargeFileOptions,
-): FinishLargeFileResponseBodyError {
-  if (
-    err.fileId === fileId &&
-    err.bucketId === options.bucketId &&
-    err.fileName === options.fileName
-  ) {
-    return err
-  }
-  return new FinishLargeFileResponseBodyError(err.message, {
-    cause: err.cause ?? err,
-    fileId,
-    bucketId: options.bucketId,
-    fileName: options.fileName,
-  })
 }
 
 /**

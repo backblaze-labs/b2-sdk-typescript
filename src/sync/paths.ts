@@ -47,3 +47,79 @@ export function resolveSafeLocalPath(
   }
   return fullPath
 }
+
+/**
+ * Resolves and prepares a local download target under a sync root, rejecting
+ * symlinked parent directories before the caller opens the file for writing.
+ * @param root - Absolute local sync root.
+ * @param relativePath - Sync-relative path to write.
+ *
+ * @returns The absolute local filesystem path.
+ *
+ * @throws If the target escapes the root, uses a reserved basename, or has a
+ *   symlinked parent component.
+ */
+export async function resolveSafeLocalWritePath(
+  root: string,
+  relativePath: string,
+): Promise<string> {
+  if (root === '') {
+    throw new Error('Sync local root is required for downloads.')
+  }
+
+  const path = await import('node:path')
+  const { lstat, mkdir, realpath } = await import('node:fs/promises')
+  const fullPath = resolveSafeLocalPath(root, relativePath, path)
+  const parentPath = path.dirname(fullPath)
+  const rootPath = path.resolve(root)
+  await mkdir(rootPath, { recursive: true })
+  const rootStats = await lstat(rootPath)
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    throw new Error(`Sync local root is not a real directory: ${root}`)
+  }
+
+  const parentFromRoot = path.relative(rootPath, parentPath)
+  let current = rootPath
+  if (parentFromRoot !== '') {
+    for (const segment of parentFromRoot.split(path.sep).filter(Boolean)) {
+      current = path.resolve(current, segment)
+      let stats: Awaited<ReturnType<typeof lstat>>
+      try {
+        stats = await lstat(current)
+      } catch (err) {
+        if (!isNodeErrorCode(err, 'ENOENT')) throw err
+        try {
+          await mkdir(current)
+        } catch (mkdirErr) {
+          if (!isNodeErrorCode(mkdirErr, 'EEXIST')) throw mkdirErr
+        }
+        stats = await lstat(current)
+      }
+      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+        throw new Error(`Sync path has an unsafe parent directory: ${relativePath}`)
+      }
+    }
+  }
+
+  const rootRealPath = await realpath(rootPath)
+  const parentRealPath = await realpath(parentPath)
+  const relativeParent = path.relative(rootRealPath, parentRealPath)
+  if (
+    relativeParent === '..' ||
+    relativeParent.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeParent)
+  ) {
+    throw new Error(`Sync path escapes the local root: ${relativePath}`)
+  }
+
+  return fullPath
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { readonly code?: unknown }).code === code
+  )
+}

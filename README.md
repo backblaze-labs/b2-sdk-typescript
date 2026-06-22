@@ -125,7 +125,9 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response body was lost, retrying can create a duplicate file version.
+`FileSource` rejects non-regular leaf paths and later leaf path swaps on a best-effort filesystem identity check. Parent directory symlinks are followed unless your application validates the containing root first. On Windows, a same-size rewrite with a restored mtime can be undetectable through Node's portable stat fields; use `compareMode: 'sha1'` in sync flows or an independent digest when tamper-resistant local integrity matters.
+
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
 
 Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
@@ -611,7 +613,7 @@ The default transport follows same-origin `GET` / `HEAD` redirects after each ta
 The SDK automatically retries transient errors with exponential backoff:
 
 - **401 expired_auth_token**: re-authorizes and retries
-- **503, 408, 429**: exponential backoff with jitter, respects `Retry-After` header
+- **408, 429, transient 5xx (500, 502, 503, 504)**: exponential backoff with jitter, respects `Retry-After` header
 - **Network errors**: retried with backoff
 - **Permanent errors** (403 cap_exceeded, 404 not_found, etc.): thrown immediately
 
@@ -630,7 +632,7 @@ const client = new B2Client({
 })
 ```
 
-When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe a failed cleanup with the orphaned `fileId` so operators can reconcile unfinished large files.
+When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
 
 ## Testing with the simulator
 

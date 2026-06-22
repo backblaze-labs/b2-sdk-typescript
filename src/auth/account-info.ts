@@ -34,6 +34,19 @@ export interface AuthContextAwareAccountInfo {
  * pools of reusable upload URLs (checkout/checkin/evict pattern).
  */
 export interface AccountInfo {
+  /**
+   * @deprecated Persistent auth stores should implement
+   * {@link AuthContextAwareAccountInfo}. This optional hook remains for
+   * source compatibility with older integrations.
+   */
+  setRealmUrl?(realmUrl: string): void
+  /**
+   * @deprecated Persistent auth stores should implement
+   * {@link AuthContextAwareAccountInfo}. This optional hook remains for
+   * source compatibility with older integrations.
+   */
+  setApplicationKeyId?(applicationKeyId: string): void
+
   /** Store a fresh authorization response, replacing any previous state. */
   setAuth(auth: AuthorizeAccountResponse): void
   /** Return the current authorization response, or null if not authorized. */

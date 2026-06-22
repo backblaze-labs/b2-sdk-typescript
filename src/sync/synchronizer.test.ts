@@ -2764,7 +2764,7 @@ describe('synchronize', () => {
 
     it.skipIf(!isNode || isWindows)('rejects symlinked local parents on download', async () => {
       const { tmpdir } = await import('node:os')
-      const { mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')
+      const { mkdir, mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
       const { join } = await import('node:path')
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-symlink-root-'))
       const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-symlink-out-'))
@@ -2783,7 +2783,7 @@ describe('synchronize', () => {
         const events = await collectEvents(config)
 
         expect(events.some((event) => event.type === 'error')).toBe(true)
-        await expect(rm(join(outside, 'payload.txt'), { force: false })).rejects.toThrow()
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
       } finally {
         await rm(root, { recursive: true, force: true })
         await rm(outside, { recursive: true, force: true })
