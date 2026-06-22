@@ -33,6 +33,77 @@ export const localFileIoTestHooks: {
   statForDeviceCheck?: DeviceStatFn
 } = {}
 
+interface ScannedLocalFileHandle {
+  stat(): Promise<{
+    isFile(): boolean
+    readonly dev: number
+    readonly ino: number
+    readonly mtimeMs: number
+    readonly size: number
+  }>
+  readFile(): Promise<Uint8Array>
+  close(): Promise<void>
+}
+
+/**
+ * Verifies that a previously scanned local file still points at the same regular file.
+ *
+ * @param path - Scanned local path and file identity.
+ *
+ * @internal
+ */
+export async function validateScannedLocalFile(path: LocalSyncPath): Promise<void> {
+  const handle = await openValidatedScannedLocalFile(path)
+  await handle.close()
+}
+
+/**
+ * Reads a previously scanned local file while rejecting symlink swaps and metadata drift.
+ *
+ * @param path - Scanned local path and file identity.
+ *
+ * @returns The file bytes.
+ *
+ * @internal
+ */
+export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
+  const handle = await openValidatedScannedLocalFile(path)
+  try {
+    const data = await handle.readFile()
+    if (data.byteLength !== path.size) {
+      throw new Error('local file changed before upload: size changed while reading')
+    }
+    return data
+  } finally {
+    await handle.close()
+  }
+}
+
+async function openValidatedScannedLocalFile(path: LocalSyncPath): Promise<ScannedLocalFileHandle> {
+  const { constants } = await import('node:fs')
+  const { open } = await import('node:fs/promises')
+  const flags =
+    constants.O_RDONLY |
+    noFollowFlag(constants) |
+    ((constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0)
+  const handle = await open(path.absolutePath, flags).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ELOOP')) {
+      throw new Error('local file changed before upload: not a regular file')
+    }
+    throw new Error(
+      `local file changed before upload: could not open scanned file: ${sanitizeErrorReason(err)}`,
+    )
+  })
+  try {
+    const stats = await handle.stat()
+    assertSameScannedRegularFile(stats, path)
+    return handle
+  } catch (err) {
+    await handle.close().catch(() => {})
+    throw err
+  }
+}
+
 /**
  * Writes bytes under a local sync root after path containment checks.
  *
@@ -118,13 +189,18 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
-  const statForDeviceCheck = localFileIoTestHooks.statForDeviceCheck ?? stat
-  await assertDownloadPathSameDevice(
-    rootRealPath,
-    parentRealPath,
-    statForDeviceCheck,
-    'unsafe local destination path: cannot publish download across filesystems',
-  )
+  try {
+    const targetStats = await lstat(finalPath)
+    if (targetStats.isSymbolicLink()) {
+      throw new Error('unsafe local destination path: target is a symbolic link')
+    }
+    if (targetStats.isFile() && targetStats.nlink > 1) {
+      throw new Error('unsafe local destination path: target has multiple hard links')
+    }
+  } catch (err) {
+    if (!hasErrorCode(err, 'ENOENT')) throw err
+  }
+  await options.downloadTempFileSweeper?.(parentRealPath)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined

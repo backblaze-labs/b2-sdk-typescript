@@ -23,6 +23,7 @@ import {
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import {
   deleteLocalFileInsideRoot,
+  validateScannedLocalFile,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
 import { readLocalSha1File } from './local-sha1.ts'
@@ -812,6 +813,7 @@ function createActionFactory(
           // same-size rewrite detection should use compareMode: 'sha1' or an
           // independent digest because restored modification times can hide
           // local rewrites.
+          await validateScannedLocalFile(source)
           const fileSource = await FileSource.fromPath(targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
