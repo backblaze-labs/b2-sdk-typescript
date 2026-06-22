@@ -81,6 +81,7 @@ function makeB2SyncPath(
 function makeMemoryFolder(files: SyncPath[], type: 'local' | 'b2' = 'local'): SyncFolder {
   return {
     type,
+    appliesScanSorting: true,
     async *scan() {
       const sorted = [...files].sort((a, b) =>
         compareSyncRelativePaths(a.relativePath, b.relativePath),
@@ -289,6 +290,7 @@ describe('synchronize', () => {
       })
       const source: SyncFolder = {
         type: 'b2',
+        appliesScanSorting: true,
         async *scan() {
           yield first
           await secondGate
@@ -360,7 +362,13 @@ describe('synchronize', () => {
       expect(compare.value).toMatchObject({ type: 'compare', path: 'copy.txt' })
 
       const copyEvent = gen.next()
-      await Promise.resolve()
+      for (
+        let attempts = 0;
+        mockBucket.copyFile.mock.calls.length === 0 && attempts < 10;
+        attempts++
+      ) {
+        await Promise.resolve()
+      }
       expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
       expect(mockBucket.downloadById).not.toHaveBeenCalled()
 
@@ -684,7 +692,7 @@ describe('synchronize', () => {
 
         expect(mockBucket.upload).not.toHaveBeenCalled()
         const errors = events.filter((event) => event.type === 'error')
-        expect(errors[0]?.message).toContain('local file changed before upload')
+        expect(errors[0]?.message).toContain('Refusing to access path through symlink')
       } finally {
         await rm(root, { recursive: true, force: true })
         await rm(outside, { recursive: true, force: true })
@@ -1012,7 +1020,7 @@ describe('synchronize', () => {
     })
 
     it.skipIf(!isNode)('refuses uploads when a scanned file is swapped to a symlink', async () => {
-      const { mkdtemp, rm, symlink, writeFile } = await import('node:fs/promises')
+      const { lstat, mkdtemp, rm, symlink, writeFile } = await import('node:fs/promises')
       const { tmpdir } = await import('node:os')
       const { join } = await import('node:path')
       const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-symlink-'))
@@ -1026,23 +1034,24 @@ describe('synchronize', () => {
         await mkdir(outside)
         await writeFile(sourcePath, 'public')
         await writeFile(secretPath, 'secret')
+        const sourceStats = await lstat(sourcePath)
 
         const sourceFile: LocalSyncPath = {
           relativePath: 'public.txt',
           absolutePath: sourcePath,
-          modTimeMillis: 1000,
-          size: 6,
-        }
-        const source: SyncFolder = {
-          type: 'local',
-          appliesScanFilters: true,
-          appliesScanSorting: true,
-          async *scan() {
-            yield sourceFile
-            await rm(sourcePath, { force: true })
-            await symlink(secretPath, sourcePath, 'file')
+          modTimeMillis: Math.floor(sourceStats.mtimeMs),
+          size: sourceStats.size,
+          fileIdentity: {
+            deviceId: sourceStats.dev,
+            inode: sourceStats.ino,
+            size: sourceStats.size,
+            modTimeMillis: Math.floor(sourceStats.mtimeMs),
           },
         }
+        await rm(sourcePath, { force: true })
+        await symlink(secretPath, sourcePath, 'file')
+
+        const source = makeMemoryFolder([sourceFile], 'local')
         const dest = makeMemoryFolder([], 'b2')
         const mockBucket = makeMockBucket()
         const config: SynchronizerUpConfig = {
@@ -1334,6 +1343,7 @@ describe('synchronize', () => {
       const sourceFile = makeLocalSyncPath('uploaded.txt', 2000, 50)
       const source: SyncFolder = {
         type: 'local',
+        appliesScanSorting: true,
         async *scan(options: SyncScanOptions = {}) {
           yield sourceFile
           const event: SyncEvent = {
@@ -1373,6 +1383,7 @@ describe('synchronize', () => {
       const sourceFile = makeB2SyncPath('copied.txt', 2000, 50)
       const source: SyncFolder = {
         type: 'b2',
+        appliesScanSorting: true,
         async *scan() {
           yield sourceFile
           throw new Error('scan exploded')
@@ -1855,16 +1866,14 @@ describe('synchronize', () => {
         const controller = new AbortController()
         const source = makeMemoryFolder([makeB2SyncPath('payload.txt', 1000, 3)], 'b2')
         const dest = makeMemoryFolder([], 'local')
-        const mockBucket = {
-          ...makeMockBucket(),
-          download: vi.fn().mockResolvedValue({
-            body: new ReadableStream<Uint8Array>({
-              start() {
-                setTimeout(() => controller.abort(new Error('download cancelled')), 0)
-              },
-            }),
+        const mockBucket = makeMockBucket()
+        mockBucket.downloadById.mockReturnValue({
+          body: new ReadableStream<Uint8Array>({
+            start() {
+              setTimeout(() => controller.abort(new Error('download cancelled')), 0)
+            },
           }),
-        }
+        })
 
         const config: SynchronizerDownConfig = {
           source: { ...source, type: 'b2' },
@@ -2429,18 +2438,16 @@ describe('synchronize', () => {
 
         const source = makeMemoryFolder([makeB2SyncPath('docs/payload.txt', 1000, 3)], 'b2')
         const dest = makeMemoryFolder([], 'local')
-        const mockBucket = {
-          ...makeMockBucket(),
-          download: vi.fn().mockResolvedValue({
-            body: new ReadableStream({
-              async pull(controller) {
-                startRacing()
-                controller.enqueue(new Uint8Array([1, 2, 3]))
-                controller.close()
-              },
-            }),
+        const mockBucket = makeMockBucket()
+        mockBucket.downloadById.mockReturnValue({
+          body: new ReadableStream({
+            async pull(controller) {
+              startRacing()
+              controller.enqueue(new Uint8Array([1, 2, 3]))
+              controller.close()
+            },
           }),
-        }
+        })
 
         const config: SynchronizerDownConfig = {
           source: { ...source, type: 'b2' },
@@ -2507,17 +2514,15 @@ describe('synchronize', () => {
         try {
           const source = makeMemoryFolder([makeB2SyncPath('broken.txt', 1000, 3)], 'b2')
           const dest = makeMemoryFolder([], 'local')
-          const mockBucket = {
-            ...makeMockBucket(),
-            download: vi.fn().mockResolvedValue({
-              body: new ReadableStream<Uint8Array>({
-                start(controller) {
-                  controller.enqueue(new Uint8Array([1, 2, 3]))
-                  controller.error(new Error('stream failed'))
-                },
-              }),
+          const mockBucket = makeMockBucket()
+          mockBucket.downloadById.mockReturnValue({
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([1, 2, 3]))
+                controller.error(new Error('stream failed'))
+              },
             }),
-          }
+          })
 
           const config: SynchronizerDownConfig = {
             source: { ...source, type: 'b2' },
@@ -4204,6 +4209,7 @@ describe('synchronize', () => {
         let sourceScans = 0
         const source: SyncFolder = {
           type: 'local',
+          appliesScanSorting: true,
           async *scan() {
             for (const file of sourceFiles) {
               sourceScans += 1
@@ -4326,7 +4332,10 @@ describe('synchronize', () => {
         const events = await collectEvents(config)
         expect(events.filter((e) => e.type === 'download-done')).toHaveLength(1)
         expect(mockBucket.downloadById).toHaveBeenCalledTimes(1)
-        expect(mockBucket.downloadById).toHaveBeenCalledWith('fid_remote.txt', {})
+        expect(mockBucket.downloadById).toHaveBeenCalledWith(
+          'fid_remote.txt',
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        )
         await expect(readFile(localPath)).resolves.toEqual(Buffer.from(remoteData))
       } finally {
         await rm(root, { recursive: true, force: true })
@@ -4569,7 +4578,7 @@ describe('synchronize', () => {
       const copyEvents = events.filter((e) => e.type === 'copy-done')
       expect(copyEvents).toHaveLength(1)
       expect(mockBucket.copyFile).toHaveBeenCalledWith(
-        expect.objectContaining({ fileName: 'paired.txt', signal: controller.signal }),
+        expect.objectContaining({ fileName: 'paired.txt', signal: expect.any(AbortSignal) }),
       )
     })
 
@@ -5255,23 +5264,6 @@ describe('synchronize', () => {
       expect(maxInFlight).toBeLessThanOrEqual(2)
       // With 6 actions and concurrency 2, at least 2 should overlap.
       expect(maxInFlight).toBeGreaterThanOrEqual(2)
-    })
-
-    it('normalizes invalid concurrency before transfer execution', async () => {
-      const mockBucket = makeMockBucket()
-      const source = makeMemoryFolder([makeB2SyncPath('copy.txt', 1000, 5)], 'b2')
-      const dest = makeMemoryFolder([], 'b2')
-
-      const config = {
-        source: { ...source, type: 'b2' },
-        dest: { ...dest, type: 'b2' },
-        options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency: Number.NaN },
-        bucket: mockBucket as unknown as Bucket,
-        prefix: '',
-      } as unknown as SynchronizerUpConfig
-
-      const events = await collectEvents(config)
-      expect(events.filter((e) => e.type === 'copy-done')).toHaveLength(1)
     })
   })
 

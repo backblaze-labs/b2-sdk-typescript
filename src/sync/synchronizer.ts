@@ -268,6 +268,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     items: readonly PreparedActionPlan[],
   ): AsyncGenerator<SyncEvent, boolean> {
     for (const item of items) {
+      yield* emitQueuedEvents()
       yield item.event
       yield* emitQueuedEvents()
       /* v8 ignore next -- abort between compare yield and scheduling is timing-dependent */
@@ -406,8 +407,9 @@ function normalizeSyncConcurrency(value: number | undefined): number {
 
 function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
   if (value === undefined) return DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS
+  if (value === Number.POSITIVE_INFINITY) return value
   if (!Number.isFinite(value) || value < 1) {
-    throw new Error('downloadIdleTimeoutMs must be a positive finite number')
+    throw new Error('downloadIdleTimeoutMs must be a positive finite number or Infinity')
   }
   return Math.floor(value)
 }
@@ -545,9 +547,6 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
   const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
-  const downloadIdleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
-    config.options.downloadIdleTimeoutMs,
-  )
 
   const destBucket = upConfig.bucket ?? downConfig.bucket
   // Defensive optional chain on `info`: synchronizer tests use Bucket
@@ -609,7 +608,9 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         await ensureLocalSyncRootDirectory(root, relPath)
         await writeLocalStreamInsideRoot(root, relPath, result.body, {
           expectedBytes: source.selectedVersion.contentLength,
-          idleTimeoutMillis: downloadIdleTimeoutMillis,
+          idleTimeoutMillis: normalizeDownloadIdleTimeoutMillis(
+            config.options.downloadIdleTimeoutMs,
+          ),
           ...(signal !== undefined ? { signal } : {}),
         })
       })

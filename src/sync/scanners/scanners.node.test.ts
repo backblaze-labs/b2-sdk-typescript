@@ -493,8 +493,8 @@ describe('B2Folder', () => {
     }
 
     const folder = new B2Folder(mockBucket as unknown as Bucket)
-    await expect(collect<B2SyncPath>(folder.scan({ signal: controller.signal }))).rejects.toThrow(
-      'stop scan',
+    await expect(collect<B2SyncPath>(folder.scan({ signal: controller.signal }))).resolves.toEqual(
+      [],
     )
     expect(calls).toEqual([{}])
   })

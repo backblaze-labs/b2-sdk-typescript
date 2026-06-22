@@ -337,7 +337,7 @@ export interface SyncFolder {
    * True when `scan(filters)` already enforces include/exclude filters itself.
    * Custom folders that set this should use the exported filter helpers from
    * `@backblaze-labs/b2-sdk/sync` to stay aligned with the SDK glob and RegExp dialect.
-  */
+   */
   readonly appliesScanFilters?: true
   /**
    * True when `scan(filters)` already yields entries in `compareSyncRelativePaths` order.

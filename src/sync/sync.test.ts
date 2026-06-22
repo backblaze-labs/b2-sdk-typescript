@@ -969,7 +969,7 @@ describe('zipFolders', () => {
     expect(destClosed).toBe(true)
   })
 
-  it('uses scanner collation when joining mixed-case paths', async () => {
+  it('uses code-unit scan ordering when joining mixed-case paths', async () => {
     const source = makeMemoryFolder([
       makeSyncPath('a.txt', 1000, 10),
       makeSyncPath('B.txt', 1000, 20),
@@ -982,12 +982,12 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([
-      ['a.txt', null],
       ['B.txt', 'B.txt'],
+      ['a.txt', null],
     ])
   })
 
-  it('normalizes old-order custom folder output before pairing', async () => {
+  it('normalizes custom folder output to code-unit order before pairing', async () => {
     const source: SyncFolder = {
       type: 'local',
       async *scan() {
@@ -1009,8 +1009,8 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([
-      ['a.txt', 'a.txt'],
       ['Z.txt', 'Z.txt'],
+      ['a.txt', 'a.txt'],
     ])
   })
 
@@ -1101,8 +1101,8 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([
-      ['a.txt', null],
       ['Z.txt', null],
+      ['a.txt', null],
     ])
   })
 

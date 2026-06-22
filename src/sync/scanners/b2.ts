@@ -2,12 +2,12 @@ import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { FileId } from '../../types/ids.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
-import { isAbortError } from '../local-sha1.ts'
 import {
   literalPrefixForSyncFilters,
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
+import { isAbortError } from '../local-sha1.ts'
 import { compareCodeUnits, compareSyncRelativePaths } from '../path-order.ts'
 import {
   asRawB2KeyPrefix,
@@ -66,6 +66,7 @@ export class B2Folder implements SyncFolder {
    * Lists all file versions in the bucket, groups by name, and yields the latest visible version.
    * @param options - Optional scan controls.
    */
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: pagination, grouping, and filtering stay in one async iterator.
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<B2SyncPath> {
     validateSyncFilters(options)
     const maxScanEntries = scanEntryLimit(options)
@@ -77,7 +78,7 @@ export class B2Folder implements SyncFolder {
     let startFileId: FileId | undefined
 
     while (true) {
-      throwIfScanAborted(options)
+      if (scanIsAborted(options)) return
 
       let listing: Awaited<ReturnType<Bucket['listFileVersions']>>
       try {
@@ -88,14 +89,13 @@ export class B2Folder implements SyncFolder {
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (err) {
-        throwIfScanAborted(options)
-        if (isAbortError(err)) throw err
+        if (scanIsAborted(options) || isAbortError(err)) return
         throw emitScanError(options, 'failed to scan B2 file versions', err)
       }
-      throwIfScanAborted(options)
+      if (scanIsAborted(options)) return
 
       for (const fv of listing.files) {
-        throwIfScanAborted(options)
+        if (scanIsAborted(options)) return
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
@@ -160,7 +160,7 @@ export class B2Folder implements SyncFolder {
     )
 
     for (const { relativePath, versions, selectedVersion } of sorted) {
-      throwIfScanAborted(options)
+      if (scanIsAborted(options)) return
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
@@ -370,8 +370,6 @@ function removeAcceptedCandidate(
   if (index !== -1) candidates.splice(index, 1)
 }
 
-function throwIfScanAborted(filters: SyncScanOptions | undefined): void {
-  if (filters?.signal?.aborted === true) {
-    throw filters.signal.reason ?? new DOMException('Aborted', 'AbortError')
-  }
+function scanIsAborted(filters: SyncScanOptions | undefined): boolean {
+  return filters?.signal?.aborted === true
 }

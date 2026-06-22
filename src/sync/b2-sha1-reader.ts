@@ -24,11 +24,14 @@ export async function readStreamChunkWithTimeout(
   let timeout: ReturnType<typeof setTimeout> | undefined
   let removeAbortListener: (() => void) | undefined
   const readPromise = reader.read()
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      reject(new Error(stalledMessage))
-    }, timeoutMillis)
-  })
+  const timeoutPromise =
+    timeoutMillis === Number.POSITIVE_INFINITY
+      ? undefined
+      : new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(stalledMessage))
+          }, timeoutMillis)
+        })
   const abortPromise =
     signal === undefined
       ? undefined
@@ -39,11 +42,11 @@ export async function readStreamChunkWithTimeout(
         })
 
   try {
-    return await Promise.race(
-      abortPromise === undefined
-        ? [readPromise, timeoutPromise]
-        : [readPromise, timeoutPromise, abortPromise],
-    )
+    if (timeoutPromise === undefined && abortPromise === undefined) return await readPromise
+    const candidates = [readPromise]
+    if (timeoutPromise !== undefined) candidates.push(timeoutPromise)
+    if (abortPromise !== undefined) candidates.push(abortPromise)
+    return await Promise.race(candidates)
   } finally {
     if (timeout !== undefined) clearTimeout(timeout)
     removeAbortListener?.()
