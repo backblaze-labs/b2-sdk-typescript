@@ -38,6 +38,13 @@ describe('sync filters', () => {
   it('bounds accepted regex filter inputs before matching', () => {
     expect(pathPassesSyncFilters(`x${'a'.repeat(1023)}`, { include: [/^x.*y$/] })).toBe(false)
     expect(pathPassesSyncFilters('a'.repeat(1025), { include: [/^a+$/] })).toBe(false)
+    expect(pathPassesSyncFilters('a'.repeat(1025), { exclude: [/\.bak$/] })).toBe(true)
+    expect(
+      pathPassesSyncFilters(`docs/${'a'.repeat(1025)}`, {
+        include: ['docs/**'],
+        exclude: [/\.bak$/],
+      }),
+    ).toBe(true)
   })
 
   it('does not retain state when matching regular expression filters', () => {

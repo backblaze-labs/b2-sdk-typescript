@@ -8,7 +8,6 @@ import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
-import { isSyncDownloadTempName } from '../temp-files.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 type LocalDirent = {
@@ -28,7 +27,6 @@ type LocalStats = {
 type LocalNodeDeps = {
   readdir(path: string, options: { readonly withFileTypes: true }): Promise<LocalDirent[]>
   lstat(path: string): Promise<LocalStats>
-  rm(path: string, options: { readonly force: true }): Promise<void>
   join(...paths: string[]): string
   relative(from: string, to: string): string
   sep: string
@@ -67,7 +65,7 @@ export class LocalFolder implements SyncFolder {
     await this.walk(this.root, collected, options, scanEntryLimit(options), nodeDeps)
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
-      if (options.signal?.aborted) return
+      throwIfScanAborted(options)
       yield entry
     }
   }
@@ -87,8 +85,7 @@ export class LocalFolder implements SyncFolder {
     maxScanEntries: number,
     nodeDeps: LocalNodeDeps,
   ): Promise<void> {
-    if (options.signal?.aborted) return
-
+    throwIfScanAborted(options)
     let entries: LocalDirent[]
     try {
       entries = await nodeDeps.readdir(dir, { withFileTypes: true })
@@ -104,8 +101,7 @@ export class LocalFolder implements SyncFolder {
     }
 
     for (const entry of entries) {
-      if (options.signal?.aborted) return
-
+      throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
       const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
       if (rel.includes('\\')) {
@@ -116,10 +112,6 @@ export class LocalFolder implements SyncFolder {
           reason: 'unsafe-name',
           message: `Skipped local path ${JSON.stringify(rel)}: backslashes are not safe sync path characters`,
         })
-        continue
-      }
-      if (entry.isFile() && isSyncDownloadTempName(entry.name)) {
-        await nodeDeps.rm(fullPath, { force: true }).catch(() => undefined)
         continue
       }
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
@@ -191,7 +183,6 @@ async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
   return {
     readdir: fsPromises.readdir as LocalNodeDeps['readdir'],
     lstat: fsPromises.lstat as LocalNodeDeps['lstat'],
-    rm: fsPromises.rm as LocalNodeDeps['rm'],
     join: path.join,
     relative: path.relative,
     sep: path.sep,
@@ -200,4 +191,10 @@ async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
 
 function relativePathFromRoot(root: string, path: string, nodeDeps: LocalNodeDeps): string {
   return nodeDeps.relative(root, path).split(nodeDeps.sep).join('/')
+}
+
+function throwIfScanAborted(options: SyncScanOptions): void {
+  if (options.signal?.aborted === true) {
+    throw options.signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
 }

@@ -121,6 +121,17 @@ describe('LocalFolder', () => {
     )
   })
 
+  it('stops local scans when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    controller.abort(new Error('stop local scan'))
+    await writeFile(join(tmpDir, 'file.txt'), 'content')
+
+    const folder = new LocalFolder(tmpDir)
+    await expect(
+      collect<LocalSyncPath>(folder.scan({ signal: controller.signal })),
+    ).rejects.toThrow('stop local scan')
+  })
+
   it('uses forward slashes in relative paths even on the current platform', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
     await writeFile(join(tmpDir, 'a', 'b', 'file.txt'), 'content')
@@ -424,7 +435,7 @@ describe('B2Folder', () => {
     )
   })
 
-  it('counts retained B2 names, not raw listed versions, for scan limits', async () => {
+  it('counts retained B2 versions for scan limits', async () => {
     const bucket = await client.createBucket({
       bucketName: 'scan-limit-versions-bucket',
       bucketType: BucketType.AllPrivate,
@@ -435,10 +446,57 @@ describe('B2Folder', () => {
     await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a2')) })
 
     const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'Sync scan entry limit exceeded',
+    )
+    const entries = await collect<B2SyncPath>(folder.scan({ maxScanEntries: 2 }))
 
     expect(entries.map((entry) => entry.relativePath)).toEqual(['a.txt'])
     expect(entries[0]?.allVersions).toHaveLength(2)
+  })
+
+  it('stops B2 scans before the next page when the signal aborts', async () => {
+    function makeFileVersion(name: string): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${name}` as unknown as FileId,
+        fileInfo: {},
+        fileName: name,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp: 1,
+      }
+    }
+
+    const controller = new AbortController()
+    const calls: Array<{ startFileName?: string }> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { startFileName?: string }) {
+        calls.push({
+          ...(opts?.startFileName !== undefined ? { startFileName: opts.startFileName } : {}),
+        })
+        controller.abort(new Error('stop scan'))
+        return {
+          files: [makeFileVersion('first.txt')],
+          nextFileName: 'second.txt',
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    await expect(collect<B2SyncPath>(folder.scan({ signal: controller.signal }))).rejects.toThrow(
+      'stop scan',
+    )
+    expect(calls).toEqual([{}])
   })
 
   it('groups multiple versions and picks the latest', async () => {
@@ -817,10 +875,14 @@ describe('B2Folder', () => {
             makeFileVersion('safe.txt', 1),
             makeFileVersion('name:stream', 2),
             makeFileVersion('AUX.txt', 3),
-            makeFileVersion('trailing.', 4),
-            makeFileVersion('trailing ', 5),
-            makeFileVersion('Readme.txt', 6),
-            makeFileVersion('README.txt', 7),
+            makeFileVersion('CONIN$', 4),
+            makeFileVersion('COM0.txt', 5),
+            makeFileVersion('nul.tar.gz', 6),
+            makeFileVersion('dir/C:/x', 7),
+            makeFileVersion('trailing.', 8),
+            makeFileVersion('trailing ', 9),
+            makeFileVersion('Readme.txt', 10),
+            makeFileVersion('README.txt', 11),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -843,6 +905,10 @@ describe('B2Folder', () => {
     expect(skips).toEqual([
       'local-unsafe-name:name:stream',
       'local-unsafe-name:AUX.txt',
+      'local-unsafe-name:CONIN$',
+      'local-unsafe-name:COM0.txt',
+      'local-unsafe-name:nul.tar.gz',
+      'local-unsafe-name:dir/C:/x',
       'local-unsafe-name:trailing.',
       'local-unsafe-name:trailing ',
       'local-path-collision:Readme.txt',
@@ -850,7 +916,7 @@ describe('B2Folder', () => {
     ])
   })
 
-  it('reports paths that are too long for RegExp filters', async () => {
+  it('keeps long paths for exclude-only RegExp filters', async () => {
     const longRelativePath = `${'deep/'.repeat(205)}file.txt`
     const fileVersion: FileVersion = {
       accountId: 'acc' as unknown as AccountId,
@@ -890,8 +956,8 @@ describe('B2Folder', () => {
       }),
     )
 
-    expect(entries).toEqual([])
-    expect(skips).toEqual([`path-too-long-for-regexp:${longRelativePath}`])
+    expect(entries.map((entry) => entry.relativePath)).toEqual([longRelativePath])
+    expect(skips).toEqual([])
   })
 
   it('continues scanning when onSkip throws', async () => {

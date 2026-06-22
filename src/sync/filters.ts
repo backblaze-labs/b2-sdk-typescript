@@ -109,13 +109,13 @@ export async function* filterSyncPaths<T extends SyncPath>(
 }
 
 /**
- * Tests whether a path is skipped solely because RegExp filters are configured and the normalized
- * path exceeds the SDK RegExp input guard.
+ * Tests whether a path is skipped solely because include RegExp filters are configured and the
+ * normalized path exceeds the SDK RegExp input guard.
  *
  * @param relativePath - Folder-relative path using forward slashes.
  * @param filters - Optional include and exclude filters.
  *
- * @returns True when RegExp filters are present and the path is too long to evaluate.
+ * @returns True when include RegExp filters are present and the path is too long to evaluate.
  */
 export function pathSkippedByRegExpInputLimit(
   relativePath: string,
@@ -129,7 +129,7 @@ function normalizedPathSkippedByRegExpInputLimit(
   normalizedPath: string,
   filters: SyncFilterOptions | undefined,
 ): boolean {
-  return pathExceedsSafeRegExpInput(normalizedPath) && filtersContainRegExp(filters)
+  return pathExceedsSafeRegExpInput(normalizedPath) && includeFiltersContainRegExp(filters)
 }
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {
@@ -162,11 +162,8 @@ function stringPatternExcludesAllDescendants(
   return globSegments.at(-1) === '**' && matchPathGlob(splitPath(relativePath), globSegments)
 }
 
-function filtersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
-  return (
-    filters?.include?.some(patternIsRegExp) === true ||
-    filters?.exclude?.some(patternIsRegExp) === true
-  )
+function includeFiltersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
+  return filters?.include?.some(patternIsRegExp) === true
 }
 
 function patternMayMatchDescendant(relativePath: string, pattern: SyncFilterPattern): boolean {

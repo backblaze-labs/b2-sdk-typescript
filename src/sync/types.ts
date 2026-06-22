@@ -38,8 +38,9 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  * protection. Current guards reject overly long sources, backreferences, multiple unbounded
  * quantifiers, large or excessive bounded quantifiers, and quantified groups whose subtree
  * contains a quantifier or alternation.
- * When a RegExp filter is configured, paths longer than the SDK's RegExp input guard are skipped
- * instead of being fed to the JavaScript RegExp engine.
+ * When an include RegExp is configured, paths longer than the SDK's RegExp input guard are skipped
+ * instead of being fed to the JavaScript RegExp engine. Exclude-only RegExp filters keep an
+ * untestable long path because the SDK cannot prove it matches the deny-list.
  */
 export type SyncFilterPattern = string | RegExp
 
@@ -71,7 +72,10 @@ export interface SyncFilterOptions {
  * callback for paths the scanner cannot safely represent or test.
  */
 export interface SyncScanOptions extends SyncFilterOptions {
-  /** Signal used to stop a scan before it runs to completion. */
+  /**
+   * Optional signal checked by built-in scanners while enumerating. Aborting stops local traversal
+   * promptly and stops B2 scans before requesting the next page.
+   */
   readonly signal?: AbortSignal
   /** Receives scan diagnostics before the scanner aborts. */
   readonly onError?: (event: SyncErrorEvent) => void
@@ -323,7 +327,8 @@ export interface SyncEncryptionProvider {
  *
  * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
  * require memory proportional to the scanned entries; B2 scans also group listed versions before
- * yielding, and exclude filters or non-literal includes do not bound that listing footprint.
+ * yielding. For B2, `maxScanEntries` counts retained file versions, not just distinct visible file
+ * names, and exclude filters or non-literal includes do not bound B2 listing calls.
  */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */

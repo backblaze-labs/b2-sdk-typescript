@@ -73,7 +73,10 @@ function segmentIsUnsafe(segment: string): boolean {
 function segmentIsLocalFilesystemUnsafe(segment: string): boolean {
   if (segment.includes(':') || segment.endsWith('.') || segment.endsWith(' ')) return true
   const basename = segment.split('.')[0]?.toUpperCase()
-  return basename !== undefined && /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(basename)
+  return (
+    basename !== undefined &&
+    /^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9]|LPT[0-9])$/.test(basename)
+  )
 }
 
 function containsControlCharacter(segment: string): boolean {

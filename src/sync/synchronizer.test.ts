@@ -994,6 +994,65 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('refuses uploads when a scanned file is swapped to a symlink', async () => {
+      const { mkdtemp, rm, symlink, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-symlink-'))
+      const root = join(parent, 'root')
+      const outside = join(parent, 'outside')
+      const sourcePath = join(root, 'public.txt')
+      const secretPath = join(outside, 'secret.txt')
+      try {
+        const { mkdir } = await import('node:fs/promises')
+        await mkdir(root)
+        await mkdir(outside)
+        await writeFile(sourcePath, 'public')
+        await writeFile(secretPath, 'secret')
+
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'public.txt',
+          absolutePath: sourcePath,
+          modTimeMillis: 1000,
+          size: 6,
+        }
+        const source: SyncFolder = {
+          type: 'local',
+          appliesScanFilters: true,
+          appliesScanSorting: true,
+          async *scan() {
+            yield sourceFile
+            await rm(sourcePath, { force: true })
+            await symlink(secretPath, sourcePath, 'file')
+          },
+        }
+        const dest = makeMemoryFolder([], 'b2')
+        const mockBucket = makeMockBucket()
+        const config: SynchronizerUpConfig = {
+          source: { ...source, type: 'local', root },
+          dest: { ...dest, type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: 'error', path: 'public.txt' }),
+        )
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+      } catch (error) {
+        const code =
+          typeof error === 'object' && error !== null && 'code' in error
+            ? (error as { readonly code?: unknown }).code
+            : undefined
+        if (code !== 'EPERM' && code !== 'EACCES') throw error
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)('uses a slashless B2 upload prefix as a raw key prefix', async () => {
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { tmpdir } = await import('node:os')
@@ -1540,9 +1599,13 @@ describe('synchronize', () => {
             makeFileVersion('safe.txt', 1),
             makeFileVersion('name:stream', 2),
             makeFileVersion('CON', 3),
-            makeFileVersion('trailing.', 4),
-            makeFileVersion('Readme.txt', 5),
-            makeFileVersion('README.txt', 6),
+            makeFileVersion('CONOUT$', 4),
+            makeFileVersion('COM0.txt', 5),
+            makeFileVersion('nul.tar.gz', 6),
+            makeFileVersion('dir/C:/x', 7),
+            makeFileVersion('trailing.', 8),
+            makeFileVersion('Readme.txt', 9),
+            makeFileVersion('README.txt', 10),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -1563,6 +1626,18 @@ describe('synchronize', () => {
       expect(events).toContainEqual(expect.objectContaining({ type: 'compare', path: 'safe.txt' }))
       expect(events).toContainEqual(
         expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'CON' }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'CONOUT$' }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'COM0.txt' }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'nul.tar.gz' }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'dir/C:/x' }),
       )
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -4566,6 +4641,56 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it('does not remove destination files after a source filesystem scan error', async () => {
+      const mockBucket = makeMockBucket()
+      const source: SyncFolder = {
+        type: 'local',
+        appliesScanFilters: true,
+        appliesScanSorting: true,
+        scan(filters) {
+          filters?.onSkip?.({
+            type: 'skip',
+            path: 'blocked',
+            size: 0,
+            reason: 'filesystem-error',
+            message: 'Skipped local path "blocked": permission denied',
+          })
+          return {
+            [Symbol.asyncIterator]() {
+              return {
+                async next(): Promise<IteratorResult<SyncPath>> {
+                  return { done: true, value: undefined as never }
+                },
+              }
+            },
+          }
+        },
+      }
+      const dest = makeMemoryFolder([makeB2SyncPath('blocked/file.txt', 1000, 4)], 'b2')
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      }
+      const events: SyncEvent[] = []
+
+      await expect(
+        (async () => {
+          for await (const event of synchronize(config)) {
+            events.push(event)
+          }
+        })(),
+      ).rejects.toThrow('permission denied')
+
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'filesystem-error', path: 'blocked' }),
+      )
+      expect(mockBucket.hideFile).not.toHaveBeenCalled()
+      expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+    })
   })
 
   describe('abort signal mid-flight', () => {

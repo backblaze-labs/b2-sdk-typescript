@@ -53,6 +53,7 @@ const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
 
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
+  fatalFilesystemErrorMessage?: string
   dropped: number
 }
 
@@ -222,6 +223,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     await drainActions()
 
     yield* emitQueuedEvents()
+    const filesystemError = scanFilesystemError(scanEvents)
+    if (filesystemError !== undefined) throw filesystemError
 
     if (errorCount > 0) {
       yield {
@@ -317,7 +320,11 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     for (const preparedEvent of prepared.events) queueEvent(preparedEvent)
     errorCount += prepared.errors.length
     if (prepared.skipActionGeneration) return { event, actions: [] }
-    if (scanHadError && prepared.pair[0] === null && prepared.pair[1] !== null) {
+    if (
+      (scanHadError || scanHadFilesystemError(scanEvents)) &&
+      prepared.pair[0] === null &&
+      prepared.pair[1] !== null
+    ) {
       return {
         event,
         actions: [
@@ -551,6 +558,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const factory: ActionFactory = {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
+      const root = localSyncRoot(upConfig.source)
       assertBucket(bucket, 'upload')
 
       return new UploadAction(
@@ -558,11 +566,15 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         source.absolutePath,
         source.size,
         async (absPath, relPath, signal) => {
-          const data = await readScannedLocalFile({ ...source, absolutePath: absPath })
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
               : `${uploadPrefix}${relPath}`
+          const data = await readContainedScannedLocalFile(
+            root,
+            { ...source, absolutePath: absPath },
+            signal,
+          )
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -726,6 +738,18 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+async function readContainedScannedLocalFile(
+  root: string,
+  path: LocalSyncPath,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array> {
+  const targetPath = await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
+  throwIfAborted(signal)
+  const data = await readScannedLocalFile({ ...path, absolutePath: targetPath })
+  throwIfAborted(signal)
+  return data
+}
+
 async function resolveLocalDeletePath(
   root: string,
   relativePath: string,
@@ -743,6 +767,9 @@ async function resolveLocalDeletePath(
 }
 
 function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
+  if (event.type === 'skip' && event.reason === 'filesystem-error') {
+    buffer.fatalFilesystemErrorMessage ??= event.message
+  }
   if (buffer.events.length < MAX_BUFFERED_SCAN_EVENTS) {
     buffer.events.push(event)
   } else {
@@ -766,6 +793,16 @@ function* drainScanEvents(buffer: ScanEventBuffer): Generator<SyncEvent> {
     }
     buffer.dropped = 0
   }
+}
+
+function scanHadFilesystemError(scanEvents: ScanEventBuffer): boolean {
+  return scanEvents.fatalFilesystemErrorMessage !== undefined
+}
+
+function scanFilesystemError(scanEvents: ScanEventBuffer): Error | undefined {
+  return scanEvents.fatalFilesystemErrorMessage === undefined
+    ? undefined
+    : new Error(scanEvents.fatalFilesystemErrorMessage)
 }
 
 async function resolveContainedLocalPath(

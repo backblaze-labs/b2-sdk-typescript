@@ -72,11 +72,12 @@ export class B2Folder implements SyncFolder {
     const grouped = new Map<string, B2ScanEntry>()
     const listPrefix = this.listPrefixFor(options)
 
+    let retainedVersions = 0
     let startFileName: string | undefined
     let startFileId: FileId | undefined
 
     while (true) {
-      if (options.signal?.aborted) return
+      throwIfScanAborted(options)
 
       let listing: Awaited<ReturnType<Bucket['listFileVersions']>>
       try {
@@ -87,12 +88,14 @@ export class B2Folder implements SyncFolder {
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (err) {
-        if (options.signal?.aborted || isAbortError(err)) return
+        throwIfScanAborted(options)
+        if (isAbortError(err)) throw err
         throw emitScanError(options, 'failed to scan B2 file versions', err)
       }
+      throwIfScanAborted(options)
 
       for (const fv of listing.files) {
-        if (options.signal?.aborted) return
+        throwIfScanAborted(options)
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
@@ -130,10 +133,11 @@ export class B2Folder implements SyncFolder {
         }
 
         const existing = grouped.get(fv.fileName)
+        assertScanEntryLimit(retainedVersions + 1, maxScanEntries)
+        retainedVersions++
         if (existing) {
           existing.versions.push(fv)
         } else {
-          assertScanEntryLimit(grouped.size + 1, maxScanEntries)
           grouped.set(fv.fileName, { relativePath, versions: [fv] })
         }
       }
@@ -156,7 +160,7 @@ export class B2Folder implements SyncFolder {
     )
 
     for (const { relativePath, versions, selectedVersion } of sorted) {
-      if (options.signal?.aborted) return
+      throwIfScanAborted(options)
       versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
@@ -364,4 +368,10 @@ function removeAcceptedCandidate(
 ): void {
   const index = candidates.indexOf(target)
   if (index !== -1) candidates.splice(index, 1)
+}
+
+function throwIfScanAborted(filters: SyncScanOptions | undefined): void {
+  if (filters?.signal?.aborted === true) {
+    throw filters.signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
 }

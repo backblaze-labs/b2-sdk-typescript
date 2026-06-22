@@ -1,23 +1,16 @@
-const syncPathCollator = new Intl.Collator('en-US', {
-  numeric: false,
-  sensitivity: 'variant',
-  usage: 'sort',
-})
-
 /**
- * Compares sync-relative paths using the same fixed collation everywhere sorted scans are consumed.
+ * Compares sync-relative paths using the same code-unit order everywhere sorted scans are consumed.
  *
  * @param left - First sync-relative path.
  * @param right - Second sync-relative path.
  *
- * @returns Negative, zero, or positive using the SDK scan collation.
+ * @returns Negative, zero, or positive using JavaScript code-unit order.
  */
 export function compareSyncRelativePaths(left: string, right: string): number {
-  const result = syncPathCollator.compare(left, right)
-  return result === 0 && left !== right ? compareCodeUnits(left, right) : result
+  return compareCodeUnits(left, right)
 }
 
-/** Backwards-compatible alias for the SDK scan collation. */
+/** Backwards-compatible alias for the SDK scan ordering. */
 export function compareSyncPathNames(a: string, b: string): number {
   return compareSyncRelativePaths(a, b)
 }
