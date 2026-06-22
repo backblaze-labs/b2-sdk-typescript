@@ -6,6 +6,11 @@ export interface SyncDownloadTempFileSweeper {
   (directory: string): Promise<void>
 }
 
+type DirectoryEntry = {
+  name: string
+  isFile(): boolean
+}
+
 /**
  * Checks whether a directory entry is an SDK-managed partial download file.
  * @param name - Directory entry basename.
@@ -51,7 +56,7 @@ export async function removeSyncDownloadTempFiles(
 ): Promise<void> {
   const { readdir, rm } = await import('node:fs/promises')
 
-  let entries: import('node:fs').Dirent[]
+  let entries: DirectoryEntry[]
   try {
     entries = await readdir(directory, { withFileTypes: true })
   } catch {
