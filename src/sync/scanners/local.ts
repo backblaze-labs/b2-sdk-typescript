@@ -44,6 +44,8 @@ type LocalNodeDeps = {
  * Scans a local directory tree and yields {@link LocalSyncPath} entries sorted by relative path.
  * A root directory read failure aborts the scan with an error diagnostic. Per-entry file or
  * directory failures are reported through `onError` and the scan continues over readable siblings.
+ * SDK-managed partial download file names are skipped so unfinished internal
+ * temp files are not synchronized.
  * The current implementation collects matching entries before sorting, so memory usage is
  * proportional to the number of matched files.
  */

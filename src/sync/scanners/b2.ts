@@ -47,6 +47,8 @@ interface VisibleB2ScanEntry extends B2ScanEntry {
  * All versions for the listed prefix are fetched, grouped, and sorted before
  * yielding; exclude filters are applied client-side and do not reduce that
  * B2 listing memory footprint.
+ * SDK-reserved temporary names fail the scan because syncing them could corrupt
+ * in-progress transfers.
  */
 export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
@@ -202,6 +204,7 @@ export class B2Folder implements SyncFolder {
 
     for (const { relativePath, versions, selectedVersion } of sorted) {
       if (scanIsAborted(options)) return
+      // Reserved SDK temp names are a hard safety failure, not an ordinary filter.
       assertSyncPathAllowed(relativePath)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
