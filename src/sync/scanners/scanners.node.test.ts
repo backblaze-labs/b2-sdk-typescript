@@ -1462,6 +1462,68 @@ describe('B2Folder', () => {
     expect(skips).toEqual(['outside-prefix:root/active/wrong-prefix.txt'])
   })
 
+  it('does not match sibling keys that only share a prefix string', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('photos/cat.jpg', 1),
+            makeFileVersion('photos-archive/secret.jpg', 2),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'photos')
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['cat.jpg'])
+    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual(['photos/cat.jpg'])
+  })
+
+  it('passes scan abort signal to B2 page requests', async () => {
+    const controller = new AbortController()
+    const signals: Array<AbortSignal | undefined> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { signal?: AbortSignal }) {
+        signals.push(opts?.signal)
+        return {
+          files: [],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan({ signal: controller.signal }))
+
+    expect(entries).toEqual([])
+    expect(signals).toEqual([controller.signal])
+  })
+
   // Pagination: when listFileVersions returns nextFileName, B2Folder must
   // continue the loop with startFileName + startFileId until the server runs
   // out of pages. The simulator's default page size is large enough that real
