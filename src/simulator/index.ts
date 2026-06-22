@@ -1977,8 +1977,8 @@ export class B2Simulator {
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
-    // Real B2 orders unfinished large files by file name; resume sorts
-    // scanned exact-name matches by uploadTimestamp before selecting one.
+    // Keep listing order deterministic; resume sorts scanned exact-name
+    // matches by uploadTimestamp before selecting one.
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))
