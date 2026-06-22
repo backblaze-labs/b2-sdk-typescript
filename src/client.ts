@@ -1,4 +1,4 @@
-import type { AccountInfo, AuthContextAwareAccountInfo } from './auth/account-info.ts'
+import type { AccountInfo } from './auth/account-info.ts'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { getRealmUrl } from './auth/realms.ts'
 import { Bucket } from './bucket.ts'
@@ -412,19 +412,8 @@ function bindAccountInfoAuthContext(
   realmUrl: string,
   applicationKeyId: string,
 ): void {
-  if (!isAuthContextAwareAccountInfo(accountInfo)) return
-  accountInfo.setApplicationKeyId(applicationKeyId)
-  accountInfo.setRealmUrl(realmUrl)
-}
-
-function isAuthContextAwareAccountInfo(
-  accountInfo: AccountInfo,
-): accountInfo is AccountInfo & AuthContextAwareAccountInfo {
-  const candidate = accountInfo as Partial<AuthContextAwareAccountInfo>
-  return (
-    typeof candidate.setApplicationKeyId === 'function' &&
-    typeof candidate.setRealmUrl === 'function'
-  )
+  accountInfo.setApplicationKeyId?.(applicationKeyId)
+  accountInfo.setRealmUrl?.(realmUrl)
 }
 
 /**

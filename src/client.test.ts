@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
@@ -61,6 +62,39 @@ describe('B2Client with simulator', () => {
     })
 
     expect('uploadRetryOptions' in retryClient).toBe(false)
+  })
+
+  it('binds account-info auth context hooks independently', () => {
+    class RealmOnlyAccountInfo extends InMemoryAccountInfo {
+      boundRealmUrl: string | null = null
+      setRealmUrl(realmUrl: string): void {
+        this.boundRealmUrl = realmUrl
+      }
+    }
+    class KeyOnlyAccountInfo extends InMemoryAccountInfo {
+      boundApplicationKeyId: string | null = null
+      setApplicationKeyId(applicationKeyId: string): void {
+        this.boundApplicationKeyId = applicationKeyId
+      }
+    }
+
+    const realmOnly = new RealmOnlyAccountInfo()
+    const keyOnly = new KeyOnlyAccountInfo()
+
+    new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'https://auth.custom.example',
+      accountInfo: realmOnly,
+    })
+    new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      accountInfo: keyOnly,
+    })
+
+    expect(realmOnly.boundRealmUrl).toBe('https://auth.custom.example')
+    expect(keyOnly.boundApplicationKeyId).toBe('test-key-id')
   })
 
   it('creates and lists buckets', async () => {
