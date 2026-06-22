@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
@@ -31,10 +31,11 @@ async function setup(options?: {
 }
 
 describe('Bucket.paginateFileNames', () => {
+  let client: B2Client
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ bucket } = await setup())
+    ;({ client, bucket } = await setup())
     // Upload 7 files; paginate in pages of 3 to force pagination.
     for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt', 'f.txt', 'g.txt']) {
       await bucket.upload({
@@ -86,6 +87,25 @@ describe('Bucket.paginateFileNames', () => {
       })(),
     ).rejects.toThrow()
     expect(names).toEqual(['a.txt', 'b.txt'])
+  })
+
+  it('passes abort signals into file-name list requests', async () => {
+    const controller = new AbortController()
+    const listFileNames = vi.spyOn(client.raw, 'listFileNames')
+
+    const iterator = bucket.paginateFileNames({
+      pageSize: 2,
+      signal: controller.signal,
+    })
+    await iterator.next()
+    await iterator.return?.()
+
+    expect(listFileNames).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(Object),
+      expect.objectContaining({ signal: controller.signal }),
+    )
   })
 
   it('yields nothing on an empty bucket', async () => {

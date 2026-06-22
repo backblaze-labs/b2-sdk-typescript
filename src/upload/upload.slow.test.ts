@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { BufferSource } from '../streams/source.ts'
@@ -112,7 +112,25 @@ describe('uploadLargeFile resume', () => {
     bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
   })
 
-  it('resume: true picks up an existing unfinished large file and skips uploaded parts', async () => {
+  it('resume: true starts fresh without same-name discovery', async () => {
+    const data = deterministicBytes(5_000_010)
+    const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'resume-reupload.bin',
+      source: new BufferSource(data),
+      partSize: 5_000_000,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('resume-reupload.bin')
+    expect(result.contentLength).toBe(data.byteLength)
+    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+  })
+
+  it('resumeFileId skips matching server parts after hashing local bytes', async () => {
     const size = 5_000_010
     const data = deterministicBytes(size)
 
@@ -144,24 +162,27 @@ describe('uploadLargeFile resume', () => {
       },
       part1Data,
     )
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const listParts = vi.spyOn(client.raw, 'listParts')
 
-    // Step 2: resume with the same file name. Should find the unfinished file
-    // via listUnfinishedLargeFiles, see part 1 already uploaded with matching SHA-1,
-    // and only upload the remaining parts.
+    // Step 2: resume the exact large file ID, see part 1 already uploaded with
+    // matching SHA-1, and only upload the remaining parts.
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
       fileName: 'resumed.bin',
       source: new BufferSource(data),
       partSize: 5_000_000,
       concurrency: 1,
-      resume: true,
+      resumeFileId: startResp.fileId,
     })
 
     expect(result.fileName).toBe('resumed.bin')
     expect(result.contentLength).toBe(size)
+    expect(uploadPart).toHaveBeenCalledTimes(1)
+    expect(listParts).toHaveBeenCalled()
   })
 
-  it('resume: true with no candidate falls back to a fresh upload', async () => {
+  it('uploads fresh without resume options', async () => {
     const data = deterministicBytes(5_000_010)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
@@ -169,7 +190,6 @@ describe('uploadLargeFile resume', () => {
       source: new BufferSource(data),
       partSize: 5_000_000,
       concurrency: 1,
-      resume: true,
     })
 
     expect(result.fileName).toBe('no-candidate.bin')

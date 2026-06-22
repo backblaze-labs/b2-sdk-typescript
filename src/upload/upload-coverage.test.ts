@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { B2SsrfError } from '../errors/index.ts'
@@ -14,6 +14,7 @@ import {
 } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
 import type { UploadRetryEvent } from './retry.ts'
@@ -27,7 +28,7 @@ import type { UploadRetryEvent } from './retry.ts'
  *     when `b2_upload_part` fails.
  *   - `uploadLargeFile` outer cleanup: `cancelLargeFile` itself failing inside
  *     the catch (best-effort swallow).
- *   - `uploadLargeFile` resume=true with no candidate: the spread branches
+ *   - `uploadLargeFile` fresh multipart start: the spread branches
  *     for `serverSideEncryption`, `fileRetention`, and `legalHold` inside
  *     the start-large-file call.
  *   - `uploadSmallFile` catch block: `accountInfo.evictUploadUrl` + rethrow.
@@ -178,6 +179,55 @@ describe('uploadLargeFile cleanup paths', () => {
       { bucketId: bucket.id },
     )
     expect(unfinished.files.find((f) => f.fileName === 'boom.bin')).toBeUndefined()
+  })
+
+  it('does not cancel an explicit resume file ID after upload failure', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated resumed upload_part failure',
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'resume-part-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+    const start = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'resume-owned.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+
+    const partSize = 100_000
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-owned.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        resumeFileId: start.fileId,
+      }),
+    ).rejects.toThrow(/simulated resumed upload_part failure/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileId === start.fileId)).toBeDefined()
   })
 
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
@@ -548,6 +598,57 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(2)
     expect(retryEvents).toHaveLength(1)
     expect(await countFileVersions(bucket, 'lost-body.txt')).toBe(2)
+  })
+
+  it('retries a truncated 2xx upload JSON body when explicitly enabled', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let uploadAttempts = 0
+    let getUploadUrlCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({ ...body, uploadUrl: `${body.uploadUrl}&json=${getUploadUrlCalls}` })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          const response = await inner.send(req)
+          if (uploadAttempts === 1) {
+            return {
+              ...response,
+              json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+            }
+          }
+          return response
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'truncated-body',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'truncated-body.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retryResponseBodyFailures: true,
+    })
+
+    expect(result.fileName).toBe('truncated-body.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'truncated-body.txt')).toBe(2)
   })
 
   it('does not retry after a lost 2xx upload response body by default', async () => {
@@ -1094,7 +1195,7 @@ describe('upload scoped handles ignore runtime scope overrides', () => {
   })
 })
 
-describe('uploadLargeFile resume=true with no candidate', () => {
+describe('uploadLargeFile fresh multipart metadata', () => {
   let client: B2Client
   let bucketId: string
 
@@ -1109,9 +1210,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     bucketId = b.id
   })
 
-  it('forwards serverSideEncryption when no resume candidate exists', async () => {
-    // resume=true with no unfinished candidate falls through to the
-    // start_large_file branch. With SSE-B2 supplied we hit the conditional spread.
+  it('forwards serverSideEncryption when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1120,14 +1219,13 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
     })
     expect(result.fileName).toBe('resume-sse.bin')
     expect(result.contentLength).toBe(data.byteLength)
   })
 
-  it('forwards fileRetention when no resume candidate exists', async () => {
+  it('forwards fileRetention when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1136,7 +1234,6 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       fileRetention: {
         mode: RetentionMode.Governance,
         retainUntilTimestamp: daysFromNow(1),
@@ -1145,7 +1242,7 @@ describe('uploadLargeFile resume=true with no candidate', () => {
     expect(result.fileName).toBe('resume-retention.bin')
   })
 
-  it('forwards legalHold when no resume candidate exists', async () => {
+  it('forwards legalHold when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -1154,7 +1251,6 @@ describe('uploadLargeFile resume=true with no candidate', () => {
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      resume: true,
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
@@ -1322,6 +1418,28 @@ describe('uploadSmallFile cleanup path', () => {
     expect(result.contentSha1).toBeNull()
   })
 
+  it('rejects resumeFileId on streaming sources before listing parts', async () => {
+    const { client } = makeSmallPartClient()
+    await client.authorize()
+    const listParts = vi.spyOn(client.raw, 'listParts')
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucketId('bucket'),
+        fileName: 'stream-resume.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+        resumeFileId: largeFileId('unfinished-large-file'),
+      }),
+    ).rejects.toThrow('resume is not supported on non-sliceable sources')
+    expect(listParts).not.toHaveBeenCalled()
+  })
+
   it('forwards serverSideEncryption on each part of a streaming-source upload', async () => {
     // Covers the SSE conditional spread inside the streaming part loop.
     // The simulator accepts SSE-B2 without enforcing key material, so we
@@ -1401,12 +1519,7 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
   })
 
-  it('rejects a streaming-source upload when resume is requested', async () => {
-    // StreamSource has no random access, so resume can't replay parts.
-    // The engine bails early with a clear message and cancels the
-    // started large file rather than silently buffering the whole
-    // payload. The `resume` option lives on `uploadLargeFile` rather
-    // than the high-level `bucket.upload`, so we call it directly.
+  it('ignores resume true for fresh stream uploads without discovery', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -1423,16 +1536,19 @@ describe('uploadSmallFile cleanup path', () => {
       },
     })
 
-    await expect(
-      uploadLargeFile(client.raw, client.accountInfo, {
-        bucketId: bucket.id,
-        fileName: 'resume-stream.bin',
-        source: new StreamSource(readable, payload.byteLength),
-        partSize,
-        concurrency: 1,
-        resume: true,
-      }),
-    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+    const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'resume-stream.bin',
+      source: new StreamSource(readable, payload.byteLength),
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('resume-stream.bin')
+    expect(result.contentLength).toBe(payload.byteLength)
+    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
   })
 
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {

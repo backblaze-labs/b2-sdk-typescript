@@ -72,7 +72,7 @@ npx tsx examples/node-download.ts my-bucket photo.jpg [output-path]
 
 ### Sync a directory
 
-Sync a local directory to a B2 bucket prefix. Supports modtime/size comparison, delete mode, dry-run, and configurable concurrency.
+Sync a local directory to a B2 bucket prefix. Supports modtime/size/SHA-1 comparison, delete mode, dry-run, and configurable concurrency.
 
 ```bash
 npx tsx examples/node-sync-cli.ts ./local-dir my-bucket backup/
@@ -84,10 +84,37 @@ SYNC_MODE=size SYNC_DELETE=true SYNC_CONCURRENCY=8 SYNC_DRY_RUN=true \
 
 | Env var | Default | Description |
 |---------|---------|-------------|
-| `SYNC_MODE` | `modtime` | Compare mode: `modtime`, `size`, or `none` |
+| `SYNC_MODE` | `modtime` | Compare mode: `modtime`, `size`, `sha1`, or `none` |
 | `SYNC_DELETE` | `false` | Delete remote files not present locally |
 | `SYNC_CONCURRENCY` | `4` | Parallel upload/download workers |
 | `SYNC_DRY_RUN` | `false` | Print actions without executing them |
+
+`SYNC_MODE=sha1` hashes local files and compares them with B2 SHA-1 metadata. B2's verified
+single-part `contentSha1` can prove equality; multipart `fileInfo.large_file_sha1` and
+`unverified:<hex>` values are treated as untrusted hints and verified by reading the selected B2
+version's bytes. It is useful for accidental drift detection, not as a cryptographic tamper
+guarantee. Files without any comparable remote SHA-1 are skipped with a surfaced event instead of
+being transferred repeatedly.
+
+SHA-1 comparison reads matching-size local files in full before transfers are executed. In normal
+runs, untrusted B2 metadata also causes a selected-version download so the SDK can hash real B2
+bytes before treating the pair as equal. The SDK does not cache that result across runs, so
+unchanged multipart objects can incur full-object B2 download reads every `sha1` sync.
+Dry-runs avoid those B2 content downloads and instead plan conservative transfer actions when
+untrusted metadata cannot prove equality. `SYNC_CONCURRENCY`
+bounds SHA-1 comparison workers, transfer workers, and queued transfer promises, but hashing and
+transfer do not fully overlap. Changed uploads may read the same file again for transfer.
+`SYNC_DRY_RUN=true` still performs local comparison reads. The example logs `compare.bytesHashed`
+and `compare.bytesVerified` so you can distinguish hash and B2 verification work from a hung sync.
+Incorrect or adversarial size-matching, hash-mismatching metadata can force a full hash pass and
+transfers in `sha1` mode. To keep total disk and network work within `SYNC_CONCURRENCY`, SHA-1
+batch preparation waits for prior transfer actions to drain instead of overlapping both phases.
+The SDK bounds local and B2 SHA-1 reads with an idle/no-progress timeout, adds an absolute deadline
+to untrusted B2 verification downloads, rejects non-regular local files, and bounds local reads to
+the scanned size. Untrusted B2 verification also refuses to read more bytes than the selected
+version's `contentLength`; set `sha1VerificationMaxBytes` in code when you need a lower per-file
+ceiling for large-object verification. Objects over that byte ceiling, or objects that cannot be
+verified before `sha1VerificationTimeoutMillis`, are skipped for that run.
 
 ### Upload with a progress bar
 

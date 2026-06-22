@@ -9,7 +9,7 @@ import type {
   SyncDirection,
   SyncPath,
 } from '../types.ts'
-import { filesAreDifferent } from './compare.ts'
+import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 
 /** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {
@@ -39,6 +39,10 @@ export interface ActionFactory {
 /**
  * Converts a paired source/dest tuple into zero or more sync actions based on the
  * sync direction, compare mode, and keep policy.
+ * For `compareMode: 'sha1'`, prefer the high-level `synchronize()` API so local
+ * file hashes and comparable B2 hashes are prepared before actions are generated.
+ * Low-level callers must pass pairs with local `contentSha1` values already
+ * computed and B2 `contentSha1` values containing any comparable metadata fallback.
  *
  * @param pair - The source/dest file pair from {@link zipFolders}.
  * @param direction - The sync direction.
@@ -59,6 +63,8 @@ export function* generateActions(
   factory: ActionFactory,
   compareThreshold: number,
 ): Generator<SyncAction> {
+  assertSupportedCompareMode(compareMode)
+
   const [source, dest] = pair
 
   if (source !== null && dest === null) {

@@ -3,9 +3,8 @@ import type { SseCDownloadKey } from '../raw/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
-import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
-import { toError } from '../util/to-error.ts'
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import type { SyncAction } from './actions/index.ts'
 import {
   CopyAction,
@@ -13,11 +12,31 @@ import {
   DeleteRemoteAction,
   DownloadAction,
   HideAction,
+  SkipAction,
   UploadAction,
 } from './actions/index.ts'
-import { zipFolders } from './pairing.ts'
+import {
+  hashReadableStreamSha1,
+  normalizeSha1VerificationMaxBytes,
+  withSha1VerificationDeadline,
+} from './b2-sha1-reader.ts'
+import { readScannedLocalFile, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import { readLocalSha1File } from './local-sha1.ts'
+import { type SyncPair, zipFolders } from './pairing.ts'
+import { safeRelativePathSegments } from './path-safety.ts'
+import {
+  assertSupportedCompareMode,
+  type B2Sha1Reader,
+  type ComparePreparationResult,
+  preparePairsForCompare,
+  readyComparePair,
+} from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
+import {
+  DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
+  normalizeSha1TimeoutMillis,
+} from './sha1-options.ts'
 import type {
   B2SyncPath,
   LocalSyncPath,
@@ -25,6 +44,7 @@ import type {
   SyncEvent,
   SyncFolder,
   SyncOptions,
+  SyncScanOptions,
 } from './types.ts'
 
 /** Base configuration for a sync operation. */
@@ -73,6 +93,11 @@ export interface SynchronizerDownConfig extends SynchronizerConfig {
   readonly bucket: Bucket
 }
 
+interface PreparedActionPlan {
+  readonly event: SyncEvent
+  readonly actions: readonly SyncAction[]
+}
+
 /**
  * Infers the sync direction from the source and destination folder types.
  * @param source - The folder to read files from.
@@ -98,73 +123,288 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  */
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
+  assertSupportedCompareMode(options.compareMode)
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
-  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
+  const concurrency = normalizeSyncConcurrency(options.concurrency)
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
 
   const factory = createActionFactory(config)
+  const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
 
-  const actions: SyncAction[] = []
-
-  for await (const pair of zipFolders(source, dest)) {
-    if (options.signal?.aborted) return
-
-    for (const action of generateActions(
-      pair,
-      direction,
-      options.compareMode,
-      options.keepMode,
-      keepDays,
-      nowMillis,
-      factory,
-      compareThreshold,
-    )) {
-      actions.push(action)
-    }
-
-    yield { type: 'compare', path: (pair[0] ?? pair[1])?.relativePath ?? '', size: 0 }
+  const queuedEvents: SyncEvent[] = []
+  let errorCount = 0
+  let scanHadError = false
+  const runningActions = new Set<Promise<void>>()
+  const scanOptions: SyncScanOptions = {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    onError: (event) => {
+      scanHadError = true
+      errorCount += 1
+      queueEvent(event)
+    },
   }
 
-  const sem = new Semaphore(concurrency)
-  const results: SyncEvent[] = []
-  const errors: Error[] = []
+  async function* finishAfterAbort(): AsyncGenerator<SyncEvent> {
+    await drainActions()
+    yield* emitQueuedEvents()
+  }
 
-  const promises = actions.map(async (action) => {
-    await sem.acquire()
+  try {
+    try {
+      if (options.compareMode === 'sha1') {
+        const compareBatchSize = concurrency
+        let batch: SyncPair[] = []
+        for await (const pair of zipFolders(source, dest, scanOptions)) {
+          if (options.signal?.aborted) {
+            yield* finishAfterAbort()
+            return
+          }
+          batch.push(pair)
+          if (batch.length >= compareBatchSize) {
+            if (yield* emitSha1Batch(batch)) return
+            batch = []
+          }
+        }
+
+        if (yield* emitSha1Batch(batch)) return
+      } else {
+        for await (const pair of zipFolders(source, dest, scanOptions)) {
+          if (options.signal?.aborted) {
+            yield* finishAfterAbort()
+            return
+          }
+          const item = planPreparedPair(pair, readyComparePair(pair))
+          if (yield* emitPreparedItems([item])) return
+        }
+      }
+    } catch (err) {
+      await drainActions()
+      if (!scanHadError) throw err
+
+      yield* emitQueuedEvents()
+      yield {
+        type: 'error',
+        path: '',
+        size: 0,
+        message: `${errorCount} sync error(s) occurred`,
+      }
+      return
+    }
+
+    await drainActions()
+
+    yield* emitQueuedEvents()
+
+    if (errorCount > 0) {
+      yield {
+        type: 'error',
+        path: '',
+        size: 0,
+        message: `${errorCount} sync error(s) occurred`,
+      }
+    }
+  } finally {
+    await drainActions()
+  }
+
+  async function* emitSha1Batch(batch: readonly SyncPair[]): AsyncGenerator<SyncEvent, boolean> {
+    if (batch.length === 0) return false
+
+    // Keep SHA-1 hashing / B2 verification and transfer actions under one effective
+    // concurrency ceiling. This intentionally creates a batch barrier instead of
+    // overlapping compare reads with prior transfers.
+    await drainActions()
+    yield* emitQueuedEvents()
+
+    const preparedBatch = await processPreparedBatch(batch)
+    if (yield* emitPreparedItems(preparedBatch.items)) return true
+    if (preparedBatch.aborted || options.signal?.aborted) {
+      yield* finishAfterAbort()
+      return true
+    }
+    return false
+  }
+
+  async function* emitPreparedItems(
+    items: readonly PreparedActionPlan[],
+  ): AsyncGenerator<SyncEvent, boolean> {
+    for (const item of items) {
+      yield item.event
+      yield* emitQueuedEvents()
+      /* v8 ignore next -- abort between compare yield and scheduling is timing-dependent */
+      if (options.signal?.aborted) {
+        yield* finishAfterAbort()
+        return true
+      }
+      for (const action of item.actions) {
+        await scheduleAction(action)
+        yield* emitQueuedEvents()
+      }
+    }
+    return false
+  }
+
+  async function processPreparedBatch(
+    batch: readonly SyncPair[],
+  ): Promise<{ readonly items: readonly PreparedActionPlan[]; readonly aborted: boolean }> {
+    if (batch.length === 0) return { items: [], aborted: false }
+    const preparedPairs = await preparePairsForCompare(batch, 'sha1', {
+      concurrency,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options.sha1ReadTimeoutMillis !== undefined
+        ? { sha1ReadTimeoutMillis: options.sha1ReadTimeoutMillis }
+        : {}),
+      readLocalSha1: readLocalSha1File,
+      ...(readB2Sha1 !== undefined ? { readB2Sha1 } : {}),
+    })
+
+    const items: PreparedActionPlan[] = []
+    for (const { originalPair, prepared } of preparedPairs) {
+      if (prepared.aborted || options.signal?.aborted) return { items, aborted: true }
+      items.push(planPreparedPair(originalPair, prepared))
+    }
+    return { items, aborted: false }
+  }
+
+  function planPreparedPair(
+    pair: SyncPair,
+    prepared: ComparePreparationResult,
+  ): PreparedActionPlan {
+    const event: SyncEvent = {
+      type: 'compare',
+      path: (pair[0] ?? pair[1])?.relativePath ?? '',
+      size: 0,
+      bytesHashed: prepared.bytesHashed,
+      ...(prepared.bytesVerified > 0 ? { bytesVerified: prepared.bytesVerified } : {}),
+    }
+
+    for (const preparedEvent of prepared.events) queueEvent(preparedEvent)
+    errorCount += prepared.errors.length
+    if (prepared.skipActionGeneration) return { event, actions: [] }
+    if (scanHadError && prepared.pair[0] === null && prepared.pair[1] !== null) {
+      return {
+        event,
+        actions: [
+          new SkipAction(prepared.pair[1].relativePath, 'not removed because scan errors occurred'),
+        ],
+      }
+    }
+
+    const actions = [
+      ...generateActions(
+        prepared.pair,
+        direction,
+        options.compareMode,
+        options.keepMode,
+        keepDays,
+        nowMillis,
+        factory,
+        compareThreshold,
+      ),
+    ]
+
+    return { event, actions }
+  }
+
+  async function scheduleAction(action: SyncAction): Promise<void> {
+    const task = executeAction(action).finally(() => {
+      runningActions.delete(task)
+    })
+    runningActions.add(task)
+    if (runningActions.size >= concurrency) await Promise.race(runningActions)
+  }
+
+  async function executeAction(action: SyncAction): Promise<void> {
     try {
       if (options.signal?.aborted) return
       const event = await action.execute(dryRun)
-      results.push(event)
+      queueEvent(event)
     } catch (err) {
-      const errorValue = toError(err)
-      errors.push(errorValue)
-      results.push({
+      errorCount += 1
+      queueEvent({
         type: 'error',
         path: action.relativePath,
         size: 0,
-        message: errorValue.message,
+        message: sanitizeErrorReason(err),
       })
-    } finally {
-      sem.release()
     }
-  })
-
-  await Promise.all(promises)
-
-  for (const event of results) {
-    yield event
   }
 
-  if (errors.length > 0) {
-    yield {
-      type: 'error',
-      path: '',
-      size: 0,
-      message: `${errors.length} action(s) failed`,
+  function queueEvent(event: SyncEvent): void {
+    queuedEvents.push(event)
+  }
+
+  async function* emitQueuedEvents(): AsyncGenerator<SyncEvent> {
+    for (const event of queuedEvents.splice(0)) yield event
+  }
+
+  async function drainActions(): Promise<void> {
+    while (runningActions.size > 0) {
+      await Promise.race(runningActions)
     }
+  }
+}
+
+/**
+ * Normalizes user-provided sync concurrency before it controls compare batches and transfers.
+ *
+ * @param value - Optional concurrency value from sync options.
+ *
+ * @returns A positive integer concurrency value.
+ */
+function normalizeSyncConcurrency(value: number | undefined): number {
+  const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
+  if (!Number.isFinite(candidate) || candidate < 1) return DEFAULT_TRANSFER_CONCURRENCY
+  return Math.max(1, Math.floor(candidate))
+}
+
+function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefined {
+  const upConfig = config as Partial<SynchronizerUpConfig>
+  const downConfig = config as Partial<SynchronizerDownConfig>
+  const bucket = upConfig.bucket ?? downConfig.bucket
+  if (bucket === undefined) return undefined
+  const idleTimeoutMillis = normalizeSha1TimeoutMillis(config.options.sha1ReadTimeoutMillis)
+  const verificationTimeoutMillis = normalizeSha1TimeoutMillis(
+    config.options.sha1VerificationTimeoutMillis,
+    DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
+  )
+
+  return async (path, signal) => {
+    const expectedBytes = Math.max(0, Math.floor(path.selectedVersion.contentLength))
+    const maxBytes = normalizeSha1VerificationMaxBytes(
+      expectedBytes,
+      config.options.sha1VerificationMaxBytes,
+    )
+    return withSha1VerificationDeadline(
+      signal,
+      verificationTimeoutMillis,
+      async (deadlineSignal) => {
+        deadlineSignal.throwIfAborted()
+        if (maxBytes < expectedBytes) {
+          throw new Error(
+            `sha1 B2 verification skipped because contentLength ${expectedBytes} exceeds ${maxBytes} byte verification budget`,
+          )
+        }
+        const serverSideEncryption = toSseCDownloadKey(
+          config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),
+        )
+        const result = await bucket
+          .file(path.selectedVersion.fileName)
+          .downloadById(path.selectedVersion.fileId, {
+            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            signal: deadlineSignal,
+          })
+        const verified = await hashReadableStreamSha1(result.body, deadlineSignal, {
+          idleTimeoutMillis,
+          maxBytes,
+          expectedBytes,
+        })
+        return { contentSha1: verified.contentSha1, bytesRead: verified.bytesRead }
+      },
+    )
   }
 }
 
@@ -250,8 +490,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         source.absolutePath,
         source.size,
         async (absPath, relPath) => {
-          const { readFile } = await import('node:fs/promises')
-          const data = await readFile(absPath)
+          const data = await readScannedLocalFile({ ...source, absolutePath: absPath })
           const fileName = `${prefix}${relPath}`
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -259,8 +498,9 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           )
           await bucket.upload({
             fileName,
-            source: new BufferSource(new Uint8Array(data)),
+            source: new BufferSource(data),
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
           })
         },
       )
@@ -273,41 +513,21 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath) => {
+        safeRelativePathSegments(relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
-        const result = await bucket.download(source.selectedVersion.fileName, {
-          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+        const result = await bucket
+          .file(source.selectedVersion.fileName)
+          .downloadById(source.selectedVersion.fileId, {
+            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
+          })
+        await writeLocalStreamInsideRoot(root, relPath, result.body, {
+          expectedBytes: source.selectedVersion.contentLength,
+          idleTimeoutMillis: normalizeSha1TimeoutMillis(config.options.sha1ReadTimeoutMillis),
+          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
         })
-        const reader = result.body.getReader()
-        let combined: Uint8Array
-        try {
-          const chunks: Uint8Array[] = []
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            chunks.push(value)
-          }
-          let total = 0
-          for (const c of chunks) total += c.byteLength
-          combined = new Uint8Array(total)
-          let offset = 0
-          for (const c of chunks) {
-            combined.set(c, offset)
-            offset += c.byteLength
-          }
-        } finally {
-          // Release the body stream's reader lock so a downstream
-          // writeFile failure doesn't strand the response stream half-
-          // open with the upstream HTTP connection still pumping.
-          reader.releaseLock()
-        }
-
-        const { mkdir, writeFile } = await import('node:fs/promises')
-        const { dirname, join } = await import('node:path')
-        const destPath = join(root, relPath)
-        await mkdir(dirname(destPath), { recursive: true })
-        await writeFile(destPath, combined)
       })
     },
 
@@ -328,6 +548,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             ? { destinationServerSideEncryption }
             : {}),
           ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
+          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
         })
       })
     },
@@ -338,7 +559,12 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
       return new HideAction(path, async (relPath) => {
         const prefix = upConfig.prefix ?? ''
-        await bucket.hideFile(`${prefix}${relPath}`)
+        const fileName = `${prefix}${relPath}`
+        if (config.options.signal !== undefined) {
+          await bucket.hideFile(fileName, { signal: config.options.signal })
+        } else {
+          await bucket.hideFile(fileName)
+        }
       })
     },
 
@@ -359,7 +585,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         path.relativePath,
         path.selectedVersion.fileId as string,
         async (fileId) => {
-          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
+          if (config.options.signal !== undefined) {
+            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
+              signal: config.options.signal,
+            })
+          } else {
+            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
+          }
         },
       )
     },
@@ -367,6 +599,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     deleteLocal(path: LocalSyncPath): SyncAction {
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
         const { unlink } = await import('node:fs/promises')
+        config.options.signal?.throwIfAborted()
         await unlink(absPath)
       })
     },

@@ -13,7 +13,7 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { collectPartSha1s, findResumeCandidate } from './resume.ts'
+import { collectPartSha1s } from './resume.ts'
 import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
 
 /** Options for uploading a large file via the multipart protocol. */
@@ -60,8 +60,8 @@ export interface UploadLargeFileOptions {
    */
   readonly retryResponseBodyFailures?: boolean
   /**
-   * If true, look for an unfinished large file with the same bucket and file name
-   * and skip parts whose locally-recomputed SHA-1 matches the server's.
+   * Deprecated compatibility flag. Automatic same-name resume is disabled.
+   * Without {@link resumeFileId}, this flag is ignored and a fresh upload is started.
    */
   readonly resume?: boolean
   /**
@@ -101,9 +101,8 @@ export async function uploadLargeFile(
   const parts = planRanges(totalSize, partSize)
   const fileInfo: Record<string, string> = { ...options.fileInfo }
 
-  // Construct the `b2_start_large_file` request body once so the two
-  // non-resume branches below (no `resume`, resume-but-no-candidate)
-  // can dispatch without re-spelling the conditional spreads.
+  // Construct the `b2_start_large_file` request body once so the fresh
+  // upload branch can dispatch without re-spelling the conditional spreads.
   const startLargeFileRequest = {
     bucketId: options.bucketId,
     fileName: options.fileName,
@@ -116,32 +115,19 @@ export async function uploadLargeFile(
     ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
   }
 
-  // --- Resume discovery (M11.1) ---
+  // --- Explicit resume file reuse (M11.1) ---
+  if (!options.source.canSlice && options.resumeFileId !== undefined) {
+    throw new Error(
+      'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
+    )
+  }
+
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
-
+  let createdLargeFile = false
   if (options.resumeFileId !== undefined) {
     largeFileId = options.resumeFileId
     preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
-  } else if (options.resume === true) {
-    const candidate = await findResumeCandidate(
-      raw,
-      accountInfo,
-      options.bucketId,
-      options.fileName,
-    )
-    if (candidate) {
-      largeFileId = candidate.fileId
-      preUploaded = candidate.uploadedPartSha1s
-    } else {
-      const startResp = await raw.startLargeFile(
-        accountInfo.getApiUrl(),
-        accountInfo.getAuthToken(),
-        startLargeFileRequest,
-      )
-      largeFileId = startResp.fileId
-      preUploaded = new Map<number, string>()
-    }
   } else {
     const startResp = await raw.startLargeFile(
       accountInfo.getApiUrl(),
@@ -150,6 +136,7 @@ export async function uploadLargeFile(
     )
     largeFileId = startResp.fileId
     preUploaded = new Map<number, string>()
+    createdLargeFile = true
   }
 
   const partSha1s: string[] = new Array(parts.length)
@@ -163,14 +150,6 @@ export async function uploadLargeFile(
   // shipped, then dropped before the next read starts, so the peak
   // memory footprint is ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
-    if (options.resume === true || options.resumeFileId !== undefined) {
-      // Cancel the unfinished large file before throwing so the caller
-      // doesn't have to clean it up themselves.
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
-      throw new Error(
-        'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
-      )
-    }
     try {
       await uploadPartsSequentially(
         raw,
@@ -186,7 +165,7 @@ export async function uploadLargeFile(
         partSha1Array: partSha1s,
       })
     } catch (err) {
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+      if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
       throw err
     }
   }
@@ -245,7 +224,7 @@ export async function uploadLargeFile(
 
     return result
   } catch (err) {
-    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+    if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
     throw err
   }
 }

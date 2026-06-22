@@ -11,14 +11,27 @@ export interface ResumeCandidate {
   readonly uploadedPartSha1s: ReadonlyMap<number, string>
 }
 
+/** Options for unfinished large-file resume discovery. */
+export interface FindResumeCandidateOptions {
+  /** Explicit unfinished large-file ID selected by the caller. */
+  readonly resumeFileId?: LargeFileId
+  /**
+   * When true, list already-uploaded parts and return their server SHA-1 values.
+   * Leave false unless the caller will trust those SHA-1s to skip uploads.
+   */
+  readonly collectUploadedPartSha1s?: boolean
+}
+
 /**
- * Finds an unfinished large file matching the given bucket and file name.
+ * Finds an explicitly selected unfinished large file matching the given bucket and file name.
  * Returns `null` when no matching candidate exists.
+ * This intentionally does not auto-adopt unfinished files by name.
  *
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param bucketId - Target bucket of the upload.
  * @param fileName - Destination file name of the upload.
+ * @param options - Optional controls for whether uploaded part SHA-1s are listed.
  *
  * @returns A {@link ResumeCandidate} describing the candidate and its uploaded parts, or `null`.
  */
@@ -27,20 +40,39 @@ export async function findResumeCandidate(
   accountInfo: AccountInfo,
   bucketId: BucketId,
   fileName: string,
+  options: FindResumeCandidateOptions = {},
 ): Promise<ResumeCandidate | null> {
-  const unfinished = await raw.listUnfinishedLargeFiles(
-    accountInfo.getApiUrl(),
-    accountInfo.getAuthToken(),
-    { bucketId },
-  )
+  if (options.resumeFileId === undefined) return null
 
-  const match = unfinished.files.find((f) => f.fileName === fileName)
-  if (!match) return null
+  let startFileId: LargeFileId | undefined
 
-  const fileId = largeFileIdOf(match.fileId)
-  const uploadedPartSha1s = await collectPartSha1s(raw, accountInfo, fileId)
+  while (true) {
+    const unfinished = await raw.listUnfinishedLargeFiles(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId,
+        namePrefix: fileName,
+        ...(startFileId !== undefined ? { startFileId } : {}),
+      },
+    )
 
-  return { fileId, uploadedPartSha1s }
+    const match = unfinished.files.find(
+      (f) => f.fileName === fileName && f.fileId === options.resumeFileId,
+    )
+    if (match) {
+      const fileId = largeFileIdOf(match.fileId)
+      const uploadedPartSha1s =
+        options.collectUploadedPartSha1s === true
+          ? await collectPartSha1s(raw, accountInfo, fileId)
+          : new Map<number, string>()
+
+      return { fileId, uploadedPartSha1s }
+    }
+
+    if (unfinished.nextFileId === null) return null
+    startFileId = unfinished.nextFileId
+  }
 }
 
 /**

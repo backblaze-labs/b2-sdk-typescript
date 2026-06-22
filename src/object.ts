@@ -139,14 +139,13 @@ export class B2Object {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Resume an unfinished multipart upload for this file name when one
-     * exists. Only meaningful on the large-file path. Ignored on the
-     * small-file path.
+     * Deprecated compatibility flag. Automatic same-name resume is disabled.
+     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
      */
     resume?: boolean
     /**
-     * Resume into a specific large-file ID, bypassing discovery.
-     * Overrides the `resume` discovery path.
+     * Resume into a specific large-file ID. Matching parts are skipped after
+     * their local SHA-1 is recomputed and matches the server-reported part SHA-1.
      */
     resumeFileId?: LargeFileId
   }): Promise<FileVersion> {

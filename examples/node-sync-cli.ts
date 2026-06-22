@@ -5,10 +5,14 @@
  *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/node-sync-cli.ts <local-dir> <bucket-name> [prefix]
  *
  * Options via env:
- *   SYNC_MODE=modtime|size|none     (default: modtime)
+ *   SYNC_MODE=modtime|size|sha1|none     (default: modtime)
  *   SYNC_DELETE=true|false           (default: false, no-delete)
  *   SYNC_CONCURRENCY=N              (default: 4)
  *   SYNC_DRY_RUN=true|false         (default: false)
+ *
+ * The sha1 mode is an accidental drift detector, not a cryptographic tamper guarantee. It hashes
+ * matching-size local files before transfers; SYNC_CONCURRENCY bounds both hashing and transfers,
+ * but the two phases do not fully overlap. Dry-runs still hash matching-size local files.
  */
 
 import { B2Client } from '@backblaze-labs/b2-sdk'
@@ -41,9 +45,9 @@ async function main() {
     process.exit(1)
   }
 
-  const compareMode = (process.env.SYNC_MODE ?? 'modtime') as CompareMode
+  const compareMode = parseCompareMode(process.env.SYNC_MODE ?? 'modtime')
   const keepMode: KeepMode = process.env.SYNC_DELETE === 'true' ? 'delete' : 'no-delete'
-  const concurrency = Number.parseInt(process.env.SYNC_CONCURRENCY ?? '4', 10)
+  const concurrency = parseConcurrency(process.env.SYNC_CONCURRENCY ?? '4')
   const dryRun = process.env.SYNC_DRY_RUN === 'true'
 
   if (dryRun) console.log('DRY RUN: no changes will be made\n')
@@ -54,6 +58,7 @@ async function main() {
   let uploaded = 0
   let skipped = 0
   let errors = 0
+  let hashedBytes = 0
 
   const config: SynchronizerUpConfig = {
     source,
@@ -83,16 +88,44 @@ async function main() {
         console.error(`  ERROR: ${event.path}: ${event.message}`)
         break
       case 'compare':
+        if (compareMode === 'sha1' && (event.bytesHashed ?? 0) > 0) {
+          hashedBytes += event.bytesHashed ?? 0
+          console.log(`  compared ${event.path} (${event.bytesHashed ?? 0} bytes hashed)`)
+        }
+        if (compareMode === 'sha1' && (event.bytesVerified ?? 0) > 0) {
+          console.log(`  verified ${event.path} (${event.bytesVerified ?? 0} B2 bytes)`)
+        }
         break
       default:
         console.log(`  ${event.type}: ${event.path}`)
     }
   }
 
-  console.log(`\nDone. Uploaded: ${uploaded}, Skipped: ${skipped}, Errors: ${errors}`)
+  console.log(
+    `\nDone. Uploaded: ${uploaded}, Skipped: ${skipped}, Errors: ${errors}, Hashed: ${hashedBytes} bytes`,
+  )
 }
 
 main().catch((err) => {
   console.error(err)
   process.exit(1)
 })
+
+function parseCompareMode(value: string): CompareMode {
+  switch (value) {
+    case 'modtime':
+    case 'size':
+    case 'sha1':
+    case 'none':
+      return value
+    default:
+      throw new Error(`Unsupported SYNC_MODE "${value}". Use modtime, size, sha1, or none.`)
+  }
+}
+
+function parseConcurrency(value: string): number {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`Unsupported SYNC_CONCURRENCY "${value}". Use a positive integer.`)
+  }
+  return Number.parseInt(value, 10)
+}

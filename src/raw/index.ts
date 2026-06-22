@@ -72,6 +72,18 @@ export interface RawClientOptions {
   readonly transport: HttpTransport
 }
 
+/** Optional request controls for {@link RawClient.listFileNames}. */
+export interface ListFileNamesOptions {
+  /** Optional abort signal for the listing request. */
+  readonly signal?: AbortSignal
+}
+
+/** Optional request controls for {@link RawClient.listFileVersions}. */
+export interface ListFileVersionsOptions {
+  /** Optional abort signal for the listing request. */
+  readonly signal?: AbortSignal
+}
+
 interface JsonPostOptions {
   readonly signal?: AbortSignal
   readonly retry?: Partial<RetryOptions>
@@ -278,6 +290,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The list of file names and optional continuation token.
    */
@@ -285,9 +298,16 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListFileNamesRequest,
+    options?: ListFileNamesOptions,
   ): Promise<ListFileNamesResponse> {
     return normalizeFileVersionListSha1(
-      await this.postJson<ListFileNamesResponse>(apiUrl, authToken, 'b2_list_file_names', request),
+      await this.postJson<ListFileNamesResponse>(
+        apiUrl,
+        authToken,
+        'b2_list_file_names',
+        request,
+        options,
+      ),
     )
   }
 
@@ -296,6 +316,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The list of file versions and optional continuation token.
    */
@@ -303,6 +324,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListFileVersionsRequest,
+    options?: ListFileVersionsOptions,
   ): Promise<ListFileVersionsResponse> {
     return normalizeFileVersionListSha1(
       await this.postJson<ListFileVersionsResponse>(
@@ -310,6 +332,7 @@ export class RawClient {
         authToken,
         'b2_list_file_versions',
         request,
+        options,
       ),
     )
   }
@@ -337,6 +360,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The hidden file version metadata.
    */
@@ -344,9 +368,10 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: HideFileRequest,
+    options?: { readonly signal?: AbortSignal },
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_hide_file', request),
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_hide_file', request, options),
     )
   }
 
@@ -355,6 +380,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The deleted file version identifier.
    */
@@ -362,12 +388,14 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: DeleteFileVersionRequest,
+    options?: { readonly signal?: AbortSignal },
   ): Promise<DeleteFileVersionResponse> {
     return this.postJson<DeleteFileVersionResponse>(
       apiUrl,
       authToken,
       'b2_delete_file_version',
       request,
+      options,
     )
   }
 
@@ -376,6 +404,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The copied file version metadata.
    */
@@ -383,9 +412,10 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyFileRequest,
+    options?: { readonly signal?: AbortSignal },
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request),
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),
     )
   }
 

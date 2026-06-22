@@ -257,7 +257,7 @@ function isUploadRateLimitError(err: unknown): err is B2Error {
 function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof DOMException && err.name === 'AbortError') return err
-  if (err instanceof TypeError || err instanceof DOMException) {
+  if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
     if (options.retryResponseBodyFailures !== true) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)

@@ -28,6 +28,21 @@ export { generateActions } from './policies/index.ts'
 export { B2Folder } from './scanners/b2.ts'
 export { LocalFolder } from './scanners/local.ts'
 export type {
+  SyncSha1PendingState,
+  SyncSha1State,
+  SyncSha1UnavailableState,
+  SyncSha1UntrustedState,
+  SyncSha1VerifiedState,
+} from './sha1-metadata.ts'
+export {
+  isUntrustedSha1,
+  parseSyncContentSha1,
+  selectB2ComparableSha1,
+  syncSha1StateOf,
+  untrustedSha1,
+  untrustedSha1Prefix,
+} from './sha1-metadata.ts'
+export type {
   B2SyncFolder,
   LocalSyncFolder,
   SynchronizerConfig,
@@ -39,9 +54,11 @@ export type {
   B2SyncPath,
   CompareMode,
   KeepMode,
+  LocalFileIdentity,
   LocalSyncPath,
   SyncActionEvent,
   SyncActionEventType,
+  SyncCompareEvent,
   SyncDirection,
   SyncEncryptionProvider,
   SyncErrorEvent,
@@ -50,5 +67,6 @@ export type {
   SyncFolder,
   SyncOptions,
   SyncPath,
+  SyncScanOptions,
   SyncSkipEvent,
 } from './types.ts'

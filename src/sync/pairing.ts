@@ -1,4 +1,5 @@
-import type { SyncFolder, SyncPath } from './types.ts'
+import { compareSyncPathNames } from './path-order.ts'
+import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
 export type SyncPair = readonly [SyncPath | null, SyncPath | null]
@@ -10,34 +11,55 @@ export type SyncPair = readonly [SyncPath | null, SyncPath | null]
  *
  * @param source - The source folder to scan.
  * @param dest - The destination folder to scan.
+ * @param options - Optional scan controls shared by both folders.
  */
-export async function* zipFolders(source: SyncFolder, dest: SyncFolder): AsyncGenerator<SyncPair> {
-  const sourceIter = source.scan()[Symbol.asyncIterator]()
-  const destIter = dest.scan()[Symbol.asyncIterator]()
+export async function* zipFolders(
+  source: SyncFolder,
+  dest: SyncFolder,
+  options: SyncScanOptions = {},
+): AsyncGenerator<SyncPair> {
+  const sourceIter = source.scan(options)[Symbol.asyncIterator]()
+  const destIter = dest.scan(options)[Symbol.asyncIterator]()
 
-  let sourceResult = await sourceIter.next()
-  let destResult = await destIter.next()
+  try {
+    let sourceResult = await sourceIter.next()
+    let destResult = await destIter.next()
 
-  while (!sourceResult.done || !destResult.done) {
-    const s = sourceResult.done ? null : sourceResult.value
-    const d = destResult.done ? null : destResult.value
+    while (!sourceResult.done || !destResult.done) {
+      const s = sourceResult.done ? null : sourceResult.value
+      const d = destResult.done ? null : destResult.value
 
-    if (s === null) {
-      yield [null, d]
-      destResult = await destIter.next()
-    } else if (d === null) {
-      yield [s, null]
-      sourceResult = await sourceIter.next()
-    } else if (s.relativePath < d.relativePath) {
-      yield [s, null]
-      sourceResult = await sourceIter.next()
-    } else if (d.relativePath < s.relativePath) {
-      yield [null, d]
-      destResult = await destIter.next()
-    } else {
-      yield [s, d]
-      sourceResult = await sourceIter.next()
-      destResult = await destIter.next()
+      if (s === null) {
+        yield [null, d]
+        destResult = await destIter.next()
+      } else if (d === null) {
+        yield [s, null]
+        sourceResult = await sourceIter.next()
+      } else {
+        const order = compareSyncPathNames(s.relativePath, d.relativePath)
+        if (order < 0) {
+          yield [s, null]
+          sourceResult = await sourceIter.next()
+        } else if (order > 0) {
+          yield [null, d]
+          destResult = await destIter.next()
+        } else {
+          yield [s, d]
+          sourceResult = await sourceIter.next()
+          destResult = await destIter.next()
+        }
+      }
     }
+  } finally {
+    await closeScanIterator(sourceIter)
+    await closeScanIterator(destIter)
+  }
+}
+
+async function closeScanIterator(iterator: AsyncIterator<SyncPath>): Promise<void> {
+  try {
+    await iterator.return?.()
+  } catch {
+    // Best-effort scanner cleanup should not mask the original stop reason.
   }
 }

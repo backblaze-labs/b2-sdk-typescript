@@ -1,8 +1,19 @@
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
+import type { SyncSha1State } from './sha1-metadata.ts'
 
-/** Strategy for comparing source and destination files: by modification time, size, or skip comparison. */
-export type CompareMode = 'modtime' | 'size' | 'none'
+/**
+ * Strategy for comparing source and destination files.
+ *
+ * The `sha1` mode compares 40-character hexadecimal SHA-1 digests as a practical drift
+ * detector. Digest case is normalized before comparison. Missing, null, unavailable, or
+ * non-verifiable metadata cannot prove equality: the high-level synchronizer either transfers
+ * conservatively for untrusted metadata or skips action generation with a surfaced event when a
+ * B2 file has no comparable digest. Untrusted B2 metadata may require downloading the selected
+ * B2 version to hash its bytes before equality can be trusted. This is not a cryptographic
+ * integrity or tamper-proofing guarantee, because SHA-1 collisions are possible.
+ */
+export type CompareMode = 'modtime' | 'size' | 'sha1' | 'none'
 
 /** Strategy for handling destination files not present in the source. */
 export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
@@ -18,12 +29,47 @@ export interface SyncPath {
   readonly modTimeMillis: number
   /** File size in bytes. */
   readonly size: number
+  /**
+   * SHA-1 checksum state for compare modes that need content hashes.
+   *
+   * - `undefined`: not computed yet; the synchronizer may hash local files before comparing.
+   * - `null`: known to be unavailable; `sha1` sync skips the pair with a surfaced event.
+   * - 40-character hex string: known verifiable digest.
+   * - other string: untrusted provider metadata such as B2's `unverified:<hex>` sentinel;
+   *   consumers must not treat it as proof that bytes match. The `sha1` synchronizer must
+   *   verify untrusted B2 bytes before using them for equality, or transfer conservatively.
+   *
+   * Use `parseSyncContentSha1`, `selectB2ComparableSha1`, and `untrustedSha1` from the sync
+   * entrypoint to construct or inspect this field without depending on sentinel strings.
+   */
+  readonly contentSha1?: string | null
+  /**
+   * Explicit SHA-1 trust and availability state. Prefer this field for custom
+   * scanners that can distinguish verified digests from untrusted provider
+   * metadata without relying on `contentSha1` sentinel strings. When omitted,
+   * the synchronizer derives the state from `contentSha1` for compatibility.
+   */
+  readonly contentSha1State?: SyncSha1State
+}
+
+/** Filesystem identity captured while scanning a local file. */
+export interface LocalFileIdentity {
+  /** Device ID from the local filesystem. */
+  readonly deviceId: number
+  /** Inode number from the local filesystem. */
+  readonly inode: number
+  /** Size observed during the scan. */
+  readonly size: number
+  /** Modification time observed during the scan, floored to milliseconds. */
+  readonly modTimeMillis: number
 }
 
 /** A file on the local filesystem discovered during a scan. */
 export interface LocalSyncPath extends SyncPath {
   /** Absolute filesystem path to the file. */
   readonly absolutePath: string
+  /** Optional filesystem identity used to reject scan-to-read races. */
+  readonly fileIdentity?: LocalFileIdentity
 }
 
 /** A file in a B2 bucket discovered during a scan. */
@@ -50,9 +96,9 @@ export type SyncEventType =
   | 'compare'
 
 /**
- * Action event types: per-file outcomes (transfer / metadata change /
- * skip) that always carry a `path` and a `size`. These never carry a
- * `message` because the type tag already says what happened.
+ * Action event types: per-file transfer or metadata-change outcomes that
+ * always carry a `path` and a `size`. Skips are reported separately as
+ * {@link SyncSkipEvent} because they carry a diagnostic `message`.
  */
 export type SyncActionEventType =
   | 'upload-start'
@@ -64,10 +110,9 @@ export type SyncActionEventType =
   | 'hide'
   | 'delete-remote'
   | 'delete-local'
-  | 'compare'
 
 /**
- * Per-action progress event (transfer, metadata change, comparison). All
+ * Per-action progress event (transfer or metadata change). All
  * action-event variants share the same shape; the `type` tag distinguishes
  * them.
  */
@@ -76,8 +121,22 @@ export interface SyncActionEvent {
   readonly type: SyncActionEventType
   /** Relative path of the file this event concerns. */
   readonly path: string
-  /** Size in bytes of the file involved, or 0 for metadata-only events. */
+  /** Size in bytes of the file involved, or `0` for metadata-only actions. */
   readonly size: number
+}
+
+/** Per-file comparison progress event. */
+export interface SyncCompareEvent {
+  /** Discriminant tag (always the literal string `'compare'`). */
+  readonly type: 'compare'
+  /** Relative path of the compared file. */
+  readonly path: string
+  /** Reserved for compatibility with earlier metadata-only compare events. */
+  readonly size: 0
+  /** Local file bytes hashed while preparing this comparison, if any. */
+  readonly bytesHashed?: number
+  /** B2 bytes downloaded and hashed while verifying untrusted SHA-1 metadata, if any. */
+  readonly bytesVerified?: number
 }
 
 /**
@@ -118,7 +177,7 @@ export interface SyncErrorEvent {
  * `case 'error':` (or `'skip':`) to narrow into a variant with `message`
  * guaranteed non-optional.
  */
-export type SyncEvent = SyncActionEvent | SyncSkipEvent | SyncErrorEvent
+export type SyncEvent = SyncActionEvent | SyncCompareEvent | SyncSkipEvent | SyncErrorEvent
 
 /** Configuration options for a sync operation. */
 export interface SyncOptions {
@@ -134,10 +193,33 @@ export interface SyncOptions {
   readonly dryRun?: boolean
   /** Tolerance for comparison (bytes for size, milliseconds for modtime). */
   readonly compareThreshold?: number
-  /** Signal to abort the sync operation. */
+  /** Signal to abort the sync operation, including scans and in-progress SHA-1 reads. */
   readonly signal?: AbortSignal
+  /** Optional idle/no-progress timeout in milliseconds for SHA-1 reads in `sha1` mode. */
+  readonly sha1ReadTimeoutMillis?: number
+  /**
+   * Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads.
+   * Objects that cannot be fully verified before this deadline are skipped for that run.
+   */
+  readonly sha1VerificationTimeoutMillis?: number
+  /**
+   * Optional per-file byte ceiling for untrusted B2 SHA-1 verification reads.
+   *
+   * By default, verifying untrusted B2 metadata may download the selected version's full
+   * `contentLength` each run. Set this to a lower value to skip objects above the per-file
+   * budget before they can be treated as equal.
+   */
+  readonly sha1VerificationMaxBytes?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
+}
+
+/** Options passed to folder scanners by the sync engine. */
+export interface SyncScanOptions {
+  /** Signal used to stop a scan before it runs to completion. */
+  readonly signal?: AbortSignal
+  /** Receives scan diagnostics before the scanner aborts. */
+  readonly onError?: (event: SyncErrorEvent) => void
 }
 
 /** Supplies encryption settings on a per-file basis during sync. */
@@ -148,10 +230,10 @@ export interface SyncEncryptionProvider {
   getSettingForDownload(fileVersion: FileVersion): EncryptionSetting | undefined
 }
 
-/** A scannable folder (local or B2) that yields files in sorted order. */
+/** A scannable folder (local or B2) that yields files in deterministic string order. */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
-  /** Scans the folder and yields files sorted by relative path. */
-  scan(): AsyncIterable<SyncPath>
+  /** Scans the folder and yields files sorted by relative path using JavaScript `<`/`>` order. */
+  scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

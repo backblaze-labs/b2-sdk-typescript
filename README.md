@@ -119,7 +119,7 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 #### Resume a failed multipart upload
 
-Pass `resume: true` and the SDK looks up the matching unfinished large file via `b2_list_unfinished_large_files`, checks which parts are already on the server, and only re-uploads the missing ones. Parts whose locally-recomputed SHA-1 matches the server's are skipped.
+Resume requires the exact unfinished large-file ID returned by B2 when the multipart upload was started. The SDK does not auto-attach to same-name unfinished files because another bucket writer can create those with different metadata or retention settings. Passing the deprecated `resume: true` flag without `resumeFileId` starts a fresh upload. With `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100
@@ -127,13 +127,6 @@ await bucket.upload({
   fileName: 'backup.tar.gz',
   source: new BlobSource(largeBlob),
   partSize: 64 * 1024 * 1024,
-  resume: true,
-})
-
-// Or target a specific in-progress large file explicitly
-await bucket.upload({
-  fileName: 'backup.tar.gz',
-  source: new BlobSource(largeBlob),
   resumeFileId: knownLargeFileId,
 })
 ```
@@ -154,7 +147,7 @@ const fileVersion = await done
 console.log(`Streamed upload finished: ${fileVersion.fileName} (${fileVersion.contentLength} bytes)`)
 ```
 
-> Streaming uploads do not support resume because the total size and per-part SHA-1s are not known in advance. Use the buffered `upload` path with `resume: true` when that matters.
+> Streaming uploads do not support resume because the total size and per-part SHA-1s are not known in advance. Use the buffered `upload` path with `resumeFileId` when that matters.
 
 ### Downloads
 
@@ -179,6 +172,10 @@ const stream = obj.createReadStream(fileId, totalSize, {
 ```
 
 Full-body downloads are automatically verified when B2 returns a real `X-Bz-Content-Sha1` digest. If the downloaded bytes do not match, the body stream errors with `ChecksumMismatchError`; discard any partially written output when piping to disk. HEAD requests, range GETs, and files whose SHA-1 is unavailable are not verified because no matching whole-body digest exists.
+
+### Sync SHA-1 comparisons
+
+`compareMode: 'sha1'` hashes matching-size local files and compares them with verifiable B2 SHA-1 metadata. B2 multipart objects do not have an authoritative `contentSha1`; when only `fileInfo.large_file_sha1` or another untrusted hint is available, a real sync downloads that selected B2 version and hashes the full object before skipping a transfer. The SDK does not persist that verification result, so an unchanged 100 GB multipart object can cost 100 GB of B2 download reads on every SHA-1 sync run. `compare.bytesVerified` reports those B2 verification bytes for the run. Use `sha1VerificationMaxBytes` to skip objects above your per-file verification budget, raise `sha1VerificationTimeoutMillis` for large objects on slow links, or use `size`/`modtime` mode when recurring verification egress is not acceptable.
 
 ### File operations
 
