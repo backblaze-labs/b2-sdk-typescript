@@ -960,6 +960,19 @@ describe('synchronize', () => {
         const filePath = join(root, 'signal.txt')
         await writeFile(filePath, 'signal')
         const mockBucket = makeMockBucket()
+        const uploadStarted = deferred<{
+          readonly fileName: string
+          readonly signal?: AbortSignal
+        }>()
+        const releaseUpload = deferred()
+        mockBucket.upload = vi
+          .fn()
+          .mockImplementation(
+            async (options: { readonly fileName: string; readonly signal?: AbortSignal }) => {
+              uploadStarted.resolve(options)
+              await releaseUpload.promise
+            },
+          )
         const sourceFiles: LocalSyncPath[] = [
           {
             relativePath: 'signal.txt',
@@ -983,12 +996,16 @@ describe('synchronize', () => {
           prefix: '',
         }
 
-        await collectEvents(config)
+        const eventsPromise = collectEvents(config)
+        const uploadOptions = await uploadStarted.promise
 
-        expect(mockBucket.upload.mock.calls[0]?.[0]).toMatchObject({
-          fileName: 'signal.txt',
-          signal: controller.signal,
-        })
+        expect(uploadOptions.fileName).toBe('signal.txt')
+        expect(uploadOptions.signal).toBeInstanceOf(AbortSignal)
+        expect(uploadOptions.signal?.aborted).toBe(false)
+        controller.abort(new Error('stop upload'))
+        expect(uploadOptions.signal?.aborted).toBe(true)
+        releaseUpload.resolve(undefined)
+        await eventsPromise
       } finally {
         await rm(root, { recursive: true, force: true })
       }
