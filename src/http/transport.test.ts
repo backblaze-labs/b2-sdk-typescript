@@ -191,6 +191,35 @@ describe('FetchTransport', () => {
     ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 
+  it('unrefs request timeout timers when supported', async () => {
+    const realSetTimeout = globalThis.setTimeout
+    const unref = vi.fn()
+    type TimerWithOptionalUnref = ReturnType<typeof setTimeout> & { unref?: () => void }
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: Parameters<typeof setTimeout>[0],
+      timeout?: Parameters<typeof setTimeout>[1],
+    ) => {
+      const timer = realSetTimeout(handler, timeout) as unknown as TimerWithOptionalUnref
+      timer.unref = unref
+      return timer
+    }) as unknown as typeof setTimeout)
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 10_000 },
+      })
+
+      expect(unref).toHaveBeenCalledTimes(1)
+      await response.body?.cancel()
+    } finally {
+      setTimeoutSpy.mockRestore()
+    }
+  })
+
   it.each([
     'json',
     'text',

@@ -184,6 +184,7 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
     timedOut = true
     controller.abort(new DOMException('HTTP request timed out', 'TimeoutError'))
   }, timeoutMs)
+  unrefTimer(timer)
 
   if (request.signal?.aborted === true) {
     clearTimeout(timer)
@@ -203,6 +204,11 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
       request.signal?.removeEventListener('abort', abortFromUpstream)
     },
   }
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const maybeUnref = (timer as { unref?: () => void }).unref
+  if (typeof maybeUnref === 'function') maybeUnref.call(timer)
 }
 
 function createRequestTimeoutError(scope: RequestTimeoutScope): DOMException {
