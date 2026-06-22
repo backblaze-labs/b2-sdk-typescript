@@ -772,9 +772,23 @@ async function ensureLocalSyncRootDirectory(root: string, relativePath: string):
     throw new Error('Local sync root required for filesystem mutation')
   }
 
-  const { mkdir } = await import('node:fs/promises')
+  const { lstat, mkdir } = await import('node:fs/promises')
   const { resolve } = await import('node:path')
   const safeRoot = resolve(root)
+
+  try {
+    const stats = await lstat(safeRoot)
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
+    }
+    if (!stats.isDirectory()) {
+      throw new Error(`Local sync root is not a directory: ${relativePath}`)
+    }
+    return
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error
+  }
+
   await mkdir(safeRoot, { recursive: true })
   await assertLocalRootHasNoSymlink(safeRoot, relativePath)
 }

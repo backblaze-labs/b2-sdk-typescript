@@ -1424,6 +1424,29 @@ describe('synchronize', () => {
       expect((rejection as Error).message).toBe('scan exploded')
     })
 
+    it.skipIf(!isNode)('reports local deletes configured without a local root', async () => {
+      const source = makeMemoryFolder([], 'b2')
+      const dest = makeMemoryFolder([makeLocalSyncPath('orphan.txt', 1000, 10)], 'local')
+      const mockBucket = makeMockBucket()
+
+      const config: SynchronizerDownConfig = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'local', root: '' },
+        options: { compareMode: 'modtime', keepMode: 'delete' },
+        bucket: mockBucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          path: 'orphan.txt',
+          message: 'Local sync root required for filesystem mutation',
+        }),
+      )
+    })
+
     it('keeps recent files with keep-days mode', async () => {
       const now = Date.now()
       const recentTime = now - 6 * 60 * 60 * 1000 // 6 hours ago (within 7 day retention)
@@ -1709,6 +1732,119 @@ describe('synchronize', () => {
             type: 'error',
             path: '',
             message: '1 sync error(s) occurred',
+          }),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('reports invalid download idle timeout values', async () => {
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-timeout-'))
+      try {
+        const source = makeMemoryFolder([makeB2SyncPath('payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            downloadIdleTimeoutMs: 0,
+          },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'payload.txt',
+            message: 'downloadIdleTimeoutMs must be a positive finite number or Infinity',
+          }),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('allows downloads with the idle timeout disabled', async () => {
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-no-timeout-'))
+      try {
+        const source = makeMemoryFolder([makeB2SyncPath('payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            downloadIdleTimeoutMs: Number.POSITIVE_INFINITY,
+          },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(false)
+        await expect(
+          readFile(join(root, 'payload.txt')).then((data) => Array.from(data)),
+        ).resolves.toEqual([1, 2, 3])
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('reports aborts while waiting for download body data', async () => {
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-abort-wait-'))
+      try {
+        const controller = new AbortController()
+        const source = makeMemoryFolder([makeB2SyncPath('payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = {
+          ...makeMockBucket(),
+          download: vi.fn().mockResolvedValue({
+            body: new ReadableStream<Uint8Array>({
+              start() {
+                setTimeout(() => controller.abort(new Error('download cancelled')), 0)
+              },
+            }),
+          }),
+        }
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: {
+            compareMode: 'modtime',
+            keepMode: 'no-delete',
+            downloadIdleTimeoutMs: Number.POSITIVE_INFINITY,
+            signal: controller.signal,
+          },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'payload.txt',
+            message: 'download cancelled',
           }),
         )
       } finally {
@@ -2179,6 +2315,40 @@ describe('synchronize', () => {
           }),
         )
         await expect(access(outsideFile)).rejects.toThrow()
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('refuses downloads when the local root is a file', async () => {
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-root-file-'))
+      const root = join(parent, 'root-file')
+      try {
+        await writeFile(root, 'not a directory')
+
+        const source = makeMemoryFolder([makeB2SyncPath('payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'payload.txt',
+            message: 'Local sync root is not a directory: payload.txt',
+          }),
+        )
       } finally {
         await rm(parent, { recursive: true, force: true })
       }
