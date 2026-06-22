@@ -60,8 +60,8 @@ export interface UploadLargeFileOptions {
    */
   readonly retryResponseBodyFailures?: boolean
   /**
-   * Deprecated compatibility flag. Automatic same-name resume is intentionally disabled;
-   * pass {@link resumeFileId} to resume an explicitly selected unfinished large file.
+   * Deprecated compatibility flag. Automatic same-name resume is disabled.
+   * Without {@link resumeFileId}, this flag is ignored and a fresh upload is started.
    */
   readonly resume?: boolean
   /**
@@ -118,11 +118,10 @@ export async function uploadLargeFile(
   // --- Resume discovery (M11.1) ---
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
+  let createdLargeFile = false
   if (options.resumeFileId !== undefined) {
     largeFileId = options.resumeFileId
     preUploaded = await collectPartSha1s(raw, accountInfo, largeFileId)
-  } else if (options.resume === true) {
-    throw new Error('uploadLargeFile: resume requires an explicit resumeFileId')
   } else {
     const startResp = await raw.startLargeFile(
       accountInfo.getApiUrl(),
@@ -131,6 +130,7 @@ export async function uploadLargeFile(
     )
     largeFileId = startResp.fileId
     preUploaded = new Map<number, string>()
+    createdLargeFile = true
   }
 
   const partSha1s: string[] = new Array(parts.length)
@@ -144,10 +144,7 @@ export async function uploadLargeFile(
   // shipped, then dropped before the next read starts, so the peak
   // memory footprint is ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
-    if (options.resume === true || options.resumeFileId !== undefined) {
-      // Cancel the unfinished large file before throwing so the caller
-      // doesn't have to clean it up themselves.
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+    if (options.resumeFileId !== undefined) {
       throw new Error(
         'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
       )
@@ -167,7 +164,7 @@ export async function uploadLargeFile(
         partSha1Array: partSha1s,
       })
     } catch (err) {
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+      if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
       throw err
     }
   }
@@ -226,7 +223,7 @@ export async function uploadLargeFile(
 
     return result
   } catch (err) {
-    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+    if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
     throw err
   }
 }

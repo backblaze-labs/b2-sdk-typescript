@@ -13,7 +13,12 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
-import { isUntrustedSha1, parseSyncContentSha1, untrustedSha1 } from './sha1-metadata.ts'
+import {
+  isUntrustedSha1,
+  parseSyncContentSha1,
+  syncSha1StateOf,
+  untrustedSha1,
+} from './sha1-metadata.ts'
 import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
 
 function makeSyncPath(
@@ -241,6 +246,23 @@ describe('untrusted SHA-1 metadata helpers', () => {
       raw: 'not-a-sha1',
       value: null,
     })
+    expect(
+      syncSha1StateOf({ contentSha1: 'ignored', contentSha1State: { kind: 'unavailable' } }),
+    ).toEqual({ kind: 'unavailable' })
+  })
+
+  it('compares explicit sha1 states without sentinel strings', () => {
+    const sha1 = 'a'.repeat(40)
+    const source: SyncPath = {
+      ...makeSyncPath('file.txt', 1000, 10),
+      contentSha1State: { kind: 'verified', value: sha1 },
+    }
+    const dest: SyncPath = {
+      ...makeSyncPath('file.txt', 1000, 10),
+      contentSha1State: { kind: 'verified', value: sha1 },
+    }
+
+    expect(filesAreDifferent(source, dest, 'sha1')).toBe(false)
   })
 })
 
@@ -532,7 +554,7 @@ describe('preparePairForCompare', () => {
     expect(result.events).toEqual([])
   })
 
-  it('returns an error event when source B2 byte hashing fails', async () => {
+  it('returns a skip event when source B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
     const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
@@ -545,11 +567,11 @@ describe('preparePairForCompare', () => {
 
     expect(result.skipActionGeneration).toBe(true)
     expect(result.events[0]).toMatchObject({
-      type: 'error',
+      type: 'skip',
       path: 'file.txt',
-      message: 'failed to hash B2 file for sha1 comparison: download failed',
+      message: 'sha1 comparison skipped because B2 verification failed: download failed',
     })
-    expect(result.errors).toHaveLength(1)
+    expect(result.errors).toHaveLength(0)
   })
 
   it('skips when B2 byte hashing returns an unavailable sha1', async () => {
@@ -571,7 +593,7 @@ describe('preparePairForCompare', () => {
     })
   })
 
-  it('returns an error event when destination B2 byte hashing fails', async () => {
+  it('returns a skip event when destination B2 byte hashing fails', async () => {
     const sha1 = 'a'.repeat(40)
     const source = makeB2SyncPath('source.txt', 1000, 100, sha1)
     const dest = makeB2SyncPath('dest.txt', 1000, 100, `unverified:${sha1}`)
@@ -585,11 +607,11 @@ describe('preparePairForCompare', () => {
 
     expect(result.skipActionGeneration).toBe(true)
     expect(result.events[0]).toMatchObject({
-      type: 'error',
+      type: 'skip',
       path: 'dest.txt',
-      message: 'failed to hash B2 file for sha1 comparison: download failed',
+      message: 'sha1 comparison skipped because B2 verification failed: download failed',
     })
-    expect(result.errors).toHaveLength(1)
+    expect(result.errors).toHaveLength(0)
   })
 
   it('only hashes B2 sides with untrusted sha1 metadata', async () => {

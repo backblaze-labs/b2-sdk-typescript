@@ -227,7 +227,7 @@ describe('B2Folder', () => {
     )
   })
 
-  it('passes abort signals into B2 list requests', async () => {
+  it('stops cleanly when a B2 list request is aborted', async () => {
     const controller = new AbortController()
     const listFileVersions = vi.fn().mockImplementation(
       (options?: { signal?: AbortSignal }) =>
@@ -243,23 +243,18 @@ describe('B2Folder', () => {
     const errors: unknown[] = []
     const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
 
-    await expect(
-      collect<B2SyncPath>(
-        folder.scan({
-          signal: controller.signal,
-          onError: (event) => errors.push(event),
-        }),
-      ),
-    ).rejects.toThrow('failed to scan B2 file versions')
+    const entries = await collect<B2SyncPath>(
+      folder.scan({
+        signal: controller.signal,
+        onError: (event) => errors.push(event),
+      }),
+    )
+
+    expect(entries).toEqual([])
     expect(listFileVersions).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
     )
-    expect(errors).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        message: 'failed to scan B2 file versions: aborted',
-      }),
-    )
+    expect(errors).toEqual([])
   })
 
   it('scans a bucket with files and yields them sorted by name', async () => {

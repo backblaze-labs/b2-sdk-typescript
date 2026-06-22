@@ -119,7 +119,23 @@ describe('collectPartSha1s', () => {
 })
 
 describe('findResumeCandidate', () => {
-  it('returns null when no unfinished file matches the destination name', async () => {
+  it('returns null without an explicit resume file ID', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        throw new Error('listUnfinishedLargeFiles should not be called without a resumeFileId')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+    )
+    expect(result).toBeNull()
+  })
+
+  it('returns null when no unfinished file matches the destination name and file ID', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -138,6 +154,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'target.bin',
+      { resumeFileId: 'target-id' as LargeFileId },
     )
     expect(result).toBeNull()
   })
@@ -154,6 +171,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'anything.bin',
+      { resumeFileId: 'missing-id' as LargeFileId },
     )
     expect(result).toBeNull()
   })
@@ -191,6 +209,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'wanted.bin',
+      { resumeFileId: 'lf-match' as LargeFileId },
     )
 
     expect(result?.fileId).toBe('lf-match' as LargeFileId)
@@ -219,6 +238,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'wanted.bin',
+      { resumeFileId: 'lf-match' as LargeFileId },
     )
     expect(result).not.toBeNull()
     expect(result?.fileId).toBe('lf-match' as LargeFileId)
@@ -254,7 +274,7 @@ describe('findResumeCandidate', () => {
       makeAccountInfo(),
       bucketId('bucket1'),
       'wanted.bin',
-      { collectUploadedPartSha1s: true },
+      { resumeFileId: 'lf-match' as LargeFileId, collectUploadedPartSha1s: true },
     )
     expect(result).not.toBeNull()
     expect(result?.fileId).toBe('lf-match' as LargeFileId)

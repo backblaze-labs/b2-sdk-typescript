@@ -1,5 +1,6 @@
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
+import type { SyncSha1State } from './sha1-metadata.ts'
 
 /**
  * Strategy for comparing source and destination files.
@@ -42,6 +43,13 @@ export interface SyncPath {
    * entrypoint to construct or inspect this field without depending on sentinel strings.
    */
   readonly contentSha1?: string | null
+  /**
+   * Explicit SHA-1 trust and availability state. Prefer this field for custom
+   * scanners that can distinguish verified digests from untrusted provider
+   * metadata without relying on `contentSha1` sentinel strings. When omitted,
+   * the synchronizer derives the state from `contentSha1` for compatibility.
+   */
+  readonly contentSha1State?: SyncSha1State
 }
 
 /** Filesystem identity captured while scanning a local file. */
@@ -189,14 +197,17 @@ export interface SyncOptions {
   readonly signal?: AbortSignal
   /** Optional idle/no-progress timeout in milliseconds for SHA-1 reads in `sha1` mode. */
   readonly sha1ReadTimeoutMillis?: number
-  /** Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads. */
+  /**
+   * Optional absolute deadline in milliseconds for untrusted B2 SHA-1 verification reads.
+   * Objects that cannot be fully verified before this deadline are skipped for that run.
+   */
   readonly sha1VerificationTimeoutMillis?: number
   /**
    * Optional per-file byte ceiling for untrusted B2 SHA-1 verification reads.
    *
    * By default, verifying untrusted B2 metadata may download the selected version's full
-   * `contentLength` each run. Set this to a lower value to fail such verification before a
-   * large object can be fully read.
+   * `contentLength` each run. Set this to a lower value to skip objects above the per-file
+   * budget before they can be treated as equal.
    */
   readonly sha1VerificationMaxBytes?: number
   /** Optional provider for per-file encryption settings. */

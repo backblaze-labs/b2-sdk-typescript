@@ -1,8 +1,9 @@
 import type { Bucket } from '../../bucket.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
+import { isAbortError } from '../local-sha1.ts'
 import { compareSyncPathNames } from '../path-order.ts'
-import { selectB2ComparableSha1 } from '../sha1-metadata.ts'
+import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type { B2SyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 /**
@@ -49,6 +50,7 @@ export class B2Folder implements SyncFolder {
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
       } catch (err) {
+        if (options.signal?.aborted || isAbortError(err)) return
         throw emitScanError(options, 'failed to scan B2 file versions', err)
       }
 
@@ -79,11 +81,13 @@ export class B2Folder implements SyncFolder {
 
       const relativePath = this.prefix !== '' ? fileName.slice(this.prefix.length) : fileName
 
+      const contentSha1 = selectB2ComparableSha1(selected)
       yield {
         relativePath,
         modTimeMillis: selected.uploadTimestamp,
         size: selected.contentLength,
-        contentSha1: selectB2ComparableSha1(selected),
+        contentSha1,
+        contentSha1State: syncSha1StateOf({ contentSha1 }),
         selectedVersion: selected,
         allVersions: versions,
       }

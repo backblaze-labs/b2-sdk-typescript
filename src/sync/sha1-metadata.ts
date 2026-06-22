@@ -112,3 +112,17 @@ export function parseSyncContentSha1(sha1: string | null | undefined): SyncSha1S
   if (normalized === null) return { kind: 'untrusted', raw: sha1, value: null }
   return { kind: 'verified', value: normalized }
 }
+
+/**
+ * Reads an explicit SHA-1 state when present, otherwise parses the compatibility field.
+ *
+ * @param path - Object carrying SHA-1 metadata.
+ *
+ * @returns The explicit or parsed SHA-1 state.
+ */
+export function syncSha1StateOf(path: {
+  readonly contentSha1?: string | null
+  readonly contentSha1State?: SyncSha1State
+}): SyncSha1State {
+  return path.contentSha1State ?? parseSyncContentSha1(path.contentSha1)
+}

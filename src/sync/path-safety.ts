@@ -21,11 +21,24 @@ export function safeRelativePathSegments(relPath: string): string[] {
   }
 
   const segments = relPath.split('/')
-  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+  if (
+    segments.some(
+      (segment) =>
+        segment.length === 0 ||
+        segment === '.' ||
+        segment === '..' ||
+        segment.includes(':') ||
+        segment.endsWith('.') ||
+        segment.endsWith(' ') ||
+        WINDOWS_RESERVED_NAME.test(segment),
+    )
+  ) {
     throw new Error('unsafe local destination path')
   }
   return segments
 }
+
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
 
 /**
  * Throws if {@link target} is not contained by {@link root}.

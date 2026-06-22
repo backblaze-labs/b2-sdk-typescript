@@ -13,6 +13,8 @@ export interface ResumeCandidate {
 
 /** Options for unfinished large-file resume discovery. */
 export interface FindResumeCandidateOptions {
+  /** Explicit unfinished large-file ID selected by the caller. */
+  readonly resumeFileId?: LargeFileId
   /**
    * When true, list already-uploaded parts and return their server SHA-1 values.
    * Leave false unless the caller will trust those SHA-1s to skip uploads.
@@ -21,8 +23,9 @@ export interface FindResumeCandidateOptions {
 }
 
 /**
- * Finds an unfinished large file matching the given bucket and file name.
+ * Finds an explicitly selected unfinished large file matching the given bucket and file name.
  * Returns `null` when no matching candidate exists.
+ * This intentionally does not auto-adopt unfinished files by name.
  *
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
@@ -39,6 +42,8 @@ export async function findResumeCandidate(
   fileName: string,
   options: FindResumeCandidateOptions = {},
 ): Promise<ResumeCandidate | null> {
+  if (options.resumeFileId === undefined) return null
+
   let startFileId: LargeFileId | undefined
 
   while (true) {
@@ -52,7 +57,9 @@ export async function findResumeCandidate(
       },
     )
 
-    const match = unfinished.files.find((f) => f.fileName === fileName)
+    const match = unfinished.files.find(
+      (f) => f.fileName === fileName && f.fileId === options.resumeFileId,
+    )
     if (match) {
       const fileId = largeFileIdOf(match.fileId)
       const uploadedPartSha1s =

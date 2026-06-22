@@ -1936,7 +1936,7 @@ describe('synchronize', () => {
       },
     )
 
-    it.skipIf(!isNode)('surfaces errors while verifying matching B2 metadata bytes', async () => {
+    it.skipIf(!isNode)('skips when verifying matching B2 metadata bytes fails', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
@@ -1982,8 +1982,10 @@ describe('synchronize', () => {
 
         const events = await collectEvents(config)
         const errors = events.filter((e) => e.type === 'error')
-        expect(errors[0]?.path).toBe('remote-read-error.txt')
-        expect(errors[0]?.message).toContain('failed to hash B2 file')
+        const skips = events.filter((e) => e.type === 'skip')
+        expect(errors).toHaveLength(0)
+        expect(skips[0]?.path).toBe('remote-read-error.txt')
+        expect(skips[0]?.message).toContain('B2 verification failed')
         expect(mockBucket.upload).not.toHaveBeenCalled()
       } finally {
         await rm(root, { recursive: true, force: true })
@@ -2021,8 +2023,10 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const errors = events.filter((e) => e.type === 'error')
-      expect(errors[0]?.path).toBe('remote-stall.txt')
-      expect(errors[0]?.message).toContain('sha1 B2 read stalled')
+      const skips = events.filter((e) => e.type === 'skip')
+      expect(errors).toHaveLength(0)
+      expect(skips[0]?.path).toBe('remote-stall.txt')
+      expect(skips[0]?.message).toContain('sha1 B2 read stalled')
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
@@ -2060,11 +2064,11 @@ describe('synchronize', () => {
         setTimeout(() => reject(new Error('timed out waiting for cancel')), 1000)
       })
       const events = await Promise.race([collectEvents(config), timeout])
-      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(events.some((event) => event.type === 'skip')).toBe(true)
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
-    it('surfaces an error when B2 sha1 verification exceeds the byte budget', async () => {
+    it('skips when B2 sha1 verification exceeds the byte budget', async () => {
       const mockBucket = makeMockBucket({ 'fid_remote-budget.txt': new Uint8Array([1, 2, 3, 4]) })
       const sha1 = await sha1Hex(new Uint8Array([1, 2, 3]))
       const sourceFile = makeB2SyncPath(
@@ -2089,12 +2093,14 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const errors = events.filter((event) => event.type === 'error')
-      expect(errors[0]?.path).toBe('remote-budget.txt')
-      expect(errors[0]?.message).toContain('sha1 B2 read exceeded 3 byte verification budget')
+      const skips = events.filter((event) => event.type === 'skip')
+      expect(errors).toHaveLength(0)
+      expect(skips[0]?.path).toBe('remote-budget.txt')
+      expect(skips[0]?.message).toContain('sha1 B2 read exceeded 3 byte verification budget')
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
-    it('surfaces an error when B2 sha1 verification exceeds an explicit byte ceiling', async () => {
+    it('skips when B2 sha1 verification exceeds an explicit byte ceiling', async () => {
       const mockBucket = makeMockBucket({ 'fid_remote-ceiling.txt': new Uint8Array([1, 2, 3]) })
       const sha1 = await sha1Hex(new Uint8Array([1, 2, 3]))
       const sourceFile = makeB2SyncPath(
@@ -2123,11 +2129,13 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const errors = events.filter((event) => event.type === 'error')
-      expect(errors[0]?.message).toContain('sha1 B2 read exceeded 2 byte verification budget')
+      const skips = events.filter((event) => event.type === 'skip')
+      expect(errors).toHaveLength(0)
+      expect(skips[0]?.message).toContain('sha1 B2 read exceeded 2 byte verification budget')
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
-    it('surfaces an error when B2 sha1 verification ends before contentLength', async () => {
+    it('skips when B2 sha1 verification ends before contentLength', async () => {
       const actual = new Uint8Array([1, 2, 3])
       const expected = new Uint8Array([1, 2, 3, 4])
       const mockBucket = makeMockBucket({ 'fid_remote-short.txt': actual })
@@ -2160,7 +2168,9 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const errors = events.filter((event) => event.type === 'error')
-      expect(errors[0]?.message).toContain('sha1 B2 read ended after 3 bytes, expected 4')
+      const skips = events.filter((event) => event.type === 'skip')
+      expect(errors).toHaveLength(0)
+      expect(skips[0]?.message).toContain('sha1 B2 read ended after 3 bytes, expected 4')
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
@@ -2203,7 +2213,7 @@ describe('synchronize', () => {
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
-    it('surfaces an error when the B2 sha1 download request exceeds the deadline', async () => {
+    it('skips when the B2 sha1 download request exceeds the deadline', async () => {
       const mockBucket = makeMockBucket()
       mockBucket.downloadById.mockImplementation(() => new Promise(() => {}))
       const sha1 = await sha1Hex(new Uint8Array([1, 2, 3]))
@@ -2233,8 +2243,10 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       const errors = events.filter((event) => event.type === 'error')
-      expect(errors[0]?.path).toBe('remote-deadline.txt')
-      expect(errors[0]?.message).toContain('sha1 B2 verification exceeded 1 ms')
+      const skips = events.filter((event) => event.type === 'skip')
+      expect(errors).toHaveLength(0)
+      expect(skips[0]?.path).toBe('remote-deadline.txt')
+      expect(skips[0]?.message).toContain('sha1 B2 verification exceeded 1 ms')
       expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
@@ -2673,6 +2685,7 @@ describe('synchronize', () => {
         const events = await collectEvents(config)
 
         expect(events.filter((event) => event.type === 'upload-done')).toHaveLength(1)
+        expect(events.find(isCompareEvent)?.bytesHashed).toBe(data.byteLength)
         expect(events.find(isCompareEvent)?.bytesVerified).toBeUndefined()
         expect(mockBucket.downloadById).not.toHaveBeenCalled()
         expect(mockBucket.upload).not.toHaveBeenCalled()
@@ -3001,6 +3014,7 @@ describe('synchronize', () => {
 
     it('copies a paired-but-different file in b2-to-b2 mode', async () => {
       const mockBucket = makeMockBucket()
+      const controller = new AbortController()
       const sourceFile = makeB2SyncPath('paired.txt', 5000, 100)
       const destFile = makeB2SyncPath('paired.txt', 1000, 100)
       const source = makeMemoryFolder([sourceFile], 'b2')
@@ -3009,7 +3023,7 @@ describe('synchronize', () => {
       const config: SynchronizerUpConfig = {
         source: { ...source, type: 'b2' },
         dest: { ...dest, type: 'b2' },
-        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
         bucket: mockBucket as unknown as Bucket,
         prefix: '',
       } as unknown as SynchronizerUpConfig
@@ -3018,7 +3032,7 @@ describe('synchronize', () => {
       const copyEvents = events.filter((e) => e.type === 'copy-done')
       expect(copyEvents).toHaveLength(1)
       expect(mockBucket.copyFile).toHaveBeenCalledWith(
-        expect.objectContaining({ fileName: 'paired.txt' }),
+        expect.objectContaining({ fileName: 'paired.txt', signal: controller.signal }),
       )
     })
 
@@ -3667,6 +3681,7 @@ describe('synchronize', () => {
       // relativePath and silently failed with `file_not_present` on any
       // sync with a non-empty destination prefix.
       const mockBucket = makeMockBucket()
+      const controller = new AbortController()
       // The scanner reports `relativePath: 'orphan.txt'` (prefix
       // stripped) but the FileVersion's `fileName` is the actual B2
       // key, `'backup/orphan.txt'`.
@@ -3677,7 +3692,7 @@ describe('synchronize', () => {
       const config: SynchronizerUpConfig = {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
-        options: { compareMode: 'modtime', keepMode: 'delete' },
+        options: { compareMode: 'modtime', keepMode: 'delete', signal: controller.signal },
         bucket: mockBucket as unknown as Bucket,
         prefix: 'backup/',
       }
@@ -3694,6 +3709,7 @@ describe('synchronize', () => {
       expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith(
         'backup/orphan.txt',
         'fid_orphan.txt',
+        { signal: controller.signal },
       )
     })
 
@@ -3703,6 +3719,7 @@ describe('synchronize', () => {
       // calling `bucket.hideFile`. This preserves the old prefix
       // behaviour for the cases where it actually matters.
       const mockBucket = makeMockBucket()
+      const controller = new AbortController()
       const lockedBucket: typeof mockBucket & { info: object } = Object.assign(mockBucket, {
         info: {
           fileLockConfiguration: { value: { isFileLockEnabled: true } },
@@ -3715,7 +3732,7 @@ describe('synchronize', () => {
       const config: SynchronizerUpConfig = {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
-        options: { compareMode: 'modtime', keepMode: 'delete' },
+        options: { compareMode: 'modtime', keepMode: 'delete', signal: controller.signal },
         bucket: lockedBucket as unknown as Bucket,
         prefix: 'backup/',
       }
@@ -3725,7 +3742,9 @@ describe('synchronize', () => {
       const deletes = events.filter((e) => e.type === 'delete-remote')
       expect(hides).toHaveLength(1)
       expect(deletes).toHaveLength(0)
-      expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt')
+      expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt', {
+        signal: controller.signal,
+      })
       expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
     })
   })

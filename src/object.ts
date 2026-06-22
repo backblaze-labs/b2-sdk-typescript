@@ -139,8 +139,8 @@ export class B2Object {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled;
-     * pass `resumeFileId` for an explicitly selected unfinished large file.
+     * Deprecated compatibility flag. Automatic same-name resume is disabled.
+     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
      */
     resume?: boolean
     /**

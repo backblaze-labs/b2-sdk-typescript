@@ -119,7 +119,7 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 #### Resume a failed multipart upload
 
-Resume requires the exact unfinished large-file ID returned by B2 when the multipart upload was started. The SDK does not auto-attach to same-name unfinished files because another bucket writer can create those with different metadata or retention settings. With `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
+Resume requires the exact unfinished large-file ID returned by B2 when the multipart upload was started. The SDK does not auto-attach to same-name unfinished files because another bucket writer can create those with different metadata or retention settings. Passing the deprecated `resume: true` flag without `resumeFileId` starts a fresh upload. With `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
 
 ```ts
 // Restart the upload that crashed at part 47 of 100
@@ -175,7 +175,7 @@ Full-body downloads are automatically verified when B2 returns a real `X-Bz-Cont
 
 ### Sync SHA-1 comparisons
 
-`compareMode: 'sha1'` hashes matching-size local files and compares them with verifiable B2 SHA-1 metadata. B2 multipart objects do not have an authoritative `contentSha1`; when only `fileInfo.large_file_sha1` or another untrusted hint is available, a real sync downloads that selected B2 version and hashes the full object before skipping a transfer. The SDK does not persist that verification result, so an unchanged 100 GB multipart object can cost 100 GB of B2 download reads on every SHA-1 sync run. Use `sha1VerificationMaxBytes` to fail instead of verifying objects above your per-file budget, or use `size`/`modtime` mode when recurring verification egress is not acceptable.
+`compareMode: 'sha1'` hashes matching-size local files and compares them with verifiable B2 SHA-1 metadata. B2 multipart objects do not have an authoritative `contentSha1`; when only `fileInfo.large_file_sha1` or another untrusted hint is available, a real sync downloads that selected B2 version and hashes the full object before skipping a transfer. The SDK does not persist that verification result, so an unchanged 100 GB multipart object can cost 100 GB of B2 download reads on every SHA-1 sync run. `compare.bytesVerified` reports those B2 verification bytes for the run. Use `sha1VerificationMaxBytes` to skip objects above your per-file verification budget, raise `sha1VerificationTimeoutMillis` for large objects on slow links, or use `size`/`modtime` mode when recurring verification egress is not acceptable.
 
 ### File operations
 

@@ -38,6 +38,7 @@ export {
   isUntrustedSha1,
   parseSyncContentSha1,
   selectB2ComparableSha1,
+  syncSha1StateOf,
   untrustedSha1,
   untrustedSha1Prefix,
 } from './sha1-metadata.ts'

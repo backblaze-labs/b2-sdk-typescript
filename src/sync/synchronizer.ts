@@ -541,6 +541,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             ? { destinationServerSideEncryption }
             : {}),
           ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
+          ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
         })
       })
     },
@@ -551,7 +552,12 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
 
       return new HideAction(path, async (relPath) => {
         const prefix = upConfig.prefix ?? ''
-        await bucket.hideFile(`${prefix}${relPath}`)
+        const fileName = `${prefix}${relPath}`
+        if (config.options.signal !== undefined) {
+          await bucket.hideFile(fileName, { signal: config.options.signal })
+        } else {
+          await bucket.hideFile(fileName)
+        }
       })
     },
 
@@ -572,7 +578,13 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         path.relativePath,
         path.selectedVersion.fileId as string,
         async (fileId) => {
-          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
+          if (config.options.signal !== undefined) {
+            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
+              signal: config.options.signal,
+            })
+          } else {
+            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
+          }
         },
       )
     },
@@ -580,6 +592,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     deleteLocal(path: LocalSyncPath): SyncAction {
       return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
         const { unlink } = await import('node:fs/promises')
+        config.options.signal?.throwIfAborted()
         await unlink(absPath)
       })
     },

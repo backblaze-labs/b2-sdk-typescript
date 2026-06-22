@@ -1,8 +1,11 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
+  localFileIoTestHooks,
   readScannedLocalFile,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
@@ -10,6 +13,9 @@ import {
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
+const isWindows = process.platform === 'win32'
+const isLinux = process.platform === 'linux'
+const execFileAsync = promisify(execFile)
 
 function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -73,6 +79,39 @@ describe('readScannedLocalFile', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('rejects a scanned file removed before upload', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-'))
+    try {
+      const path = await makeScannedPath(root, 'file.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+
+      await expect(readScannedLocalFile(path)).rejects.toThrow(
+        'local file changed before upload: could not open scanned file',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('rejects a scanned file replaced by a FIFO without hanging', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-fifo-'))
+    try {
+      const path = await makeScannedPath(root, 'pipe.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+      await execFileAsync('mkfifo', [path.absolutePath])
+
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('timed out waiting for FIFO rejection')), 1500)
+      })
+
+      await expect(Promise.race([readScannedLocalFile(path), timeout])).rejects.toThrow(
+        'local file changed before upload: not a regular file',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('writeLocalFileInsideRoot', () => {
@@ -116,6 +155,35 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
     } finally {
       await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(!isLinux)('does not follow a parent symlink swap during final rename', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-root-'))
+    const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-out-'))
+    try {
+      await mkdir(join(root, 'safe'))
+      localFileIoTestHooks.beforeFinalRename = async () => {
+        await rename(join(root, 'safe'), join(root, 'safe-real'))
+        await symlink(outside, join(root, 'safe'), 'dir')
+      }
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'safe/payload.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+      await expect(readFile(join(root, 'safe-real', 'payload.txt'), 'utf8')).resolves.toBe('abc')
+    } finally {
+      delete localFileIoTestHooks.beforeFinalRename
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
     }
   })
 })

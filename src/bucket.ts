@@ -185,8 +185,8 @@ export class Bucket {
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
     /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled;
-     * pass `resumeFileId` for an explicitly selected unfinished large file.
+     * Deprecated compatibility flag. Automatic same-name resume is disabled.
+     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
      */
     resume?: boolean
     /**
@@ -542,14 +542,16 @@ export class Bucket {
   /**
    * Hides a file by creating a hide marker. The file remains in version history but is no longer visible in `listFileNames`.
    * @param fileName - The file path to hide.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns Metadata for the newly created hide marker.
    */
-  async hideFile(fileName: string): Promise<FileVersion> {
+  async hideFile(fileName: string, options?: { signal?: AbortSignal }): Promise<FileVersion> {
     return this.client.raw.hideFile(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
       { bucketId: this.id, fileName },
+      options,
     )
   }
 
@@ -564,12 +566,12 @@ export class Bucket {
    *
    * @param fileName - The file path of the version to delete.
    * @param fileId - The unique identifier of the file version to delete.
-   * @param options - Optional flag for bypassing governance retention.
+   * @param options - Optional governance and abort controls.
    */
   async deleteFileVersion(
     fileName: string,
     fileId: FileId,
-    options?: { bypassGovernance?: boolean },
+    options?: { bypassGovernance?: boolean; signal?: AbortSignal },
   ): Promise<void> {
     await this.client.raw.deleteFileVersion(
       this.client.accountInfo.getApiUrl(),
@@ -581,6 +583,7 @@ export class Bucket {
           ? { bypassGovernance: options.bypassGovernance }
           : {}),
       },
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
   }
 
@@ -771,8 +774,11 @@ export class Bucket {
     destinationServerSideEncryption?: EncryptionSetting
     /** SSE-C settings for the source if it was uploaded with SSE-C. */
     sourceServerSideEncryption?: EncryptionSetting
+    /** Optional abort signal for cancelling the copy request. */
+    signal?: AbortSignal
   }): Promise<FileVersion> {
-    const { serverSideEncryption, destinationServerSideEncryption, ...copyOptions } = options
+    const { serverSideEncryption, destinationServerSideEncryption, signal, ...copyOptions } =
+      options
     const destinationEncryption = destinationServerSideEncryption ?? serverSideEncryption
     return this.client.raw.copyFile(
       this.client.accountInfo.getApiUrl(),
@@ -783,6 +789,7 @@ export class Bucket {
           ? { destinationServerSideEncryption: destinationEncryption }
           : {}),
       },
+      signal !== undefined ? { signal } : undefined,
     )
   }
 

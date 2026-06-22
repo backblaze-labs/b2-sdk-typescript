@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { B2SsrfError } from '../errors/index.ts'
@@ -178,6 +178,55 @@ describe('uploadLargeFile cleanup paths', () => {
       { bucketId: bucket.id },
     )
     expect(unfinished.files.find((f) => f.fileName === 'boom.bin')).toBeUndefined()
+  })
+
+  it('does not cancel an explicit resume file ID after upload failure', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated resumed upload_part failure',
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'resume-part-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+    const start = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'resume-owned.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+
+    const partSize = 100_000
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-owned.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        resumeFileId: start.fileId,
+      }),
+    ).rejects.toThrow(/simulated resumed upload_part failure/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileId === start.fileId)).toBeDefined()
   })
 
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
@@ -1447,7 +1496,7 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
   })
 
-  it('rejects automatic resume discovery', async () => {
+  it('ignores resume true for fresh stream uploads without discovery', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -1464,16 +1513,19 @@ describe('uploadSmallFile cleanup path', () => {
       },
     })
 
-    await expect(
-      uploadLargeFile(client.raw, client.accountInfo, {
-        bucketId: bucket.id,
-        fileName: 'resume-stream.bin',
-        source: new StreamSource(readable, payload.byteLength),
-        partSize,
-        concurrency: 1,
-        resume: true,
-      }),
-    ).rejects.toThrow(/resume requires an explicit resumeFileId/)
+    const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'resume-stream.bin',
+      source: new StreamSource(readable, payload.byteLength),
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('resume-stream.bin')
+    expect(result.contentLength).toBe(payload.byteLength)
+    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
   })
 
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {

@@ -3,7 +3,7 @@ import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
 import { formatHashError, isAbortError, type LocalSha1Reader } from '../local-sha1.ts'
 import type { SyncPair } from '../pairing.ts'
-import { isUntrustedSha1, selectB2ComparableSha1, untrustedSha1Prefix } from '../sha1-metadata.ts'
+import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type {
   B2SyncPath,
   CompareMode,
@@ -375,6 +375,7 @@ async function prepareB2PathSha1(
     const preparedPath = {
       ...path,
       contentSha1,
+      contentSha1State: syncSha1StateOf({ contentSha1 }),
     }
     if (contentSha1 === null) {
       return {
@@ -401,30 +402,21 @@ async function prepareB2PathSha1(
       bytesHashed: 0,
       bytesVerified: 0,
       event: {
-        type: 'error',
+        type: 'skip',
         path: path.relativePath,
         size: 0,
-        message: `failed to hash B2 file for sha1 comparison: ${formatHashError(error)}`,
+        message: `sha1 comparison skipped because B2 verification failed: ${formatHashError(error)}`,
       },
-      error,
       aborted: false,
     }
   }
 }
 
 function comparableSha1(path: SyncPath): Sha1State {
-  const candidate = path.contentSha1
-  if (candidate === null || candidate === undefined) return { kind: 'unavailable' }
-  if (isUntrustedSha1(candidate)) {
-    return {
-      kind: 'untrusted',
-      value: normalizeVerifiableSha1(candidate.slice(untrustedSha1Prefix.length)),
-    }
-  }
-
-  const sha1 = normalizeVerifiableSha1(candidate)
-  if (sha1 === null) return { kind: 'untrusted', value: null }
-  return { kind: 'verified', value: sha1 }
+  const state = syncSha1StateOf(path)
+  if (state.kind === 'verified') return { kind: 'verified', value: state.value }
+  if (state.kind === 'untrusted') return { kind: 'untrusted', value: state.value }
+  return { kind: 'unavailable' }
 }
 
 function untrustedSha1CouldSuppressTransfer(source: Sha1State, dest: Sha1State): boolean {
@@ -437,8 +429,15 @@ function untrustedSha1CouldSuppressTransfer(source: Sha1State, dest: Sha1State):
 }
 
 function withB2ContentSha1(path: SyncPath): SyncPath {
-  if (!isB2SyncPath(path) || path.contentSha1 !== undefined) return path
-  return { ...path, contentSha1: selectB2ComparableSha1(path.selectedVersion) }
+  if (
+    !isB2SyncPath(path) ||
+    path.contentSha1 !== undefined ||
+    path.contentSha1State !== undefined
+  ) {
+    return path
+  }
+  const contentSha1 = selectB2ComparableSha1(path.selectedVersion)
+  return { ...path, contentSha1, contentSha1State: syncSha1StateOf({ contentSha1 }) }
 }
 
 function hasUnavailableB2Sha1(pair: SyncPair): boolean {

@@ -10,6 +10,7 @@ import type { LocalSyncPath } from './types.ts'
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
+  beforeFinalRename?: (path: string) => Promise<void> | void
 } = {}
 
 /**
@@ -24,14 +25,16 @@ export const localFileIoTestHooks: {
 export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
   const { constants } = await import('node:fs')
   const { open } = await import('node:fs/promises')
-  const handle = await open(path.absolutePath, constants.O_RDONLY | noFollowFlag(constants)).catch(
-    (err: unknown) => {
-      if (hasErrorCode(err, 'ELOOP')) {
-        throw new Error('local file changed before upload: not a regular file')
-      }
-      throw new Error('local file changed before upload: could not open scanned file')
-    },
-  )
+  const flags =
+    constants.O_RDONLY |
+    noFollowFlag(constants) |
+    ((constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0)
+  const handle = await open(path.absolutePath, flags).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ELOOP')) {
+      throw new Error('local file changed before upload: not a regular file')
+    }
+    throw new Error('local file changed before upload: could not open scanned file')
+  })
   try {
     const stats = await handle.stat()
     assertSameScannedRegularFile(stats, path)
@@ -124,12 +127,42 @@ export async function writeLocalStreamInsideRoot(
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
 
-  const tmpPath = path.join(parentRealPath, `.${path.basename(destPath)}.${randomUUID()}.tmp`)
-  const handle = await open(
-    tmpPath,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(constants),
-    0o666,
-  )
+  let parentHandle: Awaited<ReturnType<typeof open>> | undefined
+  let anchoredParentPath: string | undefined
+  const platform = (globalThis as { process?: { platform?: string } }).process?.platform
+  /* v8 ignore start -- Linux-only fd-relative path support is covered by Linux CI */
+  if (platform === 'linux' && constants.O_DIRECTORY !== undefined) {
+    try {
+      parentHandle = await open(
+        parentRealPath,
+        constants.O_RDONLY | constants.O_DIRECTORY | noFollowFlag(constants),
+      )
+      anchoredParentPath = `/proc/self/fd/${parentHandle.fd}`
+    } catch (err) {
+      if (hasErrorCode(err, 'ELOOP') || hasErrorCode(err, 'ENOTDIR')) {
+        throw new Error('unsafe local destination path: parent is not a directory')
+      }
+      throw err
+    }
+  }
+  /* v8 ignore stop */
+  const finalName = path.basename(destPath)
+  const tmpName = `.${finalName}.${randomUUID()}.tmp`
+  const tmpPath = path.join(anchoredParentPath ?? parentRealPath, tmpName)
+  const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
+  let handle: Awaited<ReturnType<typeof open>>
+  try {
+    handle = await open(
+      tmpPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(constants),
+      0o666,
+    )
+    /* v8 ignore start -- defensive cleanup before the main write try/finally exists */
+  } catch (err) {
+    await parentHandle?.close().catch(() => {})
+    throw err
+  }
+  /* v8 ignore stop */
   const tmpRealPath = await realpath(tmpPath)
   assertPathInsideRoot(rootRealPath, tmpRealPath, path)
   const reader = body.getReader()
@@ -160,17 +193,23 @@ export async function writeLocalStreamInsideRoot(
     const parentRealPathBeforeRename = await realpath(path.dirname(destPath))
     const finalPathBeforeRename = path.join(parentRealPathBeforeRename, path.basename(destPath))
     assertPathInsideRoot(rootRealPath, finalPathBeforeRename, path)
-    await rename(tmpPath, finalPathBeforeRename)
+    await localFileIoTestHooks.beforeFinalRename?.(parentRealPathBeforeRename)
+    await rename(tmpPath, anchoredParentPath === undefined ? finalPathBeforeRename : finalWritePath)
     completed = true
   } catch (err) {
+    /* v8 ignore next -- best-effort cleanup */
     void reader.cancel(err).catch(() => {})
     throw err
   } finally {
     reader.releaseLock()
     if (!completed) {
+      /* v8 ignore next -- best-effort cleanup */
       await handle.close().catch(() => {})
+      /* v8 ignore next -- best-effort cleanup */
       await rm(tmpPath, { force: true }).catch(() => {})
     }
+    /* v8 ignore next -- best-effort cleanup */
+    await parentHandle?.close().catch(() => {})
   }
 }
 
