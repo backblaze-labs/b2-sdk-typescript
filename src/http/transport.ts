@@ -291,7 +291,15 @@ function createTimedResponseBody(
     },
     async cancel(reason) {
       dispose()
-      await reader?.cancel(reason)
+      try {
+        if (reader !== undefined) {
+          await reader.cancel(reason)
+          return
+        }
+        await body.cancel(reason)
+      } catch {
+        // Best-effort cleanup when the caller cancels the wrapper body.
+      }
     },
   })
 }

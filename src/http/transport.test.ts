@@ -220,6 +220,23 @@ describe('FetchTransport', () => {
     }
   })
 
+  it('cancels the underlying response body when canceled before reading', async () => {
+    const cancel = vi.fn()
+    fetchSpy.mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      retry: { requestTimeoutMs: 0 },
+    })
+    await response.body?.cancel('caller stopped reading')
+
+    expect(cancel).toHaveBeenCalledWith('caller stopped reading')
+  })
+
   it.each([
     'json',
     'text',
