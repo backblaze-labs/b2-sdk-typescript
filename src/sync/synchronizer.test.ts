@@ -2382,7 +2382,7 @@ describe('synchronize', () => {
       }
     })
 
-    it.skipIf(!isNode)('hashes local files even when a scanner supplies contentSha1', async () => {
+    it.skipIf(!isNode)('uses scanner-supplied local contentSha1 without hashing', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
@@ -2421,8 +2421,9 @@ describe('synchronize', () => {
         }
 
         const events = await collectEvents(config)
-        expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(1)
-        expect(mockBucket.upload).toHaveBeenCalledTimes(1)
+        expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(0)
+        expect(events.find(isCompareEvent)?.bytesHashed).toBe(0)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
       } finally {
         await rm(root, { recursive: true, force: true })
       }
