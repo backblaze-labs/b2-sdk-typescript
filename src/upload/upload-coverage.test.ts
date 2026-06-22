@@ -13,7 +13,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, StreamSource } from '../streams/source.ts'
+import { BufferSource, type ContentSource, StreamSource } from '../streams/source.ts'
 import {
   daysFromNow,
   deterministicBytes,
@@ -145,6 +145,96 @@ function freshUrlRetryHarness(
 async function countFileVersions(bucket: Bucket, fileName: string): Promise<number> {
   const versions = await bucket.listFileVersions({ prefix: fileName })
   return versions.files.filter((file) => file.fileName === fileName).length
+}
+
+class FailingFirstSliceSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  readonly sliceStarts: number[] = []
+
+  constructor(partSize: number) {
+    this.size = partSize * 3
+  }
+
+  slice(start: number, end: number): ContentSource {
+    this.sliceStarts.push(start)
+    const length = end - start
+    const shouldFail = start === 0
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(length))
+            controller.close()
+          },
+        }),
+      toArrayBuffer: async () => {
+        if (shouldFail) throw new Error('simulated source mutation')
+        return new ArrayBuffer(length)
+      },
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
+}
+
+class FailingSecondSliceAfterFirstUploadSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  private readonly partSize: number
+  private readonly firstUploadStarted: Promise<void>
+
+  constructor(partSize: number, firstUploadStarted: Promise<void>) {
+    this.partSize = partSize
+    this.size = partSize * 2
+    this.firstUploadStarted = firstUploadStarted
+  }
+
+  slice(start: number, end: number): ContentSource {
+    const length = end - start
+    const firstUploadStarted = this.firstUploadStarted
+    const shouldFail = start === this.partSize
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(length))
+            controller.close()
+          },
+        }),
+      toArrayBuffer: async () => {
+        if (shouldFail) {
+          await firstUploadStarted
+          throw new Error('simulated second part source failure')
+        }
+        return new ArrayBuffer(length)
+      },
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
 }
 
 describe('uploadLargeFile cleanup paths', () => {
@@ -623,6 +713,107 @@ describe('uploadLargeFile cleanup paths', () => {
 
     expect(part2Settled).toBe(true)
     expect(cancelSawPart2Settled).toBe(true)
+  })
+
+  it('aborts queued multipart sibling tasks after a source read fails', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-sibling-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const source = new FailingFirstSliceSource(partSize)
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'changed.bin',
+        source,
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('simulated source mutation')
+
+    expect(source.sliceStarts).toEqual([0])
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'changed.bin')).toBeUndefined()
+  })
+
+  it('accepts an untriggered abort signal for multipart uploads', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-live-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const controller = new AbortController()
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'live-signal.bin',
+      source: new BufferSource(payload),
+      partSize,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+
+    expect(result.fileName).toBe('live-signal.bin')
+  })
+
+  it('preserves the initiating multipart failure over sibling aborts', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let markFirstUploadStarted!: () => void
+    const firstUploadStarted = new Promise<void>((resolve) => {
+      markFirstUploadStarted = resolve
+    })
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?') && req.headers?.['X-Bz-Part-Number'] === '1') {
+          markFirstUploadStarted()
+          if (req.signal?.aborted) throw new DOMException('sibling aborted', 'AbortError')
+          const signal = req.signal
+          if (signal === undefined) throw new Error('missing part upload abort signal')
+          await new Promise<never>((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(new DOMException('sibling aborted', 'AbortError')),
+              { once: true },
+            )
+          })
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-root-cause',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'root-cause.bin',
+        source: new FailingSecondSliceAfterFirstUploadSource(partSize, firstUploadStarted),
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow('simulated second part source failure')
   })
 
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
