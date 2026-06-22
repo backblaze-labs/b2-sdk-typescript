@@ -7,19 +7,20 @@ export interface RetryOptions {
   /** Base delay in milliseconds for the first retry. Doubles on each subsequent attempt. */
   readonly initialRetryDelayMs: number
   /**
-   * Absolute deadline for each HTTP request attempt. Set to 0 to disable the
-   * SDK timeout and rely only on the caller's AbortSignal.
+   * Optional absolute deadline for each HTTP request attempt. Defaults to 15
+   * minutes when omitted. Set to 0 to disable the SDK timeout and rely only on
+   * the caller's AbortSignal.
    */
-  readonly requestTimeoutMs: number
+  readonly requestTimeoutMs?: number
 }
 
 /** Default retry settings: 5 retries, 1s initial delay, 64s max delay, 15 minute attempt timeout. */
-export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
+export const DEFAULT_RETRY_OPTIONS = {
   maxRetries: 5,
   maxRetryDelayMs: 64_000,
   initialRetryDelayMs: 1_000,
   requestTimeoutMs: 15 * 60_000,
-}
+} satisfies Required<RetryOptions>
 
 /**
  * Computes the delay before the next retry using exponential backoff with jitter.
