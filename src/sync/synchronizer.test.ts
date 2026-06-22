@@ -2001,6 +2001,35 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('creates the local sync root before download descendants', async () => {
+      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-missing-root-'))
+      const root = join(parent, 'missing-root')
+      try {
+        const source = makeMemoryFolder([makeB2SyncPath('docs/payload.txt', 1000, 3)], 'b2')
+        const dest = makeMemoryFolder([], 'local')
+        const mockBucket = makeMockBucket()
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(false)
+        await expect(
+          readFile(join(root, 'docs', 'payload.txt')).then((data) => Array.from(data)),
+        ).resolves.toEqual([1, 2, 3])
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode || isWindows)('rejects symlinked local parents on download', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')

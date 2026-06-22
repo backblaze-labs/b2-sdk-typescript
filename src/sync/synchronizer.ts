@@ -606,6 +606,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             ...(signal !== undefined ? { signal } : {}),
           })
+        await ensureLocalSyncRootDirectory(root, relPath)
         await writeLocalStreamInsideRoot(root, relPath, result.body, {
           expectedBytes: source.selectedVersion.contentLength,
           idleTimeoutMillis: downloadIdleTimeoutMillis,
@@ -766,6 +767,17 @@ async function resolveLocalDeletePath(
   return resolveContainedLocalPath(root, relativePath, expectedPath)
 }
 
+async function ensureLocalSyncRootDirectory(root: string, relativePath: string): Promise<void> {
+  if (root === '') {
+    throw new Error('Local sync root required for filesystem mutation')
+  }
+
+  const { mkdir } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
+  const safeRoot = resolve(root)
+  await mkdir(safeRoot, { recursive: true })
+  await assertLocalRootHasNoSymlink(safeRoot, relativePath)
+}
 function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
   if (event.type === 'skip' && event.reason === 'filesystem-error') {
     buffer.fatalFilesystemErrorMessage ??= event.message
