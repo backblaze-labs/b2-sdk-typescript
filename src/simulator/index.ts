@@ -15,6 +15,7 @@ import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
+  EncryptionAlgorithm,
   EncryptionMode,
   type EncryptionSetting,
   type PublicEncryptionSetting,
@@ -186,6 +187,27 @@ function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryp
     return { mode: null, algorithm: null }
   }
   return encryption
+}
+
+function uploadServerSideEncryption(
+  headers: Record<string, string>,
+  fallback: EncryptionSetting,
+): EncryptionSetting {
+  const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
+  if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
+    return {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: headers['x-bz-server-side-encryption-customer-key'] ?? '',
+      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] ?? '',
+    }
+  }
+
+  if (headers['x-bz-server-side-encryption'] === EncryptionAlgorithm.Aes256) {
+    return { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 }
+  }
+
+  return fallback
 }
 
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
@@ -1086,7 +1108,10 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
-      serverSideEncryption: bucket.info.defaultServerSideEncryption,
+      serverSideEncryption: uploadServerSideEncryption(
+        headers,
+        bucket.info.defaultServerSideEncryption,
+      ),
     })
     const stored: StoredFile = { fileVersion, data: storedData }
     const existing = bucket.files.get(fileName)

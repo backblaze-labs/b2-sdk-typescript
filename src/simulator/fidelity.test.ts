@@ -5,6 +5,7 @@ import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
@@ -440,7 +441,12 @@ describe('B2Simulator upload SHA-1 verification', () => {
   })
 
   /** Upload `data` straight through the raw client with an explicit sha1 header. */
-  async function rawUpload(fileName: string, data: Uint8Array, contentSha1: string) {
+  async function rawUpload(
+    fileName: string,
+    data: Uint8Array,
+    contentSha1: string,
+    serverSideEncryption?: EncryptionSetting,
+  ) {
     const apiUrl = client.accountInfo.getApiUrl()
     const authToken = client.accountInfo.getAuthToken()
     const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
@@ -454,6 +460,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
         contentType: 'text/plain',
         contentLength: data.byteLength,
         contentSha1,
+        ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
       },
       data as BodyInit,
     )
@@ -523,6 +530,21 @@ describe('B2Simulator upload SHA-1 verification', () => {
       { mode: null, algorithm: null },
       { mode: null, algorithm: null },
     ])
+  })
+
+  it('returns explicit encryption settings from single-file upload responses', async () => {
+    const sseB2Data = new TextEncoder().encode('managed key')
+    const sseB2 = await rawUpload('sse-b2-small.txt', sseB2Data, await sha1Hex(sseB2Data), SSE_B2)
+    expect(sseB2.serverSideEncryption).toEqual(SSE_B2)
+
+    const sseCData = new TextEncoder().encode('customer key')
+    const sseC = await rawUpload(
+      'sse-c-small.txt',
+      sseCData,
+      await sha1Hex(sseCData),
+      sseCustomer('customer-key', 'customer-key-md5'),
+    )
+    expect(sseC.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
   })
 
   it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {
