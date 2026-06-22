@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { B2Error, B2RedirectError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import {
+  B2Error,
+  B2RedirectError,
+  ExpiredAuthTokenError,
+  FinishLargeFileResponseBodyError,
+  NetworkError,
+  UploadResponseBodyError,
+} from '../errors/index.ts'
+import { RawClient } from '../raw/index.ts'
+import type { AccountId, LargeFileId } from '../types/ids.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
 import { FetchTransport, RetryTransport } from './transport.ts'
 
@@ -39,6 +48,19 @@ const baseRequest: HttpRequest = {
   method: 'POST',
   headers: { Authorization: 'token-123' },
   body: JSON.stringify({ accountId: 'abc' }),
+}
+
+const textEncoder = new TextEncoder()
+
+function stalledResponse(prefix = '{"ok":'): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(textEncoder.encode(prefix))
+      },
+    }),
+    { status: 200 },
+  )
 }
 
 // ============================================================================
@@ -167,6 +189,131 @@ describe('FetchTransport', () => {
         retry: { requestTimeoutMs: 1 },
       }),
     ).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it.each([
+    'json',
+    'text',
+    'arrayBuffer',
+  ] as const)('aborts a stalled response body read through %s()', async (method) => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 1 },
+      })
+      const read = expect(response[method]()).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(1)
+
+      await read
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts a stalled response body stream read', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse('partial'))
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 1 },
+      })
+      const reader = response.body?.getReader()
+      expect((await reader?.read())?.done).toBe(false)
+      const read = expect(reader?.read()).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(1)
+
+      await read
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('times out stalled JSON bodies for normal raw API calls', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+
+      const call = expect(
+        raw.listBuckets('https://api.example.com', 'auth', {
+          accountId: 'account' as AccountId,
+        }),
+      ).rejects.toMatchObject({ name: 'TimeoutError' })
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+
+      await call
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wraps stalled upload response bodies as ambiguous upload failures', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+
+      const call = raw.uploadFile(
+        'https://pod.backblaze.com/b2_upload_file',
+        {
+          authorization: 'upload-auth',
+          fileName: 'payload.bin',
+          contentType: 'application/octet-stream',
+          contentLength: 1,
+          contentSha1: 'none',
+          fileInfo: {},
+        },
+        new Uint8Array([1]) as BodyInit,
+        undefined,
+        { requestTimeoutMs: 1 },
+      )
+      const instanceAssertion = expect(call).rejects.toBeInstanceOf(UploadResponseBodyError)
+      const causeAssertion = expect(call).rejects.toMatchObject({
+        cause: { name: 'TimeoutError' },
+      })
+      await vi.advanceTimersByTimeAsync(1)
+
+      await instanceAssertion
+      await causeAssertion
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wraps stalled finishLargeFile bodies with the ambiguous file ID', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+      const fileId = '4_zunfinished' as LargeFileId
+
+      const call = raw.finishLargeFile('https://api.example.com', 'auth', {
+        fileId,
+        partSha1Array: [],
+      })
+      const instanceAssertion = expect(call).rejects.toBeInstanceOf(
+        FinishLargeFileResponseBodyError,
+      )
+      const metadataAssertion = expect(call).rejects.toMatchObject({
+        fileId,
+        cause: { name: 'TimeoutError' },
+      })
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+
+      await instanceAssertion
+      await metadataAssertion
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('follows guard-checked same-origin GET redirects by default', async () => {

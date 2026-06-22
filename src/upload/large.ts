@@ -15,8 +15,8 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
 import {
-  type CleanupFailureOptions,
   cancelLargeFileBestEffort,
+  type CleanupFailureOptions,
   handleAmbiguousFinishLargeFileResponseBodyError,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
@@ -267,10 +267,21 @@ export async function uploadLargeFile(
   }
 
   // --- Explicit resume file reuse (M11.1) ---
-  let largeFileId: LargeFileId
-  let preUploaded: ReadonlyMap<number, string>
+  let largeFileId!: LargeFileId
+  let preUploaded!: ReadonlyMap<number, string>
   let createdLargeFile = false
   const controlOptions = options.signal !== undefined ? { signal: options.signal } : undefined
+  const startFreshLargeFile = async (): Promise<void> => {
+    const startResp = await raw.startLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      startLargeFileRequest,
+      controlOptions,
+    )
+    largeFileId = startResp.fileId
+    preUploaded = new Map<number, string>()
+    createdLargeFile = true
+  }
 
   if (options.resumeFileId !== undefined) {
     const candidate = await findResumeCandidate(
@@ -300,26 +311,10 @@ export async function uploadLargeFile(
       largeFileId = candidate.fileId
       preUploaded = new Map<number, string>()
     } else {
-      const startResp = await raw.startLargeFile(
-        accountInfo.getApiUrl(),
-        accountInfo.getAuthToken(),
-        startLargeFileRequest,
-        controlOptions,
-      )
-      largeFileId = startResp.fileId
-      preUploaded = new Map<number, string>()
-      createdLargeFile = true
+      await startFreshLargeFile()
     }
   } else {
-    const startResp = await raw.startLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      startLargeFileRequest,
-      controlOptions,
-    )
-    largeFileId = startResp.fileId
-    preUploaded = new Map<number, string>()
-    createdLargeFile = true
+    await startFreshLargeFile()
   }
 
   const partSha1s: string[] = new Array(parts.length)

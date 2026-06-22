@@ -122,15 +122,11 @@ export class FetchTransport implements HttpTransport {
           ...(timeoutScope.signal !== undefined ? { signal: timeoutScope.signal } : {}),
         })
       } catch (err) {
+        timeoutScope.dispose()
         if (timeoutScope.timedOut) {
-          throw new DOMException(
-            `HTTP request timed out after ${timeoutScope.timeoutMs} ms`,
-            'TimeoutError',
-          )
+          throw createRequestTimeoutError(timeoutScope)
         }
         throw err
-      } finally {
-        timeoutScope.dispose()
       }
 
       if (isBlockedRedirect(response)) {
@@ -143,6 +139,7 @@ export class FetchTransport implements HttpTransport {
         ) {
           const nextUrl = new URL(location, currentRequest.url).toString()
           await cancelResponseBody(response)
+          timeoutScope.dispose()
           this.urlGuard.check(nextUrl)
           currentRequest = { ...currentRequest, url: nextUrl }
           redirectCount += 1
@@ -150,17 +147,11 @@ export class FetchTransport implements HttpTransport {
         }
 
         await cancelResponseBody(response)
+        timeoutScope.dispose()
         throw new B2RedirectError(currentRequest.url, response.status, location)
       }
 
-      return {
-        status: response.status,
-        headers: response.headers,
-        body: response.body,
-        json: <T>() => response.json() as Promise<T>,
-        text: () => response.text(),
-        arrayBuffer: () => response.arrayBuffer(),
-      }
+      return createTimedHttpResponse(response, timeoutScope)
     }
   }
 }
@@ -211,6 +202,115 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
       clearTimeout(timer)
       request.signal?.removeEventListener('abort', abortFromUpstream)
     },
+  }
+}
+
+function createRequestTimeoutError(scope: RequestTimeoutScope): DOMException {
+  return new DOMException(`HTTP request timed out after ${scope.timeoutMs} ms`, 'TimeoutError')
+}
+
+function createTimedHttpResponse(
+  response: Response,
+  timeoutScope: RequestTimeoutScope,
+): HttpResponse {
+  const body = response.body
+  if (body === null) timeoutScope.dispose()
+  let timedBody: ReadableStream<Uint8Array> | undefined
+
+  return {
+    status: response.status,
+    headers: response.headers,
+    get body() {
+      if (body === null) return null
+      timedBody ??= createTimedResponseBody(body, timeoutScope)
+      return timedBody
+    },
+    json: <T>() =>
+      readTimedResponseBody(timeoutScope, response, () => response.json() as Promise<T>),
+    text: () => readTimedResponseBody(timeoutScope, response, () => response.text()),
+    arrayBuffer: () => readTimedResponseBody(timeoutScope, response, () => response.arrayBuffer()),
+  }
+}
+
+async function readTimedResponseBody<T>(
+  timeoutScope: RequestTimeoutScope,
+  response: Response,
+  read: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await raceBodyReadWithAbort(timeoutScope, read())
+  } catch (err) {
+    if (timeoutScope.timedOut) {
+      await cancelResponseBody(response)
+      throw createRequestTimeoutError(timeoutScope)
+    }
+    throw err
+  } finally {
+    timeoutScope.dispose()
+  }
+}
+
+function createTimedResponseBody(
+  body: ReadableStream<Uint8Array>,
+  timeoutScope: RequestTimeoutScope,
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  let disposed = false
+  const dispose = (): void => {
+    if (disposed) return
+    disposed = true
+    timeoutScope.dispose()
+  }
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      reader ??= body.getReader()
+      try {
+        const result = await raceBodyReadWithAbort(timeoutScope, reader.read())
+        if (result.done) {
+          dispose()
+          controller.close()
+          return
+        }
+        controller.enqueue(result.value)
+      } catch (err) {
+        dispose()
+        if (timeoutScope.timedOut) {
+          await reader.cancel().catch(() => {})
+          controller.error(createRequestTimeoutError(timeoutScope))
+          return
+        }
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      dispose()
+      await reader?.cancel(reason)
+    },
+  })
+}
+
+async function raceBodyReadWithAbort<T>(
+  timeoutScope: RequestTimeoutScope,
+  read: Promise<T>,
+): Promise<T> {
+  const signal = timeoutScope.signal
+  if (signal === undefined) return read
+  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+
+  let removeAbortListener: (() => void) | undefined
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([read, abort])
+  } finally {
+    removeAbortListener?.()
   }
 }
 

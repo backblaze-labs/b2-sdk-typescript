@@ -12,15 +12,14 @@ const VERIFIED_REALM_URLS = {
 } as const satisfies Record<RealmName, string>
 
 /**
- * Read-only map of verified realm names to their `b2_authorize_account` base API URLs.
- * The staging URL aligns with Backblaze's official Python SDK realm map.
- * Region-specific API URLs are discovered from the authorize response, so
- * unverified regional aliases are intentionally omitted. Mutating this export
- * is unsupported; pass direct custom realm URLs to `B2Client` instead.
+ * Built-in realm aliases to their `b2_authorize_account` base API URLs.
+ * The object remains a mutable `Record<string, string>` for source
+ * compatibility with earlier SDK versions that let applications add local
+ * aliases. SDK internals validate only the built-in aliases in
+ * `VERIFIED_REALM_URLS`; pass direct custom realm URLs to `B2Client` instead
+ * of relying on mutation for new code.
  */
-export const REALM_URLS: Readonly<Record<RealmName, string>> = Object.freeze({
-  ...VERIFIED_REALM_URLS,
-})
+export const REALM_URLS: Record<string, string> = { ...VERIFIED_REALM_URLS }
 
 // `new URL('https:example.com')` normalizes to `https://example.com/`;
 // require the raw URL to use authority syntax before credentials are sent.

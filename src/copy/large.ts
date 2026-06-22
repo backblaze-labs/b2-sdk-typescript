@@ -1,14 +1,9 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
-import {
-  type CleanupFailureListener,
-  cancelLargeFileBestEffort,
-  handleAmbiguousFinishLargeFileResponseBodyError,
-} from '../upload/cancel.ts'
+import { type CleanupFailureListener, cleanupAfterLargeFileError } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
@@ -127,64 +122,93 @@ export async function copyLargeFile(
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
+  const abortScope = createCopyAbortScope(options.signal)
 
   try {
-    options.signal?.throwIfAborted()
-    await Promise.all(
-      ranges.map(async (range) => {
-        await sem.acquire()
-        try {
-          // Re-check the abort flag after every queue handoff so the
-          // first cancelled task short-circuits the remaining parts.
-          options.signal?.throwIfAborted()
-          const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-            sourceFileId: options.sourceFileId,
-            // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
-            // same value typed as `FileId`. Re-brand via the factory.
-            largeFileId: fileIdOf(largeFileId),
-            partNumber: range.partNumber,
-            range: byteRangeHeader(range.start, range.end),
-            ...(options.sourceServerSideEncryption !== undefined
-              ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
-              : {}),
-            ...(options.destinationServerSideEncryption !== undefined
-              ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
-              : {}),
-          })
-          partSha1s[range.partNumber - 1] = resp.contentSha1
-        } finally {
-          sem.release()
-        }
-      }),
-    )
+    abortScope.signal.throwIfAborted()
+    const tasks = ranges.map(async (range) => {
+      await sem.acquire()
+      try {
+        abortScope.signal.throwIfAborted()
+        const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+          sourceFileId: options.sourceFileId,
+          // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
+          // same value typed as `FileId`. Re-brand via the factory.
+          largeFileId: fileIdOf(largeFileId),
+          partNumber: range.partNumber,
+          range: byteRangeHeader(range.start, range.end),
+          ...(options.sourceServerSideEncryption !== undefined
+            ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
+            : {}),
+          ...(options.destinationServerSideEncryption !== undefined
+            ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
+            : {}),
+        })
+        partSha1s[range.partNumber - 1] = resp.contentSha1
+      } catch (err) {
+        abortScope.abort(err)
+        throw err
+      } finally {
+        sem.release()
+      }
+    })
 
-    options.signal?.throwIfAborted()
+    const settled = await Promise.allSettled(tasks)
+    const rejected = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (rejected !== undefined) {
+      if (abortScope.signal.aborted && abortScope.signal.reason !== undefined) {
+        throw abortScope.signal.reason
+      }
+      /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
+      throw rejected.reason
+    }
+
+    abortScope.signal.throwIfAborted()
     return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
       fileId: largeFileId,
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    if (err instanceof FinishLargeFileResponseBodyError) {
-      throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
-        fileId: largeFileId,
-        bucketId: destBucketId,
-        fileName: options.fileName,
-        onCleanupFailure: options.onCleanupFailure,
-      })
-    }
-    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, cleanupCopyOptions(options))
-    throw err
+    abortScope.abort(err)
+    return await cleanupAfterLargeFileError(err, raw, accountInfo, {
+      fileId: largeFileId,
+      bucketId: destBucketId,
+      fileName: options.fileName,
+      signal: options.signal,
+      onCleanupFailure: options.onCleanupFailure,
+    })
+  } finally {
+    abortScope.dispose()
   }
 }
 
-function cleanupCopyOptions(options: CopyLargeFileOptions): {
-  readonly signal?: AbortSignal
-  readonly onCleanupFailure?: CleanupFailureListener
-} {
+interface CopyAbortScope {
+  readonly signal: AbortSignal
+  abort(reason: unknown): void
+  dispose(): void
+}
+
+function createCopyAbortScope(upstream: AbortSignal | undefined): CopyAbortScope {
+  const controller = new AbortController()
+  let upstreamAbort: (() => void) | undefined
+  const abort = (reason: unknown): void => {
+    if (!controller.signal.aborted) controller.abort(reason)
+  }
+
+  if (upstream?.aborted === true) {
+    abort(upstream.reason)
+  } else if (upstream !== undefined) {
+    upstreamAbort = () => abort(upstream.reason)
+    upstream.addEventListener('abort', upstreamAbort, { once: true })
+  }
+
   return {
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    ...(options.onCleanupFailure !== undefined
-      ? { onCleanupFailure: options.onCleanupFailure }
-      : {}),
+    signal: controller.signal,
+    abort,
+    dispose() {
+      if (upstreamAbort !== undefined) upstream?.removeEventListener('abort', upstreamAbort)
+    },
   }
 }

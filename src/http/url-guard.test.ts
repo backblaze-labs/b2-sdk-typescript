@@ -82,17 +82,50 @@ describe('UrlGuard', () => {
     expect(() => guard.check('javascript:alert(1)')).toThrow(B2SsrfError)
   })
 
-  it('attaches the offending URL to thrown errors for triage', () => {
+  it('attaches a redacted offending URL to thrown errors for triage', () => {
     const guard = new UrlGuard()
     guard.setAllowedSuffixes(['backblazeb2.com'])
     try {
-      guard.check('https://attacker.example/foo?x=1')
+      guard.check('https://user:secret@attacker.example/foo/bar?token=1#frag')
       expect.fail('expected throw')
     } catch (err) {
       expect(err).toBeInstanceOf(B2SsrfError)
       const ssrf = err as B2SsrfError
-      expect(ssrf.url).toBe('https://attacker.example/foo?x=1')
+      expect(ssrf.url).toBe('https://attacker.example/foo/...')
+      expect(ssrf.message).not.toContain('secret')
+      expect(ssrf.message).not.toContain('token=1')
+      expect(ssrf.message).not.toContain('frag')
       expect(ssrf.retryable).toBe(false)
+    }
+  })
+
+  it.each([
+    [
+      'literal IP',
+      'http://user:secret@169.254.169.254/latest/meta-data?authorizationToken=leak#frag',
+    ],
+    [
+      'internal host',
+      'http://user:secret@metadata.google.internal/computeMetadata/v1?token=leak#frag',
+    ],
+    ['outside realm', 'https://user:secret@attacker.example/customer/path?token=leak#frag'],
+    ['malformed URL', 'https://user:secret@[::1'],
+  ])('redacts secrets from %s rejection errors', (_name, rawUrl) => {
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(['backblazeb2.com'])
+
+    try {
+      guard.check(rawUrl)
+      expect.fail('expected throw')
+    } catch (err) {
+      expect(err).toBeInstanceOf(B2SsrfError)
+      const text = `${(err as B2SsrfError).message} ${(err as B2SsrfError).url}`
+      expect(text).not.toContain('user:secret')
+      expect(text).not.toContain('authorizationToken')
+      expect(text).not.toContain('token=leak')
+      expect(text).not.toContain('frag')
+      expect(text).not.toContain('computeMetadata/v1')
+      expect(text).not.toContain('customer/path')
     }
   })
 

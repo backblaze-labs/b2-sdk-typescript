@@ -1,5 +1,4 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
@@ -14,7 +13,7 @@ import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
   DEFAULT_CLEANUP_TIMEOUT_MS,
-  handleAmbiguousFinishLargeFileResponseBodyError,
+  resolveLargeFileErrorAfterCleanup,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
@@ -349,23 +348,15 @@ export function createWriteStream(
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
-        let finalError: Error = observedError
+        let finalError: unknown = observedError
         if (fileIdToCancel !== null) {
-          if (err instanceof FinishLargeFileResponseBodyError) {
-            finalError = handleAmbiguousFinishLargeFileResponseBodyError(err, {
-              fileId: fileIdToCancel,
-              bucketId: options.bucketId,
-              fileName: options.fileName,
-              onCleanupFailure: options.onCleanupFailure,
-            })
-          } else {
-            await cancelLargeFileBestEffort(
-              raw,
-              accountInfo,
-              fileIdToCancel,
-              cleanupWriteStreamOptions(options),
-            )
-          }
+          finalError = await resolveLargeFileErrorAfterCleanup(observedError, raw, accountInfo, {
+            fileId: fileIdToCancel,
+            bucketId: options.bucketId,
+            fileName: options.fileName,
+            signal: options.signal,
+            onCleanupFailure: options.onCleanupFailure,
+          })
         }
         rejectDone(finalError)
         abortScope.dispose()

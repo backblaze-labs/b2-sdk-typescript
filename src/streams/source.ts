@@ -134,16 +134,14 @@ function assertSameIdentity(
   when: string,
 ): void {
   assertStableIdentity(path, actual)
-  if (
-    shouldComparePosixIdentity() &&
-    (actual.dev !== expected.dev || actual.ino !== expected.ino)
-  ) {
+  const comparePosix = shouldComparePosixIdentity()
+  if (comparePosix && (actual.dev !== expected.dev || actual.ino !== expected.ino)) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
-  if (shouldComparePosixIdentity() && actual.ctimeMs !== expected.ctimeMs) {
+  if (comparePosix && actual.ctimeMs !== expected.ctimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
 }
@@ -416,123 +414,91 @@ export class BufferSource implements ContentSource {
   }
 }
 
-abstract class FileRangeSource implements ContentSource {
-  /** Random-access: file ranges are read by absolute byte offset. */
+function sliceFileRange(
+  path: FileSourcePath,
+  identity: FileIdentity,
+  offset: number,
+  size: number,
+  start: number,
+  end: number,
+): ContentSource {
+  const normalizedStart = normalizeSliceOffset(start, size)
+  const normalizedEnd = normalizeSliceOffset(end, size)
+  return new FileSliceSource(
+    path,
+    identity,
+    offset + normalizedStart,
+    Math.max(normalizedEnd - normalizedStart, 0),
+  )
+}
+
+function streamFileRange(
+  path: FileSourcePath,
+  identity: FileIdentity,
+  offset: number,
+  size: number,
+): ReadableStream<Uint8Array> {
+  let position = offset
+  let remaining = size
+  let verifiedEmpty = false
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (remaining === 0) {
+          if (!verifiedEmpty) {
+            verifiedEmpty = true
+            await verifyFileIdentityForEmptyRead(path, identity)
+          }
+          controller.close()
+          return
+        }
+
+        const length = Math.min(FILE_STREAM_CHUNK_SIZE, remaining)
+        const data = await readFileRange(path, identity, position, length)
+        position += data.byteLength
+        remaining -= data.byteLength
+        controller.enqueue(data)
+        if (remaining === 0) controller.close()
+      } catch (err) {
+        controller.error(err)
+      }
+    },
+  })
+}
+
+async function fileRangeToArrayBuffer(
+  path: FileSourcePath,
+  identity: FileIdentity,
+  offset: number,
+  size: number,
+): Promise<ArrayBuffer> {
+  const data = await readFileRange(path, identity, offset, size)
+  return data.buffer as ArrayBuffer
+}
+
+class FileSliceSource implements ContentSource {
   readonly canSlice = true
 
-  /**
-   * @param path - Local filesystem path or file URL.
-   * @param identity - File identity captured when the root FileSource was constructed.
-   * @param offset - Absolute byte offset where this source starts.
-   * @param size - Number of bytes in this source.
-   */
-  protected constructor(
-    protected readonly path: FileSourcePath,
-    protected readonly identity: FileIdentity,
-    protected readonly offset: number,
+  constructor(
+    private readonly path: FileSourcePath,
+    private readonly identity: FileIdentity,
+    private readonly offset: number,
     readonly size: number,
   ) {}
 
-  /**
-   * Create a concrete file-backed source for a sub-range.
-   * @param path - Local filesystem path or file URL.
-   * @param identity - File identity captured when the root FileSource was constructed.
-   * @param offset - Absolute byte offset where this source starts.
-   * @param size - Number of bytes in this source.
-   *
-   * @returns A ContentSource representing the requested range.
-   */
-  protected createSlice(
-    path: FileSourcePath,
-    identity: FileIdentity,
-    offset: number,
-    size: number,
-  ): ContentSource {
-    return new FileSliceSource(path, identity, offset, size)
-  }
-
-  /**
-   * Return a new file-backed source covering the specified byte range.
-   * @param start - The zero-based byte offset to begin the slice.
-   * @param end - The exclusive byte offset where the slice ends.
-   *
-   * @returns A new ContentSource representing the requested sub-range.
-   */
   slice(start: number, end: number): ContentSource {
-    const normalizedStart = normalizeSliceOffset(start, this.size)
-    const normalizedEnd = normalizeSliceOffset(end, this.size)
-    return this.createSlice(
-      this.path,
-      this.identity,
-      this.offset + normalizedStart,
-      Math.max(normalizedEnd - normalizedStart, 0),
-    )
+    return sliceFileRange(this.path, this.identity, this.offset, this.size, start, end)
   }
 
-  /**
-   * Verify that the file range still points at the captured file identity.
-   * @param when - Context included in any thrown error message.
-   */
-  protected async verifyUnchanged(when: string): Promise<void> {
-    const stats = await lstatNodeFile(this.path)
-    assertRegularFile(this.path, stats)
-    assertSameIdentity(this.path, this.identity, stats, when)
-  }
-
-  /**
-   * Open this file range as a Web ReadableStream.
-   *
-   * The stream opens, verifies, reads, and closes the file for each large
-   * chunk. Closing after every pull prevents abandoned public streams from
-   * stranding a descriptor while the large chunk size keeps syscall overhead
-   * bounded for multi-GB reads.
-   *
-   * @returns A ReadableStream that reads the configured file range lazily.
-   */
   stream(): ReadableStream<Uint8Array> {
-    const path = this.path
-    const identity = this.identity
-    let position = this.offset
-    let remaining = this.size
-    let verifiedEmpty = false
-
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          if (remaining === 0) {
-            if (!verifiedEmpty) {
-              verifiedEmpty = true
-              await verifyFileIdentityForEmptyRead(path, identity)
-            }
-            controller.close()
-            return
-          }
-
-          const length = Math.min(FILE_STREAM_CHUNK_SIZE, remaining)
-          const data = await readFileRange(path, identity, position, length)
-          position += data.byteLength
-          remaining -= data.byteLength
-          controller.enqueue(data)
-          if (remaining === 0) controller.close()
-        } catch (err) {
-          controller.error(err)
-        }
-      },
-    })
+    return streamFileRange(this.path, this.identity, this.offset, this.size)
   }
 
-  /**
-   * Read this file range into an ArrayBuffer.
-   * @returns A promise resolving with exactly this source's byte range.
-   */
-  async toArrayBuffer(): Promise<ArrayBuffer> {
-    const data = await readFileRange(this.path, this.identity, this.offset, this.size)
-    return data.buffer as ArrayBuffer
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    return fileRangeToArrayBuffer(this.path, this.identity, this.offset, this.size)
   }
 }
-
-// Concrete range source returned by FileRangeSource.slice().
-class FileSliceSource extends FileRangeSource {}
 
 /**
  * ContentSource backed by a local filesystem path.
@@ -555,7 +521,14 @@ class FileSliceSource extends FileRangeSource {}
  * disjoint ranges without materialising the whole file in memory or following
  * later leaf path swaps.
  */
-export class FileSource extends FileRangeSource {
+export class FileSource implements ContentSource {
+  /** Random-access: file ranges are read by absolute byte offset. */
+  readonly canSlice = true
+  /** File size captured at construction time. */
+  readonly size: number
+  private readonly path: FileSourcePath
+  private readonly identity: FileIdentity
+
   /**
    * Create a FileSource for a local file path.
    * @param path - Local filesystem path or file URL.
@@ -577,7 +550,36 @@ export class FileSource extends FileRangeSource {
       internal?.key === FILE_SOURCE_INTERNAL
         ? internal.identity
         : validatedIdentityFromStats(path, getNodeFsSync().lstatSync(path))
-    super(path, resolvedIdentity, 0, resolvedIdentity.size)
+    this.path = path
+    this.identity = resolvedIdentity
+    this.size = resolvedIdentity.size
+  }
+
+  /**
+   * Return a new file-backed source covering the specified byte range.
+   * @param start - The zero-based byte offset to begin the slice.
+   * @param end - The exclusive byte offset where the slice ends.
+   *
+   * @returns A new ContentSource representing the requested sub-range.
+   */
+  slice(start: number, end: number): ContentSource {
+    return sliceFileRange(this.path, this.identity, 0, this.size, start, end)
+  }
+
+  /**
+   * Open this file as a Web ReadableStream.
+   * @returns A ReadableStream that reads the file lazily.
+   */
+  stream(): ReadableStream<Uint8Array> {
+    return streamFileRange(this.path, this.identity, 0, this.size)
+  }
+
+  /**
+   * Read this file into an ArrayBuffer.
+   * @returns A promise resolving with the file bytes.
+   */
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    return fileRangeToArrayBuffer(this.path, this.identity, 0, this.size)
   }
 
   /**

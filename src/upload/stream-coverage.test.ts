@@ -531,6 +531,88 @@ describe('createWriteStream branch coverage', () => {
     expect(cancelLargeFile).not.toHaveBeenCalled()
   })
 
+  it('applies write backpressure before buffering another full part', async () => {
+    const firstUploadStarted = deferred<void>()
+    const releaseFirstUpload = deferred<void>()
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      if (uploadPart.mock.calls.length === 1) {
+        firstUploadStarted.resolve(undefined)
+        await releaseFirstUpload.promise
+      }
+      return originalUploadPart(...args)
+    })
+
+    const { writable, done } = bucket.file('backpressure.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await firstUploadStarted.promise
+
+    let secondWriteResolved = false
+    const secondWrite = writer.write(deterministicBytes(100_000)).then(() => {
+      secondWriteResolved = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(secondWriteResolved).toBe(false)
+    expect(uploadPart).toHaveBeenCalledTimes(1)
+
+    releaseFirstUpload.resolve(undefined)
+    await secondWrite
+    await writer.close()
+    await done
+    expect(uploadPart).toHaveBeenCalledTimes(2)
+  })
+
+  it('waits for pending part uploads before cleanup after a part failure', async () => {
+    const secondUploadStarted = deferred<void>()
+    const releaseSecondUpload = deferred<void>()
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    const originalCancelLargeFile = client.raw.cancelLargeFile.bind(client.raw)
+    let secondUploadSettled = false
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      const callNumber = uploadPart.mock.calls.length
+      if (callNumber === 1) {
+        await secondUploadStarted.promise
+        throw new Error('forced first part failure')
+      }
+      if (callNumber === 2) {
+        secondUploadStarted.resolve(undefined)
+        await releaseSecondUpload.promise
+        const response = await originalUploadPart(...args)
+        secondUploadSettled = true
+        return response
+      }
+      return originalUploadPart(...args)
+    })
+    const cancelLargeFile = vi
+      .spyOn(client.raw, 'cancelLargeFile')
+      .mockImplementation(async (...args) => {
+        expect(secondUploadSettled).toBe(true)
+        return originalCancelLargeFile(...args)
+      })
+
+    const { writable, done } = bucket.file('settle-before-cleanup.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 2,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+
+    const close = writer.close()
+    await secondUploadStarted.promise
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+
+    releaseSecondUpload.resolve(undefined)
+    await expect(close).rejects.toThrow('forced first part failure')
+    await expect(done).rejects.toThrow('forced first part failure')
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+  })
+
   it('does not cancel when finish response body is ambiguous', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
     const inner = sim.transport()

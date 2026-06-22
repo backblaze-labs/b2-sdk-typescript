@@ -94,6 +94,8 @@ jobs:
           fi
 
       - name: Pack verified release artifact
+        env:
+          npm_config_ignore_scripts: 'true'
         run: |
           mkdir -p .release
           RELEASE_TAG="${REF#refs/tags/}"
@@ -131,7 +133,7 @@ jobs:
           node-version: 22
           package-manager-cache: false
 
-      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm build
 
       - name: Verify package types resolve cleanly (attw)

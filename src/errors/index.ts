@@ -540,16 +540,17 @@ export class B2SsrfError extends Error {
    * Creates a new {@link B2SsrfError}.
    *
    * @param message - Human-readable description of which URL was rejected and why.
-   * @param url - The full URL that was rejected.
+   * @param url - The URL that was rejected. Stored as a sanitized URL.
    */
-  constructor(
-    message: string,
-    /** The full URL that was rejected. */
-    public readonly url: string,
-  ) {
-    super(message)
+  constructor(message: string, url: string) {
+    const safeUrl = redactUrlForError(url)
+    super(`${message.split(url).join(safeUrl)} (${safeUrl})`)
     this.name = 'B2SsrfError'
+    this.url = safeUrl
   }
+
+  /** Sanitized URL that was rejected. */
+  readonly url: string
 }
 
 /** Thrown when a configured auth realm cannot safely be used for authorization. */

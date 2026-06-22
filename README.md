@@ -632,6 +632,12 @@ const client = new B2Client({
 })
 ```
 
+`requestTimeoutMs` is an absolute deadline per HTTP attempt. For upload POSTs
+it covers sending the full request body and reading the response body, so slow
+large-part uploads may need a higher value or `0` to rely on your own
+`AbortSignal`. Worst-case terminal latency can be roughly
+`(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
+
 When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
 
 ## Testing with the simulator

@@ -17,12 +17,6 @@ import { FileSource, toContentSource } from './source.ts'
 
 const decoder = new TextDecoder()
 
-class VerifiableFileSource extends FileSource {
-  verify(when: string): Promise<void> {
-    return this.verifyUnchanged(when)
-  }
-}
-
 describe('FileSource', () => {
   let tmpDir: string
 
@@ -144,13 +138,13 @@ describe('FileSource', () => {
     expect(new Uint8Array(await source.toArrayBuffer())).toEqual(new Uint8Array())
   })
 
-  it('allows explicit unchanged verification while metadata still matches', async () => {
+  it('reads successfully while metadata still matches', async () => {
     const path = join(tmpDir, 'verify-unchanged.txt')
     await writeFile(path, 'stable payload')
 
-    const source = new VerifiableFileSource(path)
+    const source = new FileSource(path)
 
-    await expect(source.verify('before read')).resolves.toBeUndefined()
+    await expect(source.toArrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer)
   })
 
   it('rejects a replaced empty file before reading it as a buffer', async () => {

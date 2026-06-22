@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
@@ -6,6 +6,20 @@ import { makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { copyLargeFile } from './large.ts'
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  resolve(value: T): void
+  reject(reason?: unknown): void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 /**
  * Fast tier for `copyLargeFile`: only the small-content / mocked-transport
@@ -89,6 +103,62 @@ describe('copyLargeFile', () => {
     expect(copied.fileName).toBe('tiny-copy.bin')
     expect(copied.action).toBe('copy')
     expect(copied.contentLength).toBe(content.byteLength)
+  })
+
+  it('waits for pending copy parts before cleanup after a part failure', async () => {
+    const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-settle-before-cleanup',
+      bucketType: BucketType.AllPrivate,
+    })
+    const uploaded = await bucket.upload({
+      fileName: 'copy-race-src.bin',
+      source: new BufferSource(new Uint8Array(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+
+    const secondCopyStarted = deferred<void>()
+    const releaseSecondCopy = deferred<void>()
+    const originalCopyPart = c.raw.copyPart.bind(c.raw)
+    const originalCancelLargeFile = c.raw.cancelLargeFile.bind(c.raw)
+    let secondCopySettled = false
+    const copyPart = vi.spyOn(c.raw, 'copyPart').mockImplementation(async (...args) => {
+      const callNumber = copyPart.mock.calls.length
+      if (callNumber === 1) {
+        await secondCopyStarted.promise
+        throw new Error('forced first copy_part failure')
+      }
+      if (callNumber === 2) {
+        secondCopyStarted.resolve(undefined)
+        await releaseSecondCopy.promise
+        const response = await originalCopyPart(...args)
+        secondCopySettled = true
+        return response
+      }
+      return originalCopyPart(...args)
+    })
+    const cancelLargeFile = vi
+      .spyOn(c.raw, 'cancelLargeFile')
+      .mockImplementation(async (...args) => {
+        expect(secondCopySettled).toBe(true)
+        return originalCancelLargeFile(...args)
+      })
+
+    const copy = copyLargeFile(c.raw, c.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'copy-race-dst.bin',
+      partSize: 100_000,
+      concurrency: 2,
+    })
+    await secondCopyStarted.promise
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+
+    releaseSecondCopy.resolve(undefined)
+    await expect(copy).rejects.toThrow('forced first copy_part failure')
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
   })
 
   it('forwards contentType, fileInfo, and SSE overrides through the single-copy fast path', async () => {

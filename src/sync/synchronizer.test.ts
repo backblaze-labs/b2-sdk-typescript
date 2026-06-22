@@ -3223,6 +3223,36 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode || isWindows)('rejects hardlinked local targets on download', async () => {
+      const { tmpdir } = await import('node:os')
+      const { link, mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-hardlink-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-hardlink-out-'))
+      const outsideFile = join(outside, 'payload.txt')
+      try {
+        await writeFile(outsideFile, 'outside original')
+        await link(outsideFile, join(root, 'payload.txt'))
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(outsideFile, 'utf8')).resolves.toBe('outside original')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode || isWindows)('rejects a symlinked parent swapped before write', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdir, mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')

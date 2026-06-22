@@ -117,6 +117,9 @@ export async function resolveSafeLocalWritePath(
     if (targetStats.isSymbolicLink()) {
       throw new Error(`Sync path has an unsafe target: ${relativePath}`)
     }
+    if (targetStats.isFile() && targetStats.nlink > 1) {
+      throw new Error(`Sync path has an unsafe hardlinked target: ${relativePath}`)
+    }
   } catch (err) {
     if (!isNodeErrorCode(err, 'ENOENT')) throw err
   }

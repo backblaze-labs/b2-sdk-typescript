@@ -48,17 +48,34 @@ const forbiddenLockPackages = [
   'yargs@16.2.2',
 ]
 
+const dynamicPackageExecution =
+  /\b(?:npx|pnpm\s+(?:dlx|exec)|npm\s+exec|yarn\s+(?:dlx|exec)|bunx|bun\s+x)\b/
+const dependencyInstall = /\b(?:pnpm|npm|yarn|bun)\s+(?:install|i|ci)\b/
+const packageScriptRun = /\b(?:pnpm|npm|yarn|bun)\s+run\b/
+
 async function read(rel) {
   return await fs.readFile(join(repo, rel), 'utf8')
 }
 
-function extractJob(workflow, jobName) {
-  const lines = workflow.split(/\r?\n/)
-  const start = lines.indexOf(`  ${jobName}:`)
-  if (start === -1) return ''
+function extractJobs(workflow) {
+  const lines = workflow.split('\n')
+  const jobsIndex = lines.indexOf('jobs:')
+  if (jobsIndex === -1) return []
 
-  const end = lines.findIndex((line, index) => index > start && /^ {2}[A-Za-z0-9_-]+:/.test(line))
-  return lines.slice(start, end === -1 ? undefined : end).join('\n')
+  const jobLines = lines.slice(jobsIndex + 1)
+  const starts = []
+  for (const [index, line] of jobLines.entries()) {
+    const match = /^ {2}([A-Za-z0-9_-]+):$/.exec(line)
+    if (match) starts.push({ index, name: match[1] })
+  }
+
+  return starts.map((start, index) => {
+    const end = starts[index + 1]?.index ?? jobLines.length
+    return {
+      body: jobLines.slice(start.index, end).join('\n'),
+      name: start.name,
+    }
+  })
 }
 
 function includesInOrder(haystack, first, second) {
@@ -69,6 +86,67 @@ function includesInOrder(haystack, first, second) {
 
 function hasLockPackage(lockfile, packageKey) {
   return lockfile.includes(`  ${packageKey}`) || lockfile.includes(`  '${packageKey}`)
+}
+
+function executableLines(body) {
+  return body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'))
+}
+
+function rejectOidcJobHazards(jobName, body, errors) {
+  if (dependencyInstall.test(body)) {
+    errors.push(`release.yml ${jobName} job must not install dependencies with id-token: write.`)
+  }
+  if (dynamicPackageExecution.test(body)) {
+    errors.push(
+      `release.yml ${jobName} job must not run dynamic package execution with id-token: write.`,
+    )
+  }
+  if (packageScriptRun.test(body)) {
+    errors.push(`release.yml ${jobName} job must not run package scripts with id-token: write.`)
+  }
+
+  const publishLines = executableLines(body).filter((line) => /\bnpm\s+publish\b/.test(line))
+  if (publishLines.length === 0) {
+    errors.push(`release.yml ${jobName} job must publish the prebuilt tarball.`)
+    return
+  }
+
+  for (const line of publishLines) {
+    if (
+      !line.includes('npm publish "$TARBALL"') &&
+      !line.includes("npm publish '$TARBALL'") &&
+      !line.includes('npm publish $TARBALL')
+    ) {
+      errors.push(`release.yml ${jobName} job must publish the downloaded tarball: ${line}`)
+    }
+  }
+
+  if (!/find\s+\.release\b[\s\S]*-name\s+['"]\*\.tgz['"]/.test(body)) {
+    errors.push(`release.yml ${jobName} job must resolve a .release/*.tgz artifact.`)
+  }
+}
+
+function rejectUnsealedArtifactHazards(jobName, body, errors) {
+  const artifactSealIndex = body.indexOf('actions/upload-artifact@')
+  if (artifactSealIndex === -1) return
+
+  const beforeSeal = body.slice(0, artifactSealIndex)
+  if (dynamicPackageExecution.test(beforeSeal)) {
+    errors.push(
+      `release.yml ${jobName} job must not run dynamic package execution before uploading an artifact.`,
+    )
+  }
+}
+
+function rejectInstallScripts(jobName, body, errors) {
+  for (const line of executableLines(body)) {
+    if (dependencyInstall.test(line) && !line.includes('--ignore-scripts')) {
+      errors.push(`release.yml ${jobName} dependency install must use --ignore-scripts.`)
+    }
+  }
 }
 
 /** @type {string[]} */
@@ -103,15 +181,23 @@ for (const packageKey of forbiddenLockPackages) {
 }
 
 const workflow = (await read('.github/workflows/release.yml')).replace(/\r\n?/g, '\n')
-const buildJob = extractJob(workflow, 'build')
-const packageTypeJob = extractJob(workflow, 'package-type-analysis')
-const publishJob = extractJob(workflow, 'publish')
-const githubReleaseJob = extractJob(workflow, 'github-release')
+const jobs = extractJobs(workflow)
+const buildJob = jobs.find((job) => job.name === 'build')?.body ?? ''
+const packageTypeJob = jobs.find((job) => job.name === 'package-type-analysis')?.body ?? ''
+const publishJob = jobs.find((job) => job.name === 'publish')?.body ?? ''
+const githubReleaseJob = jobs.find((job) => job.name === 'github-release')?.body ?? ''
 
 if (buildJob === '') errors.push('release.yml must define a build job.')
 if (packageTypeJob === '') errors.push('release.yml must define a package-type-analysis job.')
 if (publishJob === '') errors.push('release.yml must define a publish job.')
 if (githubReleaseJob === '') errors.push('release.yml must define a github-release job.')
+
+for (const { body, name } of jobs) {
+  const hasOidcWrite = /^\s{4}permissions:\n(?:^\s{6}.+\n)*?^\s{6}id-token:\s*write\s*$/m.test(body)
+  if (hasOidcWrite) rejectOidcJobHazards(name, body, errors)
+  rejectUnsealedArtifactHazards(name, body, errors)
+  rejectInstallScripts(name, body, errors)
+}
 
 if (buildJob !== '') {
   if (/\battw\b|@arethetypeswrong\/cli|npx\s/.test(buildJob)) {
