@@ -460,7 +460,7 @@ Every export is documented with full type signatures in the [API reference](http
 `synchronize()` and the built-in `LocalFolder` / `B2Folder` scanners accept `include` and `exclude` filters for paths relative to each sync root:
 
 ```ts
-await synchronize({
+for await (const event of synchronize({
   source: new LocalFolder('./site'),
   dest: new B2Folder(bucket, 'site/'),
   bucket,
@@ -471,7 +471,9 @@ await synchronize({
     include: ['assets/**', '*.html'],
     exclude: ['*.tmp', 'node_modules', 'dist/cache/**'],
   },
-})
+})) {
+  console.log(event)
+}
 ```
 
 Glob strings use the SDK dialect: `*` and `?` stay within one path segment, a whole `**` segment crosses directories, slash-less patterns match any basename or ancestor directory, and excludes win over includes. Use `dir/**` for directory-subtree patterns such as `dist/cache/**`; a slash-containing literal such as `dist/cache` matches only that exact path. RegExp filters are guarded by a best-effort synchronous safety heuristic whose exact subset may change as protections tighten. Paths beyond the RegExp input guard are skipped when an include RegExp is present, but exclude-only RegExp filters keep an untestable path because the SDK cannot prove it matches the deny-list. B2 prefixes are raw object-name prefixes; backslashes are not rewritten to `/`.
