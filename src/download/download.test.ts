@@ -3,6 +3,7 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
 import { ChecksumMismatchError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { encodeFileName } from '../raw/encoding.ts'
 import { RawClient } from '../raw/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
@@ -21,7 +22,7 @@ function headResponseHeaders(fileName = 'head.txt'): Headers {
     'Content-Type': 'text/plain',
     'X-Bz-Content-Sha1': 'none',
     'X-Bz-File-Id': 'head-file-id',
-    'X-Bz-File-Name': encodeURIComponent(fileName),
+    'X-Bz-File-Name': encodeFileName(fileName),
     'X-Bz-Upload-Timestamp': '1000',
   })
 }
