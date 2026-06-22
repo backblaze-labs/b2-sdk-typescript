@@ -267,6 +267,24 @@ async function prepareLocalPathSha1(
   if (options.signal?.aborted) return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
 
   try {
+    const state = syncSha1StateOf(path)
+    if (state.kind === 'verified') {
+      return {
+        path: { ...path, contentSha1: state.value },
+        bytesHashed: 0,
+        bytesVerified: 0,
+        aborted: false,
+      }
+    }
+    if (state.kind === 'unavailable') {
+      return {
+        path: { ...path, contentSha1: null },
+        bytesHashed: 0,
+        bytesVerified: 0,
+        aborted: false,
+      }
+    }
+
     const readLocalSha1 = options.readLocalSha1
     if (readLocalSha1 === undefined) {
       return {

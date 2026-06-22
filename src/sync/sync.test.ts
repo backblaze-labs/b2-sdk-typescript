@@ -310,6 +310,41 @@ describe('preparePairForCompare', () => {
     expect(result.skipActionGeneration).toBe(false)
   })
 
+  it('uses scanner-supplied verified local sha1 without hashing', async () => {
+    const sha1 = 'a'.repeat(40)
+    const source = { ...makeLocalSyncPath('file.txt', 1000, 100), contentSha1: sha1 }
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+    const readLocalSha1 = async () => {
+      throw new Error('should not hash')
+    }
+
+    const result = await preparePairForCompare([source, dest], 'sha1', { readLocalSha1 })
+
+    expect(result.skipActionGeneration).toBe(false)
+    expect(result.bytesHashed).toBe(0)
+    expect(result.events).toHaveLength(0)
+    expect(result.pair[0]?.contentSha1).toBe(sha1)
+  })
+
+  it('uses scanner-supplied unavailable local sha1 without hashing', async () => {
+    const source = { ...makeLocalSyncPath('file.txt', 1000, 100), contentSha1: null }
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const readLocalSha1 = async () => {
+      throw new Error('should not hash')
+    }
+
+    const result = await preparePairForCompare([source, dest], 'sha1', { readLocalSha1 })
+
+    expect(result.skipActionGeneration).toBe(true)
+    expect(result.bytesHashed).toBe(0)
+    expect(result.pair[0]?.contentSha1).toBeNull()
+    expect(result.events[0]).toMatchObject({
+      type: 'skip',
+      path: 'file.txt',
+      message: 'sha1 comparison skipped because a verifiable SHA-1 is unavailable',
+    })
+  })
+
   it('returns an error event when local sha1 hashing fails', async () => {
     const source = makeLocalSyncPath('file.txt', 1000, 100)
     const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
