@@ -1184,6 +1184,34 @@ describe('RetryTransport', () => {
       )
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
+
+    it('cancels the response body when aborted after inner send resolves', async () => {
+      const controller = new AbortController()
+      const cancel = vi.fn()
+      const response: HttpResponse = {
+        status: 200,
+        headers: new Headers(),
+        body: new ReadableStream<Uint8Array>({ cancel }),
+        json: async () => ({ ok: true }) as never,
+        text: async () => 'ok',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+      innerTransport.send.mockImplementation(async () => {
+        controller.abort('caller cancelled')
+        return response
+      })
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send({ ...baseRequest, signal: controller.signal })).rejects.toBe(
+        'caller cancelled',
+      )
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
   })
 
   // --------------------------------------------------------------------------

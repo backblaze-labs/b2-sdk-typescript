@@ -480,7 +480,7 @@ export class RetryTransport implements HttpTransport {
 
       try {
         const response = await this.inner.send({ ...request, retry: retryOptions })
-        throwIfSignalAborted(request.signal)
+        await throwIfSignalAbortedAfterResponse(request.signal, response)
 
         if (response.status >= 200 && response.status < 300) {
           return response
@@ -563,4 +563,17 @@ function throwIfSignalAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }
+}
+
+async function throwIfSignalAbortedAfterResponse(
+  signal: AbortSignal | undefined,
+  response: HttpResponse,
+): Promise<void> {
+  if (signal?.aborted !== true) return
+  try {
+    await response.body?.cancel()
+  } catch {
+    // Best-effort cleanup before preserving the caller's abort reason.
+  }
+  throw signal.reason ?? new DOMException('Aborted', 'AbortError')
 }
