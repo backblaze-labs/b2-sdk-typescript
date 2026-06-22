@@ -224,11 +224,15 @@ describe('createWriteStream branch coverage', () => {
       releaseStart = resolve
     })
     let cancelCalls = 0
+    let uploadPartCalls = 0
     const transport: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
         if (req.url.includes('b2_start_large_file')) {
           startSeen()
           await releaseStartPromise
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          uploadPartCalls++
         }
         if (req.url.includes('b2_cancel_large_file')) {
           cancelCalls++
@@ -270,6 +274,15 @@ describe('createWriteStream branch coverage', () => {
       await delay(20)
     }
     expect(cancelCalls).toBe(1)
+    expect(uploadPartCalls).toBe(0)
+    const unfinished = await raceClient.raw.listUnfinishedLargeFiles(
+      raceClient.accountInfo.getApiUrl(),
+      raceClient.accountInfo.getAuthToken(),
+      { bucketId: raceBucket.id },
+    )
+    expect(
+      unfinished.files.find((file) => file.fileName === 'abort-start-race.bin'),
+    ).toBeUndefined()
   })
 
   it('passes the abort signal to stalled startLargeFile requests', async () => {
