@@ -190,11 +190,6 @@ export class Bucket {
      */
     resume?: boolean
     /**
-     * Deprecated compatibility flag. Explicit `resumeFileId` uploads skip
-     * matching parts after locally recomputing each part SHA-1.
-     */
-    trustServerPartSha1s?: boolean
-    /**
      * Resume into a specific large-file ID. Overrides the `resume`
      * discovery path. The local `partSize` must match the server-side
      * plan.

@@ -65,12 +65,6 @@ export interface UploadLargeFileOptions {
    */
   readonly resume?: boolean
   /**
-   * Deprecated compatibility flag. Resumed sliceable uploads skip a part only after
-   * locally hashing that part and matching the server-reported SHA-1 for the explicit
-   * {@link resumeFileId}.
-   */
-  readonly trustServerPartSha1s?: boolean
-  /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
    * but the local `partSize` must still match the server's plan.
    */
