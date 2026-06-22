@@ -131,15 +131,20 @@ describe.skipIf(skip)('B2 integration', () => {
         contentType: 'b2/x-auto',
       },
     )
-    const second = await client.raw.startLargeFile(
-      client.accountInfo.getApiUrl(),
-      client.accountInfo.getAuthToken(),
-      {
+    const second = await client.raw
+      .startLargeFile(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
         bucketId: bucket.id,
         fileName: 'unfinished-order-a.bin',
         contentType: 'b2/x-auto',
-      },
-    )
+      })
+      .catch(async (err: unknown) => {
+        await client.raw
+          .cancelLargeFile(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+            fileId: first.fileId,
+          })
+          .catch(() => {})
+        throw err
+      })
 
     try {
       const listing = await client.raw.listUnfinishedLargeFiles(

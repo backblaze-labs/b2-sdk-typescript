@@ -1655,7 +1655,6 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     )
 
-    const { sha1Hex } = await import('../streams/hash.ts')
     for (const [fileId, bytes] of [
       [conflict.fileId, conflictData],
       [matching.fileId, data],
@@ -1720,7 +1719,6 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     )
 
-    const { sha1Hex } = await import('../streams/hash.ts')
     const partUrl = await client.raw.getUploadPartUrl(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -1784,7 +1782,6 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(JSON.stringify(second)).not.toContain('key-b')
     expect(JSON.stringify(second)).not.toContain('md5-b')
 
-    const { sha1Hex } = await import('../streams/hash.ts')
     const partUrl = await client.raw.getUploadPartUrl(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -1856,7 +1853,6 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     )
 
-    const { sha1Hex } = await import('../streams/hash.ts')
     const partUrl = await client.raw.getUploadPartUrl(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
