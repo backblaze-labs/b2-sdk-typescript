@@ -42,7 +42,7 @@ export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Ar
     if (data.byteLength !== path.size) {
       throw new Error('local file changed before upload: size changed while reading')
     }
-    return new Uint8Array(data)
+    return data
   } finally {
     await handle.close()
   }

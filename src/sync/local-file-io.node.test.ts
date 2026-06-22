@@ -51,7 +51,9 @@ describe('readScannedLocalFile', () => {
     try {
       const path = await makeScannedPath(root, 'file.txt', 'abc')
 
-      await expect(readScannedLocalFile(path)).resolves.toEqual(textEncoder.encode('abc'))
+      const result = await readScannedLocalFile(path)
+      expect(result).toBeInstanceOf(Uint8Array)
+      expect([...result]).toEqual([...textEncoder.encode('abc')])
     } finally {
       await rm(root, { recursive: true, force: true })
     }

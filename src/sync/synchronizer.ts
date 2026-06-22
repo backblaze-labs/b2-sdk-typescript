@@ -491,7 +491,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
           )
           await bucket.upload({
             fileName,
-            source: new BufferSource(new Uint8Array(data)),
+            source: new BufferSource(data),
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             ...(config.options.signal !== undefined ? { signal: config.options.signal } : {}),
           })
