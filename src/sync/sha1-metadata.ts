@@ -4,12 +4,42 @@ import { normalizeVerifiableSha1 } from '../util/sha1.ts'
 /** Prefix used to mark SHA-1 metadata that must not prove equality without byte verification. */
 export const untrustedSha1Prefix = 'unverified:'
 
+/** SHA-1 has not been computed or populated yet. */
+export interface SyncSha1PendingState {
+  /** State discriminator. */
+  readonly kind: 'pending'
+}
+
+/** SHA-1 is known to be unavailable for this path. */
+export interface SyncSha1UnavailableState {
+  /** State discriminator. */
+  readonly kind: 'unavailable'
+}
+
+/** SHA-1 is a normalized 40-character digest that may prove equality. */
+export interface SyncSha1VerifiedState {
+  /** State discriminator. */
+  readonly kind: 'verified'
+  /** Normalized lowercase 40-character SHA-1 digest. */
+  readonly value: string
+}
+
+/** SHA-1 metadata is present but cannot prove equality without verification. */
+export interface SyncSha1UntrustedState {
+  /** State discriminator. */
+  readonly kind: 'untrusted'
+  /** Normalized digest when one can be extracted from the raw metadata. */
+  readonly value: string | null
+  /** Original metadata string supplied by the scanner or B2 file version. */
+  readonly raw: string
+}
+
 /** Public SHA-1 state used by sync scanners and low-level compare helpers. */
 export type SyncSha1State =
-  | { readonly kind: 'pending' }
-  | { readonly kind: 'unavailable' }
-  | { readonly kind: 'verified'; readonly value: string }
-  | { readonly kind: 'untrusted'; readonly value: string | null; readonly raw: string }
+  | SyncSha1PendingState
+  | SyncSha1UnavailableState
+  | SyncSha1VerifiedState
+  | SyncSha1UntrustedState
 
 /**
  * Marks a verifiable SHA-1 digest as untrusted provider metadata.

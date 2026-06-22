@@ -27,7 +27,13 @@ export type { ActionFactory } from './policies/index.ts'
 export { generateActions } from './policies/index.ts'
 export { B2Folder } from './scanners/b2.ts'
 export { LocalFolder } from './scanners/local.ts'
-export type { SyncSha1State } from './sha1-metadata.ts'
+export type {
+  SyncSha1PendingState,
+  SyncSha1State,
+  SyncSha1UnavailableState,
+  SyncSha1UntrustedState,
+  SyncSha1VerifiedState,
+} from './sha1-metadata.ts'
 export {
   isUntrustedSha1,
   parseSyncContentSha1,

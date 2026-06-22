@@ -13,7 +13,7 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
-import { isUntrustedSha1, untrustedSha1 } from './sha1-metadata.ts'
+import { isUntrustedSha1, parseSyncContentSha1, untrustedSha1 } from './sha1-metadata.ts'
 import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
 
 function makeSyncPath(
@@ -222,6 +222,25 @@ describe('untrusted SHA-1 metadata helpers', () => {
   it('rejects invalid untrusted SHA-1 helper input', () => {
     expect(() => untrustedSha1('not-a-sha1')).toThrow('untrusted SHA-1 metadata')
     expect(isUntrustedSha1(undefined)).toBe(false)
+  })
+
+  it('parses public contentSha1 states explicitly', () => {
+    const sha1 = 'A'.repeat(40)
+    const normalized = 'a'.repeat(40)
+
+    expect(parseSyncContentSha1(undefined)).toEqual({ kind: 'pending' })
+    expect(parseSyncContentSha1(null)).toEqual({ kind: 'unavailable' })
+    expect(parseSyncContentSha1(sha1)).toEqual({ kind: 'verified', value: normalized })
+    expect(parseSyncContentSha1(`unverified:${sha1}`)).toEqual({
+      kind: 'untrusted',
+      raw: `unverified:${sha1}`,
+      value: normalized,
+    })
+    expect(parseSyncContentSha1('not-a-sha1')).toEqual({
+      kind: 'untrusted',
+      raw: 'not-a-sha1',
+      value: null,
+    })
   })
 })
 
