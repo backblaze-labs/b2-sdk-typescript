@@ -19,7 +19,28 @@ import {
   type ResumeCandidateRejectedListener,
   ResumeFileIdMismatchError,
 } from './resume.ts'
-import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
+import {
+  resolveRetryResponseBodyFailures,
+  type UploadRetryListener,
+  uploadPartWithFreshUrl,
+} from './retry.ts'
+
+/** Event emitted when resume skips a local part because B2 already has matching SHA-1 bytes. */
+export interface ResumePartReusedEvent {
+  /** File name being resumed. */
+  readonly fileName: string
+  /** Unfinished large-file ID that supplied the existing part. */
+  readonly fileId: LargeFileId
+  /** One-based part number reused from the unfinished large file. */
+  readonly partNumber: number
+  /** Number of bytes in the reused part. */
+  readonly contentLength: number
+  /** SHA-1 hex digest that matched the local part bytes. */
+  readonly contentSha1: string
+}
+
+/** Callback invoked when resume accepts a pre-existing server part. */
+export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
@@ -72,16 +93,32 @@ export interface UploadLargeFileOptions {
    * uploaded part lengths match; otherwise a new large file is started.
    *
    * Auto-discovery trusts unfinished large files created by any writer with
-   * access to the bucket. Use it only when bucket writers are mutually trusted.
+   * access to the bucket. Use it only when bucket writers are mutually trusted,
+   * and use `onResumePartReused` to observe any server parts accepted through
+   * the SHA-1 gate. Discovery runs before the first upload byte and can make up
+   * to the list-page budget plus the candidate budget times the part-page
+   * budget in sequential B2 list calls; pass `signal` to bound wall-clock time.
    * SSE-C uploads are never auto-resumed because B2 does not expose the
    * customer key identity needed to verify a compatible unfinished file.
    */
   readonly resume?: boolean
-  /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10. */
+  /**
+   * Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10.
+   * If the scan truncates, resume falls back to a fresh upload and
+   * `onResumeCandidateRejected` is the only SDK signal.
+   */
   readonly resumeMaxListPages?: number
-  /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25. */
+  /**
+   * Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25.
+   * Hitting the limit can leave older unfinished uploads orphaned while a fresh
+   * large file is started; tune for high-churn buckets.
+   */
   readonly resumeMaxPartCandidates?: number
-  /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10. */
+  /**
+   * Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10.
+   * A candidate whose parts exceed this bound is skipped and reported through
+   * `onResumeCandidateRejected`.
+   */
   readonly resumeMaxPartPages?: number
   /**
    * Explicit large file ID to resume into. Overrides {@link resume} discovery
@@ -95,6 +132,8 @@ export interface UploadLargeFileOptions {
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
   readonly onResumeCandidateRejected?: ResumeCandidateRejectedListener
+  /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
+  readonly onResumePartReused?: ResumePartReusedListener
 }
 
 /**
@@ -287,6 +326,13 @@ export async function uploadLargeFile(
         // writers only.
         const serverSha1 = preUploaded.get(part.partNumber)
         if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
+          notifyResumePartReused(options.onResumePartReused, {
+            fileName: options.fileName,
+            fileId: largeFileId,
+            partNumber: part.partNumber,
+            contentLength: data.byteLength,
+            contentSha1: serverSha1,
+          })
           partSha1s[part.partNumber - 1] = serverSha1
           tracker.addBytes(data.byteLength)
           tracker.completePart()
@@ -302,7 +348,10 @@ export async function uploadLargeFile(
           retry: options.retry,
           signal: options.signal,
           onUploadRetry: options.onUploadRetry,
-          retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
+          retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+            options.retryResponseBodyFailures,
+            'multipart',
+          ),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),
@@ -420,7 +469,10 @@ async function uploadPartsSequentially(
         retry: options.retry,
         signal: options.signal,
         onUploadRetry: options.onUploadRetry,
-        retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
+        retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+          options.retryResponseBodyFailures,
+          'multipart',
+        ),
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }
           : {}),
@@ -436,5 +488,16 @@ async function uploadPartsSequentially(
     // Releasing the lock lets the underlying stream propagate close /
     // error events to any upstream producer (e.g. a Node `Readable`).
     reader.releaseLock()
+  }
+}
+
+function notifyResumePartReused(
+  listener: ResumePartReusedListener | undefined,
+  event: ResumePartReusedEvent,
+): void {
+  try {
+    listener?.(event)
+  } catch {
+    // Diagnostic observers must not change upload success or failure.
   }
 }

@@ -434,7 +434,7 @@ function fileRetentionMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return false
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -457,7 +457,7 @@ function legalHoldMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return false
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false

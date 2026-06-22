@@ -42,10 +42,9 @@ interface UploadLayerRetryOptions {
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
    * Whether response-body read failures after an upload POST should be retried.
-   * Defaults depend on the caller: false for single-request uploads and true for
-   * multipart part uploads.
+   * The caller resolves its public default before entering this helper.
    */
-  readonly retryResponseBodyFailures?: boolean | undefined
+  readonly retryResponseBodyFailures: boolean
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
@@ -59,6 +58,24 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 }
 
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
+
+/**
+ * Resolves the public per-upload-mode default for ambiguous upload response
+ * body failures. Single-request uploads default off because a repeated POST can
+ * create a duplicate file version; multipart uploads default on because B2 keeps
+ * the latest write for a part number before finishLargeFile.
+ *
+ * @param value - Caller-provided override, if any.
+ * @param mode - Upload path whose default should be applied.
+ *
+ * @returns The boolean value passed to the upload retry helper.
+ */
+export function resolveRetryResponseBodyFailures(
+  value: boolean | undefined,
+  mode: 'single' | 'multipart',
+): boolean {
+  return value ?? mode === 'multipart'
+}
 
 /**
  * Fetches a small-file upload URL, bypassing the pool.
@@ -274,7 +291,7 @@ function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOption
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
-    if (options.retryResponseBodyFailures === false) return err
+    if (!options.retryResponseBodyFailures) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }

@@ -11,7 +11,11 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { toError } from '../util/to-error.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
+import {
+  resolveRetryResponseBodyFailures,
+  type UploadRetryListener,
+  uploadPartWithFreshUrl,
+} from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
 export interface CreateWriteStreamOptions {
@@ -155,7 +159,10 @@ export function createWriteStream(
       retry: options.retry,
       signal: options.signal,
       onUploadRetry: options.onUploadRetry,
-      retryResponseBodyFailures: options.retryResponseBodyFailures ?? true,
+      retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+        options.retryResponseBodyFailures,
+        'multipart',
+      ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
         : {}),

@@ -18,7 +18,7 @@ import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
-import { uploadLargeFile } from './large.ts'
+import { type ResumePartReusedEvent, uploadLargeFile } from './large.ts'
 import { ResumeFileIdMismatchError } from './resume.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
@@ -854,6 +854,7 @@ describe('upload fresh-URL retry', () => {
         fileName: 'blocked-url.txt',
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {},
@@ -886,6 +887,7 @@ describe('upload fresh-URL retry', () => {
         fileName: 'retry-budget.txt',
         partNumber: null,
         retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
         checkout: () => entry,
         fetchFresh: () => {
           freshFetches += 1
@@ -920,6 +922,7 @@ describe('upload fresh-URL retry', () => {
         fileName: 'rate-limited.txt',
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {
@@ -1655,6 +1658,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     )
 
+    const matchingPartSha1 = await sha1Hex(data.slice(0, partSize))
     for (const [fileId, bytes] of [
       [conflict.fileId, conflictData],
       [matching.fileId, data],
@@ -1677,6 +1681,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       )
     }
 
+    const reused: ResumePartReusedEvent[] = []
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucketId as never,
       fileName: 'same-name.bin',
@@ -1686,10 +1691,20 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       partSize,
       concurrency: 1,
       resume: true,
+      onResumePartReused: (event) => reused.push(event),
     })
 
     expect(result.fileName).toBe('same-name.bin')
     expect(result.contentLength).toBe(data.byteLength)
+    expect(reused).toEqual([
+      {
+        fileName: 'same-name.bin',
+        fileId: matching.fileId,
+        partNumber: 1,
+        contentLength: partSize,
+        contentSha1: matchingPartSha1,
+      },
+    ])
 
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),

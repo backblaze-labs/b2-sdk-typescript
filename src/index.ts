@@ -122,6 +122,10 @@ export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 export { EventType } from './types/notifications.ts'
 export type {
+  ResumePartReusedEvent,
+  ResumePartReusedListener,
+} from './upload/large.ts'
+export type {
   ResumeCandidateRejectedEvent,
   ResumeCandidateRejectedListener,
   ResumeCandidateRejectedReason,

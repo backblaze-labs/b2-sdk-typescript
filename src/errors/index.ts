@@ -29,6 +29,8 @@ import {
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
 
+export { ResumeFileIdMismatchError } from '../upload/resume.ts'
+
 /** Metadata captured from B2 error response headers. */
 export interface B2ErrorOptions {
   /** Retry delay in seconds from the `Retry-After` response header, if present. */

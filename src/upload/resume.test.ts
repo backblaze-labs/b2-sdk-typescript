@@ -625,20 +625,36 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
-  it('tolerates unreadable retention and legal hold when the caller did not request them', async () => {
+  it('rejects unreadable retention and legal hold when the caller did not request them', async () => {
     const fileInfo = { owner: 'unit' }
+    const rejected: Array<{ fileId: LargeFileId | undefined; reason: string }> = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
           files: [
             {
-              fileId: 'restricted-compatible',
+              fileId: 'restricted-retention',
               fileName: 'target.bin',
               contentType: 'application/octet-stream',
               fileInfo,
               uploadTimestamp: 1000,
               fileRetention: {
                 isClientAuthorizedToRead: false,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: null,
+              },
+            },
+            {
+              fileId: 'restricted-legal-hold',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+              fileRetention: {
+                isClientAuthorizedToRead: true,
                 value: null,
               },
               legalHold: {
@@ -650,12 +666,8 @@ describe('findResumeCandidate', () => {
           nextFileId: null,
         }
       },
-      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        expect(req.fileId).toBe('restricted-compatible')
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'restricted-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+      async listParts() {
+        throw new Error('listParts should not be called for unreadable Object Lock state')
       },
     } as unknown as RawClient
 
@@ -673,10 +685,18 @@ describe('findResumeCandidate', () => {
           { partNumber: 1, length: 100 },
           { partNumber: 2, length: 100 },
         ],
+        onCandidateRejected: (event) =>
+          rejected.push({ fileId: event.fileId, reason: event.reason }),
       },
     )
 
-    expect(result?.fileId).toBe('restricted-compatible' as LargeFileId)
+    expect(result).toBeNull()
+    expect(rejected).toEqual(
+      expect.arrayContaining([
+        { fileId: 'restricted-retention' as LargeFileId, reason: 'retention-mismatch' },
+        { fileId: 'restricted-legal-hold' as LargeFileId, reason: 'legal-hold-mismatch' },
+      ]),
+    )
   })
 
   it('rejects SSE-C candidates when no encryption option was requested', async () => {
@@ -1604,6 +1624,116 @@ describe('findResumeCandidate', () => {
     expect(listCalls[0]).toMatchObject({
       namePrefix: 'target.bin',
     })
+  })
+
+  it('rejects an explicit resumeFileId with unreadable retention state', async () => {
+    const rejected: Array<{ fileId: LargeFileId | undefined; reason: string }> = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+              fileRetention: {
+                isClientAuthorizedToRead: false,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: null,
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called for unreadable retention')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        resumeFileId: 'target-id' as LargeFileId,
+        onCandidateRejected: (event) =>
+          rejected.push({ fileId: event.fileId, reason: event.reason }),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual([{ fileId: 'target-id' as LargeFileId, reason: 'retention-mismatch' }])
+  })
+
+  it('rejects an explicit resumeFileId with unreadable legal-hold state', async () => {
+    const rejected: Array<{ fileId: LargeFileId | undefined; reason: string }> = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: false,
+                value: null,
+              },
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called for unreadable legal hold')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        resumeFileId: 'target-id' as LargeFileId,
+        onCandidateRejected: (event) =>
+          rejected.push({ fileId: event.fileId, reason: event.reason }),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(rejected).toEqual([
+      { fileId: 'target-id' as LargeFileId, reason: 'legal-hold-mismatch' },
+    ])
   })
 
   it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {

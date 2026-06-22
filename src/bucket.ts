@@ -6,7 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import type { RetryOptions } from './http/retry.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
@@ -35,7 +35,7 @@ import type {
 import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
-import { uploadLargeFile } from './upload/large.ts'
+import { type ResumePartReusedListener, uploadLargeFile } from './upload/large.ts'
 import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
@@ -130,7 +130,11 @@ export class Bucket {
    *
    * @internal
    */
-  constructor(client: B2Client, info: BucketInfo, uploadRetryOptions: RetryOptions) {
+  constructor(
+    client: B2Client,
+    info: BucketInfo,
+    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
+  ) {
     this.client = client
     this.info = info
     this.id = info.bucketId
@@ -202,15 +206,30 @@ export class Bucket {
      * rejects resume because it can't replay parts. Discovery reuses only
      * unfinished files whose upload options and uploaded part lengths
      * match the current call, and should only be used when bucket writers
-     * are mutually trusted. SSE-C uploads are not resumed because B2 does
-     * not expose customer key identity for unfinished files.
+     * are mutually trusted. Discovery can make up to the list-page budget plus
+     * the candidate budget times the part-page budget in sequential B2 list
+     * calls before upload starts; pass `signal` to bound wall-clock time.
+     * SSE-C uploads are not resumed because B2 does not expose customer key
+     * identity for unfinished files.
      */
     resume?: boolean
-    /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10. */
+    /**
+     * Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10.
+     * If the scan truncates, resume falls back to a fresh upload and
+     * `onResumeCandidateRejected` is the only SDK signal.
+     */
     resumeMaxListPages?: number
-    /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25. */
+    /**
+     * Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25.
+     * Hitting the limit can leave older unfinished uploads orphaned while a fresh
+     * large file is started; tune for high-churn buckets.
+     */
     resumeMaxPartCandidates?: number
-    /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10. */
+    /**
+     * Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10.
+     * A candidate whose parts exceed this bound is skipped and reported through
+     * `onResumeCandidateRejected`.
+     */
     resumeMaxPartPages?: number
     /**
      * Resume into a specific large-file ID. Overrides the `resume`
@@ -222,6 +241,8 @@ export class Bucket {
     resumeFileId?: LargeFileId
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */
     onResumeCandidateRejected?: ResumeCandidateRejectedListener
+    /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
+    onResumePartReused?: ResumePartReusedListener
   }): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
@@ -240,6 +261,7 @@ export class Bucket {
       resume: _resume,
       resumeFileId: _resumeFileId,
       onResumeCandidateRejected: _onResumeCandidateRejected,
+      onResumePartReused: _onResumePartReused,
       resumeMaxListPages: _resumeMaxListPages,
       resumeMaxPartCandidates: _resumeMaxPartCandidates,
       resumeMaxPartPages: _resumeMaxPartPages,

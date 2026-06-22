@@ -9,7 +9,12 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
-import { fetchFreshUploadUrl, type UploadRetryListener, withFreshUploadUrlRetry } from './retry.ts'
+import {
+  fetchFreshUploadUrl,
+  resolveRetryResponseBodyFailures,
+  type UploadRetryListener,
+  withFreshUploadUrlRetry,
+} from './retry.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
 export interface UploadFileOptions {
@@ -89,7 +94,10 @@ export async function uploadSmallFile(
     retry: options.retry,
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
-    retryResponseBodyFailures: options.retryResponseBodyFailures === true,
+    retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+      options.retryResponseBodyFailures,
+      'single',
+    ),
     checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
     fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
     returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
