@@ -384,7 +384,9 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
       async (deadlineSignal) => {
         deadlineSignal.throwIfAborted()
         if (maxBytes < expectedBytes) {
-          throw new Error(`sha1 B2 read exceeded ${maxBytes} byte verification budget`)
+          throw new Error(
+            `sha1 B2 verification skipped because contentLength ${expectedBytes} exceeds ${maxBytes} byte verification budget`,
+          )
         }
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),

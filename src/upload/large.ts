@@ -115,7 +115,7 @@ export async function uploadLargeFile(
     ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
   }
 
-  // --- Resume discovery (M11.1) ---
+  // --- Explicit resume file reuse (M11.1) ---
   if (!options.source.canSlice && options.resumeFileId !== undefined) {
     throw new Error(
       'uploadLargeFile: resume is not supported on non-sliceable sources (e.g. StreamSource).',
