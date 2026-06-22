@@ -140,6 +140,8 @@ export type {
   ResumeCandidateRejectedReason,
 } from './upload/resume.ts'
 export type {
+  AmbiguousFinishCleanupFailureEvent,
+  CancelLargeFileCleanupFailureEvent,
   CleanupFailureEvent,
   CleanupFailureListener,
   CleanupFailureOptions,
