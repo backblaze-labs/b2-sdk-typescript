@@ -283,6 +283,8 @@ export class Bucket {
     prefix?: string
     /** Delimiter for virtual directory grouping (typically `"/"`). */
     delimiter?: string
+    /** Optional abort signal for the listing request. */
+    signal?: AbortSignal
   }): Promise<ListFileNamesResponse> {
     return this.client.raw.listFileNames(
       this.client.accountInfo.getApiUrl(),
@@ -293,6 +295,9 @@ export class Bucket {
         ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
         ...(options?.prefix !== undefined ? { prefix: options.prefix } : {}),
         ...(options?.delimiter !== undefined ? { delimiter: options.delimiter } : {}),
+      },
+      {
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       },
     )
   }

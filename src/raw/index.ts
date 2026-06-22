@@ -72,6 +72,12 @@ export interface RawClientOptions {
   readonly transport: HttpTransport
 }
 
+/** Optional request controls for {@link RawClient.listFileNames}. */
+export interface ListFileNamesOptions {
+  /** Optional abort signal for the listing request. */
+  readonly signal?: AbortSignal
+}
+
 /** Optional request controls for {@link RawClient.listFileVersions}. */
 export interface ListFileVersionsOptions {
   /** Optional abort signal for the listing request. */
@@ -284,6 +290,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as an abort signal.
    *
    * @returns The list of file names and optional continuation token.
    */
@@ -291,9 +298,16 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListFileNamesRequest,
+    options?: ListFileNamesOptions,
   ): Promise<ListFileNamesResponse> {
     return normalizeFileVersionListSha1(
-      await this.postJson<ListFileNamesResponse>(apiUrl, authToken, 'b2_list_file_names', request),
+      await this.postJson<ListFileNamesResponse>(
+        apiUrl,
+        authToken,
+        'b2_list_file_names',
+        request,
+        options,
+      ),
     )
   }
 
