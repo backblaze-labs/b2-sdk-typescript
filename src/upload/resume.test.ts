@@ -290,6 +290,52 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['content-type-mismatch'])
   })
 
+  it('accepts resolved content types for requested b2/x-auto uploads', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'compatible',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: 1000,
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
+        expect(req.fileId).toBe('compatible')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'auto-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        contentType: 'b2/x-auto',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+      },
+    )
+
+    expect(result?.fileId).toBe('compatible' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('auto-p1')
+  })
+
   it('reports the candidate limit before listing more compatible candidates', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: string[] = []

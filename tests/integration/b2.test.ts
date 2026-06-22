@@ -161,7 +161,7 @@ describe.skipIf(skip)('B2 integration', () => {
       expect(ids.indexOf(second.fileId)).toBeGreaterThanOrEqual(0)
       expect(ids.indexOf(first.fileId)).toBeLessThan(ids.indexOf(second.fileId))
       expect(listing.files.find((file) => file.fileId === first.fileId)?.contentType).toBe(
-        'b2/x-auto',
+        'application/octet-stream',
       )
 
       const fromFirst = await client.raw.listUnfinishedLargeFiles(

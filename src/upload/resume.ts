@@ -312,7 +312,9 @@ function candidateMetadataRejectReason(
   criteria: ResumeCandidateCriteria,
 ): ResumeCandidateRejectedReason | null {
   if (candidate.fileName !== fileName) return 'file-name-mismatch'
-  if (candidate.contentType !== criteria.contentType) return 'content-type-mismatch'
+  if (criteria.contentType !== 'b2/x-auto' && candidate.contentType !== criteria.contentType) {
+    return 'content-type-mismatch'
+  }
 
   const candidateInfo = splitResumeFileInfo(candidate.fileInfo ?? {})
   if (!recordEquals(candidateInfo.fileInfo, criteria.fileInfo)) return 'file-info-mismatch'
