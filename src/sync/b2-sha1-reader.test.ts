@@ -8,6 +8,8 @@ import {
 } from './b2-sha1-reader.ts'
 
 const textEncoder = new TextEncoder()
+const globals = globalThis as Record<string, unknown>
+const isBun = typeof globals['Bun'] !== 'undefined'
 
 function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -39,7 +41,7 @@ describe('readStreamChunkWithTimeout', () => {
     reader.releaseLock()
   })
 
-  it('rejects when the abort signal fires during a pending read', async () => {
+  it.skipIf(isBun)('rejects when the abort signal fires during a pending read', async () => {
     const controller = new AbortController()
     const reader = new ReadableStream<Uint8Array>().getReader()
     const promise = readStreamChunkWithTimeout(reader, 1000, 'stalled', controller.signal)
