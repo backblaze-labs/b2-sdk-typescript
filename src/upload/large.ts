@@ -13,7 +13,7 @@ import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort, cleanupRequestOptions } from './cancel.ts'
+import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   findResumeCandidate,
@@ -361,7 +361,7 @@ export async function uploadLargeFile(
           raw,
           accountInfo,
           largeFileId,
-          cleanupRequestOptions(options.signal),
+          options.signal === undefined ? undefined : { signal: options.signal },
         )
       }
       throw err
@@ -462,7 +462,7 @@ export async function uploadLargeFile(
         raw,
         accountInfo,
         largeFileId,
-        cleanupRequestOptions(options.signal),
+        options.signal === undefined ? undefined : { signal: options.signal },
       )
     }
     throw err

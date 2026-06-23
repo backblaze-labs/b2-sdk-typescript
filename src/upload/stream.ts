@@ -10,11 +10,7 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import {
-  cancelLargeFileBestEffort,
-  cleanupRequestOptions,
-  DEFAULT_CLEANUP_TIMEOUT_MS,
-} from './cancel.ts'
+import { cancelLargeFileBestEffort, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   resolveRetryResponseBodyFailures,
@@ -204,7 +200,12 @@ export function createWriteStream(
     cancelAfterStartScheduled = true
     void started
       .then((fileId) =>
-        cancelLargeFileBestEffort(raw, accountInfo, fileId, cleanupRequestOptions(options.signal)),
+        cancelLargeFileBestEffort(
+          raw,
+          accountInfo,
+          fileId,
+          options.signal === undefined ? undefined : { signal: options.signal },
+        ),
       )
       .catch(() => {
         // If start failed, no file ID is available to cancel.
@@ -358,7 +359,7 @@ export function createWriteStream(
             raw,
             accountInfo,
             fileIdToCancel,
-            cleanupRequestOptions(options.signal),
+            options.signal === undefined ? undefined : { signal: options.signal },
           )
         }
         rejectDone(observedError)
@@ -384,7 +385,7 @@ export function createWriteStream(
           raw,
           accountInfo,
           fileIdToCancel,
-          cleanupRequestOptions(options.signal),
+          options.signal === undefined ? undefined : { signal: options.signal },
         )
       }
       rejectDone(abortError)
