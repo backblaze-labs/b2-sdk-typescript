@@ -59,24 +59,28 @@ async function read(rel) {
 }
 
 function extractJobs(workflow) {
-  const lines = workflow.split('\n')
-  const jobsIndex = lines.indexOf('jobs:')
-  if (jobsIndex === -1) return []
+  const jobsSectionMatch = /^jobs:\s*\n/m.exec(workflow)
+  if (jobsSectionMatch === null) return { hasJobsSection: false, jobs: [] }
 
-  const jobLines = lines.slice(jobsIndex + 1)
+  const jobLines = workflow
+    .slice(jobsSectionMatch.index + jobsSectionMatch[0].length)
+    .split('\n')
   const starts = []
   for (const [index, line] of jobLines.entries()) {
     const match = /^ {2}([A-Za-z0-9_-]+):$/.exec(line)
     if (match) starts.push({ index, name: match[1] })
   }
 
-  return starts.map((start, index) => {
-    const end = starts[index + 1]?.index ?? jobLines.length
-    return {
-      body: jobLines.slice(start.index, end).join('\n'),
-      name: start.name,
-    }
-  })
+  return {
+    hasJobsSection: true,
+    jobs: starts.map((start, index) => {
+      const end = starts[index + 1]?.index ?? jobLines.length
+      return {
+        body: jobLines.slice(start.index, end).join('\n'),
+        name: start.name,
+      }
+    }),
+  }
 }
 
 function includesInOrder(haystack, first, second) {
@@ -190,7 +194,9 @@ for (const packageKey of forbiddenLockPackages) {
 }
 
 const workflow = (await read('.github/workflows/release.yml')).replace(/\r\n?/g, '\n')
-const jobs = extractJobs(workflow)
+const { hasJobsSection, jobs } = extractJobs(workflow)
+if (!hasJobsSection) errors.push('release workflow does not define a jobs section.')
+
 const buildJob = jobs.find((job) => job.name === 'build')?.body ?? ''
 const packageTypeJob = jobs.find((job) => job.name === 'package-type-analysis')?.body ?? ''
 const publishJob = jobs.find((job) => job.name === 'publish')?.body ?? ''
