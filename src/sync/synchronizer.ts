@@ -33,11 +33,15 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
-import { asRawB2KeyPrefix, normalizeB2RelativePath } from './prefix.ts'
+import { asRawB2KeyPrefix, b2KeyToRelativePathUnderPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
 } from './sha1-options.ts'
+import {
+  createSyncDownloadTempFileSweeper,
+  type SyncDownloadTempFileSweeper,
+} from './temp-files.ts'
 import type {
   B2SyncPath,
   LocalSyncPath,
@@ -49,7 +53,8 @@ import type {
 } from './types.ts'
 
 const MAX_BUFFERED_SCAN_EVENTS = 100
-const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS = 60_000
+const MAX_AGGREGATE_FAILED_PATHS = 100
+const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS = 60_000
 
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
@@ -144,7 +149,9 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
   const queuedEvents: SyncEvent[] = []
+  const failedPaths: string[] = []
   let errorCount = 0
+  let failedPathOmittedCount = 0
   let scanHadError = false
   const runningActions = new Set<Promise<void>>()
   const scanEvents: ScanEventBuffer = { events: [], dropped: 0 }
@@ -159,12 +166,13 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
     onError: (event) => {
       scanHadError = true
-      errorCount += 1
+      recordSyncError(event)
       queueEvent(event)
     },
   }
 
-  const factory = createActionFactory(config)
+  const downloadTempFileSweeper = createSyncDownloadTempFileSweeper()
+  const factory = createActionFactory(config, downloadTempFileSweeper)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
   const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
@@ -176,63 +184,56 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 
   try {
+    let pairs: SyncPair[]
     try {
-      if (options.compareMode === 'sha1') {
-        const compareBatchSize = concurrency
-        let batch: SyncPair[] = []
-        for await (const pair of zipFolders(source, dest, scanOptions)) {
-          if (options.signal?.aborted) {
-            yield* finishAfterAbort()
-            return
-          }
-          batch.push(pair)
-          if (batch.length >= compareBatchSize) {
-            if (yield* emitSha1Batch(batch)) return
-            batch = []
-          }
-        }
-
-        if (yield* emitSha1Batch(batch)) return
-      } else {
-        for await (const pair of zipFolders(source, dest, scanOptions)) {
-          if (options.signal?.aborted) {
-            yield* finishAfterAbort()
-            return
-          }
-          const item = planPreparedPair(pair, readyComparePair(pair))
-          if (yield* emitPreparedItems([item])) return
-        }
-      }
+      pairs = await collectPairs()
     } catch (err) {
       await drainActions()
+      if (options.signal?.aborted) {
+        yield* finishAfterAbort()
+        return
+      }
       if (!scanHadError) {
         yield* emitQueuedEvents()
         throw err
       }
 
       yield* emitQueuedEvents()
-      yield {
-        type: 'error',
-        path: '',
-        size: 0,
-        message: `${errorCount} sync error(s) occurred`,
-      }
+      yield aggregateErrorEvent()
+      completed = true
       return
     }
-
-    await drainActions()
 
     yield* emitQueuedEvents()
     const filesystemError = scanFilesystemError(scanEvents)
     if (filesystemError !== undefined) throw filesystemError
 
-    if (errorCount > 0) {
-      yield {
-        type: 'error',
-        path: '',
-        size: 0,
-        message: `${errorCount} sync error(s) occurred`,
+    if (options.signal?.aborted) {
+      yield* finishAfterAbort()
+      return
+    }
+
+    if (scanHadError) {
+      if (errorCount > 0) yield aggregateErrorEvent()
+      completed = true
+      return
+    }
+
+    if (options.compareMode === 'sha1') {
+      const compareBatchSize = concurrency
+      for (let index = 0; index < pairs.length; index += compareBatchSize) {
+        if (yield* emitSha1Batch(pairs.slice(index, index + compareBatchSize))) return
       }
+    } else {
+      const items = pairs.map((pair) => planPreparedPair(pair, readyComparePair(pair)))
+      if (yield* emitPreparedItems(items)) return
+    }
+
+    await drainActions()
+    yield* emitQueuedEvents()
+
+    if (errorCount > 0) {
+      yield aggregateErrorEvent()
     }
     completed = true
   } finally {
@@ -244,6 +245,15 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     }
     removeAbortForwarder()
     await drainActions()
+  }
+
+  async function collectPairs(): Promise<SyncPair[]> {
+    const pairs: SyncPair[] = []
+    for await (const pair of zipFolders(source, dest, scanOptions)) {
+      if (options.signal?.aborted) return pairs
+      pairs.push(pair)
+    }
+    return pairs
   }
 
   async function* emitSha1Batch(batch: readonly SyncPair[]): AsyncGenerator<SyncEvent, boolean> {
@@ -318,8 +328,18 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       ...(prepared.bytesVerified > 0 ? { bytesVerified: prepared.bytesVerified } : {}),
     }
 
-    for (const preparedEvent of prepared.events) queueEvent(preparedEvent)
+    let preparedErrorEventCount = 0
+    for (const preparedEvent of prepared.events) {
+      queueEvent(preparedEvent)
+      if (preparedEvent.type === 'error') {
+        preparedErrorEventCount++
+        recordFailurePath(preparedEvent.path)
+      }
+    }
     errorCount += prepared.errors.length
+    for (let index = preparedErrorEventCount; index < prepared.errors.length; index++) {
+      recordFailurePath(event.path)
+    }
     if (prepared.skipActionGeneration) return { event, actions: [] }
     if (
       (scanHadError || scanHadFilesystemError(scanEvents)) &&
@@ -364,13 +384,40 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       const event = await action.execute(dryRun, actionAbortController.signal)
       queueEvent(event)
     } catch (err) {
-      errorCount += 1
-      queueEvent({
+      const event: SyncEvent = {
         type: 'error',
         path: action.relativePath,
         size: 0,
         message: sanitizeErrorReason(err),
-      })
+      }
+      recordSyncError(event)
+      queueEvent(event)
+    }
+  }
+
+  function recordSyncError(event: SyncEvent): void {
+    errorCount += 1
+    recordFailurePath(event.path)
+  }
+
+  function recordFailurePath(path: string): void {
+    if (path === '') return
+    if (failedPaths.length < MAX_AGGREGATE_FAILED_PATHS) {
+      failedPaths.push(path)
+    } else {
+      failedPathOmittedCount++
+    }
+  }
+
+  function aggregateErrorEvent(): SyncEvent {
+    return {
+      type: 'error',
+      path: '',
+      size: 0,
+      message: `${errorCount} sync error(s) occurred`,
+      failureCount: errorCount,
+      failedPaths: [...failedPaths],
+      ...(failedPathOmittedCount > 0 ? { failedPathOmittedCount } : {}),
     }
   }
 
@@ -396,6 +443,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
  * @param value - Optional concurrency value from sync options.
  *
  * @returns A positive integer concurrency value.
+ *
+ * @throws When the configured concurrency is not a positive integer.
  */
 function normalizeSyncConcurrency(value: number | undefined): number {
   const candidate = value ?? DEFAULT_TRANSFER_CONCURRENCY
@@ -406,10 +455,10 @@ function normalizeSyncConcurrency(value: number | undefined): number {
 }
 
 function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
-  if (value === undefined) return DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MS
+  if (value === undefined) return DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS
   if (value === Number.POSITIVE_INFINITY) return value
   if (!Number.isFinite(value) || value < 1) {
-    throw new Error('downloadIdleTimeoutMs must be a positive finite number or Infinity')
+    throw new Error('downloadIdleTimeoutMillis must be a positive finite number or Infinity')
   }
   return Math.floor(value)
 }
@@ -540,10 +589,14 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  * synchronize().
  *
  * @param config - The synchronizer configuration containing source, destination, and options.
+ * @param downloadTempFileSweeper - Per-run sweeper for owned download temp files.
  *
  * @returns An action factory bound to the provided configuration.
  */
-function createActionFactory(config: SynchronizerConfig): ActionFactory {
+function createActionFactory(
+  config: SynchronizerConfig,
+  downloadTempFileSweeper: SyncDownloadTempFileSweeper,
+): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
   const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
@@ -609,8 +662,9 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
         await writeLocalStreamInsideRoot(root, relPath, result.body, {
           expectedBytes: source.selectedVersion.contentLength,
           idleTimeoutMillis: normalizeDownloadIdleTimeoutMillis(
-            config.options.downloadIdleTimeoutMs,
+            config.options.downloadIdleTimeoutMillis,
           ),
+          downloadTempFileSweeper,
           ...(signal !== undefined ? { signal } : {}),
         })
       })
@@ -642,8 +696,11 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       const bucket = upConfig.bucket ?? downConfig.bucket
       assertBucket(bucket, 'hide')
 
-      return new HideAction(path, async () => {
-        await bucket.hideFile(`${uploadPrefix}${path}`)
+      return new HideAction(path, async (_relPath, signal) => {
+        await bucket.hideFile(
+          `${uploadPrefix}${path}`,
+          signal === undefined ? undefined : { signal },
+        )
       })
     },
 
@@ -652,12 +709,8 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       assertBucket(bucket, 'hide')
       const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
 
-      return new HideAction(path.relativePath, async () => {
-        if (config.options.signal !== undefined) {
-          await bucket.hideFile(b2FileName, { signal: config.options.signal })
-        } else {
-          await bucket.hideFile(b2FileName)
-        }
+      return new HideAction(path.relativePath, async (_relPath, signal) => {
+        await bucket.hideFile(b2FileName, signal === undefined ? undefined : { signal })
       })
     },
 
@@ -677,26 +730,29 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
       return new DeleteRemoteAction(
         path.relativePath,
         path.selectedVersion.fileId as string,
-        async (fileId) => {
-          if (config.options.signal !== undefined) {
-            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
-              signal: config.options.signal,
-            })
-          } else {
-            await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId))
-          }
+        async (fileId, _fileName, signal) => {
+          await bucket.deleteFileVersion(
+            b2FileName,
+            fileIdOf(fileId),
+            signal === undefined ? undefined : { signal },
+          )
         },
       )
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
       const root = localSyncRoot(downConfig.dest)
-      return new DeleteLocalAction(path.relativePath, path.absolutePath, async (absPath) => {
-        const { unlink } = await import('node:fs/promises')
-        config.options.signal?.throwIfAborted()
-        const verifiedTargetPath = await resolveLocalDeletePath(root, path.relativePath, absPath)
-        await unlink(verifiedTargetPath)
-      })
+      return new DeleteLocalAction(
+        path.relativePath,
+        path.absolutePath,
+        async (absPath, signal) => {
+          const { unlink } = await import('node:fs/promises')
+          signal?.throwIfAborted()
+          const verifiedTargetPath = await resolveLocalDeletePath(root, path.relativePath, absPath)
+          signal?.throwIfAborted()
+          await unlink(verifiedTargetPath)
+        },
+      )
     },
 
     removeOrphan(dest: B2SyncPath): SyncAction {
@@ -723,10 +779,7 @@ function validateB2SyncPathInPrefix(prefix: string, path: B2SyncPath): string {
     throw new Error(`Refusing to mutate B2 key outside configured prefix: ${path.relativePath}`)
   }
 
-  const suffix = prefix === '' ? fileName : fileName.slice(prefix.length)
-  const relativePath = normalizeB2RelativePath(suffix, {
-    stripLeadingSlashes: prefix !== '' && !prefix.endsWith('/'),
-  })
+  const relativePath = b2KeyToRelativePathUnderPrefix(prefix, fileName)
   if (relativePath !== path.relativePath) {
     throw new Error(`Refusing to mutate mismatched B2 key for sync path: ${path.relativePath}`)
   }
@@ -793,6 +846,7 @@ async function ensureLocalSyncRootDirectory(root: string, relativePath: string):
   await mkdir(safeRoot, { recursive: true })
   await assertLocalRootHasNoSymlink(safeRoot, relativePath)
 }
+
 function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
   if (event.type === 'skip' && event.reason === 'filesystem-error') {
     buffer.fatalFilesystemErrorMessage ??= event.message

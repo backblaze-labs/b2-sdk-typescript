@@ -10,6 +10,7 @@ import {
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { createSyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
@@ -155,6 +156,34 @@ describe('writeLocalStreamInsideRoot', () => {
         }),
       ).rejects.toThrow('download read ended after 3 bytes, expected 4')
       await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('sweeps owned partial download files before writing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-sweep-'))
+    try {
+      const sweeper = createSyncDownloadTempFileSweeper('run')
+      const orphanName = syncDownloadTempName('run', 'orphan')
+      const otherName = syncDownloadTempName('other', 'orphan')
+      await writeFile(join(root, orphanName), 'old')
+      await writeFile(join(root, otherName), 'other')
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+          downloadTempFileSweeper: sweeper,
+        },
+      )
+
+      await expect(readFile(join(root, orphanName))).rejects.toThrow()
+      await expect(readFile(join(root, otherName), 'utf8')).resolves.toBe('other')
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

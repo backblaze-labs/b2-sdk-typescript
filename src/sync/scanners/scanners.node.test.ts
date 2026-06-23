@@ -39,6 +39,30 @@ function tick(): void {
   vi.advanceTimersByTime(1)
 }
 
+function makeB2FileVersion(
+  name: string,
+  ts = 1,
+  action: FileAction = FileAction.Upload,
+): FileVersion {
+  return {
+    accountId: 'acc' as unknown as AccountId,
+    action,
+    bucketId: 'b' as unknown as BucketId,
+    contentLength: 1,
+    contentMd5: null,
+    contentSha1: 'sha1',
+    contentType: 'application/octet-stream',
+    fileId: `fid_${name}` as unknown as FileId,
+    fileInfo: {},
+    fileName: name,
+    fileRetention: { isClientAuthorizedToRead: true, value: null },
+    legalHold: { isClientAuthorizedToRead: true, value: null },
+    replicationStatus: null,
+    serverSideEncryption: { mode: EncryptionMode.None },
+    uploadTimestamp: ts,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // LocalFolder
 // ---------------------------------------------------------------------------
@@ -212,7 +236,7 @@ describe('LocalFolder', () => {
     ])
   })
 
-  it('treats SDK partial download names as ordinary source files while scanning', async () => {
+  it('skips SDK partial download files while scanning', async () => {
     const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
     await writeFile(tempPath, 'partial')
     await writeFile(join(tmpDir, 'keep.txt'), 'keep')
@@ -220,7 +244,7 @@ describe('LocalFolder', () => {
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-abandoned.partial', 'keep.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
     await expect(access(tempPath)).resolves.toBeFalsy()
   })
 
@@ -453,6 +477,57 @@ describe('B2Folder', () => {
 
     expect(entries.map((entry) => entry.relativePath)).toEqual(['a.txt'])
     expect(entries[0]?.allVersions).toHaveLength(2)
+  })
+
+  it('counts excluded B2 versions against scan limits', async () => {
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [makeB2FileVersion('skip-a.tmp', 1), makeB2FileVersion('skip-b.tmp', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket)
+
+    await expect(
+      collect<B2SyncPath>(folder.scan({ exclude: ['*.tmp'], maxScanEntries: 1 })),
+    ).rejects.toThrow('maxScanEntries=1')
+  })
+
+  it('counts unsafe B2 names against scan limits', async () => {
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [makeB2FileVersion('unsafe/../a.txt', 1), makeB2FileVersion('unsafe/../b.txt', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket)
+
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'maxScanEntries=1',
+    )
+  })
+
+  it('counts over-returned outside-prefix B2 versions against scan limits', async () => {
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [makeB2FileVersion('other/a.txt', 1), makeB2FileVersion('other/b.txt', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket, 'root/')
+
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'maxScanEntries=1',
+    )
   })
 
   it('stops B2 scans before the next page when the signal aborts', async () => {

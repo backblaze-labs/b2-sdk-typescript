@@ -137,19 +137,19 @@ export class HideAction implements SyncAction {
    */
   constructor(
     readonly relativePath: string,
-    private readonly doHide: (relativePath: string) => Promise<void>,
+    private readonly doHide: (relativePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Hides the file (unless dryRun) and returns a 'hide' event.
    * @param dryRun - Whether to simulate the action without making changes.
-   * @param _signal - Unused abort signal accepted for the shared action interface.
+   * @param signal - Optional abort signal for canceling the hide request.
    *
    * @returns An async generator yielding sync progress events.
    */
-  async execute(dryRun: boolean, _signal?: AbortSignal): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doHide(this.relativePath)
+      await this.doHide(this.relativePath, signal)
     }
     return { type: 'hide', path: this.relativePath, size: 0 }
   }
@@ -169,19 +169,23 @@ export class DeleteRemoteAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly fileId: string,
-    private readonly doDelete: (fileId: string, fileName: string) => Promise<void>,
+    private readonly doDelete: (
+      fileId: string,
+      fileName: string,
+      signal?: AbortSignal,
+    ) => Promise<void>,
   ) {}
 
   /**
    * Deletes the remote file version (unless dryRun) and returns a 'delete-remote' event.
    * @param dryRun - Whether to simulate the action without making changes.
-   * @param _signal - Unused abort signal accepted for the shared action interface.
+   * @param signal - Optional abort signal for canceling the delete request.
    *
    * @returns An async generator yielding sync progress events.
    */
-  async execute(dryRun: boolean, _signal?: AbortSignal): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doDelete(this.fileId, this.relativePath)
+      await this.doDelete(this.fileId, this.relativePath, signal)
     }
     return { type: 'delete-remote', path: this.relativePath, size: 0 }
   }
@@ -201,19 +205,19 @@ export class DeleteLocalAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly absolutePath: string,
-    private readonly doDelete: (absolutePath: string) => Promise<void>,
+    private readonly doDelete: (absolutePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Deletes the local file (unless dryRun) and returns a 'delete-local' event.
    * @param dryRun - Whether to simulate the action without making changes.
-   * @param _signal - Unused abort signal accepted for the shared action interface.
+   * @param signal - Optional abort signal checked before deleting.
    *
    * @returns An async generator yielding sync progress events.
    */
-  async execute(dryRun: boolean, _signal?: AbortSignal): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doDelete(this.absolutePath)
+      await this.doDelete(this.absolutePath, signal)
     }
     return { type: 'delete-local', path: this.relativePath, size: 0 }
   }

@@ -45,6 +45,11 @@ describe('sync filters', () => {
         exclude: [/\.bak$/],
       }),
     ).toBe(true)
+    expect(
+      pathPassesSyncFilters(`docs/${'a'.repeat(1025)}`, {
+        include: ['docs/**', /\.keep$/],
+      }),
+    ).toBe(true)
   })
 
   it('does not retain state when matching regular expression filters', () => {

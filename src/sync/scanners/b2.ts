@@ -11,9 +11,9 @@ import { isAbortError } from '../local-sha1.ts'
 import { compareCodeUnits, compareSyncRelativePaths } from '../path-order.ts'
 import {
   asRawB2KeyPrefix,
+  b2KeyToRelativePathUnderPrefix,
   localFilesystemCanonicalSyncPath,
   localFilesystemSyncPathIsUnsafe,
-  normalizeB2RelativePath,
 } from '../prefix.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
@@ -73,7 +73,7 @@ export class B2Folder implements SyncFolder {
     const grouped = new Map<string, B2ScanEntry>()
     const listPrefix = this.listPrefixFor(options)
 
-    let retainedVersions = 0
+    let listedVersions = 0
     let startFileName: string | undefined
     let startFileId: FileId | undefined
 
@@ -96,6 +96,9 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (scanIsAborted(options)) return
+        assertScanEntryLimit(listedVersions + 1, maxScanEntries)
+        listedVersions++
+
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping this.prefix so relativePath is never corrupted.
@@ -133,8 +136,6 @@ export class B2Folder implements SyncFolder {
         }
 
         const existing = grouped.get(fv.fileName)
-        assertScanEntryLimit(retainedVersions + 1, maxScanEntries)
-        retainedVersions++
         if (existing) {
           existing.versions.push(fv)
         } else {
@@ -177,10 +178,7 @@ export class B2Folder implements SyncFolder {
 
   private tryToRelativePath(fileName: string): string | null {
     try {
-      const suffix = this.prefix === '' ? fileName : fileName.slice(this.prefix.length)
-      return normalizeB2RelativePath(suffix, {
-        stripLeadingSlashes: this.prefix !== '' && !this.prefix.endsWith('/'),
-      })
+      return b2KeyToRelativePathUnderPrefix(this.prefix, fileName)
     } catch {
       return null
     }

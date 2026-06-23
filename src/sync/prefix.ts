@@ -41,6 +41,22 @@ export function normalizeB2RelativePath(
 }
 
 /**
+ * Converts a B2 object key under a configured raw prefix into a sync relative path.
+ *
+ * @param prefix - Raw B2 key prefix used for the scan or mutation guard.
+ * @param fileName - Full B2 object key.
+ *
+ * @returns The normalized sync relative path for the key suffix.
+ */
+export function b2KeyToRelativePathUnderPrefix(prefix: string, fileName: string): string {
+  const rawPrefix = asRawB2KeyPrefix(prefix)
+  const suffix = rawPrefix === '' ? fileName : fileName.slice(rawPrefix.length)
+  return normalizeB2RelativePath(suffix, {
+    stripLeadingSlashes: rawPrefix !== '' && !rawPrefix.endsWith('/'),
+  })
+}
+
+/**
  * Returns whether a sync path is unsafe to materialize on Windows-compatible local filesystems.
  * B2-to-B2 syncs can preserve these object names, but B2-to-local syncs skip them before writing.
  *

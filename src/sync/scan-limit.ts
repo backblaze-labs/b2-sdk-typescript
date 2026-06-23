@@ -29,6 +29,8 @@ export function scanEntryLimit(options: SyncScanOptions | undefined): number {
  */
 export function assertScanEntryLimit(count: number, limit: number): void {
   if (count > limit) {
-    throw new Error(`Sync scan entry limit exceeded (${count} > ${limit})`)
+    throw new Error(
+      `Sync scan entry limit exceeded: maxScanEntries=${limit} was exceeded after ${count} scanned entries; raising maxScanEntries increases peak scanner memory`,
+    )
   }
 }

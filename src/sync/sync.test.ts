@@ -824,7 +824,7 @@ describe('scan limits', () => {
   })
 
   it('throws when a scanner exceeds the entry limit', () => {
-    expect(() => assertScanEntryLimit(2, 1)).toThrow('Sync scan entry limit exceeded (2 > 1)')
+    expect(() => assertScanEntryLimit(2, 1)).toThrow('maxScanEntries=1')
     expect(() => assertScanEntryLimit(1, 1)).not.toThrow()
   })
 })

@@ -307,7 +307,7 @@ export interface SyncOptions extends SyncFilterOptions {
    */
   readonly sha1VerificationMaxBytes?: number
   /** Idle timeout in milliseconds for B2-to-local download body reads. Defaults to 60 seconds. */
-  readonly downloadIdleTimeoutMs?: number
+  readonly downloadIdleTimeoutMillis?: number
   /** Maximum scanner entries retained before failing with a defined scan-limit error. */
   readonly maxScanEntries?: number
   /** Optional provider for per-file encryption settings. */
@@ -327,8 +327,8 @@ export interface SyncEncryptionProvider {
  *
  * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
  * require memory proportional to the scanned entries; B2 scans also group listed versions before
- * yielding. For B2, `maxScanEntries` counts retained file versions, not just distinct visible file
- * names, and exclude filters or non-literal includes do not bound B2 listing calls.
+ * yielding. For B2, `maxScanEntries` counts every listed file version before prefix, safety, and
+ * filter checks, and exclude filters or non-literal includes do not bound B2 listing calls.
  */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */

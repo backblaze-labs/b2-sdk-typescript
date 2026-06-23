@@ -8,6 +8,7 @@ import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
+import { isSyncDownloadTempName } from '../temp-files.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 type LocalDirent = {
@@ -121,6 +122,9 @@ export class LocalFolder implements SyncFolder {
           await this.walk(fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
+        if (isSyncDownloadTempName(entry.name)) {
+          continue
+        }
         if (!pathPassesSyncFilters(rel, options)) {
           if (pathSkippedByRegExpInputLimit(rel, options)) {
             emitScannerSkip(options, regexpInputTooLongSkip(rel))

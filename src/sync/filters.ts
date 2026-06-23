@@ -21,13 +21,18 @@ export function pathPassesSyncFilters(
 ): boolean {
   validateSyncFilters(filters)
   const path = normalizePath(relativePath)
-  if (normalizedPathSkippedByRegExpInputLimit(path, filters)) return false
 
   const include = filters?.include ?? []
   const exclude = filters?.exclude ?? []
 
-  if (include.length > 0 && !include.some((pattern) => matchesPattern(path, pattern))) {
-    return false
+  if (include.length > 0) {
+    const matchedByStringInclude = include.some(
+      (pattern) => !patternIsRegExp(pattern) && matchesPattern(path, pattern),
+    )
+    if (!matchedByStringInclude) {
+      if (normalizedPathSkippedByRegExpInputLimit(path, filters)) return false
+      if (!include.some((pattern) => matchesPattern(path, pattern))) return false
+    }
   }
 
   return !exclude.some((pattern) => matchesPattern(path, pattern))
@@ -129,7 +134,14 @@ function normalizedPathSkippedByRegExpInputLimit(
   normalizedPath: string,
   filters: SyncFilterOptions | undefined,
 ): boolean {
-  return pathExceedsSafeRegExpInput(normalizedPath) && includeFiltersContainRegExp(filters)
+  if (!pathExceedsSafeRegExpInput(normalizedPath) || !includeFiltersContainRegExp(filters)) {
+    return false
+  }
+  return (
+    filters?.include?.some((pattern) => {
+      return !patternIsRegExp(pattern) && matchesPattern(normalizedPath, pattern)
+    }) !== true
+  )
 }
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {

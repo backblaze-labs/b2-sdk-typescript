@@ -281,7 +281,7 @@ describe('synchronize', () => {
       expect(events.filter((e) => e.type === 'upload-done')).toHaveLength(2)
     })
 
-    it('streams action events before the scan finishes', async () => {
+    it('waits for the scan to finish before starting actions', async () => {
       const first = makeB2SyncPath('a.txt', 1000, 10)
       const second = makeB2SyncPath('b.txt', 1000, 20)
       let releaseSecond = () => {}
@@ -307,14 +307,23 @@ describe('synchronize', () => {
       } satisfies SynchronizerConfig & { readonly bucket: Bucket }
 
       const gen = synchronize(config)
-      const compare = await gen.next()
+      let firstSettled = false
+      const firstNext = gen.next().then((result) => {
+        firstSettled = true
+        return result
+      })
+      await Promise.resolve()
+      expect(firstSettled).toBe(false)
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+
+      releaseSecond()
+      const compare = await firstNext
       expect(compare.value).toMatchObject({ type: 'compare', path: 'a.txt' })
 
       const upload = await gen.next()
       expect(upload.value).toMatchObject({ type: 'copy-done', path: 'a.txt' })
       expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
 
-      releaseSecond()
       const rest: SyncEvent[] = []
       for await (const event of gen) rest.push(event)
       expect(rest.some((event) => event.type === 'copy-done' && event.path === 'b.txt')).toBe(true)
@@ -1166,7 +1175,7 @@ describe('synchronize', () => {
     })
 
     it.skipIf(!isNode)(
-      'does not delete SDK partial-looking source files during dry-run',
+      'does not upload SDK partial-looking source files during dry-run',
       async () => {
         const { access, mkdtemp, rm, writeFile } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
@@ -1187,7 +1196,7 @@ describe('synchronize', () => {
 
           const events = await collectEvents(config)
 
-          expect(events).toContainEqual(
+          expect(events).not.toContainEqual(
             expect.objectContaining({ type: 'upload-done', path: '.b2sdk-payroll.partial' }),
           )
           await expect(access(partialPath)).resolves.toBeFalsy()
@@ -1272,7 +1281,7 @@ describe('synchronize', () => {
     })
 
     it.skipIf(!isNode || isWindows)(
-      'continues uploading readable files after a local scan error',
+      'does not upload readable files after a local scan error',
       async () => {
         const { chmod, mkdir, mkdtemp, rm, writeFile } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
@@ -1297,8 +1306,8 @@ describe('synchronize', () => {
           const events = await collectEvents(config)
           const errors = events.filter((event) => event.type === 'error')
           expect(errors[0]?.message).toContain('failed to scan local directory')
-          expect(events.filter((event) => event.type === 'upload-done')).toHaveLength(1)
-          expect(mockBucket.upload).toHaveBeenCalledTimes(1)
+          expect(events.filter((event) => event.type === 'upload-done')).toHaveLength(0)
+          expect(mockBucket.upload).not.toHaveBeenCalled()
         } finally {
           await chmod(blockedDir, 0o700).catch(() => {})
           await rm(root, { recursive: true, force: true })
@@ -1332,15 +1341,20 @@ describe('synchronize', () => {
           const errors = events.filter((event) => event.type === 'error')
           expect(errors).toHaveLength(0)
           expect(mockBucket.hideFile).not.toHaveBeenCalled()
-          expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith('linked.txt', 'fid_linked.txt')
+          expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith(
+            'linked.txt',
+            'fid_linked.txt',
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
+          )
         } finally {
           await rm(root, { recursive: true, force: true })
         }
       },
     )
 
-    it('reports completed actions when a later scan error aborts the sync', async () => {
+    it('does not start actions when a sorted scanner fails after yielding a file', async () => {
       const sourceFile = makeLocalSyncPath('uploaded.txt', 2000, 50)
+      const mockBucket = makeMockBucket()
       const source: SyncFolder = {
         type: 'local',
         appliesScanSorting: true,
@@ -1362,24 +1376,26 @@ describe('synchronize', () => {
         source: { ...source, type: 'local', root: '/tmp' },
         dest: { ...dest, type: 'b2' },
         options: { compareMode: 'modtime', keepMode: 'no-delete', dryRun: true },
-        bucket: makeMockBucket() as unknown as Bucket,
+        bucket: mockBucket as unknown as Bucket,
         prefix: '',
       }
 
       const events = await collectEvents(config)
-      const uploadIndex = events.findIndex((event) => event.type === 'upload-done')
-      const scanErrorIndex = events.findIndex(
-        (event) => event.type === 'error' && event.path === 'later.txt',
+      expect(events.some((event) => event.type === 'compare')).toBe(false)
+      expect(events.some((event) => event.type === 'upload-done')).toBe(false)
+      expect(mockBucket.upload).not.toHaveBeenCalled()
+      expect(events).toContainEqual(expect.objectContaining({ type: 'error', path: 'later.txt' }))
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          path: '',
+          failureCount: 1,
+          failedPaths: ['later.txt'],
+        }),
       )
-      const summaryIndex = events.findIndex((event) => event.type === 'error' && event.path === '')
-
-      expect(events[0]).toMatchObject({ type: 'compare', path: 'uploaded.txt' })
-      expect(uploadIndex).toBeGreaterThan(0)
-      expect(scanErrorIndex).toBeGreaterThan(uploadIndex)
-      expect(summaryIndex).toBeGreaterThan(scanErrorIndex)
     })
 
-    it('drains in-flight actions before rethrowing scan errors without diagnostics', async () => {
+    it('rethrows scan errors without diagnostics before starting actions', async () => {
       const sourceFile = makeB2SyncPath('copied.txt', 2000, 50)
       const source: SyncFolder = {
         type: 'b2',
@@ -1391,13 +1407,6 @@ describe('synchronize', () => {
       }
       const dest = makeMemoryFolder([], 'b2')
       const mockBucket = makeMockBucket()
-      let finishCopy = () => {}
-      const copyMayFinish = new Promise<void>((resolve) => {
-        finishCopy = resolve
-      })
-      mockBucket.copyFile.mockImplementation(async () => {
-        await copyMayFinish
-      })
       const config = {
         source: { ...source, type: 'b2' },
         dest: { ...dest, type: 'b2' },
@@ -1405,34 +1414,8 @@ describe('synchronize', () => {
         bucket: mockBucket as unknown as Bucket,
       } satisfies SynchronizerConfig & { readonly bucket: Bucket }
 
-      const run = collectEvents(config)
-      let settled = false
-      let rejection: unknown
-      const observed = run.then(
-        () => {
-          settled = true
-        },
-        (err: unknown) => {
-          settled = true
-          rejection = err
-        },
-      )
-
-      for (
-        let attempts = 0;
-        mockBucket.copyFile.mock.calls.length === 0 && attempts < 10;
-        attempts++
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
-      expect(mockBucket.copyFile).toHaveBeenCalledTimes(1)
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(settled).toBe(false)
-
-      finishCopy()
-      await observed
-      expect(rejection).toBeInstanceOf(Error)
-      expect((rejection as Error).message).toBe('scan exploded')
+      await expect(collectEvents(config)).rejects.toThrow('scan exploded')
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
     })
 
     it.skipIf(!isNode)('reports local deletes configured without a local root', async () => {
@@ -1764,7 +1747,7 @@ describe('synchronize', () => {
           options: {
             compareMode: 'modtime',
             keepMode: 'no-delete',
-            downloadIdleTimeoutMs: 5,
+            downloadIdleTimeoutMillis: 5,
           },
           bucket: mockBucket as unknown as Bucket,
         }
@@ -1806,7 +1789,7 @@ describe('synchronize', () => {
           options: {
             compareMode: 'modtime',
             keepMode: 'no-delete',
-            downloadIdleTimeoutMs: 0,
+            downloadIdleTimeoutMillis: 0,
           },
           bucket: mockBucket as unknown as Bucket,
         }
@@ -1817,7 +1800,7 @@ describe('synchronize', () => {
           expect.objectContaining({
             type: 'error',
             path: 'payload.txt',
-            message: 'downloadIdleTimeoutMs must be a positive finite number or Infinity',
+            message: 'downloadIdleTimeoutMillis must be a positive finite number or Infinity',
           }),
         )
       } finally {
@@ -1841,7 +1824,7 @@ describe('synchronize', () => {
           options: {
             compareMode: 'modtime',
             keepMode: 'no-delete',
-            downloadIdleTimeoutMs: Number.POSITIVE_INFINITY,
+            downloadIdleTimeoutMillis: Number.POSITIVE_INFINITY,
           },
           bucket: mockBucket as unknown as Bucket,
         }
@@ -1881,7 +1864,7 @@ describe('synchronize', () => {
           options: {
             compareMode: 'modtime',
             keepMode: 'no-delete',
-            downloadIdleTimeoutMs: Number.POSITIVE_INFINITY,
+            downloadIdleTimeoutMillis: Number.POSITIVE_INFINITY,
             signal: controller.signal,
           },
           bucket: mockBucket as unknown as Bucket,
@@ -4185,7 +4168,7 @@ describe('synchronize', () => {
       }
     })
 
-    it.skipIf(!isNode)('prepares sha1 comparisons in bounded batches', async () => {
+    it.skipIf(!isNode)('scans the full inventory before preparing sha1 batches', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { join } = await import('node:path')
@@ -4230,7 +4213,7 @@ describe('synchronize', () => {
         const first = await iterator.next()
         expect(first.done).toBe(false)
         expect(first.value?.type).toBe('compare')
-        expect(sourceScans).toBe(2)
+        expect(sourceScans).toBe(3)
         await iterator.return?.(undefined)
       } finally {
         await rm(root, { recursive: true, force: true })
@@ -4810,6 +4793,45 @@ describe('synchronize', () => {
       expect(errors[0]?.message).toBe('copy boom')
       expect(errors[1]?.path).toBe('')
       expect(errors[1]?.message).toContain('1 sync error(s) occurred')
+      expect(errors[1]).toMatchObject({
+        failureCount: 1,
+        failedPaths: ['fail.txt'],
+      })
+      expect(errors[1]).not.toHaveProperty('failedPathOmittedCount')
+    })
+
+    it('bounds failed paths on aggregate error events', async () => {
+      const mockBucket = makeMockBucket()
+      mockBucket.copyFile = vi.fn().mockRejectedValue(new Error('copy boom'))
+
+      const source = makeMemoryFolder(
+        Array.from({ length: 101 }, (_, index) =>
+          makeB2SyncPath(`fail-${index.toString().padStart(3, '0')}.txt`, 2000, 100),
+        ),
+        'b2',
+      )
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      const events = await collectEvents(config)
+      const summary = events.find(
+        (event): event is Extract<SyncEvent, { type: 'error' }> =>
+          event.type === 'error' && event.path === '',
+      )
+
+      expect(summary).toMatchObject({
+        failureCount: 101,
+        failedPathOmittedCount: 1,
+      })
+      expect(summary?.failedPaths).toHaveLength(100)
+      expect(summary?.failedPaths?.[0]).toBe('fail-000.txt')
     })
 
     it('wraps a non-Error thrown value as a string', async () => {
@@ -5003,6 +5025,99 @@ describe('synchronize', () => {
       finishCopy()
       await returnedPromise
       expect(returned).toBe(true)
+    })
+
+    it('aborts a pending remote delete when the async iterator is closed', async () => {
+      const mockBucket = makeMockBucket()
+      const deleteStarted = deferred()
+      let receivedSignal: AbortSignal | undefined
+      mockBucket.deleteFileVersion.mockImplementation(
+        async (_fileName: string, _fileId: string, options?: { readonly signal?: AbortSignal }) => {
+          receivedSignal = options?.signal
+          deleteStarted.resolve(undefined)
+          await new Promise<void>((resolve) => {
+            options?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        },
+      )
+
+      const source = makeMemoryFolder([], 'local')
+      const dest = makeMemoryFolder(
+        [makeB2SyncPath('a.txt', 1000, 1), makeB2SyncPath('b.txt', 1000, 1)],
+        'b2',
+      )
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'delete', concurrency: 2 },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      }
+
+      const iterator = synchronize(config)
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'a.txt' },
+      })
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'b.txt' },
+      })
+      await deleteStarted.promise
+
+      await iterator.return(undefined)
+
+      expect(receivedSignal).toBeDefined()
+      expect(receivedSignal?.aborted).toBe(true)
+    })
+
+    it('aborts a pending remote hide when the async iterator is closed', async () => {
+      const mockBucket = makeMockBucket()
+      const lockedBucket: typeof mockBucket & { info: object } = Object.assign(mockBucket, {
+        info: {
+          fileLockConfiguration: { value: { isFileLockEnabled: true } },
+        },
+      })
+      const hideStarted = deferred()
+      let receivedSignal: AbortSignal | undefined
+      mockBucket.hideFile.mockImplementation(
+        async (_fileName: string, options?: { readonly signal?: AbortSignal }) => {
+          receivedSignal = options?.signal
+          hideStarted.resolve(undefined)
+          await new Promise<void>((resolve) => {
+            options?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          })
+        },
+      )
+
+      const source = makeMemoryFolder([], 'local')
+      const dest = makeMemoryFolder(
+        [makeB2SyncPath('a.txt', 1000, 1), makeB2SyncPath('b.txt', 1000, 1)],
+        'b2',
+      )
+      const config: SynchronizerUpConfig = {
+        source: { ...source, type: 'local', root: '/tmp' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'delete', concurrency: 2 },
+        bucket: lockedBucket as unknown as Bucket,
+        prefix: '',
+      }
+
+      const iterator = synchronize(config)
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'a.txt' },
+      })
+      await expect(iterator.next()).resolves.toMatchObject({
+        done: false,
+        value: { type: 'compare', path: 'b.txt' },
+      })
+      await hideStarted.promise
+
+      await iterator.return(undefined)
+
+      expect(receivedSignal).toBeDefined()
+      expect(receivedSignal?.aborted).toBe(true)
     })
 
     it('aborts sha1 sync before queuing a pair when signal flips during scan', async () => {
@@ -5519,7 +5634,7 @@ describe('synchronize', () => {
       expect(mockBucket.deleteFileVersion).toHaveBeenCalledWith(
         'backup/orphan.txt',
         'fid_orphan.txt',
-        { signal: controller.signal },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       )
     })
 
@@ -5550,9 +5665,10 @@ describe('synchronize', () => {
       const deletes = events.filter((e) => e.type === 'delete-remote')
       expect(hides).toHaveLength(1)
       expect(deletes).toHaveLength(0)
-      expect(mockBucket.hideFile).toHaveBeenCalledWith('backup/orphan.txt', {
-        signal: controller.signal,
-      })
+      expect(mockBucket.hideFile).toHaveBeenCalledWith(
+        'backup/orphan.txt',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
       expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
     })
   })

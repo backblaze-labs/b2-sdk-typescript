@@ -7,6 +7,7 @@ import {
   safeRelativePathSegments,
 } from './path-safety.ts'
 import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
+import { type SyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 /** @internal */
@@ -99,6 +100,7 @@ export async function writeLocalStreamInsideRoot(
   options: {
     readonly expectedBytes: number
     readonly idleTimeoutMillis: number
+    readonly downloadTempFileSweeper?: SyncDownloadTempFileSweeper
     readonly signal?: AbortSignal
   },
 ): Promise<void> {
@@ -130,6 +132,7 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
+  await options.downloadTempFileSweeper?.(parentRealPath)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -151,7 +154,8 @@ export async function writeLocalStreamInsideRoot(
   }
   /* v8 ignore stop */
   const finalName = path.basename(destPath)
-  const tmpName = `.${finalName}.${randomUUID()}.tmp`
+  const tmpOwnerToken = options.downloadTempFileSweeper?.ownerToken ?? randomUUID()
+  const tmpName = syncDownloadTempName(tmpOwnerToken, randomUUID())
   const tmpPath = path.join(anchoredParentPath ?? parentRealPath, tmpName)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
   let handle: Awaited<ReturnType<typeof open>>
