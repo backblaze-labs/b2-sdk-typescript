@@ -64,7 +64,10 @@ export async function uploadSmallFile(
 ): Promise<FileVersion> {
   const data = await readSmallFileSource(options.source, options.signal)
   if (data.byteLength !== options.source.size) {
-    throw new Error('uploadSmallFile: source byte count does not match advertised size.')
+    throw new Error(
+      `uploadSmallFile: source byte count does not match advertised size ` +
+        `(expected ${options.source.size} bytes, got ${data.byteLength} bytes).`,
+    )
   }
   const sha1 = new IncrementalSha1()
   await sha1.update(data)
