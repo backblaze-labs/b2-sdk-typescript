@@ -99,8 +99,21 @@ function scanWithFilters(
   options: { readonly scanner: SyncScanOptions; readonly sdk: SyncScanOptions },
 ): AsyncIterable<SyncPath> {
   const scanned = filterSyncPaths(folder.scan(options.scanner), options.sdk)
-  if (folder.appliesScanSorting === true) return scanned
+  if (folder.appliesScanSorting === true) return limitSyncPaths(scanned, options.sdk)
   return sortSyncPaths(scanned, options.sdk)
+}
+
+async function* limitSyncPaths(
+  paths: AsyncIterable<SyncPath>,
+  filters: SyncScanOptions | undefined,
+): AsyncGenerator<SyncPath> {
+  const maxScanEntries = scanEntryLimit(filters)
+  let count = 0
+  for await (const path of paths) {
+    count++
+    assertScanEntryLimit(count, maxScanEntries)
+    yield path
+  }
 }
 
 async function* sortSyncPaths(

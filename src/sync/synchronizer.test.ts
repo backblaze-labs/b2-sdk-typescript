@@ -797,7 +797,10 @@ describe('synchronize', () => {
           const mockBucket = makeMockBucket()
           const config: SynchronizerUpConfig = {
             source: new LocalFolder(root),
-            dest: { ...makeMemoryFolder([makeB2SyncPath('a/b.txt', 1000, 9)], 'b2'), type: 'b2' },
+            dest: {
+              ...makeMemoryFolder([makeB2SyncPath('a/b.txt', 1000, 9, 'a\\b.txt')], 'b2'),
+              type: 'b2',
+            },
             options: {
               compareMode: 'modtime',
               keepMode: 'delete',
@@ -825,6 +828,128 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode)('refuses custom B2 source keys outside prefix before download', async () => {
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-source-prefix-down-'))
+      try {
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('leak.txt', 2000, 4, 'other/leak.txt')
+        const source: B2SyncFolder = {
+          ...makeMemoryFolder([sourceFile], 'b2'),
+          type: 'b2',
+          rawPrefix: 'tenant/',
+        }
+
+        const config: SynchronizerDownConfig = {
+          source,
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        await expect(collectEvents(config)).rejects.toThrow(
+          'Refusing to read B2 key outside configured prefix: leak.txt',
+        )
+        expect(mockBucket.downloadById).not.toHaveBeenCalled()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it('refuses custom B2 source keys outside prefix before copy', async () => {
+      const mockBucket = makeMockBucket()
+      const sourceFile = makeB2SyncPath('report.txt', 2000, 4, 'other/report.txt')
+      const source: B2SyncFolder = {
+        ...makeMemoryFolder([sourceFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'src/',
+      }
+      const dest: B2SyncFolder = {
+        ...makeMemoryFolder([], 'b2'),
+        type: 'b2',
+        rawPrefix: 'dst/',
+      }
+      const config: SynchronizerConfig & { readonly bucket: Bucket; readonly prefix: string } = {
+        source,
+        dest,
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: 'dst/',
+      }
+
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Refusing to read B2 key outside configured prefix: report.txt',
+      )
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
+
+    it('refuses custom B2 source keys mismatched under prefix before copy', async () => {
+      const mockBucket = makeMockBucket()
+      const sourceFile = makeB2SyncPath('report.txt', 2000, 4, 'src/other.txt')
+      const source: B2SyncFolder = {
+        ...makeMemoryFolder([sourceFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'src/',
+      }
+      const dest: B2SyncFolder = {
+        ...makeMemoryFolder([], 'b2'),
+        type: 'b2',
+        rawPrefix: 'dst/',
+      }
+      const config: SynchronizerConfig & { readonly bucket: Bucket; readonly prefix: string } = {
+        source,
+        dest,
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: 'dst/',
+      }
+
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Refusing to read mismatched B2 key for sync path: report.txt',
+      )
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
+
+    it('refuses custom B2 source keys outside prefix before sha1 verification', async () => {
+      const mockBucket = makeMockBucket()
+      const sha1 = 'a'.repeat(40)
+      const sourceFile = makeB2SyncPath(
+        'report.txt',
+        1000,
+        4,
+        'other/report.txt',
+        undefined,
+        {},
+        `unverified:${sha1}`,
+      )
+      const destFile = makeB2SyncPath('report.txt', 1000, 4, 'dst/report.txt', sha1, {}, sha1)
+      const source: B2SyncFolder = {
+        ...makeMemoryFolder([sourceFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'src/',
+      }
+      const dest: B2SyncFolder = {
+        ...makeMemoryFolder([destFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'dst/',
+      }
+      const config: SynchronizerConfig & { readonly bucket: Bucket; readonly prefix: string } = {
+        source,
+        dest,
+        options: { compareMode: 'sha1', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: 'dst/',
+      }
+
+      await expect(collectEvents(config)).rejects.toThrow(
+        'Refusing to read B2 key outside configured prefix: report.txt',
+      )
+      expect(mockBucket.downloadById).not.toHaveBeenCalled()
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
 
     it('keeps local deletes blocked after custom B2 regexp input-limit skips', async () => {
       const skippedPath = 'docs/token.txt'
@@ -4627,6 +4752,142 @@ describe('synchronize', () => {
         expect(events.filter((event) => event.type === 'upload-done')).toHaveLength(1)
         expect(events.find(isCompareEvent)?.bytesHashed).toBe(data.byteLength)
         expect(events.find(isCompareEvent)?.bytesVerified).toBeUndefined()
+        expect(mockBucket.downloadById).not.toHaveBeenCalled()
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('verifies untrusted B2 sha1 bytes for whole-bucket sources', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sha1-b2-prefixless-'))
+      try {
+        const data = new TextEncoder().encode('abc')
+        const sha1 = await sha1Hex(data)
+        const localPath = join(root, 'same.txt')
+        await writeFile(localPath, data)
+        const mockBucket = makeMockBucket({ 'fid_same.txt': data })
+        const sourceFile = makeB2SyncPath(
+          'same.txt',
+          1000,
+          data.byteLength,
+          undefined,
+          null,
+          { large_file_sha1: sha1 },
+          `unverified:${sha1}`,
+        )
+        const destFile: LocalSyncPath = {
+          relativePath: 'same.txt',
+          absolutePath: localPath,
+          modTimeMillis: 1000,
+          size: data.byteLength,
+        }
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([destFile], 'local'), type: 'local', root },
+          options: { compareMode: 'sha1', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(expect.objectContaining({ type: 'skip', path: 'same.txt' }))
+        expect(events.find(isCompareEvent)?.bytesVerified).toBe(data.byteLength)
+        expect(mockBucket.downloadById).toHaveBeenCalledTimes(1)
+        expect(mockBucket.copyFile).not.toHaveBeenCalled()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it('verifies untrusted B2 sha1 bytes under the destination prefix', async () => {
+      const data = new TextEncoder().encode('abc')
+      const sha1 = await sha1Hex(data)
+      const mockBucket = makeMockBucket({ 'fid_same.txt': data })
+      const sourceFile = makeB2SyncPath('same.txt', 1000, data.byteLength, 'src/same.txt', sha1)
+      const destFile = makeB2SyncPath(
+        'same.txt',
+        1000,
+        data.byteLength,
+        'dst/same.txt',
+        null,
+        { large_file_sha1: sha1 },
+        `unverified:${sha1}`,
+      )
+      const source: B2SyncFolder = {
+        ...makeMemoryFolder([sourceFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'src/',
+      }
+      const dest: B2SyncFolder = {
+        ...makeMemoryFolder([destFile], 'b2'),
+        type: 'b2',
+        rawPrefix: 'dst/',
+      }
+      const config: SynchronizerConfig & { readonly bucket: Bucket; readonly prefix: string } = {
+        source,
+        dest,
+        options: { compareMode: 'sha1', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: 'dst/',
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(expect.objectContaining({ type: 'skip', path: 'same.txt' }))
+      expect(events.find(isCompareEvent)?.bytesVerified).toBe(data.byteLength)
+      expect(mockBucket.downloadById).toHaveBeenCalledTimes(1)
+      expect(mockBucket.copyFile).not.toHaveBeenCalled()
+    })
+
+    it.skipIf(!isNode)('skips sha1 comparison when destination B2 key leaves prefix', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-sha1-dest-prefix-'))
+      try {
+        const data = new TextEncoder().encode('abc')
+        const sha1 = await sha1Hex(data)
+        const localPath = join(root, 'same.txt')
+        await writeFile(localPath, data)
+        const mockBucket = makeMockBucket({ 'fid_same.txt': data })
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'same.txt',
+          absolutePath: localPath,
+          modTimeMillis: 1000,
+          size: data.byteLength,
+        }
+        const destFile = makeB2SyncPath(
+          'same.txt',
+          1000,
+          data.byteLength,
+          'other/same.txt',
+          null,
+          { large_file_sha1: sha1 },
+          `unverified:${sha1}`,
+        )
+
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([destFile], 'b2'), type: 'b2', rawPrefix: 'dst/' },
+          options: { compareMode: 'sha1', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: 'dst/',
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'skip',
+            path: 'same.txt',
+            message: expect.stringContaining('B2 verification failed'),
+          }),
+        )
         expect(mockBucket.downloadById).not.toHaveBeenCalled()
         expect(mockBucket.upload).not.toHaveBeenCalled()
       } finally {

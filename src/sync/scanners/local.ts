@@ -138,27 +138,15 @@ export class LocalFolder implements SyncFolder {
           }
           continue
         }
+        let s: LocalStats
         try {
-          const s = await nodeDeps.lstat(fullPath)
+          s = await nodeDeps.lstat(fullPath)
           /* v8 ignore start -- lstat race after a Dirent file result is not deterministic */
           if (!s.isFile()) {
             this.emitScanError(options, rel, 'file', new Error('not a regular file'))
             continue
           }
           /* v8 ignore stop */
-          out.push({
-            relativePath: rel,
-            absolutePath: fullPath,
-            modTimeMillis: Math.floor(s.mtimeMs),
-            size: s.size,
-            fileIdentity: {
-              deviceId: s.dev,
-              inode: s.ino,
-              size: s.size,
-              modTimeMillis: Math.floor(s.mtimeMs),
-            },
-          })
-          assertScanEntryLimit(out.length, maxScanEntries)
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
           this.emitScanError(
@@ -167,7 +155,21 @@ export class LocalFolder implements SyncFolder {
             'file',
             err,
           )
+          continue
         }
+        assertScanEntryLimit(out.length + 1, maxScanEntries)
+        out.push({
+          relativePath: rel,
+          absolutePath: fullPath,
+          modTimeMillis: Math.floor(s.mtimeMs),
+          size: s.size,
+          fileIdentity: {
+            deviceId: s.dev,
+            inode: s.ino,
+            size: s.size,
+            modTimeMillis: Math.floor(s.mtimeMs),
+          },
+        })
       }
     }
   }

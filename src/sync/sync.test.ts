@@ -1035,6 +1035,26 @@ describe('zipFolders', () => {
     ).rejects.toThrow('Sync scan entry limit exceeded')
   })
 
+  it('enforces entry limits for custom scanners that declare sorted output', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanSorting: true,
+      async *scan() {
+        yield makeSyncPath('a.txt', 1000, 10)
+        yield makeSyncPath('b.txt', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest, { maxScanEntries: 1 })) {
+          // exhaust until the scan limit fails
+        }
+      })(),
+    ).rejects.toThrow('Sync scan entry limit exceeded')
+  })
+
   it('applies include filters to both folder scans before pairing', async () => {
     const source = makeMemoryFolder([
       makeSyncPath('docs/readme.md', 1000, 10),

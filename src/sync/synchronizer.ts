@@ -54,6 +54,7 @@ import type {
   SyncEvent,
   SyncFolder,
   SyncOptions,
+  SyncPath,
   SyncScanOptions,
   SyncSkipEvent,
 } from './types.ts'
@@ -289,6 +290,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       },
     })) {
       if (options.signal?.aborted) return pairs
+      validateB2SourcePairPrefix(pair, config)
       pairs.push(pair)
     }
     return pairs
@@ -524,6 +526,7 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
   const downConfig = config as Partial<SynchronizerDownConfig>
   const bucket = upConfig.bucket ?? downConfig.bucket
   if (bucket === undefined) return undefined
+  const readablePrefixes = b2ReadableRawPrefixes(config)
   const idleTimeoutMillis = normalizeSha1TimeoutMillis(config.options.sha1ReadTimeoutMillis)
   const verificationTimeoutMillis = normalizeSha1TimeoutMillis(
     config.options.sha1VerificationTimeoutMillis,
@@ -549,12 +552,11 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(path.selectedVersion),
         )
-        const result = await bucket
-          .file(path.selectedVersion.fileName)
-          .downloadById(path.selectedVersion.fileId, {
-            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-            signal: deadlineSignal,
-          })
+        const fileName = validateB2SyncPathInAnyPrefix(readablePrefixes, path, 'read')
+        const result = await bucket.file(fileName).downloadById(path.selectedVersion.fileId, {
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+          signal: deadlineSignal,
+        })
         const verified = await hashReadableStreamSha1(result.body, deadlineSignal, {
           idleTimeoutMillis,
           maxBytes,
@@ -656,6 +658,7 @@ function createActionFactory(
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
   const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? b2FolderRawPrefix(config.dest) ?? '')
+  const sourceB2Prefix = b2FolderRawPrefix(config.source)
 
   const destBucket = upConfig.bucket ?? downConfig.bucket
   // Defensive optional chain on `info`: synchronizer tests use Bucket
@@ -705,6 +708,10 @@ function createActionFactory(
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
         safeRelativePathSegments(relPath)
+        const b2FileName =
+          sourceB2Prefix === undefined
+            ? source.selectedVersion.fileName
+            : validateB2SyncPathInPrefix(sourceB2Prefix, source, 'read')
         const idleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
           config.options.downloadIdleTimeoutMillis,
         )
@@ -712,12 +719,10 @@ function createActionFactory(
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
-        const result = await bucket
-          .file(source.selectedVersion.fileName)
-          .downloadById(source.selectedVersion.fileId, {
-            ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-            ...(signal !== undefined ? { signal } : {}),
-          })
+        const result = await bucket.file(b2FileName).downloadById(source.selectedVersion.fileId, {
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+          ...(signal !== undefined ? { signal } : {}),
+        })
         try {
           await writeLocalStreamInsideRoot(root, relPath, result.body, {
             expectedBytes: source.selectedVersion.contentLength,
@@ -825,6 +830,7 @@ function createActionFactory(
     assertBucket(bucket, 'copy')
 
     return new CopyAction(source.relativePath, source.size, async (_relPath, signal) => {
+      if (sourceB2Prefix !== undefined) validateB2SyncPathInPrefix(sourceB2Prefix, source, 'read')
       const destinationServerSideEncryption =
         config.options.encryptionProvider?.getSettingForUpload(targetPath, source.size)
       const sourceServerSideEncryption = toSseCEncryptionSetting(
@@ -855,18 +861,67 @@ function b2FolderRawPrefix(folder: SyncFolder | undefined): string | undefined {
   return typeof rawPrefix === 'string' ? rawPrefix : undefined
 }
 
-function validateB2SyncPathInPrefix(prefix: string, path: B2SyncPath): string {
+function validateB2SourcePairPrefix(pair: SyncPair, config: SynchronizerConfig): void {
+  const [source] = pair
+  if (config.source.type !== 'b2' || source === null || !isB2SyncPath(source)) return
+  const sourcePrefix = b2FolderRawPrefix(config.source)
+  if (sourcePrefix === undefined) return
+  validateB2SyncPathInPrefix(sourcePrefix, source, 'read')
+}
+
+function b2ReadableRawPrefixes(config: SynchronizerConfig): readonly string[] {
+  const prefixes: string[] = []
+  const sourcePrefix = b2FolderRawPrefix(config.source)
+  if (config.source.type === 'b2') prefixes.push(sourcePrefix ?? '')
+
+  const upConfig = config as Partial<SynchronizerUpConfig>
+  if (config.dest.type === 'b2') {
+    prefixes.push(upConfig.prefix ?? b2FolderRawPrefix(config.dest) ?? '')
+  }
+
+  return [...new Set(prefixes.map((prefix) => asRawB2KeyPrefix(prefix)))]
+}
+
+function validateB2SyncPathInAnyPrefix(
+  prefixes: readonly string[],
+  path: B2SyncPath,
+  operation: string,
+): string {
+  let firstError = new Error(`Refusing to ${operation} B2 key: ${path.relativePath}`)
+  for (const prefix of prefixes) {
+    try {
+      return validateB2SyncPathInPrefix(prefix, path, operation)
+    } catch (err) {
+      if (err instanceof Error) firstError = err
+    }
+  }
+  throw firstError
+}
+
+function validateB2SyncPathInPrefix(
+  prefix: string,
+  path: B2SyncPath,
+  operation = 'mutate',
+): string {
   const fileName = path.selectedVersion.fileName
   if (!fileName.startsWith(prefix)) {
-    throw new Error(`Refusing to mutate B2 key outside configured prefix: ${path.relativePath}`)
+    throw new Error(
+      `Refusing to ${operation} B2 key outside configured prefix: ${path.relativePath}`,
+    )
   }
 
   const relativePath = b2KeyToRelativePathUnderPrefix(prefix, fileName)
   if (relativePath !== path.relativePath) {
-    throw new Error(`Refusing to mutate mismatched B2 key for sync path: ${path.relativePath}`)
+    throw new Error(
+      `Refusing to ${operation} mismatched B2 key for sync path: ${path.relativePath}`,
+    )
   }
 
   return fileName
+}
+
+function isB2SyncPath(path: SyncPath): path is B2SyncPath {
+  return 'selectedVersion' in path
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

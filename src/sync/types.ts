@@ -77,7 +77,10 @@ export interface SyncScanOptions extends SyncFilterOptions {
    * promptly and stops B2 scans before requesting the next page.
    */
   readonly signal?: AbortSignal
-  /** Receives scan diagnostics before the scanner aborts. */
+  /**
+   * Receives scan diagnostics. Built-in scanners may continue after recoverable per-path
+   * diagnostics, such as unreadable local children, but fatal scan failures still abort.
+   */
   readonly onError?: (event: SyncErrorEvent) => void
   /**
    * Receives scanner skip diagnostics. Built-in scans isolate callback errors so diagnostics

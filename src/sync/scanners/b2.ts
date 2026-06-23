@@ -41,7 +41,8 @@ interface VisibleB2ScanEntry extends B2ScanEntry {
 
 /**
  * Scans a B2 bucket (optionally filtered by a raw B2 key prefix) and yields
- * {@link B2SyncPath} entries sorted by file name. Hidden files are excluded.
+ * {@link B2SyncPath} entries sorted by `compareSyncRelativePaths(relativePath)`. Hidden files are excluded.
+ * Raw B2 file names are used only as an internal tie-breaker after collision handling.
  * All versions for the listed prefix are fetched, grouped, and sorted before
  * yielding; exclude filters are applied client-side and do not reduce that
  * B2 listing memory footprint.

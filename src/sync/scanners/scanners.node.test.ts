@@ -103,6 +103,24 @@ describe('LocalFolder', () => {
     }
   })
 
+  it('fails immediately when the local scan entry limit is exceeded', async () => {
+    await writeFile(join(tmpDir, 'a.txt'), 'a')
+    await writeFile(join(tmpDir, 'b.txt'), 'b')
+    const errors: unknown[] = []
+
+    const folder = new LocalFolder(tmpDir)
+
+    await expect(
+      collect<LocalSyncPath>(
+        folder.scan({
+          maxScanEntries: 1,
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('Sync scan entry limit exceeded')
+    expect(errors).toEqual([])
+  })
+
   it('scans nested directories recursively', async () => {
     await mkdir(join(tmpDir, 'sub', 'deep'), { recursive: true })
     await writeFile(join(tmpDir, 'root.txt'), 'root')

@@ -33,6 +33,11 @@ export { compareSyncRelativePaths } from './path-order.ts'
 export { filesAreDifferent } from './policies/compare.ts'
 export type { ActionFactory } from './policies/index.ts'
 export { generateActions } from './policies/index.ts'
+export {
+  asRawB2KeyPrefix,
+  b2KeyToRelativePathUnderPrefix,
+  normalizeB2RelativePath,
+} from './prefix.ts'
 export { B2Folder } from './scanners/b2.ts'
 export { LocalFolder } from './scanners/local.ts'
 export type {
