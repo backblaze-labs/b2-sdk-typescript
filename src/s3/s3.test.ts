@@ -207,6 +207,13 @@ describe('createS3ClientConfig', () => {
     expect(() =>
       createS3ClientConfig({
         accountInfo,
+        applicationKeyId: '   ',
+        applicationKey: 'test-key',
+      }),
+    ).toThrow('applicationKeyId must be a non-empty string')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
         applicationKeyId: 'test-key-id',
         applicationKey: undefined,
       } as unknown as Parameters<typeof createS3ClientConfig>[0]),
@@ -215,8 +222,23 @@ describe('createS3ClientConfig', () => {
       createS3ClientConfig({
         accountInfo,
         applicationKeyId: 'test-key-id',
+        applicationKey: '   ',
+      }),
+    ).toThrow('applicationKey must be a non-empty string')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
         applicationKey: 'test-key',
         region: '',
+      }),
+    ).toThrow('region must be a non-empty string')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        region: '   ',
       }),
     ).toThrow('region must be a non-empty string')
   })

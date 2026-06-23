@@ -507,7 +507,7 @@ function normalizeValidDurationInSeconds(validDurationInSeconds: number): number
 }
 
 function assertNonEmptyStringOption(name: string, value: unknown): asserts value is string {
-  if (typeof value !== 'string' || value.length === 0) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
     throw new TypeError(`${name} must be a non-empty string.`)
   }
 }
