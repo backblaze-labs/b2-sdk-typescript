@@ -1,11 +1,14 @@
-import { hasHttpHeaderControlCharacter } from '../util/http.ts'
-import { utf8Encoder } from '../util/text-codec.ts'
+import {
+  BUCKET_NAME_MAX,
+  BUCKET_NAME_MIN,
+  BUCKET_NAME_RESERVED_PREFIX,
+  FILE_NAME_MAX_BYTES,
+  getB2FileNameByteLength,
+  hasB2FileNameControlCharacter,
+  hasValidB2BucketNameShape,
+} from '../internal/b2-naming.ts'
 
-export const FILE_NAME_MAX_BYTES = 1024
-const BUCKET_NAME_MIN = 6
-const BUCKET_NAME_MAX = 63
-const BUCKET_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$/
-const BUCKET_NAME_RESERVED_PREFIX = 'b2-'
+export { FILE_NAME_MAX_BYTES }
 
 /**
  * Validate a B2 bucket name before signing or embedding it in a URL path.
@@ -17,10 +20,10 @@ const BUCKET_NAME_RESERVED_PREFIX = 'b2-'
  * naming rules.
  */
 export function assertSafeBucketName(bucketName: string): void {
-  if (bucketName.length === 0) {
+  if (typeof bucketName !== 'string' || bucketName.length === 0) {
     throw new TypeError('bucketName must be a non-empty string.')
   }
-  if (hasHttpHeaderControlCharacter(bucketName)) {
+  if (hasB2FileNameControlCharacter(bucketName)) {
     throw new TypeError('bucketName must not contain control characters.')
   }
   if (bucketName === '.' || bucketName === '..' || /[/\\]/.test(bucketName)) {
@@ -29,9 +32,9 @@ export function assertSafeBucketName(bucketName: string): void {
   if (bucketName.length < BUCKET_NAME_MIN || bucketName.length > BUCKET_NAME_MAX) {
     throw new TypeError(`bucketName must be ${BUCKET_NAME_MIN}-${BUCKET_NAME_MAX} characters.`)
   }
-  if (!BUCKET_NAME_REGEX.test(bucketName)) {
+  if (!hasValidB2BucketNameShape(bucketName)) {
     throw new TypeError(
-      'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
+      'bucketName must contain only letters, digits, hyphens, and periods, cannot start or end with punctuation, and cannot contain consecutive periods.',
     )
   }
   if (bucketName.startsWith(BUCKET_NAME_RESERVED_PREFIX)) {
@@ -62,6 +65,17 @@ export function assertNativeDownloadFileName(fileName: string): void {
 }
 
 /**
+ * Validate a B2 file name for the deprecated native URL helper that percent
+ * encodes the whole name as one component. Slash-boundary and dot-segment names
+ * are safe in that legacy URL shape and remain accepted for compatibility.
+ *
+ * @param fileName - B2 file name supplied by the caller.
+ */
+export function assertLegacyNativeDownloadFileName(fileName: string): void {
+  assertB2FileNameCore(fileName)
+}
+
+/**
  * Validate a B2 file name for URL signing safety.
  *
  * This is presign-safety validation, not full native B2 file-name validation.
@@ -78,24 +92,26 @@ export function assertNativeDownloadFileName(fileName: string): void {
  * characters, or contains dot-only path segments.
  */
 export function assertValidB2FileName(fileName: string): void {
-  if (fileName.length === 0) {
-    throw new TypeError('fileName must be a non-empty string.')
-  }
-
-  const bytes = utf8Encoder.encode(fileName)
-  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
-    throw new TypeError(
-      `fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes; received ${bytes.byteLength}.`,
-    )
-  }
-
-  if (hasHttpHeaderControlCharacter(fileName)) {
-    throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
-  }
+  assertB2FileNameCore(fileName)
 
   if (fileName.split('/').some((segment) => segment === '.' || segment === '..')) {
     throw new TypeError(
       'fileName must not contain dot-only path segments because URL parsers can normalize presigned paths.',
     )
+  }
+}
+
+function assertB2FileNameCore(fileName: string): void {
+  if (typeof fileName !== 'string' || fileName.length === 0) {
+    throw new TypeError('fileName must be a non-empty string.')
+  }
+
+  const byteLength = getB2FileNameByteLength(fileName)
+  if (byteLength === null) {
+    throw new TypeError(`fileName must be at most ${FILE_NAME_MAX_BYTES} UTF-8 bytes.`)
+  }
+
+  if (hasB2FileNameControlCharacter(fileName)) {
+    throw new TypeError('fileName must not contain control characters (U+0000-U+001F or U+007F).')
   }
 }

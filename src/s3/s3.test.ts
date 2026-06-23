@@ -32,18 +32,10 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = [
 const B2_INVALID_BUCKET_NAMES = [
   ['short', 'bucketName must be 6-63 characters.'],
   ['a'.repeat(64), 'bucketName must be 6-63 characters.'],
-  [
-    '-badbucket',
-    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
-  ],
-  [
-    'badbucket-',
-    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
-  ],
-  [
-    'bad_bucket',
-    'bucketName must contain only letters, digits, and hyphens, and cannot start or end with a hyphen.',
-  ],
+  ['-badbucket', 'bucketName must contain only letters, digits, hyphens, and periods'],
+  ['badbucket-', 'bucketName must contain only letters, digits, hyphens, and periods'],
+  ['bad_bucket', 'bucketName must contain only letters, digits, hyphens, and periods'],
+  ['bad..bucket', 'bucketName must contain only letters, digits, hyphens, and periods'],
   ['b2-secret', 'bucketName cannot start with the reserved prefix "b2-".'],
 ] as const
 
@@ -179,6 +171,27 @@ describe('createS3ClientConfig', () => {
         applicationKey: 'test-key',
       }),
     ).toThrow('Pass an explicit `region` option')
+  })
+
+  it('redacts non-standard endpoint details in region errors', () => {
+    const accountInfo = createMockAccountInfo({
+      s3ApiUrl: 'https://user:secret@proxy.example/private/path?token=abc#frag',
+    })
+
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+      }),
+    ).toThrow('https://proxy.example/...')
+    expect(() =>
+      createS3ClientConfig({
+        accountInfo,
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+      }),
+    ).not.toThrow(/secret|token=abc|frag|private/)
   })
 
   it('validates credentials and explicit regions before returning config', () => {
@@ -414,6 +427,17 @@ describe('presignS3GetObjectUrl', () => {
     }
   })
 
+  it('accepts dotted bucket names for path-style S3 GET URLs', async () => {
+    const url = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        bucketName: 'bucket.name',
+      }),
+    )
+
+    expect(url.pathname).toBe('/bucket.name/path/to/file.txt')
+  })
+
   it('signs response override query parameters', async () => {
     const expires = new Date('2024-03-04T05:06:07Z')
     const url = new URL(
@@ -479,6 +503,18 @@ describe('presignS3GetObjectUrl', () => {
     }
   })
 
+  it('allows browser-executable response content type overrides with explicit opt-in', async () => {
+    const url = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseContentType: 'text/html',
+        allowBrowserExecutableResponseContentType: true,
+      }),
+    )
+
+    expect(url.searchParams.get('response-content-type')).toBe('text/html')
+  })
+
   it('rejects empty response content type overrides', async () => {
     for (const responseContentType of ['', '   ', '; charset=utf-8']) {
       await expect(
@@ -510,6 +546,20 @@ describe('presignS3GetObjectUrl', () => {
     ).rejects.toThrow('responseContentDisposition must not force inline rendering')
   })
 
+  it('allows inline response content disposition overrides with explicit opt-in', async () => {
+    const url = new URL(
+      await presignS3GetObjectUrl({
+        ...basePresignOptions(),
+        responseContentDisposition: 'inline; filename="preview.pdf"',
+        allowInlineResponseContentDisposition: true,
+      }),
+    )
+
+    expect(url.searchParams.get('response-content-disposition')).toBe(
+      'inline; filename="preview.pdf"',
+    )
+  })
+
   it('rejects invalid response expiry dates', async () => {
     await expect(
       presignS3GetObjectUrl({
@@ -535,24 +585,41 @@ describe('presignGetObjectUrl', () => {
     expect(url).toContain('Authorization=auth-token-123')
   })
 
-  it('rejects native URL path-normalizing inputs', () => {
-    expect(() =>
-      presignGetObjectUrl(
+  it('accepts legacy file names encoded as one URL component', () => {
+    for (const fileName of ['/leading-slash', 'a//b.txt', 'trailing/', 'allowed/../private.txt']) {
+      const url = presignGetObjectUrl(
         'https://f004.backblazeb2.com',
         'my-bucket',
-        'allowed/../private.txt',
+        fileName,
         'auth-token-123',
-      ),
-    ).toThrow('fileName must not contain dot-only path segments')
+      )
+
+      expect(new URL(url).pathname).toBe(`/file/my-bucket/${encodeURIComponent(fileName)}`)
+    }
+  })
+
+  it('rejects unsafe legacy native URL bucket names', () => {
     expect(() =>
       presignGetObjectUrl('https://f004.backblazeb2.com', '..', 'file.txt', 'auth-token-123'),
     ).toThrow('bucketName must not be "." or ".."')
   })
 
-  it('rejects non-HTTPS native download URLs before returning bearer tokens', () => {
-    expect(() =>
-      presignGetObjectUrl('http://f004.backblazeb2.com', 'bucket', 'file.txt', 'secret-token'),
-    ).toThrow('Native download-authorization URLs require an https: downloadUrl')
+  it('rejects unsafe legacy native download URL bases before returning bearer tokens', () => {
+    for (const [downloadUrl, message] of [
+      ['http://f004.backblazeb2.com', 'require an https: downloadUrl'],
+      ['https://user:pass@f004.backblazeb2.com', 'must not include userinfo'],
+      ['https://user:pass@attacker.example', 'must not include userinfo'],
+      ['https://f004.backblazeb2.com?steal=', 'must not include query or fragment'],
+      ['https://attacker.example?steal=', 'must not include query or fragment'],
+      ['https://f004.backblazeb2.com#steal', 'must not include query or fragment'],
+      ['https://attacker.example#steal', 'must not include query or fragment'],
+      ['https://f004.backblazeb2.com/base', 'must not include a path'],
+      ['https://attacker.example', 'require a Backblaze download host'],
+    ] as const) {
+      expect(() => presignGetObjectUrl(downloadUrl, 'bucket', 'file.txt', 'secret-token')).toThrow(
+        message,
+      )
+    }
   })
 
   it('rejects invalid compatibility duration values', () => {
@@ -789,6 +856,17 @@ describe('presignS3PutObjectUrl', () => {
     }
   })
 
+  it('accepts dotted bucket names for path-style S3 PUT URLs', async () => {
+    const url = new URL(
+      await presignS3PutObjectUrl({
+        ...basePresignOptions(),
+        bucketName: 'bucket.name',
+      }),
+    )
+
+    expect(url.pathname).toBe('/bucket.name/path/to/file.txt')
+  })
+
   it('signs metadata headers with normalized key casing', async () => {
     const url = new URL(
       await presignS3PutObjectUrl({
@@ -897,6 +975,17 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     expect(url).toContain('/file/my-bucket/path/to/my%20file%232.txt')
   })
 
+  it('accepts dotted bucket names for native download URLs', () => {
+    const url = createNativeDownloadAuthorizationUrl(
+      'https://f004.backblazeb2.com',
+      'bucket.name',
+      'file.txt',
+      'auth-token-123',
+    )
+
+    expect(new URL(url).pathname).toBe('/file/bucket.name/file.txt')
+  })
+
   it('includes the authorization token', () => {
     const url = createNativeDownloadAuthorizationUrl(
       'https://f004.backblazeb2.com',
@@ -908,15 +997,22 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     expect(url).toContain('Authorization=secret-token')
   })
 
-  it('rejects non-HTTPS native download URLs before returning bearer tokens', () => {
-    expect(() =>
-      createNativeDownloadAuthorizationUrl(
-        'http://f004.backblazeb2.com',
-        'bucket',
-        'file.txt',
-        'secret-token',
-      ),
-    ).toThrow('Native download-authorization URLs require an https: downloadUrl')
+  it('rejects unsafe native download URL bases before returning bearer tokens', () => {
+    for (const [downloadUrl, message] of [
+      ['http://f004.backblazeb2.com', 'require an https: downloadUrl'],
+      ['https://user:pass@f004.backblazeb2.com', 'must not include userinfo'],
+      ['https://user:pass@attacker.example', 'must not include userinfo'],
+      ['https://f004.backblazeb2.com?steal=', 'must not include query or fragment'],
+      ['https://attacker.example?steal=', 'must not include query or fragment'],
+      ['https://f004.backblazeb2.com#steal', 'must not include query or fragment'],
+      ['https://attacker.example#steal', 'must not include query or fragment'],
+      ['https://f004.backblazeb2.com/base', 'must not include a path'],
+      ['https://attacker.example', 'require a Backblaze download host'],
+    ] as const) {
+      expect(() =>
+        createNativeDownloadAuthorizationUrl(downloadUrl, 'bucket', 'file.txt', 'secret-token'),
+      ).toThrow(message)
+    }
   })
 
   it('rejects file names and bucket names that can normalize outside the path prefix', () => {

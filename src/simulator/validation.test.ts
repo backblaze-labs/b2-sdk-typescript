@@ -29,6 +29,7 @@ import {
 describe('validateBucketName', () => {
   it('returns null for a valid name', () => {
     expect(validateBucketName('valid-bucket')).toBeNull()
+    expect(validateBucketName('valid.bucket')).toBeNull()
   })
   it('rejects names with the reserved b2- prefix', () => {
     expect(validateBucketName('b2-secret')?.code).toBe('invalid_bucket_name')

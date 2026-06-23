@@ -1,3 +1,4 @@
+import { redactUrlForError } from '../internal/url-redaction.ts'
 import { hexEncode, hmacSha256, sha256Hex } from '../util/crypto.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
 import { assertSafeBucketName, assertValidB2FileName } from './validation.ts'
@@ -151,16 +152,19 @@ function parseEndpoint(endpoint: string): URL {
   try {
     return new URL(endpoint)
   } catch (cause) {
-    throw new TypeError(`S3 presigned URL endpoint must be a valid URL; received "${endpoint}".`, {
-      cause,
-    })
+    throw new TypeError(
+      `S3 presigned URL endpoint must be a valid URL; received "${redactUrlForError(endpoint, {
+        invalidUrlLabel: '<invalid S3 endpoint URL>',
+      })}".`,
+      { cause },
+    )
   }
 }
 
 function assertHttpsEndpoint(endpoint: URL): void {
   if (endpoint.protocol !== 'https:') {
     throw new TypeError(
-      `S3 presigned URLs require an https: endpoint; received "${endpoint.origin}".`,
+      `S3 presigned URLs require an https: endpoint; received "${redactUrlForError(endpoint)}".`,
     )
   }
 }

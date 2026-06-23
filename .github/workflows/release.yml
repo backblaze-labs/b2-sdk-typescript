@@ -81,7 +81,14 @@ jobs:
 
       - name: Verify package types resolve cleanly (attw)
         continue-on-error: true
-        run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
+        run: pnpm exec attw --pack . --profile node16
+
+      - name: Verify tracked files are unchanged before packing
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Tracked files changed after release verification; refusing to pack."
+            exit 1
+          fi
 
       - name: Pack verified release artifact
         run: |
@@ -141,8 +148,16 @@ jobs:
             echo "::error::Release artifact did not contain a package tarball."
             exit 1
           fi
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+          set +e
+          VIEW_OUTPUT="$(npm view "$NAME@$VERSION" version 2>&1)"
+          VIEW_STATUS=$?
+          set -e
+          if [ "$VIEW_STATUS" -eq 0 ]; then
             echo "::notice::$NAME@$VERSION is already published; skipping publish."
+          elif ! printf '%s\n' "$VIEW_OUTPUT" | grep -Eq 'E404|404 Not Found|is not in this registry'; then
+            echo "::error::Unable to verify whether $NAME@$VERSION is already published."
+            printf '%s\n' "$VIEW_OUTPUT"
+            exit "$VIEW_STATUS"
           elif [[ "$VERSION" == *-* ]]; then
             npm publish "$TARBALL" --ignore-scripts --access public --provenance --tag next
           else

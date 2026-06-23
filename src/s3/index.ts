@@ -10,6 +10,7 @@
  */
 
 import type { AccountInfo } from '../auth/account-info.ts'
+import { redactUrlForError } from '../internal/url-redaction.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
 import {
@@ -18,7 +19,11 @@ import {
   type SignedHeader,
   type SigV4PresignRequestOptions,
 } from './sigv4.ts'
-import { assertNativeDownloadFileName, assertSafeBucketName } from './validation.ts'
+import {
+  assertLegacyNativeDownloadFileName,
+  assertNativeDownloadFileName,
+  assertSafeBucketName,
+} from './validation.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const HTTP_MEDIA_TYPE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
@@ -117,6 +122,12 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
    */
   readonly responseContentDisposition?: string
   /**
+   * Permit an `inline` response Content-Disposition override. Set only when
+   * the object bytes and response headers are trusted to render from the
+   * storage origin.
+   */
+  readonly allowInlineResponseContentDisposition?: boolean
+  /**
    * Override the response Content-Encoding header. Do not populate this from
    * untrusted input without an allow-list.
    */
@@ -129,10 +140,18 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Override the response Content-Type header. If attacker-controlled, this
    * can make stored bytes render as active content from the storage origin.
-   * Restrict it to known-safe values before signing. The helper rejects known
-   * browser-executable and sniffable XML/JavaScript content types by default.
+   * Restrict it to known-safe values before signing. The helper's built-in
+   * rejection of known browser-executable and sniffable XML/JavaScript media
+   * types is best-effort and does not replace an application allow-list.
    */
   readonly responseContentType?: string
+  /**
+   * Permit browser-executable `responseContentType` overrides such as
+   * `text/html`, JavaScript, SVG, or XML media types. Leave this unset unless
+   * the served object is intentionally meant to render active content from the
+   * storage origin.
+   */
+  readonly allowBrowserExecutableResponseContentType?: boolean
   /**
    * Override the response Expires header. Do not populate this from
    * untrusted input without an allow-list.
@@ -146,7 +165,8 @@ export interface PresignS3PutObjectUrlOptions extends S3PresignObjectUrlOptions 
    * Optional content type for the uploaded object. When supplied, the generated
    * URL signs the Content-Type header, so upload clients must send the same
    * value. Browser-executable and sniffable XML/JavaScript types are rejected
-   * by default.
+   * by default as a best-effort guard; callers accepting untrusted uploads
+   * should still enforce their own allow-list.
    */
   readonly contentType?: string
   /**
@@ -270,7 +290,10 @@ export async function presignS3GetObjectUrl(
     query.push(['response-cache-control', options.responseCacheControl])
   }
   if (options.responseContentDisposition !== undefined) {
-    assertSafeResponseContentDisposition(options.responseContentDisposition)
+    assertSafeResponseContentDisposition(
+      options.responseContentDisposition,
+      options.allowInlineResponseContentDisposition === true,
+    )
     query.push(['response-content-disposition', options.responseContentDisposition])
   }
   if (options.responseContentEncoding !== undefined) {
@@ -282,7 +305,15 @@ export async function presignS3GetObjectUrl(
     query.push(['response-content-language', options.responseContentLanguage])
   }
   if (options.responseContentType !== undefined) {
-    assertSafeResponseContentType(options.responseContentType)
+    if (options.allowBrowserExecutableResponseContentType === true) {
+      assertSafeContentTypeValue(
+        'responseContentType',
+        options.responseContentType,
+        'response header value',
+      )
+    } else {
+      assertSafeResponseContentType(options.responseContentType)
+    }
     query.push(['response-content-type', options.responseContentType])
   }
   if (options.responseExpires !== undefined) {
@@ -297,8 +328,9 @@ export async function presignS3GetObjectUrl(
  *
  * This deprecated helper preserves the legacy positional output contract where
  * the whole file name is encoded as one URL component, including `/` as `%2F`.
- * It now fails closed for unsafe bucket names, path-normalizing file names,
- * non-HTTPS download URLs, and invalid compatibility durations.
+ * It accepts legacy slash-boundary and dot-segment file names that this
+ * percent-encoded URL shape can represent, while still rejecting unsafe bucket
+ * names, unsafe download URL bases, and invalid compatibility durations.
  *
  * @param downloadUrl - The B2 download URL from authorization.
  * @param bucketName - The bucket containing the file.
@@ -319,15 +351,15 @@ export function presignGetObjectUrl(
   authorizationToken: string,
   validDurationInSeconds?: number,
 ): string {
-  assertHttpsDownloadUrl(downloadUrl)
-  assertSafeBucketName(bucketName)
-  assertNativeDownloadFileName(fileName)
-  const expires =
-    Math.floor(Date.now() / 1000) +
-    normalizeValidDurationInSeconds(
-      validDurationInSeconds ?? DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
-    )
-  return `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeURIComponent(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
+  return buildNativeDownloadAuthorizationUrl(
+    downloadUrl,
+    bucketName,
+    fileName,
+    authorizationToken,
+    validDurationInSeconds ?? DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
+    encodeURIComponent,
+    assertLegacyNativeDownloadFileName,
+  )
 }
 
 /**
@@ -399,7 +431,8 @@ export async function presignPutObjectUrl(options: PresignPutObjectUrlOptions): 
  * token. `validDurationInSeconds` is retained only for compatibility with the
  * legacy `presignGetObjectUrl` helper's decorative `expires` query parameter;
  * changing it here does not shorten or extend access.
- * Because the returned URL carries a bearer token, `downloadUrl` must use HTTPS.
+ * Because the returned URL carries a bearer token, `downloadUrl` must be an
+ * HTTPS Backblaze download origin without userinfo, path, query, or fragment.
  *
  * @param downloadUrl - The B2 download URL from authorization (e.g., `https://f004.backblazeb2.com`).
  * @param bucketName - The bucket containing the file.
@@ -416,12 +449,15 @@ export function createNativeDownloadAuthorizationUrl(
   authorizationToken: string,
   validDurationInSeconds = DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
 ): string {
-  assertHttpsDownloadUrl(downloadUrl)
-  assertSafeBucketName(bucketName)
-  assertNativeDownloadFileName(fileName)
-  const expires =
-    Math.floor(Date.now() / 1000) + normalizeValidDurationInSeconds(validDurationInSeconds)
-  return `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeFileName(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
+  return buildNativeDownloadAuthorizationUrl(
+    downloadUrl,
+    bucketName,
+    fileName,
+    authorizationToken,
+    validDurationInSeconds,
+    encodeFileName,
+    assertNativeDownloadFileName,
+  )
 }
 
 function deriveRequiredS3Region(endpoint: string): string {
@@ -429,7 +465,9 @@ function deriveRequiredS3Region(endpoint: string): string {
   if (region !== null) return region
 
   throw new Error(
-    `Unable to derive B2 S3 region from endpoint "${endpoint}". Pass an explicit \`region\` option before deploying custom or proxied endpoints.`,
+    `Unable to derive B2 S3 region from endpoint "${redactUrlForError(endpoint, {
+      invalidUrlLabel: '<invalid S3 endpoint URL>',
+    })}". Pass an explicit \`region\` option before deploying custom or proxied endpoints.`,
   )
 }
 
@@ -474,21 +512,61 @@ function assertNonEmptyStringOption(name: string, value: unknown): asserts value
   }
 }
 
-function assertHttpsDownloadUrl(downloadUrl: string): void {
+function buildNativeDownloadAuthorizationUrl(
+  downloadUrl: string,
+  bucketName: string,
+  fileName: string,
+  authorizationToken: string,
+  validDurationInSeconds: number,
+  encodeFileNameForUrl: (fileName: string) => string,
+  assertFileName: (fileName: string) => void,
+): string {
+  const baseUrl = parseNativeDownloadBaseUrl(downloadUrl)
+  assertSafeBucketName(bucketName)
+  assertFileName(fileName)
+  const expires =
+    Math.floor(Date.now() / 1000) + normalizeValidDurationInSeconds(validDurationInSeconds)
+  return `${baseUrl}/file/${encodeURIComponent(bucketName)}/${encodeFileNameForUrl(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
+}
+
+function parseNativeDownloadBaseUrl(downloadUrl: string): string {
   let base: URL
   try {
     base = new URL(downloadUrl)
   } catch {
     throw new TypeError(
-      `Native download-authorization URLs require a valid https: downloadUrl; received "${downloadUrl}".`,
+      `Native download-authorization URLs require a valid https: downloadUrl; received "${redactUrlForError(
+        downloadUrl,
+        { invalidUrlLabel: '<invalid downloadUrl>' },
+      )}".`,
     )
   }
 
   if (base.protocol !== 'https:') {
     throw new TypeError(
-      `Native download-authorization URLs require an https: downloadUrl; received "${base.origin}".`,
+      `Native download-authorization URLs require an https: downloadUrl; received "${redactUrlForError(
+        base,
+      )}".`,
     )
   }
+  if (base.username !== '' || base.password !== '') {
+    throw new TypeError('Native download-authorization URLs must not include userinfo.')
+  }
+  if (base.search !== '' || base.hash !== '') {
+    throw new TypeError('Native download-authorization URLs must not include query or fragment.')
+  }
+  if (base.pathname !== '' && base.pathname !== '/') {
+    throw new TypeError('Native download-authorization URLs must not include a path.')
+  }
+  if (!isTrustedNativeDownloadHost(base.hostname)) {
+    throw new TypeError(
+      `Native download-authorization URLs require a Backblaze download host; received "${redactUrlForError(
+        base,
+      )}".`,
+    )
+  }
+
+  return base.origin
 }
 
 function normalizeMetadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
@@ -561,11 +639,14 @@ function assertSafePutContentType(contentType: string): void {
   )
 }
 
-function assertSafeResponseContentDisposition(contentDisposition: string): void {
+function assertSafeResponseContentDisposition(
+  contentDisposition: string,
+  allowInline: boolean,
+): void {
   assertSafeResponseOverride('responseContentDisposition', contentDisposition)
 
   const disposition = contentDisposition.split(';', 1)[0]?.trim().toLowerCase()
-  if (disposition === 'inline') {
+  if (!allowInline && disposition === 'inline') {
     throw new TypeError(
       'responseContentDisposition must not force inline rendering; use an attachment disposition for response overrides.',
     )
@@ -604,4 +685,11 @@ function assertNonExecutableContentType(
 
 function isBrowserExecutableContentType(mediaType: string): boolean {
   return BROWSER_EXECUTABLE_CONTENT_TYPES.has(mediaType) || mediaType.endsWith('+xml')
+}
+
+function isTrustedNativeDownloadHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  return ['backblazeb2.com', 'backblaze.com', 'backblaze.net', 'b2-staging.io'].some(
+    (suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`),
+  )
 }

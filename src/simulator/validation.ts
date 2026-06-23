@@ -14,6 +14,15 @@
  * @packageDocumentation
  */
 
+import {
+  BUCKET_NAME_MAX,
+  BUCKET_NAME_MIN,
+  BUCKET_NAME_RESERVED_PREFIX,
+  FILE_NAME_MAX_BYTES,
+  getB2FileNameByteLength,
+  hasB2FileNameControlCharacter,
+  hasValidB2BucketNameShape,
+} from '../internal/b2-naming.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
 /** Shape returned by validation functions when input is rejected. */
@@ -26,14 +35,7 @@ export interface ValidationError {
 // Bucket name (`b2_create_bucket`, `b2_update_bucket`)
 // ---------------------------------------------------------------------------
 
-/** Minimum B2 bucket-name length per https://www.backblaze.com/apidocs/b2-create-bucket. */
-export const BUCKET_NAME_MIN = 6
-/** Maximum B2 bucket-name length per https://www.backblaze.com/apidocs/b2-create-bucket. */
-export const BUCKET_NAME_MAX = 63
-/** Bucket-name char set: letters, digits, hyphens. Anchored, leading/trailing hyphens are illegal. */
-const BUCKET_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]$/
-/** Reserved prefix — B2 forbids consumer-created buckets starting with `b2-`. */
-const BUCKET_NAME_RESERVED_PREFIX = 'b2-'
+export { BUCKET_NAME_MAX, BUCKET_NAME_MIN }
 
 /**
  * Validates a bucket name against B2's documented rules.
@@ -51,11 +53,11 @@ export function validateBucketName(name: string): ValidationError | null {
       message: `bucketName must be ${BUCKET_NAME_MIN}-${BUCKET_NAME_MAX} characters`,
     }
   }
-  if (!BUCKET_NAME_REGEX.test(name)) {
+  if (!hasValidB2BucketNameShape(name)) {
     return {
       code: 'invalid_bucket_name',
       message:
-        'bucketName must contain only letters, digits, and hyphens; cannot start or end with a hyphen',
+        'bucketName must contain only letters, digits, hyphens, and periods; cannot start or end with punctuation or contain consecutive periods',
     }
   }
   if (name.startsWith(BUCKET_NAME_RESERVED_PREFIX)) {
@@ -71,10 +73,7 @@ export function validateBucketName(name: string): ValidationError | null {
 // File name (every upload / hide / copy entry point)
 // ---------------------------------------------------------------------------
 
-/** Max file-name length is 1024 BYTES (UTF-8 encoded), not chars. */
-export const FILE_NAME_MAX_BYTES = 1024
-/** Control-character range B2 rejects: U+0000-U+001F (32 codepoints) plus DEL (U+007F). */
-const FILE_NAME_DEL = 0x7f
+export { FILE_NAME_MAX_BYTES }
 
 /**
  * Validates a file name against B2's documented rules. Mirrors the
@@ -91,20 +90,17 @@ export function validateFileName(name: string): ValidationError | null {
   if (typeof name !== 'string' || name.length === 0) {
     return { code: 'invalid_file_name', message: 'fileName must be a non-empty string' }
   }
-  const bytes = utf8Encoder.encode(name)
-  if (bytes.byteLength > FILE_NAME_MAX_BYTES) {
+  const byteLength = getB2FileNameByteLength(name)
+  if (byteLength === null) {
     return {
       code: 'invalid_file_name',
-      message: `fileName exceeds the 1024-byte UTF-8 limit (got ${bytes.byteLength})`,
+      message: 'fileName exceeds the 1024-byte UTF-8 limit',
     }
   }
-  for (let i = 0; i < name.length; i++) {
-    const code = name.charCodeAt(i)
-    if (code < 0x20 || code === FILE_NAME_DEL) {
-      return {
-        code: 'invalid_file_name',
-        message: 'fileName must not contain control characters (U+0000-U+001F or U+007F)',
-      }
+  if (hasB2FileNameControlCharacter(name)) {
+    return {
+      code: 'invalid_file_name',
+      message: 'fileName must not contain control characters (U+0000-U+001F or U+007F)',
     }
   }
   // Path segments equal to `.` or `..` alone are illegal per B2 docs.

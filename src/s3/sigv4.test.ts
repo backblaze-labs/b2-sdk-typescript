@@ -114,9 +114,44 @@ describe('presignS3Request', () => {
 
     expect(error).toBeInstanceOf(TypeError)
     expect((error as Error).message).toBe(
-      'S3 presigned URL endpoint must be a valid URL; received "not a url".',
+      'S3 presigned URL endpoint must be a valid URL; received "<invalid S3 endpoint URL>".',
     )
     expect((error as Error & { cause?: unknown }).cause).toBeInstanceOf(TypeError)
+  })
+
+  it('redacts endpoint credentials and routing details from errors', async () => {
+    await expect(
+      presignS3Request(
+        'GET',
+        {
+          endpoint: 'http://user:secret@s3.us-west-004.backblazeb2.com/private/path?token=abc#frag',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: 'file.txt',
+          signingDate: SIGNING_DATE,
+        },
+        [['x-id', 'GetObject']],
+        [],
+      ),
+    ).rejects.toThrow('http://s3.us-west-004.backblazeb2.com/...')
+    await expect(
+      presignS3Request(
+        'GET',
+        {
+          endpoint: 'http://user:secret@s3.us-west-004.backblazeb2.com/private/path?token=abc#frag',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: 'file.txt',
+          signingDate: SIGNING_DATE,
+        },
+        [['x-id', 'GetObject']],
+        [],
+      ),
+    ).rejects.not.toThrow(/secret|token=abc|frag|private/)
   })
 
   it('rejects invalid signing dates and empty bucket names', async () => {

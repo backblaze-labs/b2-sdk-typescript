@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -19,8 +19,11 @@ describe('S3 presign peer dependency boundary', () => {
 
   it('does not import AWS peer modules from the presign implementation', async () => {
     const directory = dirname(fileURLToPath(import.meta.url))
+    const fileNames = (await readdir(directory)).filter(
+      (fileName) => fileName.endsWith('.ts') && !fileName.endsWith('.test.ts'),
+    )
     const sources = await Promise.all(
-      ['index.ts', 'sigv4.ts'].map(async (fileName) => ({
+      fileNames.map(async (fileName) => ({
         fileName,
         source: await readFile(join(directory, fileName), 'utf8'),
       })),
