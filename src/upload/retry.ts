@@ -76,7 +76,8 @@ export function resolveRetryResponseBodyFailures(
   value: boolean | undefined,
   mode: 'single' | 'multipart',
 ): boolean {
-  return value ?? mode === 'multipart'
+  const defaultValue = mode === 'multipart'
+  return value ?? defaultValue
 }
 
 /**

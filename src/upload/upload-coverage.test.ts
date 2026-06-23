@@ -318,6 +318,52 @@ describe('uploadLargeFile cleanup paths', () => {
     }
   })
 
+  it('bounds direct best-effort cleanup when no signal is supplied', async () => {
+    let cleanupTimeoutController!: AbortController
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((timeoutMs: number) => {
+      expect(timeoutMs).toBe(DEFAULT_CLEANUP_TIMEOUT_MS)
+      cleanupTimeoutController = new AbortController()
+      return cleanupTimeoutController.signal
+    })
+    let cleanupStarted!: () => void
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      cleanupStarted = resolve
+    })
+    let cleanupSignal: AbortSignal | undefined
+    const raw = {
+      cancelLargeFile(
+        _apiUrl: string,
+        _authToken: string,
+        _request: { fileId: string },
+        options?: { readonly signal?: AbortSignal },
+      ) {
+        cleanupSignal = options?.signal
+        cleanupStarted()
+        return new Promise<never>(() => {})
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getApiUrl: () => 'https://api.example.test',
+      getAuthToken: () => 'auth',
+    } as unknown as AccountInfo
+
+    try {
+      const cleanup = cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        largeFileId('cleanup-timeout-large-file'),
+      )
+
+      await cleanupStartedPromise
+      expect(cleanupSignal?.aborted).toBe(false)
+      cleanupTimeoutController.abort(new DOMException('Cleanup timed out', 'TimeoutError'))
+      await expect(cleanup).resolves.toBeUndefined()
+      expect(cleanupSignal?.aborted).toBe(true)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
+  })
+
   it('falls back when AbortSignal cleanup helpers are unavailable', async () => {
     const originalTimeout = AbortSignal.timeout
     const originalAny = AbortSignal.any

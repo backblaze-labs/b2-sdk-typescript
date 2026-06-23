@@ -34,13 +34,15 @@ export async function cancelLargeFileBestEffort(
   options?: { readonly signal?: AbortSignal },
 ): Promise<void> {
   await bestEffort(async () => {
+    const requestOptions =
+      options?.signal !== undefined ? options : cleanupRequestOptions(undefined)
     const request = raw.cancelLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       { fileId },
-      options,
+      requestOptions,
     )
-    await waitForCleanup(request, options?.signal)
+    await waitForCleanup(request, requestOptions.signal)
   })
 }
 

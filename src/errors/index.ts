@@ -44,7 +44,9 @@ export class ResumeFileIdMismatchError extends Error {
    * @param fileName - Requested destination file name.
    */
   constructor(fileId: LargeFileId, fileName: string) {
-    super('uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.')
+    super(
+      `uploadLargeFile: resumeFileId ${fileId} does not identify a compatible unfinished large file for ${fileName}.`,
+    )
     this.name = 'ResumeFileIdMismatchError'
     this.fileId = fileId
     this.fileName = fileName
