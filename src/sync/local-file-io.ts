@@ -142,7 +142,14 @@ export async function writeLocalStreamInsideRoot(
   /* v8 ignore stop */
   const finalName = path.basename(destPath)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
-  const publishMode = await replacementFileMode(finalPath)
+  let publishMode: number
+  try {
+    publishMode = await replacementFileMode(finalPath)
+  } catch (err) {
+    /* v8 ignore next -- best-effort close during setup failure */
+    await parentHandle?.close().catch(() => {})
+    throw err
+  }
   let stagingDirectory: string
   try {
     stagingDirectory = await createDownloadStagingDirectory(

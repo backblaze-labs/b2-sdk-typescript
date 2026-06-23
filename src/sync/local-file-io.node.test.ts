@@ -161,6 +161,21 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it.skipIf(isWindows)('propagates replacement mode lookup errors', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stat-error-'))
+    try {
+      const tooLongName = 'a'.repeat(300)
+      await expect(
+        writeLocalStreamInsideRoot(root, tooLongName, streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects destination parents on a different device', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-dev-parent-'))
     const subdir = join(root, 'sub')
@@ -341,6 +356,29 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
       await expect(readdir(managedDirectory)).resolves.toEqual([DOWNLOAD_STAGING_MARKER_NAME])
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('publishes with parent recheck when fd anchoring is disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-no-anchor-'))
+    try {
+      await mkdir(join(root, 'safe'))
+      localFileIoTestHooks.disableProcFdAnchoring = true
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'safe/payload.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'safe', 'payload.txt'), 'utf8')).resolves.toBe('abc')
+    } finally {
+      delete localFileIoTestHooks.disableProcFdAnchoring
       await rm(root, { recursive: true, force: true })
     }
   })
