@@ -13,12 +13,8 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
-import { createUploadAbortScope } from './abort-scope.ts'
-import {
-  type CleanupFailureOptions,
-  cancelLargeFileBestEffort,
-  handleAmbiguousFinishLargeFileResponseBodyError,
-} from './cancel.ts'
+import { createAbortScope, throwRejectedOrAbortReason } from './abort-scope.ts'
+import { cleanupAfterLargeFileError, type CleanupFailureOptions } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   findResumeCandidate,
@@ -68,8 +64,8 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * Non-sliceable streams and async iterables fall back to a sequential read
    * path — one part at a time, concurrency forced to 1 — so callers can stream
    * a multi-GB file without buffering the whole payload in memory. The
-   * `resume` / `resumeFileId` options require a sliceable source; they throw
-   * on a forward-only source.
+   * `resumeFileId` requires a sliceable source; deprecated `resume: true`
+   * without an explicit file ID is ignored on forward-only sources.
    */
   readonly source: ContentSource
   /** MIME type. Defaults to `b2/x-auto` for server-side detection. */
@@ -262,7 +258,7 @@ export async function uploadLargeFile(
     parts,
   )
 
-  if (!options.source.canSlice && (options.resume === true || options.resumeFileId !== undefined)) {
+  if (!options.source.canSlice && options.resumeFileId !== undefined) {
     throw new Error('uploadLargeFile: resume is not supported on non-sliceable sources.')
   }
 
@@ -327,7 +323,7 @@ export async function uploadLargeFile(
   // then dropped before the next read starts, so the peak memory footprint is
   // ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
-    const abortScope = createUploadAbortScope(options.signal)
+    const abortScope = createAbortScope(options.signal)
     try {
       await uploadPartsSequentially(
         raw,
@@ -339,40 +335,30 @@ export async function uploadLargeFile(
         partSha1s,
         tracker,
       )
-      return await raw.finishLargeFile(
-        accountInfo.getApiUrl(),
-        accountInfo.getAuthToken(),
-        {
-          fileId: largeFileId,
-          partSha1Array: partSha1s,
-        },
-        { signal: abortScope.signal },
+      return await finishLargeFileWithAbortReconciliation(
+        raw,
+        accountInfo,
+        options,
+        largeFileId,
+        partSha1s,
+        abortScope.signal,
       )
     } catch (err) {
       abortScope.abort(err)
-      if (err instanceof FinishLargeFileResponseBodyError) {
-        throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
-          fileId: largeFileId,
-          bucketId: options.bucketId,
-          fileName: options.fileName,
-          onCleanupFailure: options.onCleanupFailure,
-        })
-      }
-      if (createdLargeFile) {
-        await cancelLargeFileBestEffort(
-          raw,
-          accountInfo,
-          largeFileId,
-          cleanupLargeFileOptions(options),
-        )
-      }
-      throw err
+      return await cleanupAfterUploadLargeFileError(
+        err,
+        raw,
+        accountInfo,
+        options,
+        largeFileId,
+        createdLargeFile,
+      )
     } finally {
       abortScope.dispose()
     }
   }
 
-  const abortScope = createUploadAbortScope(options.signal)
+  const abortScope = createAbortScope(options.signal)
   try {
     const tasks = parts.map(async (part) => {
       await sem.acquire()
@@ -434,49 +420,96 @@ export async function uploadLargeFile(
       }
     })
 
-    const settled = await Promise.allSettled(tasks)
-    const rejected = settled.find(
-      (result): result is PromiseRejectedResult => result.status === 'rejected',
-    )
-    if (rejected !== undefined) {
-      if (abortScope.signal.aborted) abortScope.signal.throwIfAborted()
-      /* v8 ignore next -- task failures abort the scope; this is defensive for unexpected rejections. */
-      throw rejected.reason
-    }
+    throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
-    const result = await raw.finishLargeFile(
+    const result = await finishLargeFileWithAbortReconciliation(
+      raw,
+      accountInfo,
+      options,
+      largeFileId,
+      partSha1s,
+      abortScope.signal,
+    )
+
+    return result
+  } catch (err) {
+    abortScope.abort(err)
+    return await cleanupAfterUploadLargeFileError(
+      err,
+      raw,
+      accountInfo,
+      options,
+      largeFileId,
+      createdLargeFile,
+    )
+  } finally {
+    abortScope.dispose()
+  }
+}
+
+async function cleanupAfterUploadLargeFileError(
+  err: unknown,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: UploadLargeFileOptions,
+  largeFileId: LargeFileId,
+  createdLargeFile: boolean,
+): Promise<never> {
+  return await cleanupAfterLargeFileError(
+    err,
+    raw,
+    accountInfo,
+    {
+      fileId: largeFileId,
+      bucketId: options.bucketId,
+      fileName: options.fileName,
+      signal: options.signal,
+      onCleanupFailure: options.onCleanupFailure,
+    },
+    { cancelOnError: createdLargeFile },
+  )
+}
+
+async function finishLargeFileWithAbortReconciliation(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  options: UploadLargeFileOptions,
+  largeFileId: LargeFileId,
+  partSha1s: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<FileVersion> {
+  signal?.throwIfAborted()
+  try {
+    return await raw.finishLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       {
         fileId: largeFileId,
         partSha1Array: partSha1s,
       },
-      { signal: abortScope.signal },
+      signal === undefined ? undefined : { signal },
     )
-
-    return result
   } catch (err) {
-    abortScope.abort(err)
-    if (err instanceof FinishLargeFileResponseBodyError) {
-      throw handleAmbiguousFinishLargeFileResponseBodyError(err, {
-        fileId: largeFileId,
-        bucketId: options.bucketId,
-        fileName: options.fileName,
-        onCleanupFailure: options.onCleanupFailure,
-      })
-    }
-    if (createdLargeFile) {
-      await cancelLargeFileBestEffort(
-        raw,
-        accountInfo,
-        largeFileId,
-        cleanupLargeFileOptions(options),
+    if (isAbortFromSignal(err, signal)) {
+      throw new FinishLargeFileResponseBodyError(
+        'b2_finish_large_file was aborted after dispatch; final file state is ambiguous.',
+        {
+          cause: err,
+          fileId: largeFileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+        },
       )
     }
     throw err
-  } finally {
-    abortScope.dispose()
   }
+}
+
+function isAbortFromSignal(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted !== true) return false
+  if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
+  if (err instanceof DOMException && err.name === 'AbortError') return true
+  return err instanceof Error && err.name === 'AbortError'
 }
 
 /**
@@ -626,16 +659,5 @@ function notifyResumePartReused(
     listener?.(event)
   } catch {
     // Diagnostic observers must not change upload success or failure.
-  }
-}
-
-function cleanupLargeFileOptions(options: UploadLargeFileOptions): {
-  readonly signal?: AbortSignal
-} & CleanupFailureOptions {
-  return {
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    ...(options.onCleanupFailure !== undefined
-      ? { onCleanupFailure: options.onCleanupFailure }
-      : {}),
   }
 }

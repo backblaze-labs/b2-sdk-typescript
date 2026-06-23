@@ -191,7 +191,7 @@ describe('FetchTransport', () => {
     ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 
-  it('unrefs request timeout timers when supported', async () => {
+  it('releases request timeout timers when supported', async () => {
     const realSetTimeout = globalThis.setTimeout
     const unref = vi.fn()
     type TimerWithOptionalUnref = ReturnType<typeof setTimeout> & { unref?: () => void }
@@ -283,6 +283,44 @@ describe('FetchTransport', () => {
     }
   })
 
+  it('resets response body stream timeout after each received chunk', async () => {
+    vi.useFakeTimers()
+    try {
+      let bodyController!: ReadableStreamDefaultController<Uint8Array>
+      fetchSpy.mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyController = controller
+              controller.enqueue(new Uint8Array([1]))
+            },
+          }),
+        ),
+      )
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 10 },
+      })
+      const reader = response.body?.getReader()
+      expect((await reader?.read())?.done).toBe(false)
+
+      const secondRead = reader?.read()
+      await vi.advanceTimersByTimeAsync(9)
+      bodyController.enqueue(new Uint8Array([2]))
+      expect((await secondRead)?.done).toBe(false)
+
+      const finalRead = reader?.read()
+      await vi.advanceTimersByTimeAsync(9)
+      bodyController.close()
+      expect((await finalRead)?.done).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('times out stalled JSON bodies for normal raw API calls', async () => {
     vi.useFakeTimers()
     try {
@@ -340,7 +378,7 @@ describe('FetchTransport', () => {
     try {
       fetchSpy.mockResolvedValue(stalledResponse())
       const raw = new RawClient({ transport: new FetchTransport() })
-      const fileId = '4_zunfinished' as LargeFileId
+      const fileId = '4_z_unfinished' as LargeFileId
 
       const call = raw.finishLargeFile('https://api.example.com', 'auth', {
         fileId,

@@ -1291,6 +1291,97 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode || isWindows)(
+      'rejects same-size local rewrites with restored mtime before upload',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, utimes, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-ctime-'))
+        try {
+          const filePath = join(root, 'report.txt')
+          await writeFile(filePath, 'safe')
+          const scanned: LocalSyncPath[] = []
+          for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+          const [sourceFile] = scanned
+          if (sourceFile?.fileIdentity?.changeTimeMillis === undefined) {
+            throw new Error('expected scanned change time')
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          await writeFile(filePath, 'evil')
+          const restoredMtime = new Date(sourceFile.modTimeMillis)
+          await utimes(filePath, restoredMtime, restoredMtime)
+
+          const mockBucket = makeMockBucket()
+          const config: SynchronizerUpConfig = {
+            source: {
+              ...makeMemoryFolder([sourceFile], 'local'),
+              type: 'local',
+              root,
+            },
+            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+          expect(mockBucket.upload).not.toHaveBeenCalled()
+          expect(events.find((event) => event.type === 'error')?.message).toContain(
+            'local file changed before upload',
+          )
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode)('rejects local path replacement before upload source capture', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rename, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const { LocalFolder } = await import('./scanners/local.ts')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-swap-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-outside-'))
+      try {
+        const filePath = join(root, 'report.txt')
+        const replacementPath = join(outside, 'replacement.txt')
+        await writeFile(filePath, 'safe')
+        await writeFile(replacementPath, 'evil')
+        const scanned: LocalSyncPath[] = []
+        for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+        const [sourceFile] = scanned
+        if (sourceFile === undefined) throw new Error('expected scanned source')
+
+        await rm(filePath)
+        await rename(replacementPath, filePath)
+
+        const mockBucket = makeMockBucket()
+        const config: SynchronizerUpConfig = {
+          source: {
+            ...makeMemoryFolder([sourceFile], 'local'),
+            type: 'local',
+            root,
+          },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(mockBucket.upload).not.toHaveBeenCalled()
+        expect(events.find((event) => event.type === 'error')?.message).toContain(
+          'local file changed before upload',
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)('yields action outcomes as each action settles', async () => {
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { tmpdir } = await import('node:os')

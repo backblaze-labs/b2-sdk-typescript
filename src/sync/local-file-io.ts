@@ -39,6 +39,7 @@ interface ScannedLocalFileHandle {
     readonly dev: number
     readonly ino: number
     readonly mtimeMs: number
+    readonly ctimeMs: number
     readonly size: number
   }>
   readFile(): Promise<Uint8Array>
@@ -649,4 +650,48 @@ async function writeAll(
     if (bytesWritten <= 0) throw new Error('download write made no progress')
     offset += bytesWritten
   }
+}
+
+function assertSameScannedRegularFile(
+  stats: {
+    isFile(): boolean
+    readonly dev: number
+    readonly ino: number
+    readonly mtimeMs: number
+    readonly ctimeMs: number
+    readonly size: number
+  },
+  path: LocalSyncPath,
+  operation: 'upload' | 'delete' = 'upload',
+): void {
+  const reason = `local file changed before ${operation}`
+  if (!stats.isFile()) {
+    if (operation === 'delete') {
+      throw Object.assign(new Error(`${reason}: not a regular file`), { code: 'EISDIR' })
+    }
+    throw new Error(`${reason}: not a regular file`)
+  }
+  if (stats.size !== path.size) {
+    throw new Error(`${reason}: size changed`)
+  }
+
+  const identity = path.fileIdentity
+  if (identity === undefined) return
+
+  if (
+    stats.dev !== identity.deviceId ||
+    stats.ino !== identity.inode ||
+    stats.size !== identity.size ||
+    Math.floor(stats.mtimeMs) !== identity.modTimeMillis ||
+    (shouldComparePosixChangeTime() &&
+      identity.changeTimeMillis !== undefined &&
+      Math.floor(stats.ctimeMs) !== identity.changeTimeMillis)
+  ) {
+    throw new Error(reason)
+  }
+}
+
+function shouldComparePosixChangeTime(): boolean {
+  const processLike = (globalThis as { process?: { platform?: string } }).process
+  return processLike?.platform !== 'win32'
 }

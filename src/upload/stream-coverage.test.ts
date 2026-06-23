@@ -662,6 +662,62 @@ describe('createWriteStream branch coverage', () => {
     expect(cancelCalls).toBe(0)
     expect(cleanupFailures).toHaveLength(1)
   })
+
+  it('aborts a stalled in-flight part request when writer.abort() is called', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
+    const inner = sim.transport()
+    const uploadPartStarted = Promise.withResolvers<AbortSignal>()
+    const uploadPartAborted = Promise.withResolvers<void>()
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part')) {
+          if (req.signal === undefined) throw new Error('expected upload part signal')
+          uploadPartStarted.resolve(req.signal)
+          return await new Promise<HttpResponse>((_resolve, reject) => {
+            req.signal?.addEventListener(
+              'abort',
+              () => {
+                uploadPartAborted.resolve()
+                reject(req.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+              },
+              { once: true },
+            )
+          })
+        }
+        return inner.send(req)
+      },
+    }
+    const stalledClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await stalledClient.authorize()
+    const stalledBucket = await stalledClient.createBucket({
+      bucketName: 'stream-stalled-part-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = stalledBucket.file('stalled-part.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    const partSignal = await uploadPartStarted.promise
+
+    await writer.abort(new Error('stop stalled part'))
+    await uploadPartAborted.promise
+
+    expect(partSignal.aborted).toBe(true)
+    const rejection = await done.then(
+      () => null,
+      (err) => err,
+    )
+    expect(rejection).toBeInstanceOf(Error)
+    expect(rejection.message).toContain('stop stalled part')
+  })
 })
 
 function delay(ms: number): Promise<void> {

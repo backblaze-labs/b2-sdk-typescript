@@ -55,6 +55,16 @@ export interface LargeFileCleanupContext {
   readonly onCleanupFailure?: CleanupFailureListener | undefined
 }
 
+/** Options for applying the shared large-file cleanup policy. */
+export interface LargeFileCleanupPolicyOptions {
+  /**
+   * Whether non-ambiguous failures should cancel the unfinished large file.
+   * Defaults to true. Explicit resume callers can disable this so the SDK does
+   * not cancel a large file that it did not create.
+   */
+  readonly cancelOnError?: boolean
+}
+
 /**
  * Cancels an unfinished large file on a best-effort basis. Used at every
  * error-handling boundary in the multipart upload, write-stream, and
@@ -252,6 +262,7 @@ export function handleAmbiguousFinishLargeFileResponseBodyError(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param context - Large file metadata used for cleanup and diagnostics.
+ * @param options - Cleanup policy controls.
  *
  * @returns The error that should be surfaced to the caller.
  */
@@ -260,28 +271,39 @@ export async function resolveLargeFileErrorAfterCleanup(
   raw: RawClient,
   accountInfo: AccountInfo,
   context: LargeFileCleanupContext,
+  options: LargeFileCleanupPolicyOptions = {},
 ): Promise<unknown> {
   if (err instanceof FinishLargeFileResponseBodyError) {
     return handleAmbiguousFinishLargeFileResponseBodyError(err, context)
   }
-  await cancelLargeFileBestEffort(raw, accountInfo, context.fileId, {
-    ...(context.signal !== undefined ? { signal: context.signal } : {}),
-    ...(context.onCleanupFailure !== undefined
-      ? { onCleanupFailure: context.onCleanupFailure }
-      : {}),
-  })
+  if (options.cancelOnError ?? true) {
+    await cancelLargeFileBestEffort(raw, accountInfo, context.fileId, {
+      ...(context.signal !== undefined ? { signal: context.signal } : {}),
+      ...(context.onCleanupFailure !== undefined
+        ? { onCleanupFailure: context.onCleanupFailure }
+        : {}),
+    })
+  }
   return err
 }
 
 /**
  * Throwing wrapper around {@link resolveLargeFileErrorAfterCleanup} for paths
  * that can surface the error directly.
+ * @param err - Error from a multipart upload/copy/write-stream path.
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param context - Large file metadata used for cleanup and diagnostics.
+ * @param options - Cleanup policy controls.
+ *
+ * @throws The resolved large-file error after cleanup policy is applied.
  */
 export async function cleanupAfterLargeFileError(
   err: unknown,
   raw: RawClient,
   accountInfo: AccountInfo,
   context: LargeFileCleanupContext,
+  options?: LargeFileCleanupPolicyOptions,
 ): Promise<never> {
-  throw await resolveLargeFileErrorAfterCleanup(err, raw, accountInfo, context)
+  throw await resolveLargeFileErrorAfterCleanup(err, raw, accountInfo, context, options)
 }

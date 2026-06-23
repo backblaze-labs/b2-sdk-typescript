@@ -1068,6 +1068,135 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
   })
 
+  it('cancels instead of finishing when a sliceable upload aborts after all parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pre-abort-sliceable',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('deadline before finish')
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    let uploadPartCalls = 0
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      const result = await originalUploadPart(...args)
+      uploadPartCalls += 1
+      if (uploadPartCalls === 2) controller.abort(abortReason)
+      return result
+    })
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'finish-pre-abort-sliceable.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('deadline before finish')
+
+    expect(finishLargeFile).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledOnce()
+  })
+
+  it('cancels instead of finishing when a forward-only upload aborts after all parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pre-abort-stream',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('stream deadline before finish')
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    let uploadPartCalls = 0
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      const result = await originalUploadPart(...args)
+      uploadPartCalls += 1
+      if (uploadPartCalls === 2) controller.abort(abortReason)
+      return result
+    })
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const payload = deterministicBytes(200_000)
+    const readable = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(payload)
+        streamController.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'finish-pre-abort-stream.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('stream deadline before finish')
+
+    expect(finishLargeFile).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledOnce()
+  })
+
+  it('reports reconciliation metadata when aborting while finish is pending', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const finishStarted = Promise.withResolvers<AbortSignal>()
+    vi.spyOn(client.raw, 'finishLargeFile').mockImplementation(
+      async (_apiUrl, _authToken, _request, options) => {
+        if (options?.signal === undefined) throw new Error('expected finish abort signal')
+        finishStarted.resolve(options.signal)
+        return await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      },
+    )
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const cleanupFailures: unknown[] = []
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'finish-pending-abort.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+      onCleanupFailure: (event) => {
+        expect(event.reason).toBe('finish-ambiguous')
+        cleanupFailures.push(event)
+      },
+    })
+
+    const finishSignal = await finishStarted.promise
+    controller.abort(new Error('shutdown during finish'))
+
+    const err = await upload.then(
+      () => null,
+      (rejection) => rejection,
+    )
+    expect(finishSignal.aborted).toBe(true)
+    expect(err).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((err as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((err as FinishLargeFileResponseBodyError).fileName).toBe('finish-pending-abort.bin')
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+    expect(cleanupFailures).toHaveLength(1)
+  })
+
   it('does not cancel a forward-only upload with an ambiguous finish response', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
@@ -4408,16 +4537,47 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-read-abort.bin')).toBeUndefined()
   })
 
-  it('rejects a streaming-source upload when resume is requested', async () => {
-    // StreamSource has no random access, so resume can't replay parts.
-    // The engine bails early with a clear message and cancels the
-    // started large file rather than silently buffering the whole
-    // payload. The `resume` option lives on `uploadLargeFile` rather
+  it('ignores resume: true on streaming-source uploads', async () => {
+    // Deprecated same-name resume is disabled; without an explicit
+    // resumeFileId, resume: true starts a fresh upload even when the source
+    // is forward-only. The `resume` option lives on `uploadLargeFile` rather
     // than the high-level `bucket.upload`, so we call it directly.
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'stream-resume',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'resume-stream.bin',
+      source: new StreamSource(readable, payload.byteLength),
+      partSize,
+      concurrency: 1,
+      resume: true,
+    })
+
+    expect(result.fileName).toBe('resume-stream.bin')
+    expect(result.contentLength).toBe(payload.byteLength)
+    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+  })
+
+  it('rejects resumeFileId on streaming-source uploads', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-resume-file-id',
       bucketType: BucketType.AllPrivate,
     })
 
@@ -4438,7 +4598,7 @@ describe('uploadSmallFile cleanup path', () => {
         source: new StreamSource(readable, payload.byteLength),
         partSize,
         concurrency: 1,
-        resume: true,
+        resumeFileId: largeFileId('stream-resume-file-id'),
       }),
     ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
     expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()

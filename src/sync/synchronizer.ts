@@ -813,8 +813,7 @@ function createActionFactory(
           // same-size rewrite detection should use compareMode: 'sha1' or an
           // independent digest because restored modification times can hide
           // local rewrites.
-          await validateScannedLocalFile(source)
-          const fileSource = await FileSource.fromPath(targetPath)
+          const fileSource = await createValidatedUploadFileSource(source, targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -988,6 +987,33 @@ function createActionFactory(
   }
 
   return factory
+}
+
+async function createValidatedUploadFileSource(
+  source: LocalSyncPath,
+  absolutePath: string,
+): Promise<FileSource> {
+  try {
+    const fileSource = await FileSource.fromPath(absolutePath)
+    await validateScannedLocalFile({ ...source, absolutePath })
+    return fileSource
+  } catch (err) {
+    throw normalizeLocalUploadSourceError(err)
+  }
+}
+
+function normalizeLocalUploadSourceError(err: unknown): Error {
+  if (err instanceof Error && err.message.startsWith('local file changed before upload')) {
+    return err
+  }
+  const message = err instanceof Error ? err.message : String(err)
+  if (message.includes('not a regular file')) {
+    return new Error('local file changed before upload: not a regular file')
+  }
+  if (message.includes('changed') || message.includes('modified')) {
+    return new Error('local file changed before upload')
+  }
+  return new Error(`local file changed before upload: ${sanitizeErrorReason(err)}`)
 }
 
 function localSyncRoot(folder: LocalSyncFolder | undefined): string {

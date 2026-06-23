@@ -8,7 +8,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { createUploadAbortScope } from './abort-scope.ts'
+import { createAbortScope } from './abort-scope.ts'
 import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
@@ -88,7 +88,7 @@ export function createWriteStream(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const tracker = new ProgressTracker(options.onProgress, null, null)
   const sem = new Semaphore(concurrency)
-  const abortScope = createUploadAbortScope(options.signal)
+  const abortScope = createAbortScope(options.signal)
 
   let largeFileId: LargeFileId | null = null
   let startPromise: Promise<LargeFileId> | null = null
@@ -334,8 +334,8 @@ export function createWriteStream(
           { fileId: largeFileId, partSha1Array: partSha1s },
           { signal: abortScope.signal },
         )
-        resolveDone(result)
         abortScope.dispose()
+        resolveDone(result)
       } catch (err) {
         markErrored(err)
         const settled = await Promise.allSettled(inflight)
@@ -358,8 +358,8 @@ export function createWriteStream(
             onCleanupFailure: options.onCleanupFailure,
           })
         }
-        rejectDone(finalError)
         abortScope.dispose()
+        rejectDone(finalError)
         throw finalError
       }
     },
@@ -384,8 +384,8 @@ export function createWriteStream(
           cleanupWriteStreamOptions(options),
         )
       }
-      rejectDone(abortError)
       abortScope.dispose()
+      rejectDone(abortError)
     },
   })
 

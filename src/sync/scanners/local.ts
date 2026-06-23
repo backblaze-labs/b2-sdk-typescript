@@ -169,7 +169,13 @@ export class LocalFolder implements SyncFolder {
           absolutePath: fullPath,
           modTimeMillis: Math.floor(s.mtimeMs),
           size: s.size,
-          fileIdentity: localFileIdentityFromStats(s),
+          fileIdentity: {
+            deviceId: s.dev,
+            inode: s.ino,
+            size: s.size,
+            modTimeMillis: Math.floor(s.mtimeMs),
+            changeTimeMillis: Math.floor(s.ctimeMs),
+          },
         })
       }
     }

@@ -160,6 +160,7 @@ interface RequestTimeoutScope {
   readonly signal?: AbortSignal
   readonly timeoutMs: number
   readonly timedOut: boolean
+  reset(): void
   dispose(): void
 }
 
@@ -169,6 +170,7 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
     const scope: RequestTimeoutScope = {
       timeoutMs: 0,
       timedOut: false,
+      reset() {},
       dispose() {},
     }
     if (request.signal !== undefined) return { ...scope, signal: request.signal }
@@ -177,14 +179,26 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
 
   const controller = new AbortController()
   let timedOut = false
+  let timer: ReturnType<typeof setTimeout>
   const abortFromUpstream = (): void => {
+    clearTimeout(timer)
     controller.abort(request.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
   }
-  const timer = setTimeout(() => {
-    timedOut = true
-    controller.abort(new DOMException('HTTP request timed out', 'TimeoutError'))
-  }, timeoutMs)
-  unrefTimer(timer)
+  const armTimer = (): ReturnType<typeof setTimeout> => {
+    const nextTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new DOMException('HTTP request timed out', 'TimeoutError'))
+    }, timeoutMs)
+    unrefTimer(nextTimer)
+    return nextTimer
+  }
+  timer = armTimer()
+
+  const reset = (): void => {
+    if (timedOut || controller.signal.aborted) return
+    clearTimeout(timer)
+    timer = armTimer()
+  }
 
   if (request.signal?.aborted === true) {
     clearTimeout(timer)
@@ -199,6 +213,7 @@ function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
     get timedOut() {
       return timedOut
     },
+    reset,
     dispose() {
       clearTimeout(timer)
       request.signal?.removeEventListener('abort', abortFromUpstream)
@@ -278,6 +293,7 @@ function createTimedResponseBody(
           controller.close()
           return
         }
+        timeoutScope.reset()
         controller.enqueue(result.value)
       } catch (err) {
         dispose()

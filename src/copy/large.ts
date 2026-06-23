@@ -3,6 +3,7 @@ import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
+import { createAbortScope, throwRejectedOrAbortReason } from '../upload/abort-scope.ts'
 import { type CleanupFailureListener, cleanupAfterLargeFileError } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -122,7 +123,7 @@ export async function copyLargeFile(
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
-  const abortScope = createCopyAbortScope(options.signal)
+  const abortScope = createAbortScope(options.signal)
 
   try {
     abortScope.signal.throwIfAborted()
@@ -153,17 +154,7 @@ export async function copyLargeFile(
       }
     })
 
-    const settled = await Promise.allSettled(tasks)
-    const rejected = settled.find(
-      (result): result is PromiseRejectedResult => result.status === 'rejected',
-    )
-    if (rejected !== undefined) {
-      if (abortScope.signal.aborted && abortScope.signal.reason !== undefined) {
-        throw abortScope.signal.reason
-      }
-      /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
-      throw rejected.reason
-    }
+    throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
     abortScope.signal.throwIfAborted()
     return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
@@ -181,34 +172,5 @@ export async function copyLargeFile(
     })
   } finally {
     abortScope.dispose()
-  }
-}
-
-interface CopyAbortScope {
-  readonly signal: AbortSignal
-  abort(reason: unknown): void
-  dispose(): void
-}
-
-function createCopyAbortScope(upstream: AbortSignal | undefined): CopyAbortScope {
-  const controller = new AbortController()
-  let upstreamAbort: (() => void) | undefined
-  const abort = (reason: unknown): void => {
-    if (!controller.signal.aborted) controller.abort(reason)
-  }
-
-  if (upstream?.aborted === true) {
-    abort(upstream.reason)
-  } else if (upstream !== undefined) {
-    upstreamAbort = () => abort(upstream.reason)
-    upstream.addEventListener('abort', upstreamAbort, { once: true })
-  }
-
-  return {
-    signal: controller.signal,
-    abort,
-    dispose() {
-      if (upstreamAbort !== undefined) upstream?.removeEventListener('abort', upstreamAbort)
-    },
   }
 }

@@ -133,7 +133,7 @@ Use `onUploadRetry` to log or count retry attempts, compare returned file IDs an
 
 Single-request uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies and upload POST network errors by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
 
-Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. Each HTTP attempt has a 15 minute deadline by default; set `retry.requestTimeoutMs` higher for very slow links or to `0` to rely only on your own `AbortSignal`.
+Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Multipart workers abort sibling work promptly after a fatal part failure, and best-effort cleanup is bounded so aborting a stream does not hang indefinitely. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. Each HTTP attempt has a 15 minute deadline by default; for streamed download bodies the timeout is idle/no-progress and resets after each chunk. Set `retry.requestTimeoutMs` higher for very slow upload links or to `0` to rely only on your own `AbortSignal`.
 
 `FileSource` is the Node.js-only content adapter. It is safe to import from the
 main package in browser builds, but `FileSource.fromPath()` and its read methods
@@ -632,10 +632,12 @@ const client = new B2Client({
 })
 ```
 
-`requestTimeoutMs` is an absolute deadline per HTTP attempt. For upload POSTs
-it covers sending the full request body and reading the response body, so slow
-large-part uploads may need a higher value or `0` to rely on your own
-`AbortSignal`. Worst-case terminal latency can be roughly
+`requestTimeoutMs` covers request dispatch, upload POST bodies, and
+non-streaming response-body reads. For `response.body` download streams it is an
+idle/no-progress timeout that resets after each received chunk, so healthy large
+downloads are not aborted merely because the total transfer takes longer than
+the timeout. Slow large-part uploads may need a higher value or `0` to rely on
+your own `AbortSignal`. Worst-case terminal latency can be roughly
 `(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
 
 When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.

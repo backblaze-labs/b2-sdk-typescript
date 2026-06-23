@@ -141,8 +141,8 @@ export interface LocalFileIdentity {
   /** Modification time observed during the scan, floored to milliseconds. */
   readonly modTimeMillis: number
   /**
-   * Node `Stats.ctime` observed during the scan, floored to milliseconds when available.
-   * On POSIX this is status-change time; on Windows Node reports creation time.
+   * POSIX inode-change time observed during the scan, floored to milliseconds.
+   * Built-in local scans populate this; custom scanners may omit it.
    */
   readonly changeTimeMillis?: number
 }
