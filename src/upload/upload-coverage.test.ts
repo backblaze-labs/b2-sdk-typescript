@@ -1068,6 +1068,61 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
   })
 
+  it('does not retry or cancel when finishLargeFile times out after commit', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let finishCalls = 0
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 2, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            finishCalls += 1
+            await inner.send(req)
+            throw new DOMException('finish timed out after commit', 'TimeoutError')
+          }
+          return inner.send(req)
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-timeout-ambiguous',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    let finishError: unknown
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'ambiguous-finish-timeout.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          finishError = event.error
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.fileId).toMatch(/^4_z/)
+        },
+      }),
+    ).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+
+    expect(finishCalls).toBe(1)
+    expect(cancelCalls).toBe(0)
+    expect(finishError).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((finishError as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((finishError as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((finishError as FinishLargeFileResponseBodyError).fileName).toBe(
+      'ambiguous-finish-timeout.bin',
+    )
+    expect(await countFileVersions(bucket, 'ambiguous-finish-timeout.bin')).toBe(1)
+  })
+
   it('cancels instead of finishing when a sliceable upload aborts after all parts', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
@@ -2363,7 +2418,7 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(2)
   })
 
-  it('retries upload DOMException failures with a fresh URL', async () => {
+  it('does not retry upload timeouts after the file may have been stored', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2382,6 +2437,7 @@ describe('upload fresh-URL retry', () => {
         if (req.url.includes('b2_upload_file?')) {
           uploadAttempts += 1
           if (uploadAttempts === 1) {
+            await inner.send(req)
             throw new DOMException('upload timed out', 'TimeoutError')
           }
         }
@@ -2396,18 +2452,20 @@ describe('upload fresh-URL retry', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'retry-domexception',
+      bucketName: 'no-retry-timeout',
       bucketType: BucketType.AllPrivate,
     })
 
-    const result = await bucket.upload({
-      fileName: 'retry-domexception.txt',
-      source: new BufferSource(new Uint8Array([1, 2, 3])),
-    })
+    await expect(
+      bucket.upload({
+        fileName: 'no-retry-timeout.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toBeInstanceOf(NetworkError)
 
-    expect(result.fileName).toBe('retry-domexception.txt')
-    expect(uploadAttempts).toBe(2)
-    expect(getUploadUrlCalls).toBe(2)
+    expect(uploadAttempts).toBe(1)
+    expect(getUploadUrlCalls).toBe(1)
+    expect(await countFileVersions(bucket, 'no-retry-timeout.txt')).toBe(1)
   })
 
   it('recovers expired upload tokens through fresh URL retry without reauth', async () => {
@@ -2539,6 +2597,61 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadPartAttempts).toBe(3)
     expect(harness.uploadPartUrls[0]).toBe(harness.uploadPartUrls[1])
     expect(retryEvents).toEqual([])
+  })
+
+  it('does not retry multipart part timeouts after the part may have been stored', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let getUploadPartUrlCalls = 0
+    let uploadPartAttempts = 0
+    let cancelCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_part_url')) {
+          getUploadPartUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&partTimeout=${getUploadPartUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          uploadPartAttempts += 1
+          if (uploadPartAttempts === 1) {
+            await inner.send(req)
+            throw new DOMException('part upload timed out', 'TimeoutError')
+          }
+        }
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'no-retry-part-timeout',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'no-retry-part-timeout.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+      }),
+    ).rejects.toBeInstanceOf(NetworkError)
+
+    expect(uploadPartAttempts).toBe(1)
+    expect(getUploadPartUrlCalls).toBe(1)
+    expect(cancelCalls).toBe(1)
+    expect(await countFileVersions(bucket, 'no-retry-part-timeout.bin')).toBe(0)
   })
 })
 

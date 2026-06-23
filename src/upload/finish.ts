@@ -1,5 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
+import { FinishLargeFileResponseBodyError, NetworkError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
@@ -47,7 +47,7 @@ export async function finishLargeFileWithAbortReconciliation(
           },
     )
   } catch (err) {
-    if (isAbortOrTimeoutAfterFinishDispatch(err, context.signal)) {
+    if (isAmbiguousFinishDispatchFailure(err, context.signal)) {
       throw new FinishLargeFileResponseBodyError(
         'b2_finish_large_file failed after dispatch; final file state is ambiguous.',
         {
@@ -62,10 +62,8 @@ export async function finishLargeFileWithAbortReconciliation(
   }
 }
 
-function isAbortOrTimeoutAfterFinishDispatch(
-  err: unknown,
-  signal: AbortSignal | undefined,
-): boolean {
+function isAmbiguousFinishDispatchFailure(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (err instanceof NetworkError) return true
   if (isTimeoutError(err)) return true
   if (signal?.aborted !== true) return false
   if (signal.reason !== undefined && Object.is(err, signal.reason)) return true

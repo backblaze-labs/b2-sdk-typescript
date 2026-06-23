@@ -1189,6 +1189,28 @@ describe('RetryTransport', () => {
       expect(result).toBe(okResponse)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
+
+    it('does not replay finishLargeFile request timeouts', async () => {
+      innerTransport.send.mockRejectedValue(
+        new DOMException('HTTP request timed out', 'TimeoutError'),
+      )
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_finish_large_file',
+        }),
+      ).rejects.toMatchObject({
+        name: 'NetworkError',
+        cause: { name: 'TimeoutError' },
+      })
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
   })
 
   // --------------------------------------------------------------------------

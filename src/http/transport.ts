@@ -414,6 +414,14 @@ function isUploadEndpoint(url: string): boolean {
   )
 }
 
+function isFinishLargeFileEndpoint(url: string): boolean {
+  return new URL(url).pathname.includes('/b2_finish_large_file')
+}
+
+function isReplayUnsafePostEndpoint(url: string): boolean {
+  return isUploadEndpoint(url) || isFinishLargeFileEndpoint(url)
+}
+
 /**
  * Decide whether a classified error should be retried in place for `url`.
  * Transient errors normally retry; upload endpoints bubble to the upload layer
@@ -427,6 +435,7 @@ function isUploadEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
   return true
@@ -570,7 +579,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isUploadEndpoint(request.url) || attempt === retryOptions.maxRetries) {
+        if (isReplayUnsafePostEndpoint(request.url) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 

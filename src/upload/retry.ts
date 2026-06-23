@@ -6,6 +6,7 @@ import {
   BadRequestError,
   BadUploadUrlError,
   NetworkError,
+  UploadResponseBodyError,
 } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
@@ -66,9 +67,8 @@ const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
  * Resolves the public per-upload-mode default for `retryResponseBodyFailures`.
  * For single-request uploads, this value gates unreadable response bodies and
  * ambiguous upload POST network errors after the payload may have been sent.
- * For multipart uploads, this value gates unreadable response bodies; upload
- * POST network errors are retried regardless because B2 keeps the latest write
- * for a part number before finishLargeFile.
+ * For multipart uploads, callers must opt into replaying ambiguous upload POST
+ * failures the same way single-request uploads do.
  *
  * @param value - Caller-provided override, if any.
  * @param mode - Upload path whose default should be applied.
@@ -79,8 +79,8 @@ export function resolveRetryResponseBodyFailures(
   value: boolean | undefined,
   mode: 'single' | 'multipart',
 ): boolean {
-  const defaultValue = mode === 'multipart'
-  return value ?? defaultValue
+  void mode
+  return value ?? false
 }
 
 /**
@@ -212,7 +212,8 @@ export function uploadPartWithFreshUrl(
  * response can create a duplicate file version. Multipart retries re-send the
  * same part number instead. Response-body retry defaults are caller-specific:
  * single-request uploads keep them off by default, while multipart callers can
- * enable them by default because re-sending the same part number is idempotent.
+ * opt in with `retryResponseBodyFailures: true` when replaying the same part
+ * number is acceptable.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
@@ -298,8 +299,7 @@ function isUploadRetryable(
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
     if (!options.uploadStarted) return true
-    if (options.partNumber === null && !options.retryResponseBodyFailures) return false
-    return true
+    return options.retryResponseBodyFailures === true
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
@@ -310,11 +310,13 @@ function isUploadRateLimitError(err: unknown): err is B2Error {
   return err instanceof B2Error && err.status === 429
 }
 
-function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {
+function normalizeUploadRetryError(err: unknown, _options: UploadLayerRetryOptions): unknown {
   if (err instanceof B2Error || err instanceof NetworkError) return err
+  if (err instanceof UploadResponseBodyError) {
+    return new NetworkError(err.message, err)
+  }
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
-    if (!options.retryResponseBodyFailures) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }
