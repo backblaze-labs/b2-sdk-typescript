@@ -274,6 +274,26 @@ describe('LocalFolder', () => {
     }
   })
 
+  it('normalizes Windows roots at construction time', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('C:\\base\\dir')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(new LocalFolder('C:\\base\\..\\dest').root).toBe('C:\\dest')
+      expect(new LocalFolder('\\dest\\.\\child').root).toBe('C:\\dest\\child')
+      expect(new LocalFolder('relative\\..\\dest').root).toBe('C:\\base\\dir\\dest')
+      expect(new LocalFolder('\\\\server\\share\\dir\\..').root).toBe('\\\\server\\share\\')
+      expect(new LocalFolder('\\\\server').root).toBe('\\\\server')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
   it('uses forward slashes in relative paths even on the current platform', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
     await writeFile(join(tmpDir, 'a', 'b', 'file.txt'), 'content')
