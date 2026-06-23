@@ -805,7 +805,10 @@ export class Bucket {
     destinationServerSideEncryption?: EncryptionSetting
     /** SSE-C settings for the source if it was uploaded with SSE-C. */
     sourceServerSideEncryption?: EncryptionSetting
-    /** Callback invoked if best-effort multipart cleanup fails after a copy error. */
+    /**
+     * Callback invoked if best-effort cancellation fails, or if cancellation is
+     * skipped because `b2_finish_large_file` may already have committed.
+     */
     onCleanupFailure?: CleanupFailureListener
     /** Part size in bytes. Defaults to the account's recommended part size. */
     partSize?: number

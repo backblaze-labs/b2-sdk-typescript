@@ -95,6 +95,12 @@ export type JsonPostOptions = RawRequestOptions
 /** Optional request controls for {@link RawClient.finishLargeFile}. */
 export type FinishLargeFileOptions = RawRequestOptions
 
+/** Optional request controls for {@link RawClient.copyPart}. */
+export type CopyPartOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.startLargeFile}. */
+export type StartLargeFileOptions = RawRequestOptions
+
 function normalizeRawRequestOptions(
   optionsOrSignal?: RawRequestOptions | AbortSignal,
   retry?: Partial<RetryOptions>,
@@ -506,6 +512,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The copied part metadata.
    */
@@ -513,8 +520,9 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyPartRequest,
+    options?: CopyPartOptions,
   ): Promise<CopyPartResponse> {
-    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request)
+    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request, options)
   }
 
   // --- Large Files ---
@@ -524,7 +532,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The started large file metadata with file ID.
    */
@@ -532,7 +540,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: StartLargeFileRequest,
-    options?: RawRequestOptions,
+    options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
     return this.postJson<StartLargeFileResponse>(
       apiUrl,

@@ -146,6 +146,12 @@ export type {
   CleanupFailureListener,
   CleanupFailureOptions,
 } from './upload/cancel.ts'
+export type {
+  B2ObjectUploadOptions,
+  B2ObjectWriteStreamOptions,
+  BucketUploadOptions,
+  HighLevelUploadOptions,
+} from './upload/options.ts'
 export type { UploadRetryEvent, UploadRetryListener, UploadRetryOptions } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'

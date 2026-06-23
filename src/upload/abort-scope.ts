@@ -59,3 +59,50 @@ export function throwRejectedOrAbortReason(
   /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
   throw rejected.reason
 }
+
+/**
+ * Returns the observable reason for an aborted signal.
+ * @param signal - Aborted signal to inspect.
+ *
+ * @returns The signal's reason, or a standard AbortError when the runtime did not provide one.
+ */
+export function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Aborted', 'AbortError')
+}
+
+/**
+ * Races a request promise against an abort signal.
+ *
+ * The underlying request must still receive the same signal so transports can
+ * cancel their network work. This helper makes callers stop waiting promptly
+ * even when a test double or custom transport ignores the signal.
+ *
+ * @param promise - Request promise to observe.
+ * @param signal - Signal that should stop waiting for the request.
+ *
+ * @returns The request result if it settles before the signal aborts.
+ *
+ * @throws The abort reason if the signal aborts first, or the request rejection.
+ */
+export async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    promise.catch(() => {})
+    throw abortReason(signal)
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = (): void => reject(abortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([promise, abort])
+  } catch (err) {
+    if (signal.aborted) promise.catch(() => {})
+    throw err
+  } finally {
+    removeAbortListener?.()
+  }
+}

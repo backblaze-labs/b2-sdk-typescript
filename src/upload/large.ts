@@ -12,8 +12,12 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
-import { createAbortScope, throwRejectedOrAbortReason } from './abort-scope.ts'
-import { cleanupAfterLargeFileError, type CleanupFailureOptions } from './cancel.ts'
+import { createAbortScope, raceWithAbort, throwRejectedOrAbortReason } from './abort-scope.ts'
+import {
+  cancelLargeFileBestEffort,
+  cleanupAfterLargeFileError,
+  type CleanupFailureOptions,
+} from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import {
@@ -263,103 +267,104 @@ export async function uploadLargeFile(
   }
 
   // --- Explicit resume file reuse (M11.1) ---
-  let largeFileId!: LargeFileId
-  let preUploaded!: ReadonlyMap<number, string>
+  let largeFileId: LargeFileId | undefined
+  let preUploaded: ReadonlyMap<number, string> = new Map()
   let createdLargeFile = false
-  const controlOptions = options.signal !== undefined ? { signal: options.signal } : undefined
+  const abortScope = createAbortScope(options.signal)
   const startFreshLargeFile = async (): Promise<void> => {
-    const startResp = await raw.startLargeFile(
+    abortScope.signal.throwIfAborted()
+    const startPromise = raw.startLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       startLargeFileRequest,
-      controlOptions,
+      {
+        signal: abortScope.signal,
+        ...(options.retry !== undefined ? { retry: options.retry } : {}),
+      },
     )
-    largeFileId = startResp.fileId
+    try {
+      const startResp = await raceWithAbort(startPromise, abortScope.signal)
+      largeFileId = startResp.fileId
+    } catch (err) {
+      if (abortScope.signal.aborted) {
+        cancelLargeFileAfterStart(startPromise, raw, accountInfo, options.onCleanupFailure)
+      }
+      throw err
+    }
     preUploaded = new Map<number, string>()
     createdLargeFile = true
   }
 
-  if (options.resumeFileId !== undefined) {
-    const candidate = await findResumeCandidate(
-      raw,
-      accountInfo,
-      options.bucketId,
-      options.fileName,
-      {
-        ...resumeCandidateCriteria,
-        resumeFileId: options.resumeFileId,
-      },
-    )
-    if (candidate === null) {
-      throw new ResumeFileIdMismatchError(options.resumeFileId, options.fileName)
-    }
-    largeFileId = candidate.fileId
-    preUploaded = candidate.uploadedPartSha1s
-  } else if (options.resume === true && options.source.canSlice) {
-    const candidate = await findResumeCandidate(
-      raw,
-      accountInfo,
-      options.bucketId,
-      options.fileName,
-      resumeCandidateCriteria,
-    )
-    if (candidate) {
+  try {
+    abortScope.signal.throwIfAborted()
+    if (options.resumeFileId !== undefined) {
+      const candidate = await findResumeCandidate(
+        raw,
+        accountInfo,
+        options.bucketId,
+        options.fileName,
+        {
+          ...resumeCandidateCriteria,
+          resumeFileId: options.resumeFileId,
+        },
+      )
+      if (candidate === null) {
+        throw new ResumeFileIdMismatchError(options.resumeFileId, options.fileName)
+      }
       largeFileId = candidate.fileId
-      preUploaded = new Map<number, string>()
+      preUploaded = candidate.uploadedPartSha1s
+    } else if (options.resume === true && options.source.canSlice) {
+      const candidate = await findResumeCandidate(
+        raw,
+        accountInfo,
+        options.bucketId,
+        options.fileName,
+        resumeCandidateCriteria,
+      )
+      if (candidate) {
+        largeFileId = candidate.fileId
+        preUploaded = new Map<number, string>()
+      } else {
+        await startFreshLargeFile()
+      }
     } else {
       await startFreshLargeFile()
     }
-  } else {
-    await startFreshLargeFile()
-  }
+    const activeLargeFileId = largeFileId
+    if (activeLargeFileId === undefined) {
+      throw new Error('uploadLargeFile: start did not return a large file ID.')
+    }
 
-  const partSha1s: string[] = new Array(parts.length)
-  const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
-  const sem = new Semaphore(concurrency)
+    const partSha1s: string[] = new Array(parts.length)
+    const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
+    const sem = new Semaphore(concurrency)
 
-  // Non-sliceable sources can't be read in parallel — there's only one
-  // forward-only cursor. Resume is also impossible (no seek). Bail to a
-  // sequential read loop instead. Each part is buffered, hashed, shipped,
-  // then dropped before the next read starts, so the peak memory footprint is
-  // ~partSize bytes regardless of total file size.
-  if (!options.source.canSlice) {
-    const abortScope = createAbortScope(options.signal)
-    try {
+    // Non-sliceable sources can't be read in parallel — there's only one
+    // forward-only cursor. Resume is also impossible (no seek). Bail to a
+    // sequential read loop instead. Each part is buffered, hashed, shipped,
+    // then dropped before the next read starts, so the peak memory footprint is
+    // ~partSize bytes regardless of total file size.
+    if (!options.source.canSlice) {
       await uploadPartsSequentially(
         raw,
         accountInfo,
         options,
-        abortScope.signal,
-        largeFileId,
+        activeLargeFileId,
         parts,
         partSha1s,
         tracker,
+        abortScope.signal,
       )
       return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
-        fileId: largeFileId,
+        fileId: activeLargeFileId,
         bucketId: options.bucketId,
         fileName: options.fileName,
         partSha1s,
         signal: abortScope.signal,
         ...(options.retry !== undefined ? { retry: options.retry } : {}),
       })
-    } catch (err) {
-      abortScope.abort(err)
-      return await cleanupAfterUploadLargeFileError(
-        err,
-        raw,
-        accountInfo,
-        options,
-        largeFileId,
-        createdLargeFile,
-      )
-    } finally {
-      abortScope.dispose()
     }
-  }
 
-  const abortScope = createAbortScope(options.signal)
-  try {
     const tasks = parts.map(async (part) => {
       await sem.acquire()
       try {
@@ -380,7 +385,7 @@ export async function uploadLargeFile(
         if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
           notifyResumePartReused(options.onResumePartReused, {
             fileName: options.fileName,
-            fileId: largeFileId,
+            fileId: activeLargeFileId,
             partNumber: part.partNumber,
             contentLength: data.byteLength,
             contentSha1: serverSha1,
@@ -391,7 +396,7 @@ export async function uploadLargeFile(
           return
         }
 
-        const result = await uploadPartWithFreshUrl(raw, accountInfo, largeFileId, {
+        const result = await uploadPartWithFreshUrl(raw, accountInfo, activeLargeFileId, {
           fileName: options.fileName,
           partNumber: part.partNumber,
           data,
@@ -423,7 +428,7 @@ export async function uploadLargeFile(
     throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
     const result = await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
-      fileId: largeFileId,
+      fileId: activeLargeFileId,
       bucketId: options.bucketId,
       fileName: options.fileName,
       partSha1s,
@@ -434,6 +439,7 @@ export async function uploadLargeFile(
     return result
   } catch (err) {
     abortScope.abort(err)
+    if (largeFileId === undefined) throw err
     return await cleanupAfterUploadLargeFileError(
       err,
       raw,
@@ -445,6 +451,26 @@ export async function uploadLargeFile(
   } finally {
     abortScope.dispose()
   }
+}
+
+function cancelLargeFileAfterStart(
+  started: Promise<{ readonly fileId: LargeFileId }>,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  onCleanupFailure: CleanupFailureOptions['onCleanupFailure'],
+): void {
+  void started
+    .then((resp) =>
+      cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        resp.fileId,
+        onCleanupFailure === undefined ? undefined : { onCleanupFailure },
+      ),
+    )
+    .catch(() => {
+      // If start failed, no file ID is available to cancel.
+    })
 }
 
 async function cleanupAfterUploadLargeFileError(
@@ -485,22 +511,22 @@ async function cleanupAfterUploadLargeFileError(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param options - The original `uploadLargeFile` options.
- * @param signal - Abort signal shared by part uploads and control-plane calls.
  * @param largeFileId - ID of the in-progress large file (already started).
  * @param parts - Pre-planned part layout (used for part numbers + count).
  * @param partSha1s - Output array, written in-place at index `partNumber - 1`.
  * @param tracker - Progress tracker; bytes added per chunk, part completed
  *   each time a part finishes.
+ * @param signal - Linked abort signal for source reads and part uploads.
  */
 async function uploadPartsSequentially(
   raw: RawClient,
   accountInfo: AccountInfo,
   options: UploadLargeFileOptions,
-  signal: AbortSignal,
   largeFileId: LargeFileId,
   parts: readonly RangePlan[],
   partSha1s: string[],
   tracker: ProgressTracker,
+  signal: AbortSignal,
 ): Promise<void> {
   const reader = options.source.stream().getReader()
   let partNumber = 1
@@ -528,7 +554,7 @@ async function uploadPartsSequentially(
         const { done, value } = await readNextNonEmptyStreamChunk(
           reader,
           STREAM_EMPTY_CHUNKS_ERROR,
-          options.signal,
+          signal,
         )
         if (done) break
         const take = Math.min(value.byteLength, buf.byteLength - filled)
@@ -575,7 +601,7 @@ async function uploadPartsSequentially(
     const extra = await readNextNonEmptyStreamChunk(
       reader,
       STREAM_TRAILING_EMPTY_CHUNKS_ERROR,
-      options.signal,
+      signal,
     )
     if (!extra.done) {
       throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)

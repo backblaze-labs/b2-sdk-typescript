@@ -1158,6 +1158,48 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(cancelLargeFile).toHaveBeenCalledOnce()
   })
 
+  it('returns promptly and cancels later when startLargeFile resolves after abort', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'start-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('shutdown during start')
+    const startSignal = deferred<AbortSignal>()
+    const releaseStart = deferred<void>()
+    const originalStartLargeFile = client.raw.startLargeFile.bind(client.raw)
+    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(
+      async (apiUrl, authToken, request, options) => {
+        if (options?.signal === undefined) throw new Error('expected start abort signal')
+        startSignal.resolve(options.signal)
+        await releaseStart.promise
+        return originalStartLargeFile(apiUrl, authToken, request)
+      },
+    )
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'start-pending-abort.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const signal = await startSignal.promise
+
+    controller.abort(abortReason)
+
+    await expect(upload).rejects.toBe(abortReason)
+    expect(signal.aborted).toBe(true)
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+
+    releaseStart.resolve(undefined)
+    await vi.waitFor(() => expect(cancelLargeFile).toHaveBeenCalledOnce())
+  })
+
   it('cancels instead of finishing when a forward-only upload aborts after all parts', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
@@ -4618,15 +4660,20 @@ describe('uploadSmallFile cleanup path', () => {
     const controller = new AbortController()
     const readStarted = Promise.withResolvers<void>()
     let cancelled = false
-    const readable = new ReadableStream<Uint8Array>({
-      pull() {
-        readStarted.resolve()
-        return new Promise<never>(() => {})
+    const readable = new ReadableStream<Uint8Array>(
+      {
+        pull() {
+          readStarted.resolve()
+          return new Promise<never>(() => {})
+        },
+        cancel() {
+          cancelled = true
+        },
       },
-      cancel() {
-        cancelled = true
+      {
+        highWaterMark: 0,
       },
-    })
+    )
 
     const upload = uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
@@ -4641,7 +4688,7 @@ describe('uploadSmallFile cleanup path', () => {
     controller.abort(new Error('stop stalled stream'))
 
     await expect(upload).rejects.toThrow('stop stalled stream')
-    expect(cancelled).toBe(true)
+    await vi.waitFor(() => expect(cancelled).toBe(true))
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),

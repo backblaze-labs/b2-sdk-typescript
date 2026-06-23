@@ -29,7 +29,7 @@ export type CleanupFailureEvent =
   | CancelLargeFileCleanupFailureEvent
   | AmbiguousFinishCleanupFailureEvent
 
-/** Callback invoked when best-effort cleanup fails. */
+/** Callback invoked when best-effort cancellation fails or finish cleanup is skipped. */
 export type CleanupFailureListener = (event: CleanupFailureEvent) => void
 
 /** Shared option for observing large-file cleanup failures or skipped cleanup. */

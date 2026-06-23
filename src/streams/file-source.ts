@@ -105,6 +105,14 @@ function assertStableIdentity(path: FileSourcePath, stats: FileStatsLike): void 
   }
 }
 
+function assertSupportedFileSourcePlatform(path: FileSourcePath): void {
+  if (isWindows()) {
+    throw new Error(
+      `FileSource: ${formatFilePath(path)} is not supported on Windows because Node's portable filesystem metadata cannot enforce stable path identity there.`,
+    )
+  }
+}
+
 function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
   if (!stats.isFile()) {
     throw new Error(`FileSource: ${formatFilePath(path)} is not a regular file.`)
@@ -112,6 +120,7 @@ function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
 }
 
 function validatedIdentityFromStats(path: FileSourcePath, stats: FileStatsLike): FileIdentity {
+  assertSupportedFileSourcePlatform(path)
   assertRegularFile(path, stats)
   assertStableIdentity(path, stats)
   return identityFromStats(stats)
@@ -124,20 +133,15 @@ function assertSameIdentity(
   when: string,
 ): void {
   assertStableIdentity(path, actual)
-  const comparePosix = shouldComparePosixIdentity()
-  if (comparePosix && (actual.dev !== expected.dev || actual.ino !== expected.ino)) {
+  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
-  if (comparePosix && actual.ctimeMs !== expected.ctimeMs) {
+  if (actual.ctimeMs !== expected.ctimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
-}
-
-function shouldComparePosixIdentity(): boolean {
-  return !isWindows()
 }
 
 function isWindows(): boolean {
@@ -328,11 +332,9 @@ class FileSliceSource implements ContentSource {
  * symlinks are followed by the operating system, so callers that constrain
  * paths under a trusted root should validate those parents separately. Reads
  * reject if the path is replaced, if the filesystem cannot report stable
- * identity, or if size/mtime changes before the configured byte range is read.
- * On POSIX platforms, ctime changes are also rejected so same-size rewrites
- * that restore mtime are detected. On Windows, a same-size rewrite with a
- * restored mtime can be undetectable through Node's portable stat fields; use
- * an independent digest when a caller must prove the bytes are unchanged.
+ * identity, or if size/mtime/ctime changes before the configured byte range is
+ * read. Windows construction is rejected because Node's portable filesystem
+ * metadata cannot enforce a stable no-follow path identity there.
  * Slices preserve the captured identity, so multipart uploads can read
  * disjoint ranges without materialising the whole file in memory or following
  * later leaf path swaps.

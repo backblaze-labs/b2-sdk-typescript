@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
@@ -504,11 +504,14 @@ describe('createWriteStream branch coverage', () => {
     const startCalled = deferred<void>()
     const releaseStart = deferred<void>()
     const originalStartLargeFile = client.raw.startLargeFile.bind(client.raw)
-    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(async (...args) => {
-      startCalled.resolve(undefined)
-      await releaseStart.promise
-      return originalStartLargeFile(...args)
-    })
+    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(
+      async (apiUrl, authToken, request, options) => {
+        if (options?.signal === undefined) throw new Error('expected start abort signal')
+        startCalled.resolve(undefined)
+        await releaseStart.promise
+        return originalStartLargeFile(apiUrl, authToken, request)
+      },
+    )
     const uploadPart = vi.spyOn(client.raw, 'uploadPart')
     const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
 

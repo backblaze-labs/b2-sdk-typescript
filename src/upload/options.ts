@@ -3,13 +3,13 @@ import type { ContentSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
-import type { CleanupFailureListener } from './cancel.ts'
+import type { CleanupFailureOptions } from './cancel.ts'
 import type { ResumePartReusedListener } from './large.ts'
 import type { ResumeCandidateRejectedListener } from './resume.ts'
-import type { UploadRetryListener } from './retry.ts'
+import type { UploadRetryOptions } from './retry.ts'
 
-/** Options shared by high-level bucket and object upload methods. */
-export interface UploadOptions {
+/** Shared options for high-level file uploads. */
+export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Data source to upload. Use {@link BufferSource}, {@link BlobSource}, or {@link StreamSource}. */
   readonly source: ContentSource
   /** MIME type. Defaults to `"b2/x-auto"` (auto-detected by B2). */
@@ -30,19 +30,6 @@ export interface UploadOptions {
   readonly concurrency?: number
   /** Callback invoked with upload progress events. */
   readonly onProgress?: ProgressListener
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /** Callback invoked if best-effort large-file cleanup fails after an upload error. */
-  readonly onCleanupFailure?: CleanupFailureListener
-  /**
-   * Configure retries after B2 may have stored bytes. Single-request uploads
-   * use this for unreadable response bodies and ambiguous upload POST network
-   * failures; it defaults to false because retrying can create duplicate file
-   * versions. Multipart uploads use this only for unreadable response bodies;
-   * upload POST network failures still retry because re-posting the same part
-   * number is idempotent.
-   */
-  readonly retryResponseBodyFailures?: boolean
   /** Abort signal for cancelling the upload. */
   readonly signal?: AbortSignal
   /** Enable bounded same-name multipart resume discovery. Ignored on the small-file path. */
@@ -66,17 +53,38 @@ export interface UploadOptions {
   readonly onResumePartReused?: ResumePartReusedListener
 }
 
+/** Backwards-compatible name for high-level upload options. */
+export type UploadOptions = HighLevelUploadOptions
+
 /** Options accepted by {@link Bucket.upload}. */
-export interface BucketUploadOptions extends UploadOptions {
+export interface BucketUploadOptions extends HighLevelUploadOptions {
   /** Destination file name (path) in the bucket. */
   readonly fileName: string
 }
 
 /** Options accepted by {@link B2Object.upload}. */
-export type B2ObjectUploadOptions = UploadOptions
+export type B2ObjectUploadOptions = HighLevelUploadOptions
+
+/** Options accepted by {@link B2Object.createWriteStream}. */
+export interface B2ObjectWriteStreamOptions extends UploadRetryOptions, CleanupFailureOptions {
+  /** MIME type. Defaults to `"b2/x-auto"`. */
+  readonly contentType?: string
+  /** Custom key-value metadata stored with the file. */
+  readonly fileInfo?: Record<string, string>
+  /** Server-side encryption applied to each part. */
+  readonly serverSideEncryption?: EncryptionSetting
+  /** Target part size in bytes. Defaults to the account's recommended part size. */
+  readonly partSize?: number
+  /** Maximum number of parts uploaded in parallel. Defaults to 4. */
+  readonly concurrency?: number
+  /** Callback invoked with upload progress events. */
+  readonly onProgress?: ProgressListener
+  /** Abort signal that cancels the upload and the unfinished large file. */
+  readonly signal?: AbortSignal
+}
 
 type ResumeOnlyUploadOptions = Pick<
-  UploadOptions,
+  HighLevelUploadOptions,
   | 'resume'
   | 'resumeFileId'
   | 'onResumeCandidateRejected'
@@ -88,7 +96,10 @@ type ResumeOnlyUploadOptions = Pick<
 >
 
 /** High-level upload options after resume-only settings have been removed. */
-export type SmallUploadOptions<T extends UploadOptions> = Omit<T, keyof ResumeOnlyUploadOptions>
+export type SmallUploadOptions<T extends HighLevelUploadOptions> = Omit<
+  T,
+  keyof ResumeOnlyUploadOptions
+>
 
 /**
  * Explicit resume targets are multipart-only and must fail closed on small uploads.
@@ -98,7 +109,10 @@ export type SmallUploadOptions<T extends UploadOptions> = Omit<T, keyof ResumeOn
  *
  * @throws Error when an explicit resume target is supplied for a small upload.
  */
-export function rejectSmallResumeFileId(options: UploadOptions, caller: string): void {
+export function rejectSmallResumeFileId(
+  options: HighLevelUploadOptions,
+  caller: string,
+): void {
   if (options.resumeFileId !== undefined) {
     throw new Error(`${caller}: resumeFileId is only supported for multipart uploads.`)
   }
@@ -111,7 +125,9 @@ export function rejectSmallResumeFileId(options: UploadOptions, caller: string):
  *
  * @returns Options accepted by the single-request upload implementation.
  */
-export function stripResumeOnlyOptions<T extends UploadOptions>(options: T): SmallUploadOptions<T> {
+export function stripResumeOnlyOptions<T extends HighLevelUploadOptions>(
+  options: T,
+): SmallUploadOptions<T> {
   const {
     resume: _resume,
     resumeFileId: _resumeFileId,

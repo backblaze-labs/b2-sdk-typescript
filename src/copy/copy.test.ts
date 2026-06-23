@@ -92,7 +92,7 @@ describe('copyLargeFile', () => {
     expect(copied.contentLength).toBe(content.byteLength)
   })
 
-  it('waits for pending copy parts before cleanup after a part failure', async () => {
+  it('aborts hanging copy parts before cleanup after a sibling failure', async () => {
     const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await c.authorize()
     const bucket = await c.createBucket({
@@ -107,10 +107,9 @@ describe('copyLargeFile', () => {
     })
 
     const secondCopyStarted = deferred<void>()
-    const releaseSecondCopy = deferred<void>()
     const originalCopyPart = c.raw.copyPart.bind(c.raw)
     const originalCancelLargeFile = c.raw.cancelLargeFile.bind(c.raw)
-    let secondCopySettled = false
+    let secondCopyAborted = false
     const copyPart = vi.spyOn(c.raw, 'copyPart').mockImplementation(async (...args) => {
       const callNumber = copyPart.mock.calls.length
       if (callNumber === 1) {
@@ -118,18 +117,26 @@ describe('copyLargeFile', () => {
         throw new Error('forced first copy_part failure')
       }
       if (callNumber === 2) {
+        const options = args[3]
+        if (options?.signal === undefined) throw new Error('expected copy_part abort signal')
         secondCopyStarted.resolve(undefined)
-        await releaseSecondCopy.promise
-        const response = await originalCopyPart(...args)
-        secondCopySettled = true
-        return response
+        return await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => {
+              secondCopyAborted = true
+              reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+            },
+            { once: true },
+          )
+        })
       }
       return originalCopyPart(...args)
     })
     const cancelLargeFile = vi
       .spyOn(c.raw, 'cancelLargeFile')
       .mockImplementation(async (...args) => {
-        expect(secondCopySettled).toBe(true)
+        expect(secondCopyAborted).toBe(true)
         return originalCancelLargeFile(...args)
       })
 
@@ -140,10 +147,7 @@ describe('copyLargeFile', () => {
       concurrency: 2,
     })
     await secondCopyStarted.promise
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(cancelLargeFile).not.toHaveBeenCalled()
 
-    releaseSecondCopy.resolve(undefined)
     await expect(copy).rejects.toThrow('forced first copy_part failure')
     expect(cancelLargeFile).toHaveBeenCalledTimes(1)
   })

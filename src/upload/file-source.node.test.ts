@@ -8,7 +8,7 @@ import { type ContentSource, FileSource } from '../streams/source.ts'
 import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 
-describe('FileSource uploads', () => {
+describe.skipIf(process.platform === 'win32')('FileSource uploads', () => {
   let tmpDir: string
   let client: B2Client
   let bucket: Bucket

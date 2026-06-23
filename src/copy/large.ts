@@ -2,9 +2,17 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
-import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
-import { createAbortScope, throwRejectedOrAbortReason } from '../upload/abort-scope.ts'
-import { type CleanupFailureListener, cleanupAfterLargeFileError } from '../upload/cancel.ts'
+import { type BucketId, type FileId, fileId as fileIdOf, type LargeFileId } from '../types/ids.ts'
+import {
+  createAbortScope,
+  raceWithAbort,
+  throwRejectedOrAbortReason,
+} from '../upload/abort-scope.ts'
+import {
+  type CleanupFailureListener,
+  cancelLargeFileBestEffort,
+  cleanupAfterLargeFileError,
+} from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -33,7 +41,10 @@ export interface CopyLargeFileOptions {
   readonly destinationServerSideEncryption?: EncryptionSetting
   /** SSE-C settings used to read the source if it was uploaded with SSE-C. */
   readonly sourceServerSideEncryption?: EncryptionSetting
-  /** Callback invoked if best-effort large-file cleanup fails after a copy error. */
+  /**
+   * Callback invoked if best-effort cancellation fails, or if cancellation is
+   * skipped because `b2_finish_large_file` may already have committed.
+   */
   readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Optional abort signal. Checked before dispatching each part and
@@ -109,43 +120,66 @@ export async function copyLargeFile(
   // are already typed `BucketId`, so no cast is needed.
   const destBucketId = options.destinationBucketId ?? sourceInfo.bucketId
 
-  // Start the multipart file.
-  const startResp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-    bucketId: destBucketId,
-    fileName: options.fileName,
-    contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-    fileInfo: options.fileInfo ?? {},
-    ...(options.destinationServerSideEncryption !== undefined
-      ? { serverSideEncryption: options.destinationServerSideEncryption }
-      : {}),
-  })
-  const largeFileId = startResp.fileId
-
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
   const abortScope = createAbortScope(options.signal)
+  let largeFileId: LargeFileId | undefined
 
   try {
     abortScope.signal.throwIfAborted()
+    const startPromise = raw.startLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId: destBucketId,
+        fileName: options.fileName,
+        contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
+        fileInfo: options.fileInfo ?? {},
+        ...(options.destinationServerSideEncryption !== undefined
+          ? { serverSideEncryption: options.destinationServerSideEncryption }
+          : {}),
+      },
+      { signal: abortScope.signal },
+    )
+    try {
+      const startResp = await raceWithAbort(startPromise, abortScope.signal)
+      largeFileId = startResp.fileId
+    } catch (err) {
+      if (abortScope.signal.aborted) {
+        cancelLargeFileAfterStart(startPromise, raw, accountInfo, options.onCleanupFailure)
+      }
+      throw err
+    }
+    const startedLargeFileId = largeFileId
+    if (startedLargeFileId === undefined) {
+      throw new Error('copyLargeFile: start did not return a large file ID.')
+    }
+
     const tasks = ranges.map(async (range) => {
       await sem.acquire()
       try {
         abortScope.signal.throwIfAborted()
-        const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-          sourceFileId: options.sourceFileId,
-          // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
-          // same value typed as `FileId`. Re-brand via the factory.
-          largeFileId: fileIdOf(largeFileId),
-          partNumber: range.partNumber,
-          range: byteRangeHeader(range.start, range.end),
-          ...(options.sourceServerSideEncryption !== undefined
-            ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
-            : {}),
-          ...(options.destinationServerSideEncryption !== undefined
-            ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
-            : {}),
-        })
+        const copyPromise = raw.copyPart(
+          accountInfo.getApiUrl(),
+          accountInfo.getAuthToken(),
+          {
+            sourceFileId: options.sourceFileId,
+            // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
+            // same value typed as `FileId`. Re-brand via the factory.
+            largeFileId: fileIdOf(startedLargeFileId),
+            partNumber: range.partNumber,
+            range: byteRangeHeader(range.start, range.end),
+            ...(options.sourceServerSideEncryption !== undefined
+              ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
+              : {}),
+            ...(options.destinationServerSideEncryption !== undefined
+              ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
+              : {}),
+          },
+          { signal: abortScope.signal },
+        )
+        const resp = await raceWithAbort(copyPromise, abortScope.signal)
         partSha1s[range.partNumber - 1] = resp.contentSha1
       } catch (err) {
         abortScope.abort(err)
@@ -158,7 +192,7 @@ export async function copyLargeFile(
     throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
     return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
-      fileId: largeFileId,
+      fileId: startedLargeFileId,
       bucketId: destBucketId,
       fileName: options.fileName,
       partSha1s,
@@ -166,6 +200,7 @@ export async function copyLargeFile(
     })
   } catch (err) {
     abortScope.abort(err)
+    if (largeFileId === undefined) throw err
     return await cleanupAfterLargeFileError(err, raw, accountInfo, {
       fileId: largeFileId,
       bucketId: destBucketId,
@@ -176,4 +211,17 @@ export async function copyLargeFile(
   } finally {
     abortScope.dispose()
   }
+}
+
+function cancelLargeFileAfterStart(
+  started: Promise<{ readonly fileId: LargeFileId }>,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  onCleanupFailure: CleanupFailureListener | undefined,
+): void {
+  void started
+    .then((resp) => cancelLargeFileBestEffort(raw, accountInfo, resp.fileId, onCleanupFailure))
+    .catch(() => {
+      // If start failed, no file ID is available to cancel.
+    })
 }

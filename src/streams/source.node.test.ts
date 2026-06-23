@@ -16,8 +16,9 @@ import { readStream } from '../test-utils/index.ts'
 import { FileSource, toContentSource } from './source.ts'
 
 const decoder = new TextDecoder()
+const isWindows = process.platform === 'win32'
 
-describe('FileSource', () => {
+describe.skipIf(isWindows)('FileSource', () => {
   let tmpDir: string
 
   beforeEach(async () => {
@@ -218,18 +219,15 @@ describe('FileSource', () => {
     await expect(slice.toArrayBuffer()).rejects.toThrow(path)
   })
 
-  it.skipIf(process.platform === 'win32')(
-    'rejects metadata-only ctime changes after construction',
-    async () => {
-      const path = join(tmpDir, 'chmod.txt')
-      await writeFile(path, 'metadata-only')
+  it('rejects metadata-only ctime changes after construction', async () => {
+    const path = join(tmpDir, 'chmod.txt')
+    await writeFile(path, 'metadata-only')
 
-      const source = new FileSource(path)
-      await chmod(path, 0o400)
+    const source = new FileSource(path)
+    await chmod(path, 0o400)
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
-    },
-  )
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
+  })
 
   it('rejects if the file is truncated after construction', async () => {
     const path = join(tmpDir, 'truncate.txt')
@@ -251,23 +249,20 @@ describe('FileSource', () => {
     await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
 
-  it.skipIf(process.platform === 'win32')(
-    'detects same-size rewrites with restored mtime',
-    async () => {
-      const path = join(tmpDir, 'restored-mtime.txt')
-      const fixedTime = new Date('2026-01-01T00:00:00.000Z')
-      await writeFile(path, 'original data')
-      await utimes(path, fixedTime, fixedTime)
+  it('detects same-size rewrites with restored mtime', async () => {
+    const path = join(tmpDir, 'restored-mtime.txt')
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+    await writeFile(path, 'original data')
+    await utimes(path, fixedTime, fixedTime)
 
-      const source = new FileSource(path)
-      await writeFile(path, 'tampered data')
-      await utimes(path, fixedTime, fixedTime)
+    const source = new FileSource(path)
+    await writeFile(path, 'tampered data')
+    await utimes(path, fixedTime, fixedTime)
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
-    },
-  )
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
+  })
 
-  it.skipIf(process.platform === 'win32')('rejects a path replaced by a symlink', async () => {
+  it('rejects a path replaced by a symlink', async () => {
     const path = join(tmpDir, 'payload.txt')
     const secretPath = join(tmpDir, 'secret.txt')
     await writeFile(path, 'safe payload')
@@ -295,6 +290,36 @@ describe('FileSource', () => {
     await rename(replacementPath, path)
 
     await expect(source.toArrayBuffer()).rejects.toThrow(/(?:changed|was modified) before read/)
+  })
+})
+
+describe.runIf(isWindows)('FileSource on Windows', () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-filesource-win-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('rejects before a symlink replacement path can be uploaded', async () => {
+    const path = join(tmpDir, 'payload.txt')
+    await writeFile(path, 'safe payload')
+
+    expect(() => new FileSource(path)).toThrow(/not supported on Windows/)
+    await expect(FileSource.fromPath(path)).rejects.toThrow(/not supported on Windows/)
+  })
+
+  it('rejects before a same-size restored-mtime rewrite can be uploaded', async () => {
+    const path = join(tmpDir, 'restored-mtime.txt')
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+    await writeFile(path, 'original data')
+    await utimes(path, fixedTime, fixedTime)
+
+    expect(() => new FileSource(path)).toThrow(/not supported on Windows/)
+    await expect(FileSource.fromPath(path)).rejects.toThrow(/not supported on Windows/)
   })
 })
 

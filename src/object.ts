@@ -13,18 +13,16 @@ import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { BucketRetentionPolicy } from './types/bucket.ts'
-import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
-import type { CleanupFailureListener } from './upload/cancel.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import {
   type B2ObjectUploadOptions,
+  type B2ObjectWriteStreamOptions,
   rejectSmallResumeFileId,
   stripResumeOnlyOptions,
 } from './upload/options.ts'
-import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
 
@@ -279,32 +277,7 @@ export class B2Object {
    *
    * @returns A handle with the writable sink and a completion promise.
    */
-  createWriteStream(options?: {
-    /** MIME type. Defaults to `b2/x-auto`. */
-    contentType?: string
-    /** Custom key-value metadata stored with the file. */
-    fileInfo?: Record<string, string>
-    /** Server-side encryption applied to each part. */
-    serverSideEncryption?: EncryptionSetting
-    /** Target part size in bytes. Defaults to the account's recommended part size. */
-    partSize?: number
-    /** Maximum number of parts uploaded in parallel. Defaults to 4. */
-    concurrency?: number
-    /** Callback invoked with upload progress events. */
-    onProgress?: ProgressListener
-    /** Callback invoked before retrying with a fresh upload URL. */
-    onUploadRetry?: UploadRetryListener
-    /** Callback invoked if best-effort multipart cleanup fails after a stream error. */
-    onCleanupFailure?: CleanupFailureListener
-    /**
-     * Retry when an upload response body cannot be read after B2 may have stored
-     * the part. Upload POST network errors still retry when this is false because
-     * re-posting the same part number is idempotent. Defaults to true.
-     */
-    retryResponseBodyFailures?: boolean
-    /** Abort signal that cancels the upload and the unfinished large file. */
-    signal?: AbortSignal
-  }): UploadWriteHandle {
+  createWriteStream(options?: B2ObjectWriteStreamOptions): UploadWriteHandle {
     const uploadRetryOptions = getClientUploadRetryOptions(this.client)
     return createWriteStream(this.client.raw, this.client.accountInfo, {
       ...(options ?? {}),
