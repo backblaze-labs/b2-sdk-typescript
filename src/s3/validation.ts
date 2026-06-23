@@ -67,7 +67,9 @@ export function assertNativeDownloadFileName(fileName: string): void {
 /**
  * Validate a B2 file name for the deprecated native URL helper that percent
  * encodes the whole name as one component. Slash-boundary and dot-segment names
- * are safe in that legacy URL shape and remain accepted for compatibility.
+ * embedded in longer paths are safe in that legacy URL shape and remain
+ * accepted for compatibility. Exact "." or ".." names are rejected because
+ * common URL parsers can normalize the resulting bearer URL path.
  *
  * @param fileName - B2 file name supplied by the caller.
  */
@@ -104,6 +106,10 @@ export function assertValidB2FileName(fileName: string): void {
 function assertB2FileNameCore(fileName: string): void {
   if (typeof fileName !== 'string' || fileName.length === 0) {
     throw new TypeError('fileName must be a non-empty string.')
+  }
+
+  if (fileName === '.' || fileName === '..') {
+    throw new TypeError('fileName cannot be exactly "." or "..".')
   }
 
   const byteLength = getB2FileNameByteLength(fileName)

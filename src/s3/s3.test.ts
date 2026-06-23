@@ -404,6 +404,8 @@ describe('presignS3GetObjectUrl', () => {
   it('rejects B2-invalid object key names before signing', async () => {
     const invalidNames = [
       ['', 'fileName must be a non-empty string'],
+      ['.', 'fileName cannot be exactly "." or ".."'],
+      ['..', 'fileName cannot be exactly "." or ".."'],
       ['has\u0001ctrl.txt', 'fileName must not contain control characters'],
       ['a'.repeat(1025), 'fileName must be at most 1024 UTF-8 bytes'],
     ] as const
@@ -617,6 +619,19 @@ describe('presignGetObjectUrl', () => {
       )
 
       expect(new URL(url).pathname).toBe(`/file/my-bucket/${encodeURIComponent(fileName)}`)
+    }
+  })
+
+  it('rejects dot-only legacy native file names', () => {
+    for (const fileName of ['.', '..']) {
+      expect(() =>
+        presignGetObjectUrl(
+          'https://f004.backblazeb2.com',
+          'my-bucket',
+          fileName,
+          'auth-token-123',
+        ),
+      ).toThrow('fileName cannot be exactly "." or ".."')
     }
   })
 
@@ -837,7 +852,7 @@ describe('presignS3PutObjectUrl', () => {
   })
 
   it('rejects B2-invalid object key names before signing', async () => {
-    for (const fileName of ['', 'has\u0001ctrl.txt', 'a'.repeat(1025)]) {
+    for (const fileName of ['', '.', '..', 'has\u0001ctrl.txt', 'a'.repeat(1025)]) {
       await expect(
         presignS3PutObjectUrl({
           ...basePresignOptions(),
@@ -1041,6 +1056,8 @@ describe('createNativeDownloadAuthorizationUrl', () => {
     for (const fileName of [
       'allowed/../private.txt',
       'path/.././file.txt',
+      '.',
+      '..',
       '/leading-slash',
       'a//b.txt',
       'trailing/',
