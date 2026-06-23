@@ -12,10 +12,12 @@ import { BucketType } from '../types/bucket.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
+import { localFileIoTestHooks } from './local-file-io.ts'
 import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
 import type {
   B2SyncFolder,
+  SupportedSynchronizerConfig,
   SynchronizerConfig,
   SynchronizerDownConfig,
   SynchronizerUpConfig,
@@ -79,6 +81,30 @@ function makeB2MemoryFolder(paths: readonly B2SyncPath[]): B2SyncFolder {
       }
     },
   }
+}
+
+type MockDownloadBucket = Bucket & {
+  readonly download: ReturnType<typeof vi.fn>
+  readonly downloadById: ReturnType<typeof vi.fn>
+}
+
+function makeMockDownloadBucket(
+  downloadById: ReturnType<typeof vi.fn> = vi.fn(),
+): MockDownloadBucket {
+  return {
+    download: vi.fn(),
+    downloadById,
+    file: vi.fn().mockReturnValue({ downloadById }),
+  } as unknown as MockDownloadBucket
+}
+
+function streamFromBytes(data: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(data)
+      controller.close()
+    },
+  })
 }
 
 interface Deferred {
@@ -182,8 +208,8 @@ describe('synchronize download safety', () => {
       const destPath = join(destRoot, 'keep.txt')
       await writeFile(destPath, 'valid')
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('partial'))
@@ -191,7 +217,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('keep.txt', 99)]),
@@ -218,8 +244,8 @@ describe('synchronize download safety', () => {
       await writeFile(destPath, 'valid')
       const controller = new AbortController()
 
-      const bucket = {
-        download: vi.fn().mockImplementation(() => {
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockImplementation(() => {
           return Promise.resolve({
             body: new ReadableStream<Uint8Array>({
               start(streamController) {
@@ -230,7 +256,7 @@ describe('synchronize download safety', () => {
             }),
           })
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('keep.txt', 8)]),
@@ -256,8 +282,8 @@ describe('synchronize download safety', () => {
       const destPath = join(destRoot, 'keep.txt')
       await writeFile(destPath, 'valid')
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('attacker'))
@@ -271,7 +297,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('keep.txt', 8)]),
@@ -297,8 +323,8 @@ describe('synchronize download safety', () => {
       const destPath = join(destRoot, 'keep.txt')
       await writeFile(destPath, 'valid')
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('short'))
@@ -306,7 +332,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('keep.txt', 99)]),
@@ -370,16 +396,16 @@ describe('synchronize download safety', () => {
       const firstRelease = deferred()
       const secondRelease = deferred()
 
-      const firstBucket = {
-        download: vi.fn().mockResolvedValue({
+      const firstBucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: delayedBody('first', firstReady, firstRelease.promise),
         }),
-      } as unknown as Bucket
-      const secondBucket = {
-        download: vi.fn().mockResolvedValue({
+      )
+      const secondBucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: delayedBody('other', secondReady, secondRelease.promise),
         }),
-      } as unknown as Bucket
+      )
 
       const source = makeB2MemoryFolder([makeB2Path('same.txt', 5)])
       const baseConfig = {
@@ -401,11 +427,9 @@ describe('synchronize download safety', () => {
       firstRelease.resolve()
       const firstEvents = await firstEventsPromise
 
-      expect(firstEvents.some((event) => event.type === 'error')).toBe(false)
+      expect(firstEvents.some((event) => event.type === 'error')).toBe(true)
       expect(secondEvents.some((event) => event.type === 'error')).toBe(false)
-      expect(['first', 'other']).toContain(
-        new TextDecoder().decode(await readFile(join(destRoot, 'same.txt'))),
-      )
+      expect(new TextDecoder().decode(await readFile(join(destRoot, 'same.txt')))).toBe('other')
       expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -463,8 +487,8 @@ describe('synchronize download safety', () => {
       const destRoot = join(root, 'dest')
       await mkdir(destRoot)
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('ok'))
@@ -472,7 +496,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('nested/ok.txt', 2)]),
@@ -498,8 +522,8 @@ describe('synchronize download safety', () => {
       await mkdir(destRoot)
       await writeFile(join(destRoot, 'sub'), 'not a directory')
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('bad'))
@@ -507,7 +531,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('sub/escape.txt', 3)]),
@@ -611,27 +635,19 @@ describe('synchronize download safety', () => {
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-open-fail-'))
       const destRoot = join(root, 'dest')
       let removedTemp = false
-      let statFailed = false
+      let realpathFailed = false
 
       vi.doMock('node:fs/promises', async () => {
         const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
         return {
           ...actual,
-          open: async (...args: unknown[]) => {
-            const handle = await actual.open(...(args as Parameters<typeof actual.open>))
+          realpath: async (...args: unknown[]) => {
             const targetPath = String(args[0])
             if (targetPath.includes('.b2sdk-') && targetPath.endsWith('.partial')) {
-              return {
-                async close() {
-                  await handle.close()
-                },
-                async stat() {
-                  statFailed = true
-                  throw new Error('simulated temp stat failure')
-                },
-              }
+              realpathFailed = true
+              throw new Error('simulated temp realpath failure')
             }
-            return handle
+            return actual.realpath(...(args as Parameters<typeof actual.realpath>))
           },
           rm: async (...args: unknown[]) => {
             const targetPath = String(args[0])
@@ -665,7 +681,7 @@ describe('synchronize download safety', () => {
         }
 
         const events = await collectEvents(config)
-        expect(statFailed).toBe(true)
+        expect(realpathFailed).toBe(true)
         expect(removedTemp).toBe(true)
         expect(events.some((event) => event.type === 'error')).toBe(true)
         expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
@@ -735,29 +751,19 @@ describe('synchronize download safety', () => {
     },
   )
 
-  it.skipIf(isBun)('keeps the destination when the final rename fails', async () => {
+  it.skipIf(isBun)('keeps the destination when final publish fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-rename-fail-'))
     const destRoot = join(root, 'dest')
     const destPath = join(destRoot, 'keep.txt')
-    let renameFailed = false
-
-    vi.doMock('node:fs/promises', async () => {
-      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-      return {
-        ...actual,
-        rename: async (...args: unknown[]) => {
-          if (String(args[1]) === destPath) {
-            renameFailed = true
-            throw new Error('simulated rename failure')
-          }
-          return actual.rename(...(args as Parameters<typeof actual.rename>))
-        },
-      }
-    })
+    let publishFailed = false
 
     try {
       await mkdir(destRoot, { recursive: true })
       await writeFile(destPath, 'old')
+      localFileIoTestHooks.beforeFinalRename = async () => {
+        publishFailed = true
+        throw new Error('simulated final publish failure')
+      }
 
       const bucket = makeMockDownloadBucket(
         vi.fn().mockResolvedValue({
@@ -778,12 +784,12 @@ describe('synchronize download safety', () => {
       }
 
       const events = await collectEvents(config)
-      expect(renameFailed).toBe(true)
+      expect(publishFailed).toBe(true)
       expect(events.some((event) => event.type === 'error')).toBe(true)
       expect(new TextDecoder().decode(await readFile(destPath))).toBe('old')
       expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
     } finally {
-      vi.doUnmock('node:fs/promises')
+      delete localFileIoTestHooks.beforeFinalRename
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -813,8 +819,8 @@ describe('synchronize download safety', () => {
         absoluteEscapePath,
         'C:\\escape-drive.txt',
       ]) {
-        const bucket = {
-          download: vi.fn().mockResolvedValue({
+        const bucket = makeMockDownloadBucket(
+          vi.fn().mockResolvedValue({
             body: new ReadableStream<Uint8Array>({
               start(controller) {
                 controller.enqueue(new TextEncoder().encode('bad'))
@@ -822,7 +828,7 @@ describe('synchronize download safety', () => {
               },
             }),
           }),
-        } as unknown as Bucket
+        )
 
         const config: SynchronizerDownConfig = {
           source: makeB2MemoryFolder([makeB2Path(relPath, 3)]),
@@ -833,7 +839,7 @@ describe('synchronize download safety', () => {
 
         const events = await collectEvents(config)
         expect(events.some((event) => event.type === 'error')).toBe(true)
-        expect(bucket.download).not.toHaveBeenCalled()
+        expect(bucket.downloadById).not.toHaveBeenCalled()
       }
 
       expect(await readdir(destRoot)).toEqual([])
@@ -894,8 +900,8 @@ describe('synchronize download safety', () => {
       await mkdir(outsideRoot)
       await symlink(outsideRoot, join(destRoot, 'sub'), 'dir')
 
-      const bucket = {
-        download: vi.fn().mockResolvedValue({
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
           body: new ReadableStream<Uint8Array>({
             start(controller) {
               controller.enqueue(new TextEncoder().encode('bad'))
@@ -903,7 +909,7 @@ describe('synchronize download safety', () => {
             },
           }),
         }),
-      } as unknown as Bucket
+      )
 
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('sub/escape.txt', 3)]),
@@ -1138,7 +1144,6 @@ describe('synchronize delete-local safety', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
-
 })
 
 describe('synchronize upload safety', () => {

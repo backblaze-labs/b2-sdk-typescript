@@ -188,7 +188,6 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const { source, dest, options } = config
   assertSupportedCompareMode(options.compareMode)
   const direction = resolveDirection(source, dest)
-  validateLocalRootDeclarations(config, direction)
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
   const keepDays = options.keepDays ?? 0
@@ -656,17 +655,6 @@ function requireLocalRoot(
   return root
 }
 
-function validateLocalRootDeclarations(
-  config: SynchronizerConfig,
-  direction: SyncDirection,
-): void {
-  if (direction === 'local-to-b2') {
-    requireLocalRoot(config.source, 'source', 'upload')
-  } else if (direction === 'b2-to-local') {
-    requireLocalRoot(config.dest, 'destination', 'download')
-  }
-}
-
 async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<LocalRootContexts> {
   if (config.source.type !== 'local' && config.dest.type !== 'local') return {}
 
@@ -745,13 +733,14 @@ function createActionFactory(
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
       assertBucket(bucket, 'upload')
-      const root = localRootContexts.source ?? requireLocalRoot(upConfig.source, 'source', 'upload')
 
       return new UploadAction(
         source.relativePath,
         source.absolutePath,
         source.size,
         async (absPath, relPath, signal) => {
+          const root =
+            localRootContexts.source ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
@@ -779,10 +768,10 @@ function createActionFactory(
     download(source: B2SyncPath, scannedDest?: LocalSyncPath | null): SyncAction {
       const bucket = downConfig.bucket
       assertBucket(bucket, 'download')
-      const root =
-        localRootContexts.dest ?? requireLocalRoot(downConfig.dest, 'destination', 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
+        const root =
+          localRootContexts.dest ?? (downConfig.dest as Partial<LocalSyncFolder>).root ?? ''
         safeRelativePathSegments(relPath)
         const b2FileName =
           sourceB2Prefix === undefined

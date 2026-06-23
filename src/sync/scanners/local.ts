@@ -1,14 +1,14 @@
 import { resolve } from 'node:path'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  isManagedDownloadStagingRoot,
+} from '../download-staging.ts'
 import { localFilesystemErrorReason } from '../filesystem-errors.ts'
 import {
   directoryMayContainSyncPaths,
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
-import {
-  DOWNLOAD_STAGING_DIRECTORY_NAME,
-  isManagedDownloadStagingRoot,
-} from '../download-staging.ts'
 import { localFileIdentityFromStats } from '../local-file-identity.ts'
 import { registerLocalFilesystemRoot } from '../local-filesystem-root.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'

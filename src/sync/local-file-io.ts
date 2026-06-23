@@ -184,8 +184,20 @@ export async function writeLocalStreamInsideRoot(
     throw err
   }
   /* v8 ignore stop */
-  const tmpRealPath = await realpath(tmpPath)
-  assertPathInsideRoot(stagingDirectory, tmpRealPath, path)
+  try {
+    const tmpRealPath = await realpath(tmpPath)
+    assertPathInsideRoot(stagingDirectory, tmpRealPath, path)
+  } catch (err) {
+    /* v8 ignore next -- best-effort cleanup */
+    await handle?.close().catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await rm(tmpPath, { force: true }).catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await parentHandle?.close().catch(() => {})
+    throw err
+  }
   const writeHandle = handle
   const reader = body.getReader()
   let completed = false

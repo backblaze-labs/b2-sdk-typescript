@@ -397,7 +397,6 @@ describe('LocalFolder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-directory.partial/keep.txt'])
     await expect(access(partialDir)).resolves.toBeFalsy()
   })
-
 })
 
 // ---------------------------------------------------------------------------
