@@ -23,6 +23,33 @@ const execFileAsync = promisify(execFile)
 const isLinux = process.platform === 'linux'
 
 describe('FileSource', () => {
+  it('rejects invalid internal byte counts', () => {
+    const UnsafeFileSource = FileSource as unknown as {
+      new (
+        filePath: string,
+        size: number,
+        identity: {
+          dev: number
+          ino: number
+          size: number
+          mtimeMs: number
+          ctimeMs: number
+        },
+      ): FileSource
+    }
+
+    expect(
+      () =>
+        new UnsafeFileSource('data.bin', -1, {
+          dev: 1,
+          ino: 1,
+          size: 0,
+          mtimeMs: 0,
+          ctimeMs: 0,
+        }),
+    ).toThrow('FileSource size must be a non-negative safe integer')
+  })
+
   it('streams and slices a local file by byte range', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-'))
     try {

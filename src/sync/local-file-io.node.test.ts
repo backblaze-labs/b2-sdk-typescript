@@ -19,8 +19,9 @@ import {
   DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
+  isManagedDownloadStagingRoot,
 } from './download-staging.ts'
-import { localFileIdentityFromStats } from './local-file-identity.ts'
+import { assertSameScannedRegularFile, localFileIdentityFromStats } from './local-file-identity.ts'
 import {
   deleteLocalFileInsideRoot,
   localFileIoTestHooks,
@@ -89,6 +90,22 @@ describe('writeLocalFileInsideRoot', () => {
 })
 
 describe('writeLocalStreamInsideRoot', () => {
+  it('rejects invalid expected byte counts before staging', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-byte-count-'))
+    try {
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(new Uint8Array()), {
+          expectedBytes: -1,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('download expectedBytes must be a non-negative safe integer')
+
+      await expect(readdir(root)).resolves.toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isWindows)(
     'creates private managed staging files under the destination root',
     async () => {
@@ -297,6 +314,49 @@ describe('writeLocalStreamInsideRoot', () => {
       ).rejects.toThrow('local file changed before download')
 
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('concurrent')
+    } finally {
+      delete localFileIoTestHooks.beforeDownloadPublish
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when a scanned destination is missing before publish', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-dest-'))
+    try {
+      const scanned = await makeScannedPath(root, 'file.txt', 'old')
+      await rm(join(root, 'file.txt'))
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('new')), {
+          expectedBytes: 3,
+          expectedDestination: scanned,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('local file changed before download: file missing')
+
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when a scanned destination disappears after validation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-late-missing-'))
+    try {
+      const scanned = await makeScannedPath(root, 'file.txt', 'old')
+      localFileIoTestHooks.beforeDownloadPublish = async (publishPath) => {
+        await rm(publishPath, { force: true })
+      }
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('new')), {
+          expectedBytes: 3,
+          expectedDestination: scanned,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('local file changed before download: file missing')
+
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
     } finally {
       delete localFileIoTestHooks.beforeDownloadPublish
       await rm(root, { recursive: true, force: true })
@@ -607,6 +667,15 @@ describe('writeLocalStreamInsideRoot', () => {
 
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
       await expect(readdir(managedDirectory)).resolves.toEqual([DOWNLOAD_STAGING_MARKER_NAME])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats a missing staging candidate as unmanaged', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-marker-'))
+    try {
+      await expect(isManagedDownloadStagingRoot(join(root, 'missing'))).resolves.toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -991,6 +1060,36 @@ describe('deleteLocalFileInsideRoot', () => {
     }
   })
 
+  it('rejects parent replacement before unlink when fd anchoring is unavailable', async () => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-parent-swap-')),
+    )
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    try {
+      const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
+      Object.defineProperty(process, 'platform', { value: 'darwin' })
+      localFileIoTestHooks.beforeLocalDeleteUnlink = async () => {
+        await rename(join(root, 'safe'), join(root, 'safe-old'))
+        await mkdir(join(root, 'safe'))
+        await writeFile(join(root, 'safe', 'victim.txt'), 'replacement')
+      }
+
+      await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
+        'unsafe local delete path: parent changed before unlink',
+      )
+      await expect(readFile(join(root, 'safe', 'victim.txt'), 'utf8')).resolves.toBe('replacement')
+      await expect(readFile(join(root, 'safe-old', 'victim.txt'), 'utf8')).resolves.toBe(
+        'delete-me',
+      )
+    } finally {
+      delete localFileIoTestHooks.beforeLocalDeleteUnlink
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!isLinux)(
     'fails closed if the parent stops being a directory before open',
     async () => {
@@ -1013,4 +1112,28 @@ describe('deleteLocalFileInsideRoot', () => {
       }
     },
   )
+})
+
+describe('assertSameScannedRegularFile', () => {
+  it('uses EISDIR for delete attempts against directories', () => {
+    expect(() =>
+      assertSameScannedRegularFile(
+        {
+          dev: 1,
+          ino: 1,
+          mtimeMs: 0,
+          ctimeMs: 0,
+          size: 0,
+          isFile: () => false,
+        },
+        {
+          relativePath: 'dir',
+          absolutePath: 'dir',
+          modTimeMillis: 0,
+          size: 0,
+        },
+        'delete',
+      ),
+    ).toThrow(expect.objectContaining({ code: 'EISDIR' }))
+  })
 })

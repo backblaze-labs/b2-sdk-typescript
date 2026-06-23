@@ -6,6 +6,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises'
@@ -44,6 +45,22 @@ async function collectEvents(config: SynchronizerConfig): Promise<SyncEvent[]> {
     events.push(event)
   }
   return events
+}
+
+async function recreateDirectoryWithNewIdentity(parent: string, name: string): Promise<void> {
+  const directory = join(parent, name)
+  const original = await stat(directory)
+  await rm(directory, { recursive: true, force: true })
+
+  for (let attempt = 0; attempt < 64; attempt += 1) {
+    await mkdir(join(parent, `identity-churn-${attempt}`))
+    await mkdir(directory)
+    const replacement = await stat(directory)
+    if (replacement.dev !== original.dev || replacement.ino !== original.ino) return
+    await rm(directory, { recursive: true, force: true })
+  }
+
+  throw new Error('test setup could not recreate directory with a new identity')
 }
 
 function recordingTransport(inner: HttpTransport, urls: string[]): HttpTransport {
@@ -1059,8 +1076,7 @@ describe('synchronize download safety', () => {
       expect(first.done).toBe(false)
       expect(first.value.type).toBe('compare')
 
-      await rm(destRoot, { recursive: true, force: true })
-      await mkdir(destRoot)
+      await recreateDirectoryWithNewIdentity(root, 'dest')
 
       const rest: SyncEvent[] = []
       for await (const event of gen) rest.push(event)
@@ -1214,8 +1230,7 @@ describe('synchronize delete-local safety', () => {
       expect(first.done).toBe(false)
       expect(first.value.type).toBe('compare')
 
-      await rm(destRoot, { recursive: true, force: true })
-      await mkdir(destRoot)
+      await recreateDirectoryWithNewIdentity(root, 'dest')
       await writeFile(join(destRoot, 'gone.txt'), 'replacement')
 
       const rest: SyncEvent[] = []

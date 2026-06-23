@@ -299,6 +299,12 @@ describe('BlobSource', () => {
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(content)
   })
+
+  it('toArrayBuffer reads through the abort-aware collection path', async () => {
+    const src = new BlobSource(blob)
+    const ab = await src.toArrayBuffer({ signal: new AbortController().signal })
+    expect(new Uint8Array(ab)).toEqual(content)
+  })
 })
 
 describe('FileSource identity helper', () => {
