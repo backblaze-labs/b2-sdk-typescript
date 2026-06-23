@@ -50,12 +50,12 @@ export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
-  /** Absolute path to the local root directory. */
+  /** Absolute or relative path to the local root directory. */
   readonly root: string
 
   /**
    * Creates a new LocalFolder for the given root directory.
-   * @param root - Absolute path to the local directory to scan.
+   * @param root - Absolute or relative path to the local directory to scan.
    */
   constructor(root: string) {
     this.root = root
