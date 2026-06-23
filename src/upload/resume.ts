@@ -130,17 +130,6 @@ export interface ResumeCandidate {
   readonly uploadedPartSha1s: ReadonlyMap<number, string>
 }
 
-/** Options for unfinished large-file resume discovery. */
-export interface FindResumeCandidateOptions {
-  /** Explicit unfinished large-file ID selected by the caller. */
-  readonly resumeFileId?: LargeFileId
-  /**
-   * When true, list already-uploaded parts and return their server SHA-1 values.
-   * Leave false unless the caller will trust those SHA-1s to skip uploads.
-   */
-  readonly collectUploadedPartSha1s?: boolean
-}
-
 /**
  * Finds an unfinished large file matching the given bucket and file name.
  * Returns `null` when no compatible candidate exists.
@@ -267,6 +256,8 @@ async function collectResumePartInfo(
 
   while (pageCount < maxPages) {
     options.signal?.throwIfAborted()
+    // Fetch one part beyond the local plan so a candidate with extra uploaded
+    // parts is detected and rejected instead of silently reused.
     const remainingParts =
       maxParts === Number.POSITIVE_INFINITY
         ? undefined
@@ -312,6 +303,13 @@ function candidateMetadataRejectReason(
   criteria: ResumeCandidateCriteria,
 ): ResumeCandidateRejectedReason | null {
   if (candidate.fileName !== fileName) return 'file-name-mismatch'
+  if (
+    criteria.contentType === 'b2/x-auto' &&
+    criteria.resumeFileId === undefined &&
+    candidate.contentType !== 'b2/x-auto'
+  ) {
+    return 'content-type-mismatch'
+  }
   if (criteria.contentType !== 'b2/x-auto' && candidate.contentType !== criteria.contentType) {
     return 'content-type-mismatch'
   }
@@ -434,7 +432,7 @@ function fileRetentionMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -457,7 +455,7 @@ function legalHoldMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false

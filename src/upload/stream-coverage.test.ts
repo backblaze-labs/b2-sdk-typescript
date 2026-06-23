@@ -148,4 +148,118 @@ describe('createWriteStream branch coverage', () => {
     expect(rejection).toBeInstanceOf(Error)
     expect(rejection.message).toContain('user-cancelled-as-string')
   })
+
+  it('cancels a multipart file when aborted while startLargeFile is in flight', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let startSeen!: () => void
+    let releaseStart!: () => void
+    const startSeenPromise = new Promise<void>((resolve) => {
+      startSeen = resolve
+    })
+    const releaseStartPromise = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let cancelCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          startSeen()
+          await releaseStartPromise
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelCalls++
+        }
+        return inner.send(req)
+      },
+    }
+    const raceClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await raceClient.authorize()
+    const raceBucket = await raceClient.createBucket({
+      bucketName: 'abort-start-race',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = raceBucket.file('abort-start-race.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await startSeenPromise
+
+    const abortPromise = writer.abort(new Error('abort while starting'))
+    const abortResult = await Promise.race([
+      abortPromise.then(() => 'aborted' as const),
+      delay(50).then(() => 'timed-out' as const),
+    ])
+    expect(abortResult).toBe('aborted')
+    releaseStart()
+    await abortPromise
+    await expect(done).rejects.toThrow('abort while starting')
+
+    for (let attempt = 0; attempt < 20 && cancelCalls === 0; attempt++) {
+      await delay(10)
+    }
+    expect(cancelCalls).toBe(1)
+  })
+
+  it('aborts an in-flight write-stream part request when the writer aborts', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadSeen!: () => void
+    const uploadSeenPromise = new Promise<void>((resolve) => {
+      uploadSeen = resolve
+    })
+    let observedSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?')) {
+          observedSignal = req.signal
+          uploadSeen()
+          return new Promise<HttpResponse>((_resolve, reject) => {
+            const rejectWithAbort = () => reject(req.signal?.reason ?? new Error('part aborted'))
+            if (req.signal?.aborted === true) {
+              rejectWithAbort()
+            } else {
+              req.signal?.addEventListener('abort', rejectWithAbort, { once: true })
+            }
+          })
+        }
+        return inner.send(req)
+      },
+    }
+    const abortClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await abortClient.authorize()
+    const abortBucket = await abortClient.createBucket({
+      bucketName: 'abort-inflight',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = abortBucket.file('abort-inflight.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await uploadSeenPromise
+
+    await writer.abort(new Error('stop in-flight part'))
+    expect(observedSignal?.aborted).toBe(true)
+    await expect(done).rejects.toThrow('stop in-flight part')
+  })
 })
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}

@@ -112,7 +112,7 @@ describe('uploadLargeFile resume', () => {
     bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
   })
 
-  it('resume: true starts fresh without same-name discovery', async () => {
+  it('resume: true starts fresh when no compatible candidate exists', async () => {
     const data = deterministicBytes(5_000_010)
     const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
 
@@ -127,7 +127,7 @@ describe('uploadLargeFile resume', () => {
 
     expect(result.fileName).toBe('resume-reupload.bin')
     expect(result.contentLength).toBe(data.byteLength)
-    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+    expect(listUnfinishedLargeFiles).toHaveBeenCalledTimes(1)
   })
 
   it('resumeFileId skips matching server parts after hashing local bytes', async () => {

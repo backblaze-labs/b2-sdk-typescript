@@ -15,9 +15,13 @@ import type { ProgressListener } from './streams/progress.ts'
 import type { ContentSource } from './streams/source.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
-import type { FileId, LargeFileId } from './types/ids.ts'
+import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
-import { type ResumePartReusedListener, uploadLargeFile } from './upload/large.ts'
+import {
+  type ResumePartReusedListener,
+  type UploadLargeFileOptions,
+  uploadLargeFile,
+} from './upload/large.ts'
 import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
@@ -153,44 +157,19 @@ export class B2Object {
     retryResponseBodyFailures?: boolean
     /** Abort signal for cancelling the upload. */
     signal?: AbortSignal
+    /** See {@link UploadLargeFileOptions.resume}. Ignored on the small-file path. */
+    resume?: NonNullable<UploadLargeFileOptions['resume']>
+    /** See {@link UploadLargeFileOptions.resumeMaxListPages}. */
+    resumeMaxListPages?: NonNullable<UploadLargeFileOptions['resumeMaxListPages']>
+    /** See {@link UploadLargeFileOptions.resumeMaxPartCandidates}. */
+    resumeMaxPartCandidates?: NonNullable<UploadLargeFileOptions['resumeMaxPartCandidates']>
+    /** See {@link UploadLargeFileOptions.resumeMaxPartPages}. */
+    resumeMaxPartPages?: NonNullable<UploadLargeFileOptions['resumeMaxPartPages']>
     /**
-     * Resume an unfinished multipart upload for this file name when one
-     * exists. Only meaningful on the large-file path. Ignored on the
-     * small-file path. Discovery reuses only unfinished files whose resume
-     * options and uploaded part lengths match the current call, and should
-     * only be used when bucket writers are mutually trusted. Discovery can make
-     * up to the list-page budget plus the candidate budget times the part-page
-     * budget in sequential B2 list calls before upload starts; pass `signal` to
-     * bound wall-clock time. SSE-C uploads are not resumed because B2 does not
-     * expose customer key identity for unfinished files.
+     * See {@link UploadLargeFileOptions.resumeFileId}. Only supported on the
+     * large-file path; small-file uploads throw.
      */
-    resume?: boolean
-    /**
-     * Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10.
-     * If the scan truncates, resume falls back to a fresh upload and
-     * `onResumeCandidateRejected` is the only SDK signal.
-     */
-    resumeMaxListPages?: number
-    /**
-     * Maximum metadata-compatible candidates whose parts may be listed before upload starts. Defaults to 25.
-     * Hitting the limit can leave older unfinished uploads orphaned while a fresh
-     * large file is started; tune for high-churn buckets.
-     */
-    resumeMaxPartCandidates?: number
-    /**
-     * Maximum `b2_list_parts` pages inspected per metadata-compatible candidate before upload starts. Defaults to 10.
-     * A candidate whose parts exceed this bound is skipped and reported through
-     * `onResumeCandidateRejected`.
-     */
-    resumeMaxPartPages?: number
-    /**
-     * Resume into a specific large-file ID, bypassing discovery.
-     * Overrides the `resume` discovery path after verifying bucket, file name,
-     * upload options, encryption, retention, legal hold, and uploaded part
-     * lengths. Mismatches, including SSE-C uploads whose customer key identity
-     * cannot be verified, throw `ResumeFileIdMismatchError`.
-     */
-    resumeFileId?: LargeFileId
+    resumeFileId?: NonNullable<UploadLargeFileOptions['resumeFileId']>
     /** Diagnostic callback invoked when resume discovery rejects a candidate. */
     onResumeCandidateRejected?: ResumeCandidateRejectedListener
     /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
@@ -206,6 +185,9 @@ export class B2Object {
         fileName: this.fileName,
         retry: this.uploadRetryOptions,
       })
+    }
+    if (options.resumeFileId !== undefined) {
+      throw new Error('B2Object.upload: resumeFileId is only supported for multipart uploads.')
     }
 
     // Small-file path doesn't accept resume options.

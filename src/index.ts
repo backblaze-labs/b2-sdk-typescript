@@ -124,6 +124,7 @@ export { EventType } from './types/notifications.ts'
 export type {
   ResumePartReusedEvent,
   ResumePartReusedListener,
+  UploadLargeFileOptions,
 } from './upload/large.ts'
 export type {
   ResumeCandidateRejectedEvent,

@@ -9,6 +9,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
+import { createUploadAbortScope } from './abort-scope.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
@@ -93,9 +94,11 @@ export function createWriteStream(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const tracker = new ProgressTracker(options.onProgress, null, null)
   const sem = new Semaphore(concurrency)
+  const abortScope = createUploadAbortScope(options.signal)
 
   let largeFileId: LargeFileId | null = null
   let startPromise: Promise<LargeFileId> | null = null
+  let cancelAfterStartScheduled = false
   let nextPartNumber = 1
   let pendingBytes = 0
   const pending: Uint8Array[] = []
@@ -138,17 +141,25 @@ export function createWriteStream(
           : {}),
       })
       largeFileId = resp.fileId
+      if (abortScope.signal.aborted) {
+        scheduleCancelLargeFileAfterStart(Promise.resolve(largeFileId))
+      }
       return largeFileId
     })()
     return startPromise
   }
 
   async function shipPart(data: Uint8Array, partNumber: number): Promise<void> {
+    if (errored !== null) throw errored
+    abortScope.signal.throwIfAborted()
     const fileId = await ensureStarted()
+    if (errored !== null) throw errored
+    abortScope.signal.throwIfAborted()
 
     const sha1 = new IncrementalSha1()
     await sha1.update(data)
     const sha1Hex = await sha1.digest()
+    abortScope.signal.throwIfAborted()
 
     const result = await uploadPartWithFreshUrl(raw, accountInfo, fileId, {
       fileName: options.fileName,
@@ -157,7 +168,7 @@ export function createWriteStream(
       contentLength: data.byteLength,
       contentSha1: sha1Hex,
       retry: options.retry,
-      signal: options.signal,
+      signal: abortScope.signal,
       onUploadRetry: options.onUploadRetry,
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
@@ -170,6 +181,23 @@ export function createWriteStream(
     partSha1s[partNumber - 1] = result.contentSha1
     tracker.addBytes(data.byteLength)
     tracker.completePart()
+  }
+
+  function markErrored(err: unknown): Error {
+    const error = toError(err)
+    errored = error
+    abortScope.abort(error)
+    return error
+  }
+
+  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
+    if (cancelAfterStartScheduled) return
+    cancelAfterStartScheduled = true
+    void started
+      .then((fileId) => cancelLargeFileBestEffort(raw, accountInfo, fileId))
+      .catch(() => {
+        // If start failed, no file ID is available to cancel.
+      })
   }
 
   function dispatchPart(): void {
@@ -196,7 +224,7 @@ export function createWriteStream(
       try {
         await shipPart(data, partNumber)
       } catch (err) {
-        errored = toError(err)
+        markErrored(err)
         throw err
       } finally {
         sem.release()
@@ -210,7 +238,7 @@ export function createWriteStream(
   const writable = new WritableStream<Uint8Array>({
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
-      options.signal?.throwIfAborted()
+      abortScope.signal.throwIfAborted()
 
       pending.push(chunk)
       pendingBytes += chunk.byteLength
@@ -224,7 +252,7 @@ export function createWriteStream(
           try {
             await shipPart(carved, partNumber)
           } catch (err) {
-            errored = toError(err)
+            markErrored(err)
             throw err
           } finally {
             sem.release()
@@ -238,7 +266,7 @@ export function createWriteStream(
     async close(): Promise<void> {
       try {
         if (errored) throw errored
-        options.signal?.throwIfAborted()
+        abortScope.signal.throwIfAborted()
 
         // Ship any remaining bytes as the last part. If the total fit in one
         // single buffered batch (no parts shipped yet), we have to use the
@@ -247,7 +275,13 @@ export function createWriteStream(
           dispatchPart()
         }
 
-        await Promise.all(inflight)
+        const settled = await Promise.allSettled(inflight)
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        )
+        if (rejected !== undefined && errored === null) {
+          markErrored(rejected.reason)
+        }
         if (errored) throw errored
 
         if (largeFileId === null) {
@@ -263,7 +297,15 @@ export function createWriteStream(
           { fileId: largeFileId, partSha1Array: partSha1s },
         )
         resolveDone(result)
+        abortScope.dispose()
       } catch (err) {
+        markErrored(err)
+        const settled = await Promise.allSettled(inflight)
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        )
+        const observedError =
+          errored ?? (rejected !== undefined ? toError(rejected.reason) : toError(err))
         // Capture into a const so the cancel closure sees a non-null
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
@@ -271,17 +313,28 @@ export function createWriteStream(
         if (fileIdToCancel !== null) {
           await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
         }
-        rejectDone(err)
-        throw err
+        rejectDone(observedError)
+        abortScope.dispose()
+        throw observedError
       }
     },
 
     async abort(reason: unknown): Promise<void> {
+      const abortError = markErrored(reason)
+      pending.length = 0
+      pendingBytes = 0
       const fileIdToCancel = largeFileId
+      if (fileIdToCancel === null && startPromise !== null) {
+        // Do not await an in-flight start request here. A stalled
+        // b2_start_large_file must not make writer.abort() hang; if it later
+        // returns a file ID, cancel it best-effort in the background.
+        scheduleCancelLargeFileAfterStart(startPromise)
+      }
       if (fileIdToCancel !== null) {
         await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
       }
-      rejectDone(toError(reason))
+      rejectDone(abortError)
+      abortScope.dispose()
     },
   })
 

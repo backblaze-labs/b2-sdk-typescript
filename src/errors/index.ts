@@ -16,7 +16,8 @@
  * "stream consumed twice", or "called before init", use the native `Error`
  * constructor instead. The direct `Error` outliers are
  * {@link B2InsufficientCapabilityError}, {@link B2RedirectError},
- * {@link B2SsrfError}, and {@link NetworkError}.
+ * {@link B2SsrfError}, {@link NetworkError}, and
+ * {@link ResumeFileIdMismatchError}.
  *
  * @packageDocumentation
  */
@@ -29,6 +30,8 @@ import {
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
 
+// Defined with the resume planner to avoid splitting the error from its
+// compatibility checks, then re-exported from the public errors subpath.
 export { ResumeFileIdMismatchError } from '../upload/resume.ts'
 
 /** Metadata captured from B2 error response headers. */

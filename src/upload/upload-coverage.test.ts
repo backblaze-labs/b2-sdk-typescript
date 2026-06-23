@@ -233,6 +233,71 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(unfinished.files.find((f) => f.fileId === start.fileId)).toBeDefined()
   })
 
+  it('aborts and drains parallel part work before cancelling the large file', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const inner = sim.transport()
+    let part2Started!: () => void
+    const part2StartedPromise = new Promise<void>((resolve) => {
+      part2Started = resolve
+    })
+    let part2Settled = false
+    let cancelSawPart2Settled: boolean | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?')) {
+          const partNumber = req.headers?.['X-Bz-Part-Number']
+          if (partNumber === '1') {
+            await part2StartedPromise
+            return jsonErrorResponse(400, 'bad_request', 'forced part 1 failure')
+          }
+          if (partNumber === '2') {
+            part2Started()
+            return new Promise<HttpResponse>((_resolve, reject) => {
+              const rejectWithAbort = () => {
+                part2Settled = true
+                reject(req.signal?.reason ?? new Error('part 2 aborted'))
+              }
+              if (req.signal?.aborted === true) {
+                rejectWithAbort()
+              } else {
+                req.signal?.addEventListener('abort', rejectWithAbort, { once: true })
+              }
+            })
+          }
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelSawPart2Settled = part2Settled
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'parallel-drain',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'parallel-drain.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow(/forced part 1 failure/)
+
+    expect(part2Settled).toBe(true)
+    expect(cancelSawPart2Settled).toBe(true)
+  })
+
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
     // Force EVERY `b2_upload_part` to fail AND `b2_cancel_large_file` to
     // fail, so the outer cleanup's best-effort swallow runs. The original upload_part error must still be
@@ -2020,6 +2085,39 @@ describe('uploadSmallFile cleanup path', () => {
     expect(last?.totalBytes).toBe(payload.byteLength)
     expect(last?.partsCompleted).toBe(1)
     expect(last?.totalParts).toBe(1)
+  })
+
+  it('rejects explicit resumeFileId on Bucket.upload small-file path', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-resume-id-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'small-resume-id.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        resumeFileId: largeFileId('unfinished-large-file'),
+      }),
+    ).rejects.toThrow(/resumeFileId is only supported for multipart uploads/)
+  })
+
+  it('rejects explicit resumeFileId on B2Object.upload small-file path', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-resume-id-object',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.file('small-resume-id.txt').upload({
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        resumeFileId: largeFileId('unfinished-large-file'),
+      }),
+    ).rejects.toThrow(/resumeFileId is only supported for multipart uploads/)
   })
 
   it("normalizes the wire 'none' contentSha1 sentinel to null on multipart uploads", async () => {

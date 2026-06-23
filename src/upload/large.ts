@@ -11,6 +11,7 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
+import { createUploadAbortScope } from './abort-scope.ts'
 import { cancelLargeFileBestEffort } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
@@ -307,18 +308,21 @@ export async function uploadLargeFile(
     }
   }
 
+  const abortScope = createUploadAbortScope(options.signal)
   try {
     const tasks = parts.map(async (part) => {
       await sem.acquire()
       try {
-        options.signal?.throwIfAborted()
+        abortScope.signal.throwIfAborted()
 
         const partSource = options.source.slice(part.offset, part.offset + part.length)
         const data = new Uint8Array(await partSource.toArrayBuffer())
+        abortScope.signal.throwIfAborted()
 
         const partSha1 = new IncrementalSha1()
         await partSha1.update(data)
         const sha1Hex = await partSha1.digest()
+        abortScope.signal.throwIfAborted()
 
         // Best-effort resume deduplication gate: metadata and lengths are not enough.
         // A SHA-1 match is not a cryptographic guarantee against malicious
@@ -346,7 +350,7 @@ export async function uploadLargeFile(
           contentLength: data.byteLength,
           contentSha1: sha1Hex,
           retry: options.retry,
-          signal: options.signal,
+          signal: abortScope.signal,
           onUploadRetry: options.onUploadRetry,
           retryResponseBodyFailures: resolveRetryResponseBodyFailures(
             options.retryResponseBodyFailures,
@@ -360,12 +364,25 @@ export async function uploadLargeFile(
         partSha1s[part.partNumber - 1] = result.contentSha1
         tracker.addBytes(data.byteLength)
         tracker.completePart()
+      } catch (err) {
+        abortScope.abort(err)
+        throw err
       } finally {
         sem.release()
       }
     })
 
-    await Promise.all(tasks)
+    const settled = await Promise.allSettled(tasks)
+    const rejected = settled.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (rejected !== undefined) {
+      if (abortScope.signal.aborted && abortScope.signal.reason !== undefined) {
+        throw abortScope.signal.reason
+      }
+      /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
+      throw rejected.reason
+    }
 
     const result = await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
       fileId: largeFileId,
@@ -376,6 +393,8 @@ export async function uploadLargeFile(
   } catch (err) {
     if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
     throw err
+  } finally {
+    abortScope.dispose()
   }
 }
 
