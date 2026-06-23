@@ -10,27 +10,27 @@ import type { UploadRetryListener } from './retry.ts'
 /** Options shared by high-level bucket and object upload methods. */
 export interface UploadOptions {
   /** Data source to upload. Use {@link BufferSource}, {@link BlobSource}, or {@link StreamSource}. */
-  source: ContentSource
+  readonly source: ContentSource
   /** MIME type. Defaults to `"b2/x-auto"` (auto-detected by B2). */
-  contentType?: string
+  readonly contentType?: string
   /** Custom key-value metadata stored with the file. */
-  fileInfo?: Record<string, string>
+  readonly fileInfo?: Record<string, string>
   /** Server-side encryption settings. */
-  serverSideEncryption?: EncryptionSetting
+  readonly serverSideEncryption?: EncryptionSetting
   /** File retention policy (requires file lock on the bucket). */
-  fileRetention?: FileRetentionValue
+  readonly fileRetention?: FileRetentionValue
   /** Legal hold status for the file. */
-  legalHold?: LegalHoldValue
+  readonly legalHold?: LegalHoldValue
   /** Last-modified timestamp in milliseconds since epoch. */
-  lastModifiedMillis?: number
+  readonly lastModifiedMillis?: number
   /** Part size override for multipart uploads, in bytes. */
-  partSize?: number
+  readonly partSize?: number
   /** Number of concurrent part uploads for large files. */
-  concurrency?: number
+  readonly concurrency?: number
   /** Callback invoked with upload progress events. */
-  onProgress?: ProgressListener
+  readonly onProgress?: ProgressListener
   /** Callback invoked before retrying with a fresh upload URL. */
-  onUploadRetry?: UploadRetryListener
+  readonly onUploadRetry?: UploadRetryListener
   /**
    * Configure retries after B2 may have stored bytes. Single-request uploads
    * use this for unreadable response bodies and ambiguous upload POST network
@@ -39,34 +39,34 @@ export interface UploadOptions {
    * upload POST network failures still retry because re-posting the same part
    * number is idempotent.
    */
-  retryResponseBodyFailures?: boolean
+  readonly retryResponseBodyFailures?: boolean
   /** Abort signal for cancelling the upload. */
-  signal?: AbortSignal
+  readonly signal?: AbortSignal
   /** Enable bounded same-name multipart resume discovery. Ignored on the small-file path. */
-  resume?: boolean
+  readonly resume?: boolean
   /** Aggregate SDK-enforced timeout for resume discovery when no signal is supplied. */
-  resumeDiscoveryTimeoutMs?: number
+  readonly resumeDiscoveryTimeoutMs?: number
   /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. */
-  resumeMaxListPages?: number
+  readonly resumeMaxListPages?: number
   /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. */
-  resumeMaxPartCandidates?: number
+  readonly resumeMaxPartCandidates?: number
   /** Maximum `b2_list_parts` pages inspected per metadata-compatible candidate. */
-  resumeMaxPartPages?: number
+  readonly resumeMaxPartPages?: number
   /**
    * Explicit unfinished large-file ID to verify and resume. Only supported on
    * the large-file path; small-file uploads throw.
    */
-  resumeFileId?: LargeFileId
+  readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
-  onResumeCandidateRejected?: ResumeCandidateRejectedListener
+  readonly onResumeCandidateRejected?: ResumeCandidateRejectedListener
   /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
-  onResumePartReused?: ResumePartReusedListener
+  readonly onResumePartReused?: ResumePartReusedListener
 }
 
 /** Options accepted by {@link Bucket.upload}. */
 export interface BucketUploadOptions extends UploadOptions {
   /** Destination file name (path) in the bucket. */
-  fileName: string
+  readonly fileName: string
 }
 
 /** Options accepted by {@link B2Object.upload}. */

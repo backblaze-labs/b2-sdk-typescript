@@ -576,7 +576,16 @@ async function abortableRequest<T>(
 }
 
 function resumeAbortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? resumeDiscoveryTimeoutReason(DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS)
+  return signal.reason ?? resumeAbortFallbackReason()
+}
+
+function resumeAbortFallbackReason(): Error {
+  if (typeof DOMException === 'function') {
+    return new DOMException('Resume discovery aborted', 'AbortError')
+  }
+  const error = new Error('Resume discovery aborted')
+  error.name = 'AbortError'
+  return error
 }
 
 function resumeDiscoveryTimeoutReason(timeoutMs: number): Error {

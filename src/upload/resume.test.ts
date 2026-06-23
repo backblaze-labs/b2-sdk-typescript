@@ -2085,4 +2085,31 @@ describe('findResumeCandidate', () => {
       }),
     ).rejects.toThrow()
   })
+
+  it('reports caller aborts without a reason as AbortError', async () => {
+    const signal = {
+      aborted: true,
+      addEventListener() {},
+      removeEventListener() {},
+      throwIfAborted() {},
+    } as unknown as AbortSignal
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return { files: [], nextFileId: null }
+      },
+    } as unknown as RawClient
+
+    await expect(
+      findResumeCandidate(
+        raw,
+        makeAccountInfo(),
+        bucketId('bucket1'),
+        'target.bin',
+        defaultResumeCriteria({ signal }),
+      ),
+    ).rejects.toMatchObject({
+      message: 'Resume discovery aborted',
+      name: 'AbortError',
+    })
+  })
 })
