@@ -17,6 +17,21 @@ describe('arrayBufferFor', () => {
     expect([...new Uint8Array(buffer)]).toEqual([2, 3])
   })
 
+  it.skipIf(typeof Buffer === 'undefined')(
+    'copies Buffer views without exposing slab bytes',
+    () => {
+      const slab = Buffer.allocUnsafe(16)
+      slab.fill(0)
+      slab.set([1, 2, 3], 5)
+      const bytes = slab.subarray(5, 8)
+      const buffer = arrayBufferFor(bytes)
+
+      expect(buffer).toBeInstanceOf(ArrayBuffer)
+      expect(buffer.byteLength).toBe(bytes.byteLength)
+      expect([...new Uint8Array(buffer)]).toEqual([1, 2, 3])
+    },
+  )
+
   it.skipIf(typeof SharedArrayBuffer === 'undefined')(
     'copies SharedArrayBuffer-backed views into an ArrayBuffer',
     () => {

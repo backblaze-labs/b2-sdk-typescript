@@ -2,9 +2,10 @@
  * Return an ArrayBuffer containing exactly the bytes visible through a
  * Uint8Array view.
  *
- * Exact `ArrayBuffer` views are returned directly. Subarray and
- * `SharedArrayBuffer`-backed views are copied with `Uint8Array.slice()` so Web
- * Crypto receives a plain `ArrayBuffer` containing only the visible bytes.
+ * Exact `ArrayBuffer` views are returned directly. Other `ArrayBuffer` views
+ * are copied with `ArrayBuffer.prototype.slice()` so Node `Buffer` instances do
+ * not expose slab bytes. `SharedArrayBuffer`-backed views are copied through a
+ * fresh `Uint8Array` so Web Crypto receives a plain `ArrayBuffer`.
  *
  * @param bytes - The byte view to copy.
  *
@@ -18,6 +19,9 @@ export function arrayBufferFor(bytes: Uint8Array): ArrayBuffer {
   ) {
     return bytes.buffer
   }
+  if (bytes.buffer instanceof ArrayBuffer) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+  }
 
-  return bytes.slice().buffer as ArrayBuffer
+  return new Uint8Array(bytes).buffer
 }
