@@ -332,6 +332,9 @@ function assertSameScannedRegularFile(
 ): void {
   const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {
+    if (operation === 'delete') {
+      throw Object.assign(new Error(`${reason}: not a regular file`), { code: 'EISDIR' })
+    }
     throw new Error(`${reason}: not a regular file`)
   }
   if (stats.size !== path.size) {
