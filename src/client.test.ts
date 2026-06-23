@@ -36,6 +36,17 @@ describe('B2Client with simulator', () => {
     expect(expiringClient.accountInfo.getAuthToken()).not.toBe(originalToken)
   })
 
+  it('reauthorizes and returns the fresh auth token', async () => {
+    const token = await (
+      client as unknown as {
+        reauthorize(): Promise<string>
+      }
+    ).reauthorize()
+
+    expect(token).toBe(client.accountInfo.getAuthToken())
+    expect(client.accountInfo.getAccountId()).toBe('sim_account_0001')
+  })
+
   it('keeps resolved upload retry options off the public client shape', () => {
     const retryClient = new B2Client({
       applicationKeyId: 'test-key-id',

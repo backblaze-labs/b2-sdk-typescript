@@ -64,8 +64,8 @@ export async function readStreamChunkWithSignal<T>(
   const abortPromise = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
       const reason = abortReason(signal)
-      void reader.cancel(reason).catch(() => {})
       reject(reason)
+      void reader.cancel(reason).catch(() => {})
     }
     signal.addEventListener('abort', onAbort, { once: true })
     removeAbortListener = () => signal.removeEventListener('abort', onAbort)

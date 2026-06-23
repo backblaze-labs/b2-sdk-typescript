@@ -321,6 +321,30 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('accepts an existing managed staging marker', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-existing-marker-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await mkdir(managedDirectory)
+      await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(readdir(managedDirectory)).resolves.toEqual([DOWNLOAD_STAGING_MARKER_NAME])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!isLinux)('does not follow a parent symlink swap during final rename', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-root-'))
     const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-out-'))
