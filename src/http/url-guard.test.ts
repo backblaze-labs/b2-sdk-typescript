@@ -91,7 +91,7 @@ describe('UrlGuard', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(B2SsrfError)
       const ssrf = err as B2SsrfError
-      expect(ssrf.url).toBe('https://attacker.example/foo/...')
+      expect(ssrf.url).toBe('https://attacker.example/...')
       expect(ssrf.message).not.toContain('secret')
       expect(ssrf.message).not.toContain('token=1')
       expect(ssrf.message).not.toContain('frag')

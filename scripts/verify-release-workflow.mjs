@@ -62,9 +62,7 @@ function extractJobs(workflow) {
   const jobsSectionMatch = /^jobs:\s*\n/m.exec(workflow)
   if (jobsSectionMatch === null) return { hasJobsSection: false, jobs: [] }
 
-  const jobLines = workflow
-    .slice(jobsSectionMatch.index + jobsSectionMatch[0].length)
-    .split('\n')
+  const jobLines = workflow.slice(jobsSectionMatch.index + jobsSectionMatch[0].length).split('\n')
   const starts = []
   for (const [index, line] of jobLines.entries()) {
     const match = /^ {2}([A-Za-z0-9_-]+):$/.exec(line)
@@ -102,7 +100,9 @@ function executableLines(body) {
 
 function rejectOidcJobHazards(jobName, body, errors) {
   if (/actions\/checkout@/.test(body)) {
-    errors.push(`release.yml ${jobName} job must not checkout repository code with id-token: write.`)
+    errors.push(
+      `release.yml ${jobName} job must not checkout repository code with id-token: write.`,
+    )
   }
   if (dependencyInstall.test(body)) {
     errors.push(`release.yml ${jobName} job must not install dependencies with id-token: write.`)

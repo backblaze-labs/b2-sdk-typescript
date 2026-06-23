@@ -341,6 +341,7 @@ export async function uploadLargeFile(
         fileName: options.fileName,
         partSha1s,
         signal: abortScope.signal,
+        ...(options.retry !== undefined ? { retry: options.retry } : {}),
       })
     } catch (err) {
       abortScope.abort(err)
@@ -427,6 +428,7 @@ export async function uploadLargeFile(
       fileName: options.fileName,
       partSha1s,
       signal: abortScope.signal,
+      ...(options.retry !== undefined ? { retry: options.retry } : {}),
     })
 
     return result

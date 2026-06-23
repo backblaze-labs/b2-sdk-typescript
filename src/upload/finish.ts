@@ -1,5 +1,6 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -11,6 +12,7 @@ export interface FinishLargeFileContext {
   readonly fileName: string
   readonly partSha1s: readonly string[]
   readonly signal?: AbortSignal
+  readonly retry?: Partial<RetryOptions>
 }
 
 /**
@@ -37,7 +39,12 @@ export async function finishLargeFileWithAbortReconciliation(
         fileId: context.fileId,
         partSha1Array: context.partSha1s,
       },
-      context.signal === undefined ? undefined : { signal: context.signal },
+      context.signal === undefined && context.retry === undefined
+        ? undefined
+        : {
+            ...(context.signal !== undefined ? { signal: context.signal } : {}),
+            ...(context.retry !== undefined ? { retry: context.retry } : {}),
+          },
     )
   } catch (err) {
     if (isAbortOrTimeoutAfterFinishDispatch(err, context.signal)) {

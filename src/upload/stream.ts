@@ -359,6 +359,7 @@ export function createWriteStream(
           fileName: options.fileName,
           partSha1s,
           signal: abortScope.signal,
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
         })
         abortScope.dispose()
         resolveDone(result)

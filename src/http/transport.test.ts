@@ -373,17 +373,22 @@ describe('FetchTransport', () => {
     }
   })
 
-  it('wraps stalled finishLargeFile bodies with the ambiguous file ID', async () => {
+  it('applies finishLargeFile retry timeout overrides to response body reads', async () => {
     vi.useFakeTimers()
     try {
       fetchSpy.mockResolvedValue(stalledResponse())
       const raw = new RawClient({ transport: new FetchTransport() })
       const fileId = '4_z_unfinished' as LargeFileId
 
-      const call = raw.finishLargeFile('https://api.example.com', 'auth', {
-        fileId,
-        partSha1Array: [],
-      })
+      const call = raw.finishLargeFile(
+        'https://api.example.com',
+        'auth',
+        {
+          fileId,
+          partSha1Array: [],
+        },
+        { retry: { requestTimeoutMs: 1 } },
+      )
       const instanceAssertion = expect(call).rejects.toBeInstanceOf(
         FinishLargeFileResponseBodyError,
       )
@@ -391,7 +396,7 @@ describe('FetchTransport', () => {
         fileId,
         cause: { name: 'TimeoutError' },
       })
-      await vi.advanceTimersByTimeAsync(15 * 60_000)
+      await vi.advanceTimersByTimeAsync(1)
 
       await instanceAssertion
       await metadataAssertion

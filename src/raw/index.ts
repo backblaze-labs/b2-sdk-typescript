@@ -92,6 +92,9 @@ export interface RawRequestOptions {
  */
 export type JsonPostOptions = RawRequestOptions
 
+/** Optional request controls for {@link RawClient.finishLargeFile}. */
+export type FinishLargeFileOptions = RawRequestOptions
+
 function normalizeRawRequestOptions(
   optionsOrSignal?: RawRequestOptions | AbortSignal,
   retry?: Partial<RetryOptions>,
@@ -649,7 +652,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The completed file version metadata.
    */
@@ -657,7 +660,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: FinishLargeFileRequest,
-    options?: RawRequestOptions,
+    options?: FinishLargeFileOptions,
   ): Promise<FileVersion> {
     const response = await this.transport.send({
       url: `${apiUrl}/b2api/v3/b2_finish_large_file`,
