@@ -203,7 +203,10 @@ export async function writeLocalStreamInsideRoot(
     }
     await writeHandle.close()
     handle = undefined
-    if (publishMode !== PRIVATE_DOWNLOAD_FILE_MODE) await chmod(tmpPath, publishMode)
+    if (publishMode !== PRIVATE_DOWNLOAD_FILE_MODE) {
+      /* v8 ignore next -- best-effort mode preservation */
+      await chmod(tmpPath, publishMode).catch(() => {})
+    }
 
     const [parentRealPathBeforeRename, parentStatsBeforeRename] = await Promise.all([
       realpath(path.dirname(destPath)),
