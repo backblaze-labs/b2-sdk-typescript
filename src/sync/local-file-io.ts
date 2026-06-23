@@ -106,7 +106,7 @@ export async function writeLocalStreamInsideRoot(
   },
 ): Promise<void> {
   const { constants } = await import('node:fs')
-  const { chmod, lstat, mkdir, open, realpath, rename, rm } = await import('node:fs/promises')
+  const { chmod, lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
   const path = await import('node:path')
   const { randomUUID } = await import('node:crypto')
   const segments = safeRelativePathSegments(relPath)
@@ -133,6 +133,7 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
+  await assertDownloadDestinationSameDevice(rootRealPath, parentRealPath, stat)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -239,6 +240,17 @@ async function replacementFileMode(filePath: string): Promise<number> {
   } catch (err) {
     if (hasErrorCode(err, 'ENOENT')) return PRIVATE_DOWNLOAD_FILE_MODE
     throw err
+  }
+}
+
+async function assertDownloadDestinationSameDevice(
+  rootRealPath: string,
+  parentRealPath: string,
+  stat: typeof import('node:fs/promises').stat,
+): Promise<void> {
+  const [rootStats, parentStats] = await Promise.all([stat(rootRealPath), stat(parentRealPath)])
+  if (rootStats.dev !== parentStats.dev) {
+    throw new Error('unsafe local destination path: cannot publish download across filesystems')
   }
 }
 
