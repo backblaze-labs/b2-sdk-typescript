@@ -20,8 +20,8 @@ describe('localFilesystemErrorReason', () => {
 
   it('strips controls and bounds cleaned filesystem codes', () => {
     const coded = Object.assign(new Error('ignored'), {
-      code: `E\nACCES${'X'.repeat(100)}`,
+      code: `E\n${'X'.repeat(100)}`,
     })
-    expect(localFilesystemErrorReason(coded)).toBe(`EACCES${'X'.repeat(74)}`)
+    expect(localFilesystemErrorReason(coded)).toBe(`E${'X'.repeat(79)}`)
   })
 })

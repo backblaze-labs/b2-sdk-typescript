@@ -1,4 +1,3 @@
-import * as path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   assertPathInsideRoot,
@@ -42,10 +41,22 @@ describe('safeRelativePathSegments', () => {
 
 describe('assertPathInsideRoot', () => {
   it('accepts child paths and rejects root or outside paths', () => {
-    const root = path.resolve('sync-root')
-    expect(() => assertPathInsideRoot(root, path.join(root, 'file.txt'), path)).not.toThrow()
-    expect(() => assertPathInsideRoot(root, root, path)).toThrow('unsafe local destination path')
-    expect(() => assertPathInsideRoot(root, path.resolve('outside-root'), path)).toThrow(
+    const pathApi = {
+      sep: '/',
+      relative(root: string, target: string) {
+        if (target === root) return ''
+        if (target.startsWith(`${root}/`)) return target.slice(root.length + 1)
+        return `../${target.replace(/^\/+/, '')}`
+      },
+      isAbsolute(value: string) {
+        return value.startsWith('/')
+      },
+    } as Parameters<typeof assertPathInsideRoot>[2]
+    const root = '/sync-root'
+
+    expect(() => assertPathInsideRoot(root, `${root}/file.txt`, pathApi)).not.toThrow()
+    expect(() => assertPathInsideRoot(root, root, pathApi)).toThrow('unsafe local destination path')
+    expect(() => assertPathInsideRoot(root, '/outside-root', pathApi)).toThrow(
       'unsafe local destination path',
     )
   })
