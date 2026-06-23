@@ -84,8 +84,11 @@ export interface ListFileVersionsOptions {
   readonly signal?: AbortSignal
 }
 
-interface JsonPostOptions {
+/** Optional controls for RawClient JSON POST calls. */
+export interface JsonPostOptions {
+  /** Optional abort signal for cancellation. */
   readonly signal?: AbortSignal
+  /** Optional per-request retry override. */
   readonly retry?: Partial<RetryOptions>
 }
 
@@ -412,7 +415,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyFileRequest,
-    options?: { readonly signal?: AbortSignal },
+    options?: JsonPostOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
       await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),

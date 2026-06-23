@@ -455,6 +455,35 @@ do not require AWS presigner packages.
 
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
+## Sync filters
+
+`synchronize()` and the built-in `LocalFolder` / `B2Folder` scanners accept `include` and `exclude` filters for paths relative to each sync root:
+
+```ts
+for await (const event of synchronize({
+  source: new LocalFolder('./site'),
+  dest: new B2Folder(bucket, 'site/'),
+  bucket,
+  prefix: 'site/',
+  options: {
+    compareMode: 'modtime',
+    keepMode: 'no-delete',
+    include: ['assets/**', '*.html'],
+    exclude: ['*.tmp', 'node_modules', 'dist/cache/**'],
+  },
+})) {
+  console.log(event)
+}
+```
+
+Glob strings use the SDK dialect: `*` and `?` stay within one path segment, a whole `**` segment crosses directories, slash-less patterns match any basename or ancestor directory, and excludes win over includes. Use `dir/**` for directory-subtree patterns such as `dist/cache/**`; a slash-containing literal such as `dist/cache` matches only that exact path. RegExp filters are guarded by a best-effort synchronous safety heuristic whose exact subset may change as protections tighten. Paths beyond the RegExp input guard are skipped when any RegExp filter is present, including exclude-only RegExp deny-lists. B2 prefixes are raw object-name prefixes; backslashes are not rewritten to `/`.
+
+`SyncFolder.scan()` direct consumers should expect paths sorted with `compareSyncRelativePaths`, exported from `@backblaze-labs/b2-sdk/sync`. During `synchronize()`, custom folders are filtered before pairing even when they set `appliesScanFilters: true`; scanner-side filtering is an optimization, not the policy boundary. Custom scanner authors can call `filterSyncPaths(paths, options)` and forward `SyncScanOptions.onSkip` so RegExp input-limit diagnostics are preserved. Custom folders that do not set `appliesScanSorting: true` are sorted before pairing. The built-in local and B2 scanners set both flags. `SyncOptions.maxScanEntries` / `SyncScanOptions.maxScanEntries` default to the SDK scan ceiling and fail with a defined scan-limit error when exceeded; B2 scans count every listed file-version record, including versions later skipped by prefix, safety, or filter checks, while local and fallback scans count retained sync paths. Pass `Infinity` only when the process heap is sized for the full result set; raising the limit increases peak scanner memory because built-in scans sort or group results before yielding.
+
+Built-in scanner skip diagnostics use `SyncSkipReason` values such as `outside-prefix`, `unsafe-name`, `local-unsafe-name`, `relative-path-collision`, `local-path-collision`, `filesystem-error`, and `path-too-long-for-regexp`. The `onSkip` callback receives every diagnostic; the `SyncEvent` stream buffers the first 100 scanner diagnostics and then reports overflow with `scan-skip-overflow`.
+
+B2-to-local sync skips object names that are unsafe on local filesystems, including NTFS alternate data stream names, DOS device basenames, trailing dot/space names, and case/Unicode-canonical collisions. Downloads stream into an owned `.b2sdk-*.partial` temp file in the destination directory and rename it into place; local scans are read-only and exclude SDK-managed partial download files so abandoned partials are not uploaded as source files. Download body reads have a 60 second idle timeout by default; set `downloadIdleTimeoutMillis` to tune it or `Infinity` to disable the watchdog. Downloads and local deletes reject symlinked local roots and symlinked path components under the root, then revalidate immediately before the final filesystem operation. Uploads reopen scanned files with no-follow semantics and verify the opened file remains inside the local source root before reading. Per-action failures are emitted as `error` events; the terminal aggregate error includes `failureCount`, up to 100 `failedPaths`, and `failedPathOmittedCount` when more paths were omitted.
+
 ## Custom transport
 
 The SDK uses a pluggable transport layer. The default `FetchTransport` uses the native `fetch` API. You can provide your own:

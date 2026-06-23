@@ -21,6 +21,84 @@ export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
 /** Direction of a sync operation. */
 export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
 
+/**
+ * Glob string or regular expression used to include or exclude sync paths.
+ *
+ * Glob strings use a small SDK-defined dialect against folder-relative paths with forward
+ * slashes: `*` and `?` match within one path segment, and a path segment that is exactly `**`
+ * matches across directory boundaries. Character classes, brace expansion, extglobs, and
+ * backslash escaping are not supported. Slash-less globs use basename-style matching at any
+ * directory depth, so `*.tmp` matches `nested/file.tmp` and `readme.md` matches both `readme.md`
+ * and `docs/readme.md`. They also match ancestor directory names, so `node_modules` matches every
+ * file under a `node_modules` directory. Exclude filters win over include filters.
+ *
+ * Regular expressions are matched against the full relative path. Global and sticky flags are
+ * ignored so matching does not mutate `lastIndex`. RegExp acceptance is a best-effort safety
+ * heuristic for synchronous matching, and the exact accepted subset may change as the SDK tightens
+ * protection. Current guards reject overly long sources, backreferences, multiple unbounded
+ * quantifiers, large or excessive bounded quantifiers, and quantified groups whose subtree
+ * contains a quantifier or alternation.
+ * When any RegExp filter is configured, paths longer than the SDK's RegExp input guard are skipped
+ * instead of being fed to the JavaScript RegExp engine. This is fail-closed for deny-lists: an
+ * untestable long path is not allowed through an exclude RegExp filter.
+ */
+export type SyncFilterPattern = string | RegExp
+
+/**
+ * Include/exclude filters applied to sync paths relative to each folder root.
+ *
+ * `SyncOptions.include` and `SyncOptions.exclude` are the canonical filters for
+ * {@link synchronize}; they are passed down into folder scans and then enforced again during
+ * pairing as the SDK policy boundary. Calling
+ * {@link SyncFolder.scan} directly can pass the same filter object for standalone scans.
+ */
+export interface SyncFilterOptions {
+  /**
+   * Optional allow-list. When present, only paths matching at least one pattern are scanned.
+   * B2 scans can push down only the safe literal prefix from slash-containing glob includes;
+   * other include filtering is client-side.
+   */
+  readonly include?: readonly SyncFilterPattern[]
+  /**
+   * Optional deny-list. Paths matching any exclude pattern are skipped even when they also match
+   * an include pattern. Excludes are client-side filters; they do not reduce B2 list API calls or
+   * the B2 scanner's version grouping and sort memory.
+   */
+  readonly exclude?: readonly SyncFilterPattern[]
+}
+
+/**
+ * Options accepted by {@link SyncFolder.scan}. Includes filters plus an optional scan-level
+ * callback for paths the scanner cannot safely represent or test.
+ */
+export interface SyncScanOptions extends SyncFilterOptions {
+  /**
+   * Optional signal checked by built-in scanners while enumerating. Aborting stops local traversal
+   * promptly and stops B2 scans before requesting the next page.
+   */
+  readonly signal?: AbortSignal
+  /**
+   * Receives scan diagnostics. Built-in scanners may continue after recoverable per-path
+   * diagnostics, such as unreadable local children, but fatal scan failures still abort.
+   */
+  readonly onError?: (event: SyncErrorEvent) => void
+  /**
+   * Receives scanner skip diagnostics. Built-in scans isolate callback errors so diagnostics
+   * handlers cannot abort the scan.
+   */
+  readonly onSkip?: (event: SyncSkipEvent) => void
+  /**
+   * When true, B2 scanners skip names that cannot be written safely to a local filesystem
+   * destination and reject case/Unicode-canonical local path collisions.
+   */
+  readonly requireLocalSafePaths?: boolean
+  /**
+   * Maximum number of entries a scanner may retain before failing with a defined error instead of
+   * continuing toward unbounded heap growth. Defaults to the SDK scan limit.
+   */
+  readonly maxScanEntries?: number
+}
+
 /** Common metadata for a file discovered during a folder scan. */
 export interface SyncPath {
   /** Path relative to the sync folder root, using forward slashes. */
@@ -111,6 +189,18 @@ export type SyncActionEventType =
   | 'delete-remote'
   | 'delete-local'
 
+/** Machine-readable reasons emitted with scanner and diagnostic skip events. */
+export type SyncSkipReason =
+  | 'outside-prefix'
+  | 'unsafe-name'
+  | 'local-unsafe-name'
+  | 'relative-path-collision'
+  | 'local-path-collision'
+  | 'filesystem-error'
+  | 'path-too-long-for-regexp'
+  | 'scan-skip-overflow'
+  | 'stale-download-partial'
+
 /**
  * Per-action progress event (transfer or metadata change). All
  * action-event variants share the same shape; the `type` tag distinguishes
@@ -147,12 +237,16 @@ export interface SyncCompareEvent {
 export interface SyncSkipEvent {
   /** Discriminant tag (always the literal string `'skip'`). */
   readonly type: 'skip'
-  /** Relative path of the skipped file. */
+  /** Relative path of the skipped file, or the raw B2 key when no safe relative path exists. */
   readonly path: string
   /** Size in bytes of the file involved, always 0 for skip events. */
   readonly size: number
   /** Human-readable reason for skipping this file. */
   readonly message: string
+  /** Machine-readable skip reason when emitted by a scanner or diagnostic buffer. */
+  readonly reason?: SyncSkipReason
+  /** Original B2 key when the skip came from a B2 scan. */
+  readonly b2FileName?: string
 }
 
 /**
@@ -169,6 +263,12 @@ export interface SyncErrorEvent {
   readonly size: number
   /** Human-readable error message; never empty. */
   readonly message: string
+  /** Number of failed actions represented by an aggregate run-level error event. */
+  readonly failureCount?: number
+  /** Bounded distinct relative paths of failed actions represented by an aggregate error event. */
+  readonly failedPaths?: readonly string[]
+  /** Number of failed action paths omitted from a bounded aggregate error event. */
+  readonly failedPathOmittedCount?: number
 }
 
 /**
@@ -180,14 +280,14 @@ export interface SyncErrorEvent {
 export type SyncEvent = SyncActionEvent | SyncCompareEvent | SyncSkipEvent | SyncErrorEvent
 
 /** Configuration options for a sync operation. */
-export interface SyncOptions {
+export interface SyncOptions extends SyncFilterOptions {
   /** How to decide whether two files differ. */
   readonly compareMode: CompareMode
   /** What to do with destination files absent from the source. */
   readonly keepMode: KeepMode
   /** Number of days to retain orphaned destination files when keepMode is 'keep-days'. */
   readonly keepDays?: number
-  /** Maximum number of concurrent transfer actions. Defaults to 4. */
+  /** Maximum number of concurrent transfer actions. Must be a positive integer. Defaults to 4. */
   readonly concurrency?: number
   /** When true, actions are generated but not executed. */
   readonly dryRun?: boolean
@@ -210,16 +310,15 @@ export interface SyncOptions {
    * budget before they can be treated as equal.
    */
   readonly sha1VerificationMaxBytes?: number
+  /**
+   * Idle timeout in milliseconds for B2-to-local download body reads. Must be positive, or
+   * `Infinity` to disable the timeout. Defaults to 60 seconds.
+   */
+  readonly downloadIdleTimeoutMillis?: number
+  /** Maximum scanner entries retained before failing with a defined scan-limit error. */
+  readonly maxScanEntries?: number
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
-}
-
-/** Options passed to folder scanners by the sync engine. */
-export interface SyncScanOptions {
-  /** Signal used to stop a scan before it runs to completion. */
-  readonly signal?: AbortSignal
-  /** Receives scan diagnostics before the scanner aborts. */
-  readonly onError?: (event: SyncErrorEvent) => void
 }
 
 /** Supplies encryption settings on a per-file basis during sync. */
@@ -230,10 +329,29 @@ export interface SyncEncryptionProvider {
   getSettingForDownload(fileVersion: FileVersion): EncryptionSetting | undefined
 }
 
-/** A scannable folder (local or B2) that yields files in deterministic string order. */
+/**
+ * A scannable folder (local or B2) that yields files relative to its sync root.
+ *
+ * Built-in scanners currently sort before yielding. Large local trees or B2 prefixes may therefore
+ * require memory proportional to the scanned entries; B2 scans also group listed versions before
+ * yielding. For B2, `maxScanEntries` counts every listed file version before prefix, safety, and
+ * filter checks, and exclude filters or non-literal includes do not bound B2 listing calls.
+ */
 export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
-  /** Scans the folder and yields files sorted by relative path using JavaScript `<`/`>` order. */
+  /**
+   * True when `scan(filters)` already enforces include/exclude filters itself as an optimization.
+   * The synchronizer still reapplies filters after custom scanner output as the SDK policy
+   * boundary. Custom folders that set this should use the exported filter helpers from
+   * `@backblaze-labs/b2-sdk/sync` to stay aligned with the SDK glob and RegExp dialect.
+   */
+  readonly appliesScanFilters?: true
+  /**
+   * True when `scan(filters)` already yields entries in `compareSyncRelativePaths` order.
+   * Custom folders that omit this are sorted by `synchronize()` before pairing.
+   */
+  readonly appliesScanSorting?: true
+  /** Scans the folder and yields files relative to the folder root. */
   scan(options?: SyncScanOptions): AsyncIterable<SyncPath>
 }

@@ -1,16 +1,37 @@
 /**
- * Compares sync paths with the same ordering that {@link zipFolders} uses.
+ * Compares sync-relative paths using the same code-unit order everywhere sorted scans are consumed.
  *
- * This is JavaScript's deterministic string order, not locale collation.
- * Scanners must use this order so merge-joining can pair paths correctly.
+ * @param left - First sync-relative path.
+ * @param right - Second sync-relative path.
  *
- * @param a - First relative sync path.
- * @param b - Second relative sync path.
+ * @returns Negative, zero, or positive using JavaScript code-unit order.
+ */
+export function compareSyncRelativePaths(left: string, right: string): number {
+  return compareCodeUnits(left, right)
+}
+
+/**
+ * Backwards-compatible alias for the SDK scan ordering.
  *
- * @returns `-1` when `a` sorts first, `1` when `b` sorts first, otherwise `0`.
+ * @param a - First sync-relative path.
+ * @param b - Second sync-relative path.
+ *
+ * @returns Negative, zero, or positive using JavaScript code-unit order.
  */
 export function compareSyncPathNames(a: string, b: string): number {
-  if (a < b) return -1
-  if (a > b) return 1
+  return compareSyncRelativePaths(a, b)
+}
+
+/**
+ * Compares strings by JavaScript code-unit order.
+ *
+ * @param left - First string.
+ * @param right - Second string.
+ *
+ * @returns Negative, zero, or positive using code-unit order.
+ */
+export function compareCodeUnits(left: string, right: string): number {
+  if (left < right) return -1
+  if (left > right) return 1
   return 0
 }

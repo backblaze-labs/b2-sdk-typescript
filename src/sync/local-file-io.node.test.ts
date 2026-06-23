@@ -1,15 +1,27 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
+  deleteLocalFileInsideRoot,
   localFileIoTestHooks,
   readScannedLocalFile,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { createSyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
@@ -160,6 +172,34 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('sweeps owned partial download files before writing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-sweep-'))
+    try {
+      const sweeper = createSyncDownloadTempFileSweeper('run')
+      const orphanName = syncDownloadTempName('run', 'orphan')
+      const otherName = syncDownloadTempName('other', 'orphan')
+      await writeFile(join(root, orphanName), 'old')
+      await writeFile(join(root, otherName), 'other')
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+          downloadTempFileSweeper: sweeper,
+        },
+      )
+
+      await expect(readFile(join(root, orphanName))).rejects.toThrow()
+      await expect(readFile(join(root, otherName), 'utf8')).resolves.toBe('other')
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!isLinux)('does not follow a parent symlink swap during final rename', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-root-'))
     const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-out-'))
@@ -188,4 +228,93 @@ describe('writeLocalStreamInsideRoot', () => {
       await rm(outside, { recursive: true, force: true })
     }
   })
+})
+
+describe('deleteLocalFileInsideRoot', () => {
+  it('rejects a non-directory sync root', async () => {
+    const rootParent = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-root-file-'))
+    try {
+      const root = join(rootParent, 'root-file')
+      await writeFile(root, 'not-a-directory')
+
+      await expect(
+        deleteLocalFileInsideRoot(root, {
+          relativePath: 'file.txt',
+          absolutePath: join(root, 'file.txt'),
+          modTimeMillis: 0,
+          size: 0,
+        }),
+      ).rejects.toThrow('Local sync root is not a directory: file.txt')
+    } finally {
+      await rm(rootParent, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed when anchored deletion is unavailable', async () => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-unavailable-')),
+    )
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    try {
+      const scannedPath = await makeScannedPath(root, 'victim.txt', 'delete-me')
+      Object.defineProperty(process, 'platform', { value: 'darwin' })
+
+      await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
+        'unsafe local delete path: anchored deletion is not available',
+      )
+      await expect(readFile(scannedPath.absolutePath, 'utf8')).resolves.toBe('delete-me')
+    } finally {
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(!isLinux)('does not follow a parent symlink swap during unlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-root-'))
+    const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-out-'))
+    try {
+      await mkdir(join(root, 'safe'))
+      const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
+      await writeFile(join(outside, 'victim.txt'), 'keep')
+
+      localFileIoTestHooks.beforeLocalDeleteUnlink = async () => {
+        await rename(join(root, 'safe'), join(root, 'safe-real'))
+        await symlink(outside, join(root, 'safe'), 'dir')
+      }
+
+      await deleteLocalFileInsideRoot(root, scannedPath)
+
+      await expect(readFile(join(outside, 'victim.txt'), 'utf8')).resolves.toBe('keep')
+      await expect(readFile(join(root, 'safe-real', 'victim.txt'))).rejects.toThrow()
+    } finally {
+      delete localFileIoTestHooks.beforeLocalDeleteUnlink
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(!isLinux)(
+    'fails closed if the parent stops being a directory before open',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-parent-file-'))
+      try {
+        await mkdir(join(root, 'safe'))
+        const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
+
+        localFileIoTestHooks.beforeLocalDeleteOpenParent = async (parentRealPath) => {
+          await rm(parentRealPath, { recursive: true, force: true })
+          await writeFile(parentRealPath, 'not-a-directory')
+        }
+
+        await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
+          'unsafe local delete path: parent is not a directory',
+        )
+      } finally {
+        delete localFileIoTestHooks.beforeLocalDeleteOpenParent
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
 })

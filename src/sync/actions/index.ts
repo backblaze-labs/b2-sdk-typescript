@@ -21,8 +21,9 @@ export interface SyncAction {
   /**
    * Executes the action (or no-ops if dryRun is true) and returns a corresponding event.
    * @param dryRun - When true, skip the actual I/O but still return the event.
+   * @param signal - Optional abort signal for canceling in-flight I/O.
    */
-  execute(dryRun: boolean): Promise<SyncEvent>
+  execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent>
 }
 
 /** Uploads a local file to B2. */
@@ -40,18 +41,23 @@ export class UploadAction implements SyncAction {
     readonly relativePath: string,
     readonly absolutePath: string,
     readonly size: number,
-    private readonly doUpload: (absolutePath: string, relativePath: string) => Promise<void>,
+    private readonly doUpload: (
+      absolutePath: string,
+      relativePath: string,
+      signal?: AbortSignal,
+    ) => Promise<void>,
   ) {}
 
   /**
    * Uploads the file (unless dryRun) and returns an 'upload-done' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal for canceling the upload.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doUpload(this.absolutePath, this.relativePath)
+      await this.doUpload(this.absolutePath, this.relativePath, signal)
     }
     return { type: 'upload-done', path: this.relativePath, size: this.size }
   }
@@ -70,18 +76,19 @@ export class DownloadAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly size: number,
-    private readonly doDownload: (relativePath: string) => Promise<void>,
+    private readonly doDownload: (relativePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Downloads the file (unless dryRun) and returns a 'download-done' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal for canceling the download.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doDownload(this.relativePath)
+      await this.doDownload(this.relativePath, signal)
     }
     return { type: 'download-done', path: this.relativePath, size: this.size }
   }
@@ -100,18 +107,19 @@ export class CopyAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly size: number,
-    private readonly doCopy: (relativePath: string) => Promise<void>,
+    private readonly doCopy: (relativePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Copies the file (unless dryRun) and returns a 'copy-done' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal for canceling the copy.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doCopy(this.relativePath)
+      await this.doCopy(this.relativePath, signal)
     }
     return { type: 'copy-done', path: this.relativePath, size: this.size }
   }
@@ -129,18 +137,19 @@ export class HideAction implements SyncAction {
    */
   constructor(
     readonly relativePath: string,
-    private readonly doHide: (relativePath: string) => Promise<void>,
+    private readonly doHide: (relativePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Hides the file (unless dryRun) and returns a 'hide' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal for canceling the hide request.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doHide(this.relativePath)
+      await this.doHide(this.relativePath, signal)
     }
     return { type: 'hide', path: this.relativePath, size: 0 }
   }
@@ -160,18 +169,23 @@ export class DeleteRemoteAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly fileId: string,
-    private readonly doDelete: (fileId: string, fileName: string) => Promise<void>,
+    private readonly doDelete: (
+      fileId: string,
+      fileName: string,
+      signal?: AbortSignal,
+    ) => Promise<void>,
   ) {}
 
   /**
    * Deletes the remote file version (unless dryRun) and returns a 'delete-remote' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal for canceling the delete request.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doDelete(this.fileId, this.relativePath)
+      await this.doDelete(this.fileId, this.relativePath, signal)
     }
     return { type: 'delete-remote', path: this.relativePath, size: 0 }
   }
@@ -191,18 +205,19 @@ export class DeleteLocalAction implements SyncAction {
   constructor(
     readonly relativePath: string,
     readonly absolutePath: string,
-    private readonly doDelete: (absolutePath: string) => Promise<void>,
+    private readonly doDelete: (absolutePath: string, signal?: AbortSignal) => Promise<void>,
   ) {}
 
   /**
    * Deletes the local file (unless dryRun) and returns a 'delete-local' event.
    * @param dryRun - Whether to simulate the action without making changes.
+   * @param signal - Optional abort signal checked before deleting.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(dryRun: boolean): Promise<SyncEvent> {
+  async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
-      await this.doDelete(this.absolutePath)
+      await this.doDelete(this.absolutePath, signal)
     }
     return { type: 'delete-local', path: this.relativePath, size: 0 }
   }
@@ -226,10 +241,11 @@ export class SkipAction implements SyncAction {
   /**
    * Returns a 'skip' event with the reason message. No I/O is performed.
    * @param _dryRun - Whether to simulate the action (unused for no-op).
+   * @param _signal - Unused abort signal accepted for the shared action interface.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
-  async execute(_dryRun: boolean): Promise<SyncEvent> {
+  async execute(_dryRun: boolean, _signal?: AbortSignal): Promise<SyncEvent> {
     return { type: 'skip', path: this.relativePath, size: 0, message: this.reason }
   }
 }

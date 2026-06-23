@@ -1,18 +1,37 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
 import { ChecksumMismatchError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { encodeFileName } from '../raw/encoding.ts'
 import { RawClient } from '../raw/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient, readStream } from '../test-utils/index.ts'
 import type { FileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
-import { downloadById, downloadByName } from './single.ts'
+import { downloadById, downloadByName, headById, headByName } from './single.ts'
 
 function decode(data: Uint8Array): string {
   return new TextDecoder().decode(data)
+}
+
+function headResponseHeaders(fileName = 'head.txt'): Headers {
+  return new Headers({
+    'Content-Length': '0',
+    'Content-Type': 'text/plain',
+    'X-Bz-Content-Sha1': 'none',
+    'X-Bz-File-Id': 'head-file-id',
+    'X-Bz-File-Name': encodeFileName(fileName),
+    'X-Bz-Upload-Timestamp': '1000',
+  })
+}
+
+function mockAccountInfo(): AccountInfo {
+  return {
+    getDownloadUrl: () => 'https://download.example.com',
+    getAuthToken: () => 'auth-token',
+  } as AccountInfo
 }
 
 // ---------------------------------------------------------------------------
@@ -1310,6 +1329,54 @@ describe('downloadById HEAD method and response-header overrides', () => {
   beforeEach(async () => {
     ;({ client } = makeClient())
     await client.authorize()
+  })
+
+  it('headById cancels a non-null HEAD response body internally', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const raw = {
+      downloadFileById: vi.fn().mockResolvedValue({
+        headers: headResponseHeaders('by-id.txt'),
+        body: { cancel },
+      }),
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'head_id' as unknown as FileId,
+    })
+
+    expect(result.headers.fileName).toBe('by-id.txt')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(raw.downloadFileById).toHaveBeenCalledWith(
+      'https://download.example.com',
+      'auth-token',
+      'head_id',
+      { method: 'HEAD' },
+    )
+  })
+
+  it('headByName cancels a non-null HEAD response body internally', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const raw = {
+      downloadFileByName: vi.fn().mockResolvedValue({
+        headers: headResponseHeaders('by-name.txt'),
+        body: { cancel },
+      }),
+    } as unknown as RawClient
+
+    const result = await headByName(raw, mockAccountInfo(), {
+      bucketName: 'bucket',
+      fileName: 'by-name.txt',
+    })
+
+    expect(result.headers.fileName).toBe('by-name.txt')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(raw.downloadFileByName).toHaveBeenCalledWith(
+      'https://download.example.com',
+      'auth-token',
+      'bucket',
+      'by-name.txt',
+      { method: 'HEAD' },
+    )
   })
 
   it('HEAD download returns headers and an empty body', async () => {

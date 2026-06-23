@@ -14,13 +14,31 @@ import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 /** Factory for creating concrete sync actions. Used by {@link generateActions} to decouple policy from execution. */
 export interface ActionFactory {
   /** Creates an action to upload a local file to B2. */
-  upload(source: LocalSyncPath): SyncAction
+  upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction
   /** Creates an action to download a B2 file to the local filesystem. */
   download(source: B2SyncPath): SyncAction
-  /** Creates an action to server-side copy a B2 file to a new destination path. */
-  copy(source: B2SyncPath, destPath: string): SyncAction
-  /** Creates an action to hide a file in B2 (soft delete). */
+  /**
+   * Creates an action to server-side copy a B2 file to a sync-relative destination path.
+   * Kept for compatibility with custom factories that accept a sync-relative string.
+   */
+  copy(source: B2SyncPath, destRelativePath: string): SyncAction
+  /**
+   * Creates an action to server-side copy a B2 file using full destination path metadata.
+   * Implementations can use `dest.selectedVersion.fileName` when a raw B2 prefix or normalized
+   * sync path differs from the stored object key.
+   */
+  copyB2Path?(source: B2SyncPath, dest: B2SyncPath): SyncAction
+  /**
+   * Creates an action to hide a file in B2 (soft delete).
+   * Kept for compatibility with custom factories that accept a sync-relative string.
+   */
   hide(path: string): SyncAction
+  /**
+   * Creates an action to hide a B2 file using its full scanned path metadata.
+   * Implementations can use `selectedVersion.fileName` when a raw B2 prefix or normalized sync path
+   * differs from the stored object key.
+   */
+  hideB2Path?(path: B2SyncPath): SyncAction
   /** Creates an action to permanently delete a remote B2 file version. */
   deleteRemote(path: B2SyncPath): SyncAction
   /** Creates an action to delete a local file. */
@@ -151,13 +169,17 @@ function* actionsForBoth(
 
   switch (direction) {
     case 'local-to-b2':
-      yield factory.upload(source as LocalSyncPath)
+      yield factory.upload(source as LocalSyncPath, dest as B2SyncPath)
       break
     case 'b2-to-local':
       yield factory.download(source as B2SyncPath)
       break
-    case 'b2-to-b2':
-      yield factory.copy(source as B2SyncPath, dest.relativePath)
+    case 'b2-to-b2': {
+      const action =
+        factory.copyB2Path?.(source as B2SyncPath, dest as B2SyncPath) ??
+        factory.copy(source as B2SyncPath, dest.relativePath)
+      yield action
       break
+    }
   }
 }

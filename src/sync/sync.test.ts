@@ -4,7 +4,7 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
-import { compareSyncPathNames } from './path-order.ts'
+import { compareSyncRelativePaths } from './path-order.ts'
 import {
   filesAreDifferent,
   preparePairForCompare,
@@ -13,13 +13,14 @@ import {
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
 import { generateActions } from './policies/index.ts'
+import { assertScanEntryLimit, DEFAULT_MAX_SCAN_ENTRIES, scanEntryLimit } from './scan-limit.ts'
 import {
   isUntrustedSha1,
   parseSyncContentSha1,
   syncSha1StateOf,
   untrustedSha1,
 } from './sha1-metadata.ts'
-import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
+import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 function makeSyncPath(
   relativePath: string,
@@ -78,6 +79,11 @@ function makeB2SyncPath(
   }
 }
 
+function withSelectedB2FileName(path: B2SyncPath, fileName: string): B2SyncPath {
+  const selectedVersion = { ...path.selectedVersion, fileName }
+  return { ...path, selectedVersion, allVersions: [selectedVersion] }
+}
+
 function withoutPathContentSha1(path: B2SyncPath): B2SyncPath {
   return {
     relativePath: path.relativePath,
@@ -92,7 +98,9 @@ function makeMemoryFolder(files: SyncPath[]): SyncFolder {
   return {
     type: 'local',
     async *scan() {
-      const sorted = [...files].sort((a, b) => compareSyncPathNames(a.relativePath, b.relativePath))
+      const sorted = [...files].sort((a, b) =>
+        compareSyncRelativePaths(a.relativePath, b.relativePath),
+      )
       for (const f of sorted) yield f
     },
   }
@@ -100,11 +108,12 @@ function makeMemoryFolder(files: SyncPath[]): SyncFolder {
 
 function makeNoopFactory(): ActionFactory {
   return {
-    upload: (s: LocalSyncPath) =>
+    upload: (s: LocalSyncPath, _dest?: B2SyncPath) =>
       new UploadAction(s.relativePath, s.absolutePath, s.size, async () => {}),
     download: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-download'),
     copy: (s: B2SyncPath, _dest: string) => new SkipAction(s.relativePath, 'noop-copy'),
-    hide: (path: string) => new SkipAction(path, 'noop-hide'),
+    hide: (s: string) => new SkipAction(s, 'noop-hide'),
+    hideB2Path: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-hide-b2-path'),
     deleteRemote: (s: B2SyncPath) => new SkipAction(s.relativePath, 'noop-delete-remote'),
     deleteLocal: (s: LocalSyncPath) => new SkipAction(s.relativePath, 'noop-delete-local'),
     // For the noop test factory, treat orphans as the equivalent of
@@ -785,6 +794,46 @@ describe('preparePairsForCompare', () => {
   })
 })
 
+describe('compareSyncRelativePaths', () => {
+  it('returns zero for identical paths', () => {
+    expect(compareSyncRelativePaths('docs/readme.txt', 'docs/readme.txt')).toBe(0)
+  })
+
+  it('uses code-unit ordering when fixed collation considers paths equal', () => {
+    const decomposed = 'cafe\u0301.txt'
+    const composed = 'café.txt'
+
+    expect(compareSyncRelativePaths(decomposed, composed)).toBeLessThan(0)
+    expect(compareSyncRelativePaths(composed, decomposed)).toBeGreaterThan(0)
+  })
+})
+
+describe('scan limits', () => {
+  it('uses the default scan entry limit when unset', () => {
+    expect(scanEntryLimit(undefined)).toBe(DEFAULT_MAX_SCAN_ENTRIES)
+  })
+
+  it('allows an explicit infinite scan entry limit', () => {
+    expect(scanEntryLimit({ maxScanEntries: Number.POSITIVE_INFINITY })).toBe(
+      Number.POSITIVE_INFINITY,
+    )
+  })
+
+  it('rejects invalid scan entry limits', () => {
+    expect(() => scanEntryLimit({ maxScanEntries: 0 })).toThrow(
+      'maxScanEntries must be a positive safe integer or Infinity',
+    )
+    expect(() => scanEntryLimit({ maxScanEntries: 1.5 })).toThrow(
+      'maxScanEntries must be a positive safe integer or Infinity',
+    )
+  })
+
+  it('throws when a scanner exceeds the entry limit', () => {
+    expect(() => assertScanEntryLimit(2, 1)).toThrow('maxScanEntries=1')
+    expect(() => assertScanEntryLimit(1, 1)).not.toThrow()
+  })
+})
+
 describe('zipFolders', () => {
   it('pairs matching files from both folders', async () => {
     const source = makeMemoryFolder([
@@ -924,6 +973,310 @@ describe('zipFolders', () => {
     await expect(consume).rejects.toThrow('source scan failed')
     expect(destClosed).toBe(true)
   })
+
+  it('uses code-unit scan ordering when joining mixed-case paths', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a.txt', 1000, 10),
+      makeSyncPath('B.txt', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([makeSyncPath('B.txt', 1000, 20)])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['B.txt', 'B.txt'],
+      ['a.txt', null],
+    ])
+  })
+
+  it('normalizes custom folder output to code-unit order before pairing', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        yield makeSyncPath('Z.txt', 1000, 10)
+        yield makeSyncPath('a.txt', 1000, 20)
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'b2',
+      async *scan() {
+        yield makeSyncPath('a.txt', 1000, 20)
+        yield makeSyncPath('Z.txt', 1000, 10)
+      },
+    }
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['Z.txt', 'Z.txt'],
+      ['a.txt', 'a.txt'],
+    ])
+  })
+
+  it('fails with a defined error when custom scan output exceeds the entry limit', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a.txt', 1000, 10),
+      makeSyncPath('b.txt', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([])
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest, { maxScanEntries: 1 })) {
+          // exhaust until the scan limit fails
+        }
+      })(),
+    ).rejects.toThrow('Sync scan entry limit exceeded')
+  })
+
+  it('enforces entry limits for custom scanners that declare sorted output', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanSorting: true,
+      async *scan() {
+        yield makeSyncPath('a.txt', 1000, 10)
+        yield makeSyncPath('b.txt', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest, { maxScanEntries: 1 })) {
+          // exhaust until the scan limit fails
+        }
+      })(),
+    ).rejects.toThrow('Sync scan entry limit exceeded')
+  })
+
+  it('applies include filters to both folder scans before pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('docs/readme.md', 1000, 10),
+      makeSyncPath('tmp/source.tmp', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('docs/readme.md', 1000, 10),
+      makeSyncPath('tmp/dest.tmp', 1000, 30),
+    ])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { include: ['docs/**'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['docs/readme.md', 'docs/readme.md']])
+  })
+
+  it('applies exclude filters to both folder scans before pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('keep.txt', 1000, 10),
+      makeSyncPath('source.tmp', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('keep.txt', 1000, 10),
+      makeSyncPath('nested/dest.tmp', 1000, 30),
+    ])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['*.tmp'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['keep.txt', 'keep.txt']])
+  })
+
+  it('reapplies filters to folders that claim they already applied them', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanFilters: true,
+      async *scan() {
+        yield makeSyncPath('skip.tmp', 1000, 10)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['*.tmp'] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([])
+  })
+
+  it('keeps SDK filtering immutable when a custom scanner mutates options', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan(options: SyncScanOptions = {}) {
+        expect(Object.isFrozen(options)).toBe(true)
+        expect(Object.isFrozen(options.exclude)).toBe(true)
+
+        const mutable = options as {
+          exclude?: string[]
+          maxScanEntries?: number
+        }
+        try {
+          mutable.exclude = []
+        } catch {
+          // Frozen scanner options should reject policy replacement.
+        }
+        try {
+          mutable.exclude?.push('docs/**')
+        } catch {
+          // Frozen filter arrays should reject policy mutation.
+        }
+        try {
+          mutable.maxScanEntries = Number.POSITIVE_INFINITY
+        } catch {
+          // Frozen scanner options should reject scan limit mutation.
+        }
+
+        yield makeSyncPath('secrets/id_rsa', 1000, 10)
+        yield makeSyncPath('docs/readme.md', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, {
+      exclude: ['secrets/**'],
+      maxScanEntries: 1,
+    })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['docs/readme.md', null]])
+  })
+
+  it('sorts custom folders that apply filters but do not declare sorted output', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      appliesScanFilters: true,
+      async *scan() {
+        yield makeSyncPath('Z.txt', 1000, 10)
+        yield makeSyncPath('a.txt', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest)) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([
+      ['Z.txt', null],
+      ['a.txt', null],
+    ])
+  })
+
+  it('keeps descendants of exact slash-containing excludes while pairing', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('a/b/c.txt', 1000, 10),
+      makeSyncPath('build/output/app.js', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([
+      makeSyncPath('a/b/c.txt', 1000, 10),
+      makeSyncPath('build/output/app.js', 1000, 20),
+    ])
+
+    const exactExcludePairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { exclude: ['a/b'] })) {
+      exactExcludePairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    const includeExcludePairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, {
+      include: ['build/**'],
+      exclude: ['build/output'],
+    })) {
+      includeExcludePairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(exactExcludePairs).toEqual([
+      ['a/b/c.txt', 'a/b/c.txt'],
+      ['build/output/app.js', 'build/output/app.js'],
+    ])
+    expect(includeExcludePairs).toEqual([['build/output/app.js', 'build/output/app.js']])
+  })
+
+  it('supports regular expression filters', async () => {
+    const source = makeMemoryFolder([
+      makeSyncPath('photos/cat.jpg', 1000, 10),
+      makeSyncPath('photos/dog.png', 1000, 20),
+    ])
+    const dest = makeMemoryFolder([makeSyncPath('photos/cat.jpg', 1000, 10)])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, { include: [/\.jpg$/] })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['photos/cat.jpg', 'photos/cat.jpg']])
+  })
+
+  it('closes both scan iterators when one scan throws', async () => {
+    const cleanedUp: string[] = []
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          throw new Error('source failed')
+        } finally {
+          cleanedUp.push('source')
+        }
+      },
+    }
+    const dest: SyncFolder = {
+      type: 'b2',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 10)
+        } finally {
+          cleanedUp.push('dest')
+        }
+      },
+    }
+
+    await expect(
+      (async () => {
+        for await (const _pair of zipFolders(source, dest)) {
+          // exhaust until the source scanner fails
+        }
+      })(),
+    ).rejects.toThrow('source failed')
+    expect(cleanedUp.sort()).toEqual(['dest', 'source'])
+  })
+
+  it('closes both scan iterators when the consumer stops early', async () => {
+    const cleanedUp: string[] = []
+    const makeTrackedFolder = (name: string): SyncFolder => ({
+      type: 'local',
+      async *scan() {
+        try {
+          yield makeSyncPath('a.txt', 1000, 10)
+          yield makeSyncPath('b.txt', 1000, 10)
+        } finally {
+          cleanedUp.push(name)
+        }
+      },
+    })
+
+    const iter = zipFolders(makeTrackedFolder('source'), makeTrackedFolder('dest'))[
+      Symbol.asyncIterator
+    ]()
+    await expect(iter.next()).resolves.toMatchObject({ done: false })
+    await iter.return?.(undefined)
+
+    expect(cleanedUp.sort()).toEqual(['dest', 'source'])
+  })
 })
 
 describe('generateActions', () => {
@@ -1017,6 +1370,61 @@ describe('generateActions', () => {
     ]
     expect(actions).toHaveLength(1)
     expect(actions[0]?.type).toBe('upload')
+  })
+
+  it('passes sync-relative copy paths to custom factories', () => {
+    const source = makeB2SyncPath('a.txt', 5000, 100)
+    const dest = withSelectedB2FileName(makeB2SyncPath('a.txt', 1000, 100), 'dst/a.txt')
+    const copyDestPaths: string[] = []
+    const localFactory: ActionFactory = {
+      ...makeNoopFactory(),
+      copy: (s: B2SyncPath, destRelativePath: string) => {
+        copyDestPaths.push(destRelativePath)
+        return new SkipAction(s.relativePath, 'noop-copy')
+      },
+    }
+
+    const actions = [
+      ...generateActions(
+        [source, dest],
+        'b2-to-b2',
+        'modtime',
+        'no-delete',
+        0,
+        now,
+        localFactory,
+        0,
+      ),
+    ]
+
+    expect(actions).toHaveLength(1)
+    expect(copyDestPaths).toEqual(['a.txt'])
+  })
+
+  it('uses the B2 path-aware copy hook when available', () => {
+    const source = makeB2SyncPath('a.txt', 5000, 100)
+    const dest = withSelectedB2FileName(makeB2SyncPath('a.txt', 1000, 100), 'dst/a.txt')
+    const copyDestPaths: string[] = []
+    const copyB2DestPaths: string[] = []
+    const b2Factory: ActionFactory = {
+      ...makeNoopFactory(),
+      copy: (s: B2SyncPath, destRelativePath: string) => {
+        copyDestPaths.push(destRelativePath)
+        return new SkipAction(s.relativePath, 'noop-copy')
+      },
+      copyB2Path: (s: B2SyncPath, d: B2SyncPath) => {
+        copyB2DestPaths.push(d.selectedVersion.fileName)
+        return new SkipAction(s.relativePath, 'noop-copy-b2-path')
+      },
+    }
+
+    const actions = [
+      ...generateActions([source, dest], 'b2-to-b2', 'modtime', 'no-delete', 0, now, b2Factory, 0),
+    ]
+
+    expect(actions).toHaveLength(1)
+    expect(copyDestPaths).toEqual([])
+    expect(copyB2DestPaths).toEqual(['dst/a.txt'])
   })
 
   it('respects keep-days for recent files', () => {

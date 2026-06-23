@@ -84,6 +84,8 @@ WHATWG
 # ── 4. Cloud, network, storage acronyms ───────────────────────────────
 ACL
 ACLs
+CONIN
+CONOUT
 brotli
 cors
 endianness

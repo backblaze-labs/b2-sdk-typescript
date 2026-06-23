@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { safeRelativePathSegments } from './path-safety.ts'
+import {
+  assertPathInsideRoot,
+  hasErrorCode,
+  noFollowFlag,
+  safeRelativePathSegments,
+} from './path-safety.ts'
 
 describe('safeRelativePathSegments', () => {
   it('accepts ordinary relative B2 names', () => {
@@ -17,13 +22,51 @@ describe('safeRelativePathSegments', () => {
     'nested\\file.txt',
     'report.txt:hidden',
     'CON',
+    'CONIN$',
+    'CONOUT$',
     'con.txt',
     'NUL',
+    'COM0',
+    'COM0.txt',
     'COM1.log',
+    'LPT0',
+    'LPT0.txt',
     'LPT9',
     'trailing-dot.',
     'trailing-space ',
   ])('rejects unsafe local destination path %s', (relPath) => {
     expect(() => safeRelativePathSegments(relPath)).toThrow('unsafe local destination path')
+  })
+})
+
+describe('assertPathInsideRoot', () => {
+  it('accepts child paths and rejects root or outside paths', () => {
+    const pathApi = {
+      sep: '/',
+      relative(root: string, target: string) {
+        if (target === root) return ''
+        if (target.startsWith(`${root}/`)) return target.slice(root.length + 1)
+        return `../${target.replace(/^\/+/, '')}`
+      },
+      isAbsolute(value: string) {
+        return value.startsWith('/')
+      },
+    } as Parameters<typeof assertPathInsideRoot>[2]
+    const root = '/sync-root'
+
+    expect(() => assertPathInsideRoot(root, `${root}/file.txt`, pathApi)).not.toThrow()
+    expect(() => assertPathInsideRoot(root, root, pathApi)).toThrow('unsafe local destination path')
+    expect(() => assertPathInsideRoot(root, '/outside-root', pathApi)).toThrow(
+      'unsafe local destination path',
+    )
+  })
+})
+
+describe('filesystem error helpers', () => {
+  it('returns no-follow flags and detects error codes', () => {
+    expect(noFollowFlag({ O_NOFOLLOW: 123 })).toBe(123)
+    expect(noFollowFlag({})).toBe(0)
+    expect(hasErrorCode({ code: 'ENOENT' }, 'ENOENT')).toBe(true)
+    expect(hasErrorCode({ code: 'EACCES' }, 'ENOENT')).toBe(false)
   })
 })

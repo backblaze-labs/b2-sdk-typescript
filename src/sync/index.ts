@@ -20,11 +20,24 @@ export {
   SkipAction,
   UploadAction,
 } from './actions/index.ts'
+export {
+  directoryMayContainSyncPaths,
+  filterSyncPaths,
+  literalPrefixForSyncFilters,
+  pathPassesSyncFilters,
+  pathSkippedByRegExpInputLimit,
+} from './filters.ts'
 export type { SyncPair } from './pairing.ts'
 export { zipFolders } from './pairing.ts'
+export { compareSyncRelativePaths } from './path-order.ts'
 export { filesAreDifferent } from './policies/compare.ts'
 export type { ActionFactory } from './policies/index.ts'
 export { generateActions } from './policies/index.ts'
+export {
+  asRawB2KeyPrefix,
+  b2KeyToRelativePathUnderPrefix,
+  normalizeB2RelativePath,
+} from './prefix.ts'
 export { B2Folder } from './scanners/b2.ts'
 export { LocalFolder } from './scanners/local.ts'
 export type {
@@ -64,9 +77,12 @@ export type {
   SyncErrorEvent,
   SyncEvent,
   SyncEventType,
+  SyncFilterOptions,
+  SyncFilterPattern,
   SyncFolder,
   SyncOptions,
   SyncPath,
   SyncScanOptions,
   SyncSkipEvent,
+  SyncSkipReason,
 } from './types.ts'

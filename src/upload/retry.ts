@@ -240,6 +240,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   // Unreachable at runtime: the loop returns on success or throws from the
   // final failed attempt. This satisfies TypeScript's return-path analysis.
+  /* v8 ignore next -- defensive return-path guard. */
   throw new NetworkError('Upload retry budget exhausted')
 }
 

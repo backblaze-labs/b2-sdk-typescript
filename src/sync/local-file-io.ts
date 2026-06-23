@@ -7,12 +7,15 @@ import {
   safeRelativePathSegments,
 } from './path-safety.ts'
 import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
+import { type SyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
+  beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
+  beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
 } = {}
 
 /**
@@ -99,6 +102,7 @@ export async function writeLocalStreamInsideRoot(
   options: {
     readonly expectedBytes: number
     readonly idleTimeoutMillis: number
+    readonly downloadTempFileSweeper?: SyncDownloadTempFileSweeper
     readonly signal?: AbortSignal
   },
 ): Promise<void> {
@@ -130,6 +134,7 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
+  await options.downloadTempFileSweeper?.(parentRealPath)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -151,7 +156,8 @@ export async function writeLocalStreamInsideRoot(
   }
   /* v8 ignore stop */
   const finalName = path.basename(destPath)
-  const tmpName = `.${finalName}.${randomUUID()}.tmp`
+  const tmpOwnerToken = options.downloadTempFileSweeper?.ownerToken ?? randomUUID()
+  const tmpName = syncDownloadTempName(tmpOwnerToken, randomUUID())
   const tmpPath = path.join(anchoredParentPath ?? parentRealPath, tmpName)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
   let handle: Awaited<ReturnType<typeof open>>
@@ -217,6 +223,78 @@ export async function writeLocalStreamInsideRoot(
   }
 }
 
+/**
+ * Deletes a scanned local file under a sync root without re-resolving attacker-controlled parents.
+ *
+ * @param root - Local sync root.
+ * @param scannedPath - Previously scanned local file metadata.
+ *
+ * @internal
+ */
+export async function deleteLocalFileInsideRoot(
+  root: string,
+  scannedPath: LocalSyncPath,
+): Promise<void> {
+  if (root === '') {
+    throw new Error('Local sync root required for filesystem mutation')
+  }
+
+  const { constants } = await import('node:fs')
+  const { lstat, open, realpath, unlink } = await import('node:fs/promises')
+  const path = await import('node:path')
+  const segments = safeRelativePathSegments(scannedPath.relativePath)
+  const safeRoot = path.resolve(root)
+  const rootStats = await lstat(safeRoot)
+  if (rootStats.isSymbolicLink()) {
+    throw new Error(`Refusing to access sync root through symlink: ${scannedPath.relativePath}`)
+  }
+  if (!rootStats.isDirectory()) {
+    throw new Error(`Local sync root is not a directory: ${scannedPath.relativePath}`)
+  }
+  const rootRealPath = await realpath(safeRoot)
+  const expectedPath = path.join(rootRealPath, ...segments)
+  assertPathInsideRoot(rootRealPath, expectedPath, path)
+
+  const scannerPath = path.resolve(scannedPath.absolutePath)
+  if (scannerPath !== expectedPath) {
+    throw new Error(`Refusing to delete outside sync root: ${scannedPath.relativePath}`)
+  }
+
+  const parentRealPath = await realpath(path.dirname(expectedPath))
+  const finalPath = path.join(parentRealPath, path.basename(expectedPath))
+  assertPathInsideRoot(rootRealPath, finalPath, path)
+
+  const platform = (globalThis as { process?: { platform?: string } }).process?.platform
+  if (platform !== 'linux' || constants.O_DIRECTORY === undefined) {
+    throw new Error('unsafe local delete path: anchored deletion is not available')
+  }
+
+  let parentHandle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    await localFileIoTestHooks.beforeLocalDeleteOpenParent?.(parentRealPath)
+    parentHandle = await open(
+      parentRealPath,
+      constants.O_RDONLY | constants.O_DIRECTORY | noFollowFlag(constants),
+    )
+  } catch (err) {
+    if (hasErrorCode(err, 'ELOOP') || hasErrorCode(err, 'ENOTDIR')) {
+      throw new Error('unsafe local delete path: parent is not a directory')
+    }
+    throw err
+  }
+
+  try {
+    const anchoredPath = path.join(`/proc/self/fd/${parentHandle.fd}`, path.basename(expectedPath))
+    const stats = await lstat(anchoredPath)
+    assertSameScannedRegularFile(stats, scannedPath, 'delete')
+    await localFileIoTestHooks.beforeLocalDeleteUnlink?.(parentRealPath)
+    await unlink(anchoredPath)
+  } finally {
+    /* v8 ignore next -- best-effort cleanup */
+    await parentHandle.close().catch(() => {})
+  }
+}
+
 async function writeAll(
   handle: {
     write(
@@ -237,6 +315,7 @@ async function writeAll(
       data.byteLength - offset,
       position + offset,
     )
+    /* v8 ignore next -- defensive: FileHandle.write should progress for non-empty chunks. */
     if (bytesWritten <= 0) throw new Error('download write made no progress')
     offset += bytesWritten
   }
@@ -251,12 +330,17 @@ function assertSameScannedRegularFile(
     readonly size: number
   },
   path: LocalSyncPath,
+  operation: 'upload' | 'delete' = 'upload',
 ): void {
+  const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {
-    throw new Error('local file changed before upload: not a regular file')
+    if (operation === 'delete') {
+      throw Object.assign(new Error(`${reason}: not a regular file`), { code: 'EISDIR' })
+    }
+    throw new Error(`${reason}: not a regular file`)
   }
   if (stats.size !== path.size) {
-    throw new Error('local file changed before upload: size changed')
+    throw new Error(`${reason}: size changed`)
   }
 
   const identity = path.fileIdentity
@@ -268,6 +352,6 @@ function assertSameScannedRegularFile(
     stats.size !== identity.size ||
     Math.floor(stats.mtimeMs) !== identity.modTimeMillis
   ) {
-    throw new Error('local file changed before upload')
+    throw new Error(reason)
   }
 }

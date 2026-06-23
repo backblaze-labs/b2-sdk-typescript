@@ -1,0 +1,249 @@
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  createSyncDownloadTempFileSweeper,
+  isOwnedSyncDownloadTempName,
+  isSyncDownloadTempName,
+  removeSyncDownloadTempFiles,
+  syncDownloadTempName,
+} from './temp-files.ts'
+
+const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined'
+
+describe('sync temp files', () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-sync-temp-files-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('matches SDK-managed partial download names', () => {
+    expect(isSyncDownloadTempName('.b2sdk-active.partial')).toBe(true)
+    expect(isSyncDownloadTempName('.b2sdk-active.tmp')).toBe(false)
+    expect(isSyncDownloadTempName('active.partial')).toBe(false)
+    expect(isOwnedSyncDownloadTempName('.b2sdk-run-active.partial', 'run')).toBe(true)
+    expect(isOwnedSyncDownloadTempName('.b2sdk-other-active.partial', 'run')).toBe(false)
+  })
+
+  it('removes only owned SDK partial download files from a directory', async () => {
+    const partialPath = join(tmpDir, syncDownloadTempName('run', 'abandoned'))
+    const otherPartialPath = join(tmpDir, syncDownloadTempName('other', 'active'))
+    const keepPath = join(tmpDir, 'keep.txt')
+    await writeFile(partialPath, 'partial')
+    await writeFile(otherPartialPath, 'other')
+    await writeFile(keepPath, 'keep')
+
+    await removeSyncDownloadTempFiles(tmpDir, 'run')
+
+    await expect(access(partialPath)).rejects.toThrow()
+    await expect(access(otherPartialPath)).resolves.toBeFalsy()
+    await expect(access(keepPath)).resolves.toBeFalsy()
+  })
+
+  it('reclaims stale unowned partials while retaining active concurrent partials', async () => {
+    const now = Date.now()
+    const stalePartialPath = join(tmpDir, syncDownloadTempName('crashed', 'old'))
+    const activePartialPath = join(tmpDir, syncDownloadTempName('other', 'active'))
+    const events: string[] = []
+    await writeFile(stalePartialPath, 'stale')
+    await writeFile(activePartialPath, 'active')
+    const staleDate = new Date(now - 2_000)
+    await utimes(stalePartialPath, staleDate, staleDate)
+
+    await removeSyncDownloadTempFiles(tmpDir, 'run', {
+      staleMillis: 1_000,
+      nowMillis: () => now,
+      onEvent(event) {
+        events.push(`${event.action}:${event.name}`)
+      },
+    })
+
+    await expect(access(stalePartialPath)).rejects.toThrow()
+    await expect(access(activePartialPath)).resolves.toBeFalsy()
+    expect(events).toEqual([`removed-stale:${syncDownloadTempName('crashed', 'old')}`])
+  })
+
+  it('does not remove directories with SDK partial download names', async () => {
+    const partialDir = join(tmpDir, '.b2sdk-directory.partial')
+    await mkdir(partialDir)
+
+    await removeSyncDownloadTempFiles(tmpDir, 'run')
+
+    await expect(access(partialDir)).resolves.toBeFalsy()
+  })
+
+  it('ignores missing directories', async () => {
+    await expect(
+      removeSyncDownloadTempFiles(join(tmpDir, 'missing'), 'run'),
+    ).resolves.toBeUndefined()
+  })
+
+  it('sweeps a directory once per sweeper', async () => {
+    const firstPartialPath = join(tmpDir, syncDownloadTempName('run', 'first'))
+    const secondPartialPath = join(tmpDir, syncDownloadTempName('run', 'second'))
+    const removeSyncDownloadTempFilesOnce = createSyncDownloadTempFileSweeper('run')
+    await writeFile(firstPartialPath, 'first')
+
+    await removeSyncDownloadTempFilesOnce(tmpDir)
+    await writeFile(secondPartialPath, 'second')
+    await removeSyncDownloadTempFilesOnce(tmpDir)
+
+    await expect(access(firstPartialPath)).rejects.toThrow()
+    await expect(access(secondPartialPath)).resolves.toBeFalsy()
+  })
+
+  it('does not share sweep state across sweepers', async () => {
+    const firstPartialPath = join(tmpDir, syncDownloadTempName('run', 'first'))
+    const secondPartialPath = join(tmpDir, syncDownloadTempName('run', 'second'))
+    await writeFile(firstPartialPath, 'first')
+
+    await createSyncDownloadTempFileSweeper('run')(tmpDir)
+    await writeFile(secondPartialPath, 'second')
+    await createSyncDownloadTempFileSweeper('run')(tmpDir)
+
+    await expect(access(firstPartialPath)).rejects.toThrow()
+    await expect(access(secondPartialPath)).rejects.toThrow()
+  })
+
+  it.skipIf(isBun)('isolates owned partial cleanup failures', async () => {
+    vi.resetModules()
+    const readdir = vi
+      .fn()
+      .mockResolvedValue([{ isFile: () => true, name: syncDownloadTempName('run', 'locked') }])
+    const rm = vi.fn().mockRejectedValueOnce(new Error('locked'))
+    const stat = vi.fn()
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+      const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper('run')
+
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
+      expect(rm).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('retries a cached sweep after cleanup failure', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'blocked')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const join = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('blocked')
+      })
+      .mockReturnValue(`/tmp/mock/${name}`)
+    const rm = vi.fn()
+    const stat = vi.fn().mockResolvedValue({ mtimeMs: Date.now() })
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    vi.doMock('node:path', () => ({ join }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+      const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper('run')
+
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).rejects.toThrow('blocked')
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
+      expect(join).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.doUnmock('node:path')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('ignores stale partials that disappear before stat', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'gone')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const stat = vi.fn().mockRejectedValue(new Error('missing'))
+    const rm = vi.fn()
+    const events: string[] = []
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+        onEvent: (event) => events.push(event.action),
+      })
+
+      expect(stat).toHaveBeenCalledTimes(1)
+      expect(rm).not.toHaveBeenCalled()
+      expect(events).toEqual([])
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('reports retained stale partials when removal fails', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'locked')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const stat = vi.fn().mockResolvedValue({ mtimeMs: 0 })
+    const rm = vi.fn().mockRejectedValue(new Error('locked'))
+    const events: string[] = []
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+        onEvent: (event) => events.push(`${event.action}:${event.name}`),
+      })
+
+      expect(rm).toHaveBeenCalledTimes(1)
+      expect(events).toEqual([`retained-stale:${name}`])
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('bounds partial cleanup filesystem concurrency', async () => {
+    vi.resetModules()
+    const entries = Array.from({ length: 25 }, (_, index) => ({
+      isFile: () => true,
+      name: syncDownloadTempName('other', index.toString()),
+    }))
+    let activeOperations = 0
+    let maxActiveOperations = 0
+    async function trackIo<T>(value: T): Promise<T> {
+      activeOperations++
+      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      activeOperations--
+      return value
+    }
+
+    const readdir = vi.fn().mockResolvedValue(entries)
+    const stat = vi.fn().mockImplementation(() => trackIo({ mtimeMs: 0 }))
+    const rm = vi.fn().mockImplementation(() => trackIo(undefined))
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+      })
+
+      expect(maxActiveOperations).toBeLessThanOrEqual(8)
+      expect(stat).toHaveBeenCalledTimes(entries.length)
+      expect(rm).toHaveBeenCalledTimes(entries.length)
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+})
