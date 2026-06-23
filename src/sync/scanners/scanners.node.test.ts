@@ -162,6 +162,19 @@ describe('LocalFolder', () => {
     expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
   })
 
+  it('ignores case variants of the managed download staging directory at the scan root', async () => {
+    const stagingName = DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()
+    await mkdir(join(tmpDir, stagingName), { recursive: true })
+    await writeFile(join(tmpDir, stagingName, DOWNLOAD_STAGING_MARKER_NAME), '')
+    await writeFile(join(tmpDir, stagingName, 'partial.bin'), 'partial')
+    await writeFile(join(tmpDir, 'real.txt'), 'real')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
+  })
+
   it('scans an unmarked root entry with the staging directory name', async () => {
     await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
     await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'user.txt'), 'user')
@@ -1135,10 +1148,11 @@ describe('B2Folder', () => {
             makeFileVersion('nul.tar.gz', 12),
             makeFileVersion('dir/C:/x', 13),
             makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`, 14),
-            makeFileVersion('trailing.', 15),
-            makeFileVersion('trailing ', 16),
-            makeFileVersion('Readme.txt', 17),
-            makeFileVersion('README.txt', 18),
+            makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`, 15),
+            makeFileVersion('trailing.', 16),
+            makeFileVersion('trailing ', 17),
+            makeFileVersion('Readme.txt', 18),
+            makeFileVersion('README.txt', 19),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -1172,6 +1186,7 @@ describe('B2Folder', () => {
       'local-unsafe-name:nul.tar.gz',
       'local-unsafe-name:dir/C:/x',
       `local-unsafe-name:${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
+      `local-unsafe-name:${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`,
       'local-unsafe-name:trailing.',
       'local-unsafe-name:trailing ',
       'local-path-collision:Readme.txt',

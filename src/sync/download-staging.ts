@@ -8,6 +8,9 @@ export const DOWNLOAD_STAGING_DIRECTORY_NAME = '.b2sdk-download-staging'
 /** @internal */
 export const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker.partial'
 
+const CANONICAL_DOWNLOAD_STAGING_DIRECTORY_NAME = canonicalLocalFilesystemSegment(
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+)
 const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
 const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_STAGING_CLEANUP_CONCURRENCY = 8
@@ -24,6 +27,22 @@ type StagingActivitySnapshot = {
 type CleanupWarning = {
   readonly entryName: string
   readonly operation: 'inspect' | 'remove'
+}
+
+/**
+ * Checks whether a single path segment matches the SDK-managed staging directory name.
+ * @param segment - Candidate path segment.
+ *
+ * @returns True when the segment is the reserved staging directory name under
+ * local filesystem canonicalization.
+ *
+ * @internal
+ */
+export function isDownloadStagingDirectorySegment(segment: string | undefined): boolean {
+  return (
+    segment !== undefined &&
+    canonicalLocalFilesystemSegment(segment) === CANONICAL_DOWNLOAD_STAGING_DIRECTORY_NAME
+  )
 }
 
 /**
@@ -342,6 +361,10 @@ function safeWarningName(name: string): string {
   const bounded = chars.slice(0, 80).join('')
   const suffix = chars.length > 80 ? '...' : ''
   return JSON.stringify(`${bounded.replace(/[^A-Za-z0-9._-]/g, '?')}${suffix}`)
+}
+
+function canonicalLocalFilesystemSegment(segment: string): string {
+  return segment.normalize('NFC').toLocaleLowerCase('en-US')
 }
 
 async function forEachWithConcurrency<T>(

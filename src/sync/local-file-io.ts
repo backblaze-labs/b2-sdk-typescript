@@ -3,6 +3,7 @@ import {
   assertDownloadPathSameDevice,
   createDownloadStagingDirectory,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
+  isDownloadStagingDirectorySegment,
 } from './download-staging.ts'
 import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import {
@@ -89,7 +90,7 @@ export async function writeLocalStreamInsideRoot(
   const { randomUUID } = await import('node:crypto')
   assertValidExpectedBytes(options.expectedBytes)
   const segments = safeRelativePathSegments(relPath)
-  if (segments[0] === DOWNLOAD_STAGING_DIRECTORY_NAME) {
+  if (isDownloadStagingDirectorySegment(segments[0])) {
     throw new Error(
       `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved for SDK download staging`,
     )

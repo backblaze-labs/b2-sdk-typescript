@@ -1,4 +1,4 @@
-import { DOWNLOAD_STAGING_DIRECTORY_NAME } from './download-staging.ts'
+import { isDownloadStagingDirectorySegment } from './download-staging.ts'
 
 /**
  * Treats the supplied string as a raw B2 key prefix without adding a folder boundary.
@@ -69,7 +69,7 @@ export function b2KeyToRelativePathUnderPrefix(prefix: string, fileName: string)
 export function localFilesystemSyncPathIsUnsafe(relativePath: string): boolean {
   const segments = relativePath.split('/')
   return (
-    segments[0] === DOWNLOAD_STAGING_DIRECTORY_NAME ||
+    isDownloadStagingDirectorySegment(segments[0]) ||
     segments.some((segment) => segmentIsLocalFilesystemUnsafe(segment))
   )
 }

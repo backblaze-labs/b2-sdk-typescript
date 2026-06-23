@@ -235,17 +235,22 @@ describe('writeLocalStreamInsideRoot', () => {
   it('refuses to write into the managed staging namespace', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-reserved-'))
     try {
-      await expect(
-        writeLocalStreamInsideRoot(
-          root,
-          `${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
-          streamFromBytes(textEncoder.encode('abc')),
-          {
-            expectedBytes: 3,
-            idleTimeoutMillis: 1000,
-          },
-        ),
-      ).rejects.toThrow(`${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved`)
+      for (const stagingDirectoryName of [
+        DOWNLOAD_STAGING_DIRECTORY_NAME,
+        DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase(),
+      ]) {
+        await expect(
+          writeLocalStreamInsideRoot(
+            root,
+            `${stagingDirectoryName}/payload.bin`,
+            streamFromBytes(textEncoder.encode('abc')),
+            {
+              expectedBytes: 3,
+              idleTimeoutMillis: 1000,
+            },
+          ),
+        ).rejects.toThrow(`${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved`)
+      }
       await expect(readdir(root)).resolves.toEqual([])
     } finally {
       await rm(root, { recursive: true, force: true })

@@ -1,5 +1,5 @@
 import {
-  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  isDownloadStagingDirectorySegment,
   isManagedDownloadStagingRoot,
 } from '../download-staging.ts'
 import { localFilesystemErrorReason } from '../filesystem-errors.ts'
@@ -117,9 +117,9 @@ export class LocalFolder implements SyncFolder {
       const fullPath = nodeDeps.join(dir, entry.name)
       const rel = relativePathFromRoot(root, fullPath, nodeDeps)
       if (
-        rel === DOWNLOAD_STAGING_DIRECTORY_NAME &&
+        isDownloadStagingDirectorySegment(rel) &&
         entry.isDirectory() &&
-        entry.name === DOWNLOAD_STAGING_DIRECTORY_NAME &&
+        isDownloadStagingDirectorySegment(entry.name) &&
         (await isManagedDownloadStagingRoot(fullPath))
       ) {
         continue

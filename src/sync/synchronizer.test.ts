@@ -2223,9 +2223,10 @@ describe('synchronize', () => {
             makeFileVersion('nul.tar.gz', 12),
             makeFileVersion('dir/C:/x', 13),
             makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`, 14),
-            makeFileVersion('trailing.', 15),
-            makeFileVersion('Readme.txt', 16),
-            makeFileVersion('README.txt', 17),
+            makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`, 15),
+            makeFileVersion('trailing.', 16),
+            makeFileVersion('Readme.txt', 17),
+            makeFileVersion('README.txt', 18),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -2261,6 +2262,7 @@ describe('synchronize', () => {
         'LPT²/report.txt',
         'LPT³/report.txt',
         `${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
+        `${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`,
       ]) {
         expect(events).toContainEqual(
           expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path }),
