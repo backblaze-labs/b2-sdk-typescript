@@ -216,6 +216,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     let uploadEntry: UploadUrlEntry | undefined
+    let uploadStarted = false
 
     try {
       options.signal?.throwIfAborted()
@@ -224,6 +225,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
           ? (options.checkout() ?? (await options.fetchFresh()))
           : await options.fetchFresh()
 
+      uploadStarted = true
       const result = await options.upload(uploadEntry)
       options.returnEntry(uploadEntry)
       return result
@@ -242,7 +244,10 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (!isUploadRetryable(retryError, options) || attempt === retryOptions.maxRetries) {
+      if (
+        !isUploadRetryable(retryError, { ...options, uploadStarted }) ||
+        attempt === retryOptions.maxRetries
+      ) {
         throw retryError
       }
 
@@ -278,10 +283,14 @@ function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryE
 
 function isUploadRetryable(
   err: unknown,
-  options: UploadLayerRetryOptions & { readonly partNumber: number | null },
+  options: UploadLayerRetryOptions & {
+    readonly partNumber: number | null
+    readonly uploadStarted: boolean
+  },
 ): err is B2Error | NetworkError {
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
+    if (!options.uploadStarted) return true
     if (options.partNumber === null && !options.retryResponseBodyFailures) return false
     return true
   }

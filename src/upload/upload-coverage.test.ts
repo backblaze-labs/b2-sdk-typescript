@@ -26,6 +26,7 @@ import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
+import { DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
 import { type ResumePartReusedEvent, uploadLargeFile } from './large.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
@@ -238,6 +239,79 @@ describe('uploadLargeFile cleanup paths', () => {
       { bucketId: bucket.id },
     )
     expect(unfinished.files.find((f) => f.fileId === start.fileId)).toBeDefined()
+  })
+
+  it('bounds cleanup when the caller aborts and cancelLargeFile never settles', async () => {
+    const controller = new AbortController()
+    const abortReason = new Error('caller deadline')
+    const fileId = largeFileId('cleanup-timeout-large-file')
+    let cleanupTimeoutController!: AbortController
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockImplementation((timeoutMs: number) => {
+      expect(timeoutMs).toBe(DEFAULT_CLEANUP_TIMEOUT_MS)
+      cleanupTimeoutController = new AbortController()
+      return cleanupTimeoutController.signal
+    })
+    let cleanupStarted!: () => void
+    const cleanupStartedPromise = new Promise<void>((resolve) => {
+      cleanupStarted = resolve
+    })
+    let cleanupSignal: AbortSignal | undefined
+    const raw = {
+      async startLargeFile() {
+        return { fileId }
+      },
+      async getUploadPartUrl() {
+        return {
+          uploadUrl: 'https://upload.example.test/part',
+          authorizationToken: 'part-auth',
+        }
+      },
+      async uploadPart() {
+        controller.abort(abortReason)
+        throw abortReason
+      },
+      cancelLargeFile(
+        _apiUrl: string,
+        _authToken: string,
+        _request: { fileId: string },
+        options?: { readonly signal?: AbortSignal },
+      ) {
+        cleanupSignal = options?.signal
+        cleanupStarted()
+        return new Promise<never>(() => {})
+      },
+      async finishLargeFile() {
+        throw new Error('finishLargeFile should not be called')
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getApiUrl: () => 'https://api.example.test',
+      getAuthToken: () => 'auth',
+      getRecommendedPartSize: () => 100_000,
+      getAbsoluteMinimumPartSize: () => 100_000,
+      checkoutPartUploadUrl: () => null,
+      returnPartUploadUrl: () => {},
+      evictPartUploadUrl: () => {},
+    } as unknown as AccountInfo
+
+    try {
+      const uploadPromise = uploadLargeFile(raw, accountInfo, {
+        bucketId: bucketId('bucket1'),
+        fileName: 'cleanup-timeout.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      })
+
+      await cleanupStartedPromise
+      expect(cleanupSignal?.aborted).toBe(false)
+      cleanupTimeoutController.abort(new DOMException('Cleanup timed out', 'TimeoutError'))
+      await expect(uploadPromise).rejects.toBe(abortReason)
+      expect(cleanupSignal?.aborted).toBe(true)
+    } finally {
+      timeoutSpy.mockRestore()
+    }
   })
 
   it('aborts and drains parallel part work before cancelling the large file', async () => {
@@ -973,6 +1047,40 @@ describe('upload fresh-URL retry', () => {
     expect(uploadAttempts).toBe(1)
     expect(evictedEntries).toBe(1)
     expect(retryEvents).toBe(0)
+  })
+
+  it('retries NetworkError from fresh upload URL fetch before a small upload POST', async () => {
+    let freshFetches = 0
+    let uploadAttempts = 0
+    const retryEvents: UploadRetryEvent[] = []
+    const networkError = new NetworkError('get_upload_url connection reset')
+    const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
+
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'fresh-url-network.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      checkout: () => null,
+      fetchFresh: () => {
+        freshFetches += 1
+        if (freshFetches === 1) return Promise.reject(networkError)
+        return Promise.resolve(entry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        return Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
+
+    expect(result).toBe('uploaded')
+    expect(freshFetches).toBe(2)
+    expect(uploadAttempts).toBe(1)
+    expect(retryEvents).toHaveLength(1)
+    expect(retryEvents[0]?.error).toBe(networkError)
   })
 
   it('throws retryable upload errors after the final retry attempt', async () => {
@@ -1912,7 +2020,6 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       },
     )
 
-    const matchingPartSha1 = await sha1Hex(data.slice(0, partSize))
     for (const [fileId, bytes] of [
       [conflict.fileId, conflictData],
       [matching.fileId, data],
@@ -1950,15 +2057,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 
     expect(result.fileName).toBe('same-name.bin')
     expect(result.contentLength).toBe(data.byteLength)
-    expect(reused).toEqual([
-      {
-        fileName: 'same-name.bin',
-        fileId: matching.fileId,
-        partNumber: 1,
-        contentLength: partSize,
-        contentSha1: matchingPartSha1,
-      },
-    ])
+    expect(reused).toEqual([])
 
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
@@ -2017,6 +2116,83 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 
     expect(result.fileName).toBe('tampered-resume.bin')
     const downloaded = await bucket.download('tampered-resume.bin')
+    expect(await readStream(downloaded.body)).toEqual(data)
+  })
+
+  it('reuploads automatic resume parts even when an unfinished part has matching SHA-1', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const sim = new B2Simulator({ minimumPartSize: partSize, recommendedPartSize: partSize })
+    const inner = sim.transport()
+    let countResumeUploads = false
+    let resumeUploadPartAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (countResumeUploads && req.url.includes('b2_upload_part?')) {
+          resumeUploadPartAttempts += 1
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auto-resume-reuploads',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileName = 'auto-reupload-matching.bin'
+    const contentType = 'application/octet-stream'
+    const fileInfo = { owner: 'caller' }
+    const candidate = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName,
+        contentType,
+        fileInfo,
+      },
+    )
+    const partUrl = await client.raw.getUploadPartUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: candidate.fileId },
+    )
+    const part1 = data.slice(0, partSize)
+    await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part1.byteLength,
+        contentSha1: await sha1Hex(part1),
+      },
+      part1,
+    )
+
+    const reused: ResumePartReusedEvent[] = []
+    countResumeUploads = true
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName,
+      source: new BufferSource(data),
+      contentType,
+      fileInfo,
+      partSize,
+      concurrency: 1,
+      resume: true,
+      onResumePartReused: (event) => reused.push(event),
+    })
+
+    expect(result.fileName).toBe(fileName)
+    expect(reused).toEqual([])
+    expect(resumeUploadPartAttempts).toBe(2)
+    const downloaded = await bucket.download(fileName)
     expect(await readStream(downloaded.body)).toEqual(data)
   })
 
@@ -2197,14 +2373,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       }),
     ).rejects.toThrow(ResumeFileIdMismatchError)
 
-    expect(rejected).toEqual([
-      {
-        fileId: foreign.fileId,
-        requestedFileName: 'wanted.bin',
-        candidateFileName: 'foreign.bin',
-        reason: 'file-name-mismatch',
-      },
-    ])
+    expect(rejected).toEqual([])
 
     const parts = await client.raw.listParts(
       client.accountInfo.getApiUrl(),
@@ -2282,10 +2451,10 @@ describe('uploadLargeFile control-plane aborts', () => {
 
     await expect(upload).rejects.toThrow('finish aborted')
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal).toBeUndefined()
+    expect(cancelSignal?.aborted).toBe(false)
   })
 
-  it('omits already-aborted multipart scope from cleanup cancel requests', async () => {
+  it('uses an independent cleanup signal after multipart scope aborts', async () => {
     let cancelSignal: AbortSignal | undefined
     const raw = {
       startLargeFile: async () => ({ fileId: largeFileId('cleanup-large') }),
@@ -2313,7 +2482,7 @@ describe('uploadLargeFile control-plane aborts', () => {
       }),
     ).rejects.toThrow('part failed')
 
-    expect(cancelSignal).toBeUndefined()
+    expect(cancelSignal?.aborted).toBe(false)
   })
 })
 

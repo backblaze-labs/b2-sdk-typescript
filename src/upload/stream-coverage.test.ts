@@ -252,7 +252,7 @@ describe('createWriteStream branch coverage', () => {
     await expect(done).rejects.toThrow('stream start aborted')
   })
 
-  it('passes abort signal to stalled finish and omits aborted cleanup signal', async () => {
+  it('passes abort signal to stalled finish and uses independent cleanup signal', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     const controller = new AbortController()
@@ -303,7 +303,7 @@ describe('createWriteStream branch coverage', () => {
     await expect(closePromise).rejects.toThrow('stream finish aborted')
     await expect(done).rejects.toThrow('stream finish aborted')
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal).toBeUndefined()
+    expect(cancelSignal?.aborted).toBe(false)
   })
 
   it('aborts an in-flight write-stream part request when the writer aborts', async () => {

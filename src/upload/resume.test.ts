@@ -1744,12 +1744,13 @@ describe('findResumeCandidate', () => {
     expect(listCalls).toHaveLength(1)
     expect(listCalls[0]).toMatchObject({
       maxFileCount: 1,
+      namePrefix: 'target.bin',
       startFileId: 'target-id',
     })
-    expect(listCalls[0]?.namePrefix).toBeUndefined()
   })
 
-  it('accepts an explicit resumeFileId with unreadable omitted retention state', async () => {
+  it('rejects an explicit resumeFileId with unreadable omitted retention state', async () => {
+    const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -1774,10 +1775,7 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts() {
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+        throw new Error('listParts should not be called for unreadable retention state')
       },
     } as unknown as RawClient
 
@@ -1796,13 +1794,16 @@ describe('findResumeCandidate', () => {
           { partNumber: 2, length: 100 },
         ],
         resumeFileId: 'target-id' as LargeFileId,
+        onCandidateRejected: (event) => rejected.push(event.reason),
       },
     )
 
-    expect(result?.fileId).toBe('target-id' as LargeFileId)
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['retention-mismatch'])
   })
 
-  it('accepts an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
+  it('rejects an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
+    const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
@@ -1827,10 +1828,7 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts() {
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+        throw new Error('listParts should not be called for unreadable legal-hold state')
       },
     } as unknown as RawClient
 
@@ -1849,10 +1847,12 @@ describe('findResumeCandidate', () => {
           { partNumber: 2, length: 100 },
         ],
         resumeFileId: 'target-id' as LargeFileId,
+        onCandidateRejected: (event) => rejected.push(event.reason),
       },
     )
 
-    expect(result?.fileId).toBe('target-id' as LargeFileId)
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['legal-hold-mismatch'])
   })
 
   it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {

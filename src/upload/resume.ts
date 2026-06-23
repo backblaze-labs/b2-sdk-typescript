@@ -153,7 +153,7 @@ export async function findResumeCandidate(
       {
         bucketId,
         maxFileCount: explicitResumeFileId !== undefined ? 1 : 100,
-        ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
+        namePrefix: fileName,
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
       criteria.signal !== undefined ? { signal: criteria.signal } : undefined,
@@ -317,18 +317,10 @@ function candidateMetadataRejectReason(
     criteria.serverSideEncryption,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
-  if (
-    !fileRetentionMatches(
-      candidate.fileRetention,
-      criteria.fileRetention,
-      criteria.resumeFileId !== undefined,
-    )
-  ) {
+  if (!fileRetentionMatches(candidate.fileRetention, criteria.fileRetention)) {
     return 'retention-mismatch'
   }
-  if (
-    !legalHoldMatches(candidate.legalHold, criteria.legalHold, criteria.resumeFileId !== undefined)
-  ) {
+  if (!legalHoldMatches(candidate.legalHold, criteria.legalHold)) {
     return 'legal-hold-mismatch'
   }
 
@@ -420,11 +412,10 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
 function fileRetentionMatches(
   candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
-  explicitResume: boolean,
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return explicitResume
+    if (!candidate.isClientAuthorizedToRead) return false
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -444,11 +435,10 @@ function fileRetentionValueEquals(
 function legalHoldMatches(
   candidate: ReadableLegalHold | undefined,
   expected: LegalHoldValue | undefined,
-  explicitResume: boolean,
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return explicitResume
+    if (!candidate.isClientAuthorizedToRead) return false
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false

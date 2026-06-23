@@ -26,7 +26,7 @@ import {
   uploadPartWithFreshUrl,
 } from './retry.ts'
 
-/** Event emitted when resume skips a local part because B2 already has matching SHA-1 bytes. */
+/** Event emitted when explicit resume skips a local part because B2 already has matching SHA-1 bytes. */
 export interface ResumePartReusedEvent {
   /** File name being resumed. */
   readonly fileName: string
@@ -40,7 +40,7 @@ export interface ResumePartReusedEvent {
   readonly contentSha1: string
 }
 
-/** Callback invoked when resume accepts a pre-existing server part. */
+/** Callback invoked when explicit resume accepts a pre-existing server part. */
 export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
 /** Options for uploading a large file via the multipart protocol. */
@@ -89,20 +89,18 @@ export interface UploadLargeFileOptions {
   readonly retryResponseBodyFailures?: boolean
   /**
    * If true, look for an unfinished large file with the same bucket and file name
-   * and skip parts whose locally-recomputed SHA-1 matches the server's. Automatic
-   * discovery only reuses unfinished files whose upload options and already
-   * uploaded part lengths match; otherwise a new large file is started.
+   * and continue uploading into it. Automatic discovery only reuses unfinished
+   * files whose upload options and already-uploaded part lengths match;
+   * otherwise a new large file is started. Existing server parts are overwritten
+   * with locally read bytes instead of being trusted by SHA-1 alone.
    *
-   * Auto-discovery trusts unfinished large files created by any writer with
-   * access to the bucket. Use it only when bucket writers are mutually trusted,
-   * and use `onResumePartReused` to observe any server parts accepted through
-   * the SHA-1 gate. Discovery runs before the first upload byte and can make up
-   * to the list-page budget plus the candidate budget times the part-page
-   * budget in sequential B2 list calls; pass `signal` to bound wall-clock time.
-   * SSE-C uploads are never auto-resumed because B2 does not expose the
-   * customer key identity needed to verify a compatible unfinished file.
-   * Candidates with unreadable Object Lock retention or legal-hold fields are
-   * rejected because automatic discovery cannot prove they are unlocked.
+   * Discovery runs before the first upload byte and can make up to the
+   * list-page budget plus the candidate budget times the part-page budget in
+   * sequential B2 list calls; pass `signal` to bound wall-clock time. SSE-C
+   * uploads are never auto-resumed because B2 does not expose the customer key
+   * identity needed to verify a compatible unfinished file. Candidates with
+   * unreadable Object Lock retention or legal-hold fields are rejected because
+   * automatic discovery cannot prove they are unlocked.
    */
   readonly resume?: boolean
   /**
@@ -131,8 +129,8 @@ export interface UploadLargeFileOptions {
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
    * {@link ResumeFileIdMismatchError}.
-   * When `fileRetention` and `legalHold` are omitted, this explicit ID is the
-   * trust decision for unreadable Object Lock fields on that unfinished file.
+   * Unreadable Object Lock retention or legal-hold fields are rejected because
+   * the SDK cannot verify the final lock state.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -260,7 +258,7 @@ export async function uploadLargeFile(
     )
     if (candidate) {
       largeFileId = candidate.fileId
-      preUploaded = candidate.uploadedPartSha1s
+      preUploaded = new Map<number, string>()
     } else {
       const startResp = await raw.startLargeFile(
         accountInfo.getApiUrl(),
@@ -348,10 +346,8 @@ export async function uploadLargeFile(
         const sha1Hex = await partSha1.digest()
         abortScope.signal.throwIfAborted()
 
-        // Best-effort resume deduplication gate: metadata and lengths are not enough.
-        // A SHA-1 match is not a cryptographic guarantee against malicious
-        // bucket co-writers, so auto-resume is documented for mutually trusted
-        // writers only.
+        // Explicit resume is the only mode that trusts an already-uploaded
+        // server part enough to skip sending the local bytes again.
         const serverSha1 = preUploaded.get(part.partNumber)
         if (serverSha1 !== undefined && serverSha1 === sha1Hex) {
           notifyResumePartReused(options.onResumePartReused, {

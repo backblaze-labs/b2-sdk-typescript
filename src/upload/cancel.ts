@@ -3,6 +3,9 @@ import type { RawClient } from '../raw/index.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
 
+/** Default wall-clock bound for best-effort cleanup calls after upload failure. */
+export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000
+
 /**
  * Cancels an unfinished large file on a best-effort basis. Used at every
  * error-handling boundary in the multipart upload, write-stream, and
@@ -28,21 +31,59 @@ export async function cancelLargeFileBestEffort(
   fileId: LargeFileId,
   options?: { readonly signal?: AbortSignal },
 ): Promise<void> {
-  await bestEffort(() =>
-    raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), { fileId }, options),
-  )
+  await bestEffort(async () => {
+    const request = raw.cancelLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      { fileId },
+      options,
+    )
+    await waitForCleanup(request, options?.signal)
+  })
 }
 
 /**
- * Returns cleanup request controls only when the caller signal can still send a request.
+ * Returns cleanup request controls with a live timeout signal.
  *
  * @param signal - Caller-provided abort signal, if any.
+ * @param timeoutMs - Maximum time to spend waiting for cleanup.
  *
- * @returns Request controls with a live signal, or undefined when the signal is absent or already aborted.
+ * @returns Request controls with a signal independent of an already-aborted caller signal.
  */
 export function cleanupRequestOptions(
   signal: AbortSignal | undefined,
-): { readonly signal: AbortSignal } | undefined {
-  if (signal === undefined || signal.aborted) return undefined
-  return { signal }
+  timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
+): { readonly signal: AbortSignal } {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs)
+  if (signal === undefined || signal.aborted) return { signal: timeoutSignal }
+  return { signal: AbortSignal.any([signal, timeoutSignal]) }
+}
+
+async function waitForCleanup(
+  request: Promise<unknown>,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal === undefined) {
+    await request
+    return
+  }
+  if (signal.aborted) throw cleanupAbortReason(signal)
+
+  let removeAbortListener: (() => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(cleanupAbortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    await Promise.race([request, aborted])
+  } finally {
+    removeAbortListener?.()
+    void request.catch(() => {})
+  }
+}
+
+function cleanupAbortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Cleanup aborted', 'AbortError')
 }
