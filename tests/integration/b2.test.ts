@@ -14,6 +14,7 @@ import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
+import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
@@ -71,33 +72,6 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
     if (err instanceof BadBucketIdError) return
     throw err
   }
-}
-
-async function deleteFileVersionOnce(
-  b: Bucket,
-  fileName: string,
-  fileId: Parameters<Bucket['deleteFileVersion']>[1],
-  deleted: Set<string>,
-): Promise<void> {
-  const key = `${fileName}\0${fileId}`
-  if (deleted.has(key)) return
-  deleted.add(key)
-  try {
-    await b.deleteFileVersion(fileName, fileId)
-  } catch (err) {
-    if (!hasB2ErrorCode(err, 'file_not_present') && !hasB2ErrorCode(err, 'no_such_file')) {
-      throw err
-    }
-  }
-}
-
-function hasB2ErrorCode(err: unknown, code: string): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { readonly code?: unknown }).code === code
-  )
 }
 
 describe.skipIf(skip)('B2 integration', () => {
