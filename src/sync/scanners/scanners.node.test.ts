@@ -217,6 +217,30 @@ describe('LocalFolder', () => {
     expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
   })
 
+  it('binds relative roots at construction time', async () => {
+    const originalCwd = process.cwd()
+    const firstCwd = join(tmpDir, 'first')
+    const secondCwd = join(tmpDir, 'second')
+    await mkdir(join(firstCwd, 'dest'), { recursive: true })
+    await mkdir(join(secondCwd, 'dest'), { recursive: true })
+    await writeFile(join(firstCwd, 'dest', 'keep.txt'), 'keep')
+    await writeFile(join(secondCwd, 'dest', 'wrong.txt'), 'wrong')
+
+    try {
+      process.chdir(firstCwd)
+      const folder = new LocalFolder('dest')
+      const expectedPath = join(folder.root, 'keep.txt')
+      process.chdir(secondCwd)
+
+      const entries = await collect<LocalSyncPath>(folder.scan())
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['keep.txt'])
+      expect(entries[0]?.absolutePath).toBe(expectedPath)
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
   it('uses forward slashes in relative paths even on the current platform', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
     await writeFile(join(tmpDir, 'a', 'b', 'file.txt'), 'content')

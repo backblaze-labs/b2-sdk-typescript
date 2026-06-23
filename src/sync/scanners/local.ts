@@ -1,3 +1,4 @@
+import { resolve } from 'node:path'
 import { localFilesystemErrorReason } from '../filesystem-errors.ts'
 import {
   directoryMayContainSyncPaths,
@@ -50,7 +51,7 @@ export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
-  /** Absolute or relative path to the local root directory. */
+  /** Resolved absolute path to the local root directory. */
   readonly root: string
 
   /**
@@ -58,7 +59,7 @@ export class LocalFolder implements SyncFolder {
    * @param root - Absolute or relative path to the local directory to scan.
    */
   constructor(root: string) {
-    this.root = root
+    this.root = resolve(root)
     registerLocalFilesystemRoot(this)
   }
 
