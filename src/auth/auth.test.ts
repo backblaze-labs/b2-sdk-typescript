@@ -483,11 +483,14 @@ describe('getRealmUrl', () => {
   it('keeps REALM_URLS mutable for source compatibility without changing built-in resolution', () => {
     expect(Object.isFrozen(REALM_URLS)).toBe(false)
     const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
-    REALM_URLS['production'] = 'https://attacker.example'
-    REALM_URLS['local-test'] = 'https://local.example'
-    expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
-    expect(getRealmUrl('local-test')).toBe('local-test')
-    REALM_URLS['production'] = originalProduction
-    delete REALM_URLS['local-test']
+    try {
+      REALM_URLS['production'] = 'https://attacker.example'
+      REALM_URLS['local-test'] = 'https://local.example'
+      expect(getRealmUrl('production')).toBe('https://api.backblazeb2.com')
+      expect(getRealmUrl('local-test')).toBe('local-test')
+    } finally {
+      REALM_URLS['production'] = originalProduction
+      delete REALM_URLS['local-test']
+    }
   })
 })
