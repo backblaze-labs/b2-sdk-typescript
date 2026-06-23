@@ -162,7 +162,6 @@ export class B2Folder implements SyncFolder {
 
     for (const { relativePath, versions, selectedVersion } of sorted) {
       if (scanIsAborted(options)) return
-      versions.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
       yield {
         relativePath,
