@@ -1,5 +1,8 @@
+import { execFile } from 'node:child_process'
+import { constants } from 'node:fs'
 import {
   mkdtemp,
+  open,
   readFile,
   rename,
   rm,
@@ -10,8 +13,12 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { FileSource } from './source.ts'
+
+const execFileAsync = promisify(execFile)
+const isLinux = process.platform === 'linux'
 
 describe('FileSource', () => {
   it('streams and slices a local file by byte range', async () => {
@@ -117,6 +124,32 @@ describe('FileSource', () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-dir-'))
     try {
       await expect(FileSource.fromPath(root)).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(!isLinux)('rejects fifo paths without waiting for a writer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-fifo-'))
+    let unblockPromise: Promise<void> | undefined
+    try {
+      const fifoPath = join(root, 'pipe')
+      await execFileAsync('mkfifo', [fifoPath])
+      let neededWriterToUnblock = false
+      const unblockTimer = setTimeout(() => {
+        neededWriterToUnblock = true
+        unblockPromise = open(fifoPath, constants.O_WRONLY | constants.O_NONBLOCK)
+          .then((handle) => handle.close())
+          .catch(() => {})
+      }, 100)
+
+      try {
+        await expect(FileSource.fromPath(fifoPath)).rejects.toThrow()
+      } finally {
+        clearTimeout(unblockTimer)
+        await unblockPromise
+      }
+      expect(neededWriterToUnblock).toBe(false)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

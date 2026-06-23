@@ -107,7 +107,12 @@ export async function writeLocalStreamInsideRoot(
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
   const statForDeviceCheck = localFileIoTestHooks.statForDeviceCheck ?? stat
-  await assertDownloadDestinationSameDevice(rootRealPath, parentRealPath, statForDeviceCheck)
+  await assertDownloadPathSameDevice(
+    rootRealPath,
+    parentRealPath,
+    statForDeviceCheck,
+    'unsafe local destination path: cannot publish download across filesystems',
+  )
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -131,7 +136,18 @@ export async function writeLocalStreamInsideRoot(
   const finalName = path.basename(destPath)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
   const publishMode = await replacementFileMode(finalPath)
-  const stagingDirectory = await createDownloadStagingDirectory(rootRealPath, path, randomUUID)
+  let stagingDirectory: string
+  try {
+    stagingDirectory = await createDownloadStagingDirectory(
+      rootRealPath,
+      path,
+      randomUUID,
+      statForDeviceCheck,
+    )
+  } catch (err) {
+    await parentHandle?.close().catch(() => {})
+    throw err
+  }
   const tmpPath = path.join(stagingDirectory, `${randomUUID()}.partial`)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
@@ -217,31 +233,37 @@ async function replacementFileMode(filePath: string): Promise<number> {
   }
 }
 
-async function assertDownloadDestinationSameDevice(
+async function assertDownloadPathSameDevice(
   rootRealPath: string,
-  parentRealPath: string,
+  candidateRealPath: string,
   statForDeviceCheck: DeviceStatFn,
+  message: string,
 ): Promise<void> {
-  const [rootStats, parentStats] = await Promise.all([
+  const [rootStats, candidateStats] = await Promise.all([
     statForDeviceCheck(rootRealPath),
-    statForDeviceCheck(parentRealPath),
+    statForDeviceCheck(candidateRealPath),
   ])
-  if (rootStats.dev !== parentStats.dev) {
-    throw new Error('unsafe local destination path: cannot publish download across filesystems')
-  }
+  if (rootStats.dev !== candidateStats.dev) throw new Error(message)
 }
 
 async function createDownloadStagingDirectory(
   rootRealPath: string,
   path: typeof import('node:path'),
   randomUUID: () => string,
+  statForDeviceCheck: DeviceStatFn,
 ): Promise<string> {
-  const { chmod, mkdir, realpath, writeFile } = await import('node:fs/promises')
+  const { chmod, mkdir, realpath, rm, writeFile } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
   await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE, recursive: true })
   await chmod(managedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   const realManagedDirectory = await realpath(managedDirectory)
   assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
+  await assertDownloadPathSameDevice(
+    rootRealPath,
+    realManagedDirectory,
+    statForDeviceCheck,
+    'unsafe local destination path: cannot stage download across filesystems',
+  )
   await reapStaleDownloadStagingDirectories(realManagedDirectory, path, Date.now())
 
   const stagingDirectory = path.join(
@@ -250,12 +272,23 @@ async function createDownloadStagingDirectory(
   )
   await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
   await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  const realStagingDirectory = await realpath(stagingDirectory)
-  assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
-  await writeFile(path.join(realStagingDirectory, DOWNLOAD_STAGING_MARKER_NAME), '', {
-    mode: PRIVATE_DOWNLOAD_FILE_MODE,
-  })
-  return realStagingDirectory
+  try {
+    const realStagingDirectory = await realpath(stagingDirectory)
+    assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
+    await assertDownloadPathSameDevice(
+      rootRealPath,
+      realStagingDirectory,
+      statForDeviceCheck,
+      'unsafe local destination path: cannot stage download across filesystems',
+    )
+    await writeFile(path.join(realStagingDirectory, DOWNLOAD_STAGING_MARKER_NAME), '', {
+      mode: PRIVATE_DOWNLOAD_FILE_MODE,
+    })
+    return realStagingDirectory
+  } catch (err) {
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+    throw err
+  }
 }
 
 /**

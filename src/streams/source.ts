@@ -395,7 +395,8 @@ async function openNoFollow(filePath: string): Promise<FileHandleLike> {
   const { constants } = await import('node:fs')
   const { open } = await import('node:fs/promises')
   const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-  return open(filePath, constants.O_RDONLY | noFollow)
+  const nonBlock = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0
+  return open(filePath, constants.O_RDONLY | noFollow | nonBlock)
 }
 
 async function openValidatedHandle(

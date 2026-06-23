@@ -205,6 +205,26 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('rejects managed staging directories on a different device', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-dev-staging-'))
+    try {
+      const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+      localFileIoTestHooks.statForDeviceCheck = async (candidate) => ({
+        dev: candidate.startsWith(managedDirectory) ? 2 : 1,
+      })
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('cannot stage download across filesystems')
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      delete localFileIoTestHooks.statForDeviceCheck
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('reaps stale SDK-owned staging directories before creating a new one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stale-stage-'))
     try {
