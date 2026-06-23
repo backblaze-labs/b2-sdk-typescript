@@ -281,7 +281,8 @@ export class FileSource implements ContentSource {
           const chunk = new Uint8Array(length)
           const { bytesRead } = await handle.read(chunk, 0, length, position)
           if (bytesRead === 0) {
-            throw new Error(`FileSource ended before reading ${totalSize} bytes: ${filePath}`)
+            await assertHandleReady(filePath, handle, identity)
+            throw new Error(`FileSource file changed after validation: ${filePath}`)
           }
 
           position += bytesRead

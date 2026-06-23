@@ -131,10 +131,10 @@ Large-file part retries are coordinated per part, not by a shared circuit breake
 main package in browser builds, but `FileSource.fromPath()` and its read methods
 need local filesystem APIs at runtime. The source records the validated file
 identity and fails with `FileSource file changed after validation` if the path is
-replaced, truncated, or content-modified while a multipart upload is reading it;
-metadata-only ctime changes do not abort unchanged bytes. On platforms without
-`O_NOFOLLOW`, leaf-symlink swaps are rejected by the post-open identity check
-rather than by the open flag. Retry after active writers stop changing the file.
+replaced, truncated, content-modified, or has ctime-changing metadata updates
+while a multipart upload is reading it. On platforms without `O_NOFOLLOW`,
+leaf-symlink swaps are rejected by the post-open identity check rather than by
+the open flag. Retry after active writers stop changing the file.
 
 #### Resume a failed multipart upload
 
