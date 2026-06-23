@@ -523,7 +523,7 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await reader.read()
+        const { done, value } = await readNextNonEmptyChunk(reader)
         if (done) {
           throw new Error(
             `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
@@ -575,7 +575,7 @@ async function uploadPartsSequentially(
       )
     }
 
-    const extra = await reader.read()
+    const extra = await readNextNonEmptyChunk(reader)
     if (!extra.done) {
       bytesRead += extra.value.byteLength
       throw new Error(
@@ -589,6 +589,15 @@ async function uploadPartsSequentially(
     // Releasing the lock lets the underlying stream propagate close /
     // error events to any upstream producer (e.g. a Node `Readable`).
     reader.releaseLock()
+  }
+}
+
+async function readNextNonEmptyChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  while (true) {
+    const result = await reader.read()
+    if (result.done || result.value.byteLength > 0) return result
   }
 }
 

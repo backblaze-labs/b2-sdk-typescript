@@ -3319,7 +3319,7 @@ describe('uploadSmallFile cleanup path', () => {
     await dl.body.cancel()
   })
 
-  it('uploads a StreamSource through bucket.upload via the sequential multipart path', async () => {
+  it('uploads a StreamSource with empty chunks through the sequential multipart path', async () => {
     // Regression for the canSlice = false path: bucket.upload should
     // accept a StreamSource and stream multipart parts sequentially
     // (one partSize buffer in flight at a time), without requiring the
@@ -3337,18 +3337,32 @@ describe('uploadSmallFile cleanup path', () => {
     const payload = deterministicBytes(totalSize)
 
     // Hand-roll a ReadableStream that emits the payload in small chunks
-    // so the part-buffer assembly loop has to coalesce across reads.
+    // so the part-buffer assembly loop has to coalesce across reads and
+    // ignore valid zero-length chunks, including after the advertised size.
     const chunkSize = 7919 // prime, doesn't divide partSize evenly
     let cursor = 0
+    let emitEmpty = true
+    let trailingEmptyEmitted = false
     const readable = new ReadableStream<Uint8Array>({
       pull(controller) {
+        if (emitEmpty) {
+          emitEmpty = false
+          controller.enqueue(new Uint8Array(0))
+          return
+        }
         if (cursor >= payload.byteLength) {
+          if (!trailingEmptyEmitted) {
+            trailingEmptyEmitted = true
+            controller.enqueue(new Uint8Array(0))
+            return
+          }
           controller.close()
           return
         }
         const end = Math.min(cursor + chunkSize, payload.byteLength)
         controller.enqueue(payload.subarray(cursor, end))
         cursor = end
+        emitEmpty = true
       },
     })
 
