@@ -123,7 +123,7 @@ Large-file part retries are coordinated per part, not by a shared circuit breake
 
 #### Resume a failed multipart upload
 
-Resume requires the exact unfinished large-file ID returned by B2 when the multipart upload was started. The SDK does not auto-attach to same-name unfinished files because another bucket writer can create those with different metadata or retention settings. Passing the deprecated `resume: true` flag without `resumeFileId` starts a fresh upload. With `resumeFileId`, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
+Resume has two paths. `resumeFileId` targets a known unfinished large-file ID returned by B2 when the multipart upload was started. `resume: true` without `resumeFileId` runs bounded same-name discovery and may reuse the newest compatible unfinished upload; incompatible candidates are skipped and a fresh upload starts. In both paths, each local part is hashed again and matching server parts are skipped only when the locally recomputed SHA-1 equals B2's part SHA-1.
 
 Resume discovery is intentionally conservative. The SDK reuses only the newest unfinished large file whose file name, content type, caller-provided file info, encryption, Object Lock retention, legal hold, and uploaded part lengths match the current call. If those checks fail, a new large file is started instead. Caller-provided file info such as `large_file_sha1` or `src_last_modified_millis` is part of that identity, so keep it stable across retries. Discovery does not add SDK metadata to unfinished or finished file info.
 
