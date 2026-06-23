@@ -45,6 +45,8 @@ export interface ResumePartReusedEvent {
 /** Callback invoked when explicit resume accepts a pre-existing server part. */
 export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
+const MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS = 1024
+
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
   /** Target bucket for the upload. */
@@ -597,9 +599,16 @@ async function readNextNonEmptyChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal | undefined,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let emptyChunks = 0
   while (true) {
     const result = await readStreamChunkWithSignal(reader, signal)
     if (result.done || result.value.byteLength > 0) return result
+    emptyChunks += 1
+    if (emptyChunks > MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS) {
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than ${MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS} consecutive empty chunks.`,
+      )
+    }
   }
 }
 

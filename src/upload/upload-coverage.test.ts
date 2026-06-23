@@ -3379,6 +3379,31 @@ describe('uploadSmallFile cleanup path', () => {
     expect(result.contentSha1).toBeNull()
   })
 
+  it('rejects too many consecutive empty chunks in a streaming multipart source', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-spin',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const readable = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'empty-spin.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+      }),
+    ).rejects.toThrow('source stream emitted more than 1024 consecutive empty chunks')
+    expect(await bucket.getFileInfoByName('empty-spin.bin')).toBeNull()
+  })
+
   it('rejects a streaming multipart source that ends before its advertised size', async () => {
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
