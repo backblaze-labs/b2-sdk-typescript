@@ -1007,7 +1007,7 @@ describe('RetryTransport', () => {
 
       await expect(transport.send(baseRequest)).rejects.toBe(redirectErr)
       expect(redirectErr.retryable).toBe(false)
-      expect(redirectErr.location).toBe('http://169.254.169.254/latest/...')
+      expect(redirectErr.location).toBe('http://169.254.169.254/...')
       expect(redirectErr.message).not.toContain('secret')
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })

@@ -98,10 +98,7 @@ export class UrlGuard {
       throw new B2SsrfError(`internal hostname not allowed by SSRF guard: ${host}`, rawUrl)
     }
 
-    for (const suffix of this.allowedSuffixes) {
-      const lowered = suffix.toLowerCase()
-      if (host === lowered || host.endsWith(`.${lowered}`)) return
-    }
+    if (hostMatchesAnyAllowedSuffix(host, this.allowedSuffixes)) return
 
     throw new B2SsrfError(
       `host outside allowed B2 realm: ${host} (allowed suffixes: ${this.allowedSuffixes.join(', ')})`,
@@ -145,6 +142,35 @@ export function deriveAllowedSuffixes(storageApi: {
     }
   }
   return Array.from(suffixes).sort()
+}
+
+/**
+ * Checks a hostname against one allowed suffix using the SDK's exact-or-subdomain rule.
+ *
+ * @param hostname - URL hostname to check.
+ * @param suffix - Domain suffix that may match exactly or as a parent domain.
+ *
+ * @returns Whether the hostname is exactly the suffix or a subdomain of it.
+ */
+export function hostMatchesAllowedSuffix(hostname: string, suffix: string): boolean {
+  const host = hostname.toLowerCase()
+  const lowered = suffix.toLowerCase()
+  return host === lowered || host.endsWith(`.${lowered}`)
+}
+
+/**
+ * Checks a hostname against an allowed-suffix list.
+ *
+ * @param hostname - URL hostname to check.
+ * @param suffixes - Domain suffixes to test with the SDK's suffix-matching rule.
+ *
+ * @returns Whether any suffix matches the hostname.
+ */
+export function hostMatchesAnyAllowedSuffix(
+  hostname: string,
+  suffixes: readonly string[],
+): boolean {
+  return suffixes.some((suffix) => hostMatchesAllowedSuffix(hostname, suffix))
 }
 
 function isLiteralIp(host: string): boolean {

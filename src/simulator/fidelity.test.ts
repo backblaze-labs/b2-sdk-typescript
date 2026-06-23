@@ -49,7 +49,7 @@ describe('B2Simulator input validation: bucket name', () => {
   it('rejects bucket names with leading hyphen', async () => {
     await expect(
       client.createBucket({ bucketName: '-leading', bucketType: BucketType.AllPrivate }),
-    ).rejects.toThrow(/letters, digits, and hyphens/)
+    ).rejects.toThrow(/letters, digits, hyphens, and periods/)
   })
 
   it('rejects bucket names starting with the reserved "b2-" prefix', async () => {
@@ -64,6 +64,14 @@ describe('B2Simulator input validation: bucket name', () => {
       bucketType: BucketType.AllPrivate,
     })
     expect(bucket.name).toBe('happy-bucket')
+  })
+
+  it('accepts a dotted bucket name', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'happy.bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+    expect(bucket.name).toBe('happy.bucket')
   })
 })
 

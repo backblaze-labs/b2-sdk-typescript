@@ -140,10 +140,11 @@
     "docs:watch": "typedoc --watch",
     "clean": "rm -rf dist docs",
     "version": "node scripts/cut-changelog.mjs && git add CHANGELOG.md",
-    "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run verify:metadata && pnpm run verify:exports",
+    "prepublishOnly": "pnpm run clean && pnpm run build && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:exports",
     "verify:metadata": "node scripts/verify-package-metadata.mjs",
+    "verify:release": "node scripts/verify-release-workflow.mjs",
     "verify:exports": "node scripts/verify-package-exports.mjs",
-    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test && pnpm run build && pnpm run docs && pnpm run verify:metadata && pnpm run verify:exports"
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test && pnpm run build && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",

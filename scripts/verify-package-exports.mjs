@@ -100,6 +100,145 @@ if (dctsTypeEntries === 0) {
   )
 }
 
+const publicExportProbes = [
+  {
+    subpath: '.',
+    checks: [
+      ["typeof entry.B2Client === 'function'", 'B2Client runtime export missing'],
+      ["typeof entry.VERSION === 'string' && entry.VERSION.length > 0", 'VERSION export missing'],
+      ["entry.BucketType?.AllPublic === 'allPublic'", 'BucketType enum export drifted'],
+    ],
+  },
+  {
+    subpath: './raw',
+    checks: [["typeof entry.RawClient === 'function'", 'RawClient runtime export missing']],
+  },
+  {
+    subpath: './errors',
+    checks: [
+      ["typeof entry.B2Error === 'function'", 'B2Error runtime export missing'],
+      ["typeof entry.classifyError === 'function'", 'classifyError runtime export missing'],
+    ],
+  },
+  {
+    subpath: './auth',
+    checks: [
+      ["typeof entry.InMemoryAccountInfo === 'function'", 'InMemoryAccountInfo export missing'],
+      ["typeof entry.getRealmUrl === 'function'", 'getRealmUrl export missing'],
+    ],
+  },
+  {
+    subpath: './auth/file',
+    checks: [["typeof entry.FileAccountInfo === 'function'", 'FileAccountInfo export missing']],
+  },
+  {
+    subpath: './streams',
+    checks: [
+      ["typeof entry.BufferSource === 'function'", 'BufferSource export missing'],
+      ["typeof entry.IncrementalSha1 === 'function'", 'IncrementalSha1 export missing'],
+      ["typeof entry.sha1Hex === 'function'", 'sha1Hex export missing'],
+    ],
+  },
+  {
+    subpath: './sync',
+    checks: [
+      ["typeof entry.synchronize === 'function'", 'synchronize export missing'],
+      ["typeof entry.LocalFolder === 'function'", 'LocalFolder export missing'],
+      ["typeof entry.B2Folder === 'function'", 'B2Folder export missing'],
+    ],
+  },
+  {
+    subpath: './simulator',
+    checks: [
+      ["typeof entry.B2Simulator === 'function'", 'B2Simulator export missing'],
+      ["typeof entry.BUCKET_NAME_MIN === 'number'", 'simulator constants missing'],
+    ],
+  },
+  {
+    subpath: './notifications',
+    checks: [
+      [
+        "typeof entry.verifyWebhookSignature === 'function'",
+        'verifyWebhookSignature export missing',
+      ],
+      ["typeof entry.B2_WEBHOOK_SIGNATURE_HEADER === 'string'", 'webhook header export missing'],
+    ],
+  },
+  {
+    subpath: './s3',
+    checks: [
+      ["typeof entry.createS3ClientConfig === 'function'", 'createS3ClientConfig export missing'],
+      ["typeof entry.presignS3GetObjectUrl === 'function'", 'presignS3GetObjectUrl export missing'],
+      ["typeof entry.presignS3PutObjectUrl === 'function'", 'presignS3PutObjectUrl export missing'],
+      ["typeof entry.trustedUnsafeS3PresignOptIn === 'object'", 'trusted S3 opt-in token missing'],
+    ],
+  },
+]
+
+const exportedSubpaths = Object.keys(pkg.exports).filter(
+  (subpath) => subpath === '.' || subpath.startsWith('./'),
+)
+const probedSubpaths = new Set(publicExportProbes.map(({ subpath }) => subpath))
+for (const subpath of exportedSubpaths) {
+  if (!probedSubpaths.has(subpath)) {
+    fail(`package export "${subpath}" has no runtime smoke probe`)
+  }
+}
+for (const subpath of probedSubpaths) {
+  if (!exportedSubpaths.includes(subpath)) {
+    fail(`runtime smoke probe references missing package export "${subpath}"`)
+  }
+}
+
+if (process.exitCode) process.exit(1)
+
+function packageSpecifier(subpath) {
+  return subpath === '.' ? pkg.name : `${pkg.name}/${subpath.slice(2)}`
+}
+
+function buildRuntimeProbeSource(format) {
+  const lines = []
+
+  if (format === 'esm') {
+    publicExportProbes.forEach((probe, index) => {
+      lines.push(
+        `import * as entry${index} from ${JSON.stringify(packageSpecifier(probe.subpath))};`,
+      )
+    })
+  }
+
+  lines.push('function assert(ok, msg) { if (!ok) throw new Error(msg); }')
+  lines.push(`const expectedProbeCount = ${publicExportProbes.length};`)
+
+  publicExportProbes.forEach((probe, index) => {
+    const entryExpression =
+      format === 'esm'
+        ? `entry${index}`
+        : `require(${JSON.stringify(packageSpecifier(probe.subpath))})`
+    lines.push('{')
+    lines.push(`  const entry = ${entryExpression};`)
+    lines.push(
+      `  assert(entry && typeof entry === 'object', ${JSON.stringify(
+        `${packageSpecifier(probe.subpath)} did not load an object namespace`,
+      )});`,
+    )
+    for (const [expression, message] of probe.checks) {
+      lines.push(`  assert(${expression}, ${JSON.stringify(`${probe.subpath}: ${message}`)});`)
+    }
+    lines.push('}')
+  })
+
+  lines.push("assert(expectedProbeCount > 0, 'no runtime probes configured');")
+  if (format === 'esm') {
+    lines.push("console.log('esm-ok ' + entry0.VERSION + ' ' + expectedProbeCount);")
+  } else {
+    lines.push(
+      `console.log('cjs-ok ' + require(${JSON.stringify(pkg.name)}).VERSION + ' ' + expectedProbeCount);`,
+    )
+  }
+  return lines.join('\n')
+}
+
 // ---------------------------------------------------------------------------
 // Step 2: pack + install + import/require the package end-to-end.
 // ---------------------------------------------------------------------------
@@ -143,22 +282,14 @@ try {
     process.exit(1)
   }
 
-  // ESM probe: `import` the main entry, read VERSION, read B2Client.name.
+  // ESM probe: import every public runtime subpath from the packed package.
   const esmProbe = spawnSync(
     process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import { B2Client, VERSION, BucketType } from '${pkg.name}';
-       if (!VERSION) throw new Error('VERSION missing');
-       if (B2Client.name !== 'B2Client') throw new Error('B2Client not callable');
-       if (BucketType.AllPublic !== 'allPublic') throw new Error('BucketType enum drift');
-       console.log('esm-ok ' + VERSION);`,
-    ],
+    ['--input-type=module', '-e', buildRuntimeProbeSource('esm')],
     { cwd: scratch, encoding: 'utf8' },
   )
   if (esmProbe.status !== 0) {
-    fail(`ESM import of ${pkg.name} failed:\n${esmProbe.stderr || esmProbe.stdout}`)
+    fail(`ESM import probe of ${pkg.name} failed:\n${esmProbe.stderr || esmProbe.stdout}`)
     process.exit(1)
   }
   if (!esmProbe.stdout.startsWith('esm-ok ')) {
@@ -166,25 +297,14 @@ try {
     process.exit(1)
   }
 
-  // CJS probe: `require` the main entry. Hits the .cjs runtime via the
-  // exports map's `require.default` branch and would surface any missing
-  // .d.cts via TypeScript's downstream tooling — for runtime, this just
-  // confirms the rollup CJS bundle actually loads.
+  // CJS probe: require every public runtime subpath from the packed package.
   const cjsProbe = spawnSync(
     process.execPath,
-    [
-      '--input-type=commonjs',
-      '-e',
-      `const { B2Client, VERSION, BucketType } = require('${pkg.name}');
-       if (!VERSION) throw new Error('VERSION missing');
-       if (B2Client.name !== 'B2Client') throw new Error('B2Client not callable');
-       if (BucketType.AllPrivate !== 'allPrivate') throw new Error('BucketType enum drift');
-       console.log('cjs-ok ' + VERSION);`,
-    ],
+    ['--input-type=commonjs', '-e', buildRuntimeProbeSource('cjs')],
     { cwd: scratch, encoding: 'utf8' },
   )
   if (cjsProbe.status !== 0) {
-    fail(`CJS require of ${pkg.name} failed:\n${cjsProbe.stderr || cjsProbe.stdout}`)
+    fail(`CJS require probe of ${pkg.name} failed:\n${cjsProbe.stderr || cjsProbe.stdout}`)
     process.exit(1)
   }
   if (!cjsProbe.stdout.startsWith('cjs-ok ')) {
@@ -192,9 +312,9 @@ try {
     process.exit(1)
   }
 
-  const version = esmProbe.stdout.trim().split(' ').at(-1)
+  const version = esmProbe.stdout.trim().split(' ')[1]
   console.log(
-    `verify-package-exports: OK (${referencedFiles} files referenced, ${dctsTypeEntries} .d.cts entries, dual-format resolve at v${version})`,
+    `verify-package-exports: OK (${referencedFiles} files referenced, ${dctsTypeEntries} .d.cts entries, ${publicExportProbes.length} subpath probes, dual-format resolve at v${version})`,
   )
 } finally {
   // Best-effort cleanup. Leftover scratch dir under /tmp survives a reboot

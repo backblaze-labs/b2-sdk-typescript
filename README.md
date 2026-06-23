@@ -438,12 +438,20 @@ import {
 // Sync engine (local <-> B2)
 import { synchronize, LocalFolder, B2Folder } from '@backblaze-labs/b2-sdk/sync'
 
-// S3-compatible helpers (requires @aws-sdk/client-s3 peer dependency)
-import { createS3ClientConfig, presignGetObjectUrl } from '@backblaze-labs/b2-sdk/s3'
+// S3-compatible helpers
+import {
+  createS3ClientConfig,
+  presignS3GetObjectUrl,
+  presignS3PutObjectUrl,
+} from '@backblaze-labs/b2-sdk/s3'
 
 // In-memory B2 server for tests (no network required)
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
+
+`createS3ClientConfig()` is for `@aws-sdk/client-s3`; install that optional peer
+before constructing an AWS `S3Client`. The presign helpers sign internally and
+do not require AWS presigner packages.
 
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
@@ -625,7 +633,11 @@ The high-level surface (`B2Client`, `Bucket`, `B2Object`) gives you direct acces
 - **Event notification rules** via `bucket.getNotificationRules()` and `bucket.setNotificationRules()`.
 - **Application key restrictions** (per-bucket, per-prefix, per-capability) via `client.createKey()`.
 
-When you want S3 compatibility instead — for tooling that already speaks S3, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()` and `presignGetObjectUrl()` so the same SDK covers both surfaces.
+When you want S3 compatibility instead — for tooling that already speaks S3, browser direct uploads, or for the Bandwidth Alliance proxy pattern — `@backblaze-labs/b2-sdk/s3` exposes `createS3ClientConfig()`, `presignS3GetObjectUrl()`, and `presignS3PutObjectUrl()` so the same SDK covers both surfaces.
+
+S3 presigned URLs are bearer credentials. The helpers only emit `https:` URLs and require an explicit `region` for custom or proxied endpoints whose region cannot be derived from `s3.<region>.backblazeb2.com`; set `region` and call `createS3ClientConfig()` during startup or deployment health checks before serving traffic. Object keys with path segments exactly `.` or `..` cannot be S3-presigned safely because common URL parsers normalize them before sending; rename those objects, proxy the download through a trusted server, or use a B2-native download authorization URL when that fits the access model. URL validity depends on the signing host's clock, so URL-generating hosts should be NTP-synced, and downstream SigV4 403s should include a clock-skew check. For untrusted uploads, bind `contentType` and `contentLength` when you can; omitting `contentType` lets the uploader store any B2-accepted type, including browser-executable HTML, SVG, XML, or JavaScript. Bound active content types are rejected unless trusted server code passes `trustedUnsafeS3PresignOptIn` to `allowBrowserExecutableContentType`; booleans from request JSON are ignored. GET response overrides that force inline rendering or active content require the same token on their unsafe opt-in fields. The SDK's active-content checks are best-effort denylists, not a complete browser security policy; the SDK cannot set `X-Content-Type-Options: nosniff`, so callers accepting untrusted content should enforce their own content-type allow-list. Presigned PUT URLs are replayable until expiry; if a client retries after B2 stored the object but before the response was observed, the retry can create another file version. Use unique object keys or reconcile by listed file IDs/checksums, and configure lifecycle or version cleanup where duplicate versions must be removed automatically.
+
+The deprecated `presignGetObjectUrl()` helper returns a B2-native download-authorization URL, not an S3 presigned URL. It keeps the legacy slash-escaped URL shape and permissive string-building behavior for compatibility. Use `createNativeDownloadAuthorizationUrl()` for new B2-native download-token URLs; it uses B2 path-preserving file-name encoding, requires an `https:` Backblaze download origin without userinfo, path, query, or fragment, rejects unsafe bucket names, control characters, invalid compatibility durations, and path-normalizing file names, and constructs the bearer URL from the parsed origin rather than raw-concatenating caller input.
 
 ## Source isomorphism
 

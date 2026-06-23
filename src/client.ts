@@ -199,7 +199,7 @@ export class B2Client {
    * @returns A {@link Bucket} handle for the newly created bucket.
    */
   async createBucket(options: {
-    /** Globally unique bucket name (6-50 chars, letters, digits, hyphens). */
+    /** Globally unique bucket name (6-63 chars; letters, digits, hyphens, periods). */
     bucketName: string
     /** Access level: `"allPrivate"` or `"allPublic"`. */
     bucketType: BucketType

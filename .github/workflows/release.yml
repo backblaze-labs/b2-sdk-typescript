@@ -26,6 +26,11 @@ on:
       tag:
         description: 'Existing tag to (re)publish, e.g. v0.1.1'
         required: true
+      allow_registry_artifact_mismatch:
+        description: 'Bootstrap-only: allow an existing npm artifact to differ from this verified tarball'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read # default read-only access; release publishing escalates below
@@ -35,12 +40,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Publish + GitHub Release
+  build:
+    name: Verify release artifact
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # creates or updates the GitHub Release
-      id-token: write # OIDC token for npm trusted publishing and provenance
     env:
       REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
     steps:
@@ -54,7 +56,7 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 22
-          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
 
       - run: pnpm install --frozen-lockfile
 
@@ -80,16 +82,84 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm run verify:metadata
+      - run: pnpm run verify:release
       - run: pnpm run verify:exports
 
-      - name: Verify package types resolve cleanly (attw)
-        continue-on-error: true
-        run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
+      - name: Verify tracked files are unchanged before packing
+        run: |
+          if ! git diff --exit-code; then
+            echo "::error::Tracked files changed after release verification; refusing to pack."
+            exit 1
+          fi
 
-      # OIDC trusted publishing: pnpm exchanges this job's GitHub OIDC token for
-      # a short-lived npm credential. No NPM_TOKEN secret. publishConfig in
-      # package.json sets access=public + provenance=true. --no-git-checks
-      # because the tagged commit is checked out in detached-HEAD state.
+      - name: Pack verified release artifact
+        run: |
+          mkdir -p .release
+          RELEASE_TAG="${REF#refs/tags/}"
+          VERSION="${RELEASE_TAG#v}"
+          pnpm pack --pack-destination .release
+          node -p "require('./package.json').name" > .release/package-name.txt
+          printf '%s\n' "$VERSION" > .release/package-version.txt
+          printf '%s\n' "$RELEASE_TAG" > .release/release-tag.txt
+          node scripts/extract-changelog.mjs "$VERSION" > .release/release-notes.md
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-artifacts
+          path: .release/*
+          if-no-files-found: error
+          retention-days: 7
+
+  package-type-analysis:
+    name: Analyze package types
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ env.REF }}
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Verify package types resolve cleanly (attw)
+        run: npx --yes -p @arethetypeswrong/cli@0.18.3 attw --pack . --profile node16
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm trusted publishing and provenance
+    steps:
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Download release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts
+          path: .release
+
+      # OIDC trusted publishing: npm exchanges this job's GitHub OIDC token for
+      # a short-lived npm credential. No dependency install, test, build, or
+      # repository script runs in this job; it only publishes the artifact
+      # verified by the build job.
       #
       # Idempotent: if this exact version is already on the registry (e.g. the
       # 0.1.0 bootstrap was published manually, or this job is re-run), skip the
@@ -97,28 +167,82 @@ jobs:
       # A version containing a hyphen is a prerelease and goes to the `next`
       # dist-tag so it never becomes `latest`.
       - name: Publish to npm
+        env:
+          ALLOW_REGISTRY_ARTIFACT_MISMATCH: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_registry_artifact_mismatch || false }}
         run: |
-          NAME="$(node -p "require('./package.json').name")"
-          VERSION="$(node -p "require('./package.json').version")"
-          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
-            echo "::notice::$NAME@$VERSION is already published; skipping publish."
-          elif [[ "$VERSION" == *-* ]]; then
-            pnpm publish --no-git-checks --tag next
-          else
-            pnpm publish --no-git-checks
+          NAME="$(cat .release/package-name.txt)"
+          VERSION="$(cat .release/package-version.txt)"
+          TARBALL="$(find .release -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          if [ -z "$TARBALL" ]; then
+            echo "::error::Release artifact did not contain a package tarball."
+            exit 1
           fi
+          LOCAL_INTEGRITY="$(node -e "const { readFileSync } = require('node:fs'); const { createHash } = require('node:crypto'); const data = readFileSync(process.argv[1]); console.log('sha512-' + createHash('sha512').update(data).digest('base64'));" "$TARBALL")"
+          LOCAL_SHASUM="$(node -e "const { readFileSync } = require('node:fs'); const { createHash } = require('node:crypto'); const data = readFileSync(process.argv[1]); console.log(createHash('sha1').update(data).digest('hex'));" "$TARBALL")"
+          DIST_JSON="$(mktemp)"
+          DIST_ERR="$(mktemp)"
+          set +e
+          npm view "$NAME@$VERSION" dist --json > "$DIST_JSON" 2> "$DIST_ERR"
+          VIEW_STATUS=$?
+          set -e
+          if [ "$VIEW_STATUS" -eq 0 ]; then
+            PUBLISHED_INTEGRITY="$(node -e "const { readFileSync } = require('node:fs'); const dist = JSON.parse(readFileSync(process.argv[1], 'utf8')); console.log(dist.integrity || '');" "$DIST_JSON")"
+            PUBLISHED_SHASUM="$(node -e "const { readFileSync } = require('node:fs'); const dist = JSON.parse(readFileSync(process.argv[1], 'utf8')); console.log(dist.shasum || '');" "$DIST_JSON")"
+            if [ -n "$PUBLISHED_INTEGRITY" ]; then
+              EXPECTED="$LOCAL_INTEGRITY"
+              OBSERVED="$PUBLISHED_INTEGRITY"
+            else
+              EXPECTED="sha1-$LOCAL_SHASUM"
+              OBSERVED="sha1-$PUBLISHED_SHASUM"
+            fi
+            if [ "$EXPECTED" != "$OBSERVED" ]; then
+              if [ "$ALLOW_REGISTRY_ARTIFACT_MISMATCH" = "true" ]; then
+                echo "::warning::$NAME@$VERSION is already published with different bytes; bootstrap override allowed this mismatch."
+                echo "::warning::Expected verified artifact integrity: $EXPECTED"
+                echo "::warning::Observed registry integrity: $OBSERVED"
+                echo "::notice::$NAME@$VERSION is already published; bootstrap mismatch override enabled; skipping publish."
+              else
+                echo "::error::$NAME@$VERSION is already published with different bytes."
+                echo "::error::Expected verified artifact integrity: $EXPECTED"
+                echo "::error::Observed registry integrity: $OBSERVED"
+                exit 1
+              fi
+            else
+              echo "::notice::$NAME@$VERSION is already published with matching integrity; skipping publish."
+            fi
+          elif ! grep -Eq 'E404|404 Not Found|is not in this registry' "$DIST_ERR"; then
+            echo "::error::Unable to verify whether $NAME@$VERSION is already published."
+            cat "$DIST_ERR"
+            exit "$VIEW_STATUS"
+          elif [[ "$VERSION" == *-* ]]; then
+            npm publish "$TARBALL" --ignore-scripts --access public --provenance --tag next
+          else
+            npm publish "$TARBALL" --ignore-scripts --access public --provenance
+          fi
+
+  github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build, publish]
+    permissions:
+      contents: write # creates or updates the GitHub Release
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-artifacts
+          path: .release
 
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE_TAG="${REF#refs/tags/}"
-          VERSION="${RELEASE_TAG#v}"
-          node scripts/extract-changelog.mjs "$VERSION" > /tmp/release-notes.md
+          RELEASE_TAG="$(cat .release/release-tag.txt)"
+          VERSION="$(cat .release/package-version.txt)"
           PRERELEASE=""
           [[ "$VERSION" == *-* ]] && PRERELEASE="--prerelease"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --notes-file /tmp/release-notes.md $PRERELEASE
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file .release/release-notes.md $PRERELEASE
           else
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file /tmp/release-notes.md $PRERELEASE
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes-file .release/release-notes.md $PRERELEASE
           fi

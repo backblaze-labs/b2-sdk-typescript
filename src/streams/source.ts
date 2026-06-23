@@ -1,3 +1,4 @@
+import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
 /**
@@ -178,7 +179,7 @@ export class StreamSource implements ContentSource {
    */
   async toArrayBuffer(): Promise<ArrayBuffer> {
     const bytes = await collectStream(this.stream())
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    return arrayBufferFor(bytes)
   }
 }
 

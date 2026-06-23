@@ -409,7 +409,7 @@ describe('getRealmUrl', () => {
       thrown = err
     }
     expect(thrown).toBeInstanceOf(B2RealmConfigurationError)
-    expect((thrown as Error).message).toContain('http://attacker.example/realm')
+    expect((thrown as Error).message).toContain('http://attacker.example/...')
     expect((thrown as Error).message).not.toContain('secret')
     expect((thrown as Error).message).not.toContain('user:')
     expect((thrown as Error).message).not.toContain('@')

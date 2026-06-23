@@ -29,9 +29,13 @@ import {
 describe('validateBucketName', () => {
   it('returns null for a valid name', () => {
     expect(validateBucketName('valid-bucket')).toBeNull()
+    expect(validateBucketName('valid.bucket')).toBeNull()
   })
   it('rejects names with the reserved b2- prefix', () => {
     expect(validateBucketName('b2-secret')?.code).toBe('invalid_bucket_name')
+  })
+  it('rejects IPv4-address-form names', () => {
+    expect(validateBucketName('192.168.0.1')?.code).toBe('invalid_bucket_name')
   })
   it('rejects non-string input', () => {
     expect(validateBucketName(123 as unknown as string)?.code).toBe('invalid_bucket_name')

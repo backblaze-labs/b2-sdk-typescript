@@ -1,3 +1,6 @@
+import { arrayBufferFor } from '../util/bytes.ts'
+import { hexEncode } from '../util/crypto.ts'
+
 /** Internal wrapper around a Node.js Hash instance. */
 type NodeHasher = { update(data: Uint8Array): void; digest(encoding: string): string }
 
@@ -244,22 +247,6 @@ function wordToHex(word: number): string {
 }
 /* v8 ignore stop */
 
-/* v8 ignore start -- WebCrypto fallback path, only reachable when node:crypto is unavailable (browser/edge runtimes) */
-/**
- * Convert a byte array to a lowercase hex string.
- * @param bytes - The raw bytes to encode as hexadecimal characters.
- *
- * @returns The lowercase hex-encoded string representation of the input bytes.
- */
-function hexEncode(bytes: Uint8Array): string {
-  const hex: string[] = []
-  for (const b of bytes) {
-    hex.push(b.toString(16).padStart(2, '0'))
-  }
-  return hex.join('')
-}
-/* v8 ignore stop */
-
 /**
  * Compute the SHA-1 hex digest of a complete byte array in one shot.
  * @param data - The byte array to hash.
@@ -273,10 +260,9 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
     h.update(data)
     return h.digest('hex')
   }
-  // Pass the view directly (not `data.buffer`) so WebCrypto hashes exactly
-  // `data`'s bytes. A subarray shares its parent's buffer, so hashing
-  // `.buffer` would digest the whole backing buffer and produce a wrong hash.
+  // Copy subarray and SharedArrayBuffer-backed views so WebCrypto hashes
+  // exactly `data`'s visible bytes with a plain ArrayBuffer.
   /* v8 ignore next 2 -- WebCrypto fallback, only reachable when node:crypto is unavailable */
-  const hashBuffer = await crypto.subtle.digest('SHA-1', data as Uint8Array<ArrayBuffer>)
+  const hashBuffer = await crypto.subtle.digest('SHA-1', arrayBufferFor(data))
   return hexEncode(new Uint8Array(hashBuffer))
 }

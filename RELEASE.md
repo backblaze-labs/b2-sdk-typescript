@@ -51,7 +51,7 @@ gh release create v0.1.0 --title v0.1.0 \
   --notes-file <(node scripts/extract-changelog.mjs 0.1.0)
 ```
 
-> Pushing `v0.1.0` will trigger `release.yml`. That's fine: its publish step is idempotent and **skips** when the version is already on npm (it just (re)creates the GitHub Release). If you'd rather avoid the run entirely, disable the Release workflow in the Actions tab during the bootstrap and re-enable it after.
+> Pushing `v0.1.0` will trigger `release.yml`. That's fine: its publish step is idempotent and **skips** when the version is already on npm after confirming the registry artifact matches the verified tarball. For the one-time manual bootstrap only, a workflow dispatch rerun can set `allow_registry_artifact_mismatch` if the manually published artifact is intentionally different and the GitHub Release still needs to be created. If you'd rather avoid the run entirely, disable the Release workflow in the Actions tab during the bootstrap and re-enable it after.
 
 ### 3. Configure trusted publishing (after 0.1.0 is live)
 
@@ -129,7 +129,7 @@ Run the full local gate before releasing (CI runs it too, but catching it locall
 ```bash
 pnpm install --frozen-lockfile
 pnpm run verify     # lint + lint:docs + lint:spelling + typecheck + typecheck:examples
-                    # + test + build + docs + verify:metadata + verify:exports
+                    # + test + build + docs + verify:metadata + verify:release + verify:exports
 ```
 
 `pnpm run verify` must exit `0`. For extra confidence on the published artifact:
@@ -164,8 +164,8 @@ git push --follow-tags               # pushes the version commit AND the tag
 Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
 1. Checks out the tag and verifies the tag matches `package.json` version.
-2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:exports`; `attw` is informational).
-3. `pnpm publish` over OIDC (skipped if the version is already on the registry). Provenance is attested automatically.
+2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
+3. `pnpm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
 
 Then confirm:
