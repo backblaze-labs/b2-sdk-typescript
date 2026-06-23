@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { BucketRetentionMode } from '../types/bucket.ts'
@@ -2166,49 +2166,40 @@ describe('findResumeCandidate', () => {
   })
 
   it('does not install a resume discovery timeout when the caller omits it', async () => {
-    vi.useFakeTimers()
-    try {
-      let settled = false
-      let listOptions: { signal?: AbortSignal } | undefined
-      const raw = {
-        async listUnfinishedLargeFiles(
-          _apiUrl: string,
-          _authToken: string,
-          _req: unknown,
-          options?: { signal?: AbortSignal },
-        ) {
-          listOptions = options
-          return new Promise<{ files: []; nextFileId: null }>((resolve) => {
-            setTimeout(() => resolve({ files: [], nextFileId: null }), 45_000)
-          })
-        },
-      } as unknown as RawClient
+    let listOptions: { signal?: AbortSignal } | undefined
+    let resolveList!: (value: { files: []; nextFileId: null }) => void
+    let resolveStarted!: () => void
+    const listStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve
+    })
+    const raw = {
+      async listUnfinishedLargeFiles(
+        _apiUrl: string,
+        _authToken: string,
+        _req: unknown,
+        options?: { signal?: AbortSignal },
+      ) {
+        listOptions = options
+        resolveStarted()
+        return new Promise<{ files: []; nextFileId: null }>((resolve) => {
+          resolveList = resolve
+        })
+      },
+    } as unknown as RawClient
 
-      const result = findResumeCandidate(
-        raw,
-        makeAccountInfo(),
-        bucketId('bucket1'),
-        'target.bin',
-        defaultResumeCriteria(),
-      )
-      void result.then(
-        () => {
-          settled = true
-        },
-        () => {
-          settled = true
-        },
-      )
+    const result = findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      defaultResumeCriteria(),
+    )
 
-      await vi.advanceTimersByTimeAsync(30_001)
-      expect(settled).toBe(false)
-      expect(listOptions).toBeUndefined()
+    await listStarted
+    expect(listOptions).toBeUndefined()
 
-      await vi.advanceTimersByTimeAsync(14_999)
-      await expect(result).resolves.toBeNull()
-    } finally {
-      vi.useRealTimers()
-    }
+    resolveList({ files: [], nextFileId: null })
+    await expect(result).resolves.toBeNull()
   })
 
   it('allows callers to disable the SDK resume discovery timeout', async () => {
