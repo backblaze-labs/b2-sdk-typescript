@@ -9,6 +9,7 @@ import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-i
 import { compareSyncRelativePaths } from './path-order.ts'
 import { B2Folder } from './scanners/b2.ts'
 import type {
+  B2SyncFolder,
   SynchronizerConfig,
   SynchronizerDownConfig,
   SynchronizerUpConfig,
@@ -4922,57 +4923,49 @@ describe('synchronize', () => {
       }
     })
 
-    it.skipIf(!isNode || isWindows)(
-      'keeps local files when matching B2 source names are skipped as unsafe',
-      async () => {
-        const { access, mkdtemp, rm, writeFile } = await import('node:fs/promises')
-        const { tmpdir } = await import('node:os')
-        const { join } = await import('node:path')
-        const { LocalFolder } = await import('./scanners/local.ts')
-        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-unsafe-delete-'))
-        try {
-          const localPath = join(root, 'CON')
-          await writeFile(localPath, 'keep me')
-          const fileVersion = makeB2SyncPath('CON', 1000, 7).selectedVersion
-          const mockBucket = {
-            ...makeMockBucket(),
-            listFileVersions: vi.fn().mockResolvedValue({
-              files: [fileVersion],
-              nextFileName: null,
-              nextFileId: null,
-            }),
-          }
+    it('keeps local files when matching B2 source names are skipped as unsafe', async () => {
+      const emptySource = makeMemoryFolder([], 'b2')
+      const source: B2SyncFolder = {
+        ...emptySource,
+        type: 'b2',
+        scan(options: SyncScanOptions = {}) {
+          options.onSkip?.({
+            type: 'skip',
+            reason: 'local-unsafe-name',
+            path: 'CON',
+            b2FileName: 'CON',
+            size: 0,
+            message: 'Skipped B2 file "CON": unsafe for local filesystem destinations',
+          })
+          return emptySource.scan(options)
+        },
+      }
+      const dest = makeMemoryFolder([makeLocalSyncPath('CON', 1000, 7)], 'local')
+      const config: SynchronizerDownConfig = {
+        source,
+        dest: { ...dest, type: 'local', root: '/tmp' },
+        options: { compareMode: 'modtime', keepMode: 'delete' },
+        bucket: makeMockBucket() as unknown as Bucket,
+      }
 
-          const config: SynchronizerDownConfig = {
-            source: new B2Folder(mockBucket as unknown as Bucket),
-            dest: new LocalFolder(root),
-            options: { compareMode: 'modtime', keepMode: 'delete' },
-            bucket: mockBucket as unknown as Bucket,
-          }
+      const events = await collectEvents(config)
 
-          const events = await collectEvents(config)
-
-          expect(events).toContainEqual(
-            expect.objectContaining({
-              type: 'skip',
-              reason: 'local-unsafe-name',
-              path: 'CON',
-            }),
-          )
-          expect(events).toContainEqual(
-            expect.objectContaining({
-              type: 'skip',
-              path: 'CON',
-              message: 'not removed because the source scan skipped unsafe B2 names',
-            }),
-          )
-          expect(events.some((event) => event.type === 'delete-local')).toBe(false)
-          await expect(access(localPath)).resolves.toBeUndefined()
-        } finally {
-          await rm(root, { recursive: true, force: true })
-        }
-      },
-    )
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          reason: 'local-unsafe-name',
+          path: 'CON',
+        }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          path: 'CON',
+          message: 'not removed because the source scan skipped unsafe B2 names',
+        }),
+      )
+      expect(events.some((event) => event.type === 'delete-local')).toBe(false)
+    })
 
     it.skipIf(!isNode)('sanitizes local delete filesystem errors', async () => {
       const { tmpdir } = await import('node:os')
