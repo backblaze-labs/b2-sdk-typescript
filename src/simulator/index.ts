@@ -122,6 +122,20 @@ function parseFileInfoHeaders(headers: Record<string, string>): Record<string, s
   return info
 }
 
+/**
+ * Compares B2 file names with deterministic JS string order, not locale collation.
+ *
+ * @param a - First file name.
+ * @param b - Second file name.
+ *
+ * @returns `-1` when `a` sorts first, `1` when `b` sorts first, otherwise `0`.
+ */
+function compareB2FileNames(a: string, b: string): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   validateBucketInfo,
@@ -1540,7 +1554,7 @@ export class B2Simulator {
       .map(([_, versions]) => versions[versions.length - 1])
       .filter((v): v is StoredFile => v !== undefined)
       .map((v) => v.fileVersion)
-      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+      .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
 
     if (req.startFileName) {
       const start = req.startFileName
@@ -1571,7 +1585,7 @@ export class B2Simulator {
       .filter(([name]) => name.startsWith(prefix))
       .flatMap(([_, versions]) => versions.map((v) => v.fileVersion))
       .sort((a, b) => {
-        const nameCmp = a.fileName.localeCompare(b.fileName)
+        const nameCmp = compareB2FileNames(a.fileName, b.fileName)
         if (nameCmp !== 0) return nameCmp
         return b.uploadTimestamp - a.uploadTimestamp
       })
@@ -2007,7 +2021,7 @@ export class B2Simulator {
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+      .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
 
     // `startFileId` is the inclusive cursor returned from a prior page.
     // When present in the current listing, that entry is returned first.

@@ -169,6 +169,55 @@ describe('B2Simulator input validation: maxFileCount caps', () => {
   })
 })
 
+describe('B2Simulator listing order', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'listing-order',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  it('uses deterministic JS string order instead of locale collation', async () => {
+    await bucket.upload({
+      fileName: 'a-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await bucket.upload({
+      fileName: 'Z-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+
+    const names = await bucket.listFileNames()
+    expect(names.files.map((file) => file.fileName)).toEqual(['Z-small.txt', 'a-small.txt'])
+
+    const versions = await bucket.listFileVersions()
+    expect(versions.files.map((file) => file.fileName)).toEqual(['Z-small.txt', 'a-small.txt'])
+
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'a-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'Z-large.bin',
+      contentType: 'application/octet-stream',
+    })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    expect(unfinished.files.map((file) => file.fileName)).toEqual(['Z-large.bin', 'a-large.bin'])
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Wire-level edges
 // ---------------------------------------------------------------------------
