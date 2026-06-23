@@ -567,6 +567,30 @@ describe('createWriteStream branch coverage', () => {
     expect(uploadPart).toHaveBeenCalledTimes(2)
   })
 
+  it('ignores empty write chunks before buffering upload data', async () => {
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+
+    const { writable, done } = bucket.file('empty-writes.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    for (let i = 0; i < 1_000; i += 1) {
+      await writer.write(new Uint8Array(0))
+    }
+
+    expect(startLargeFile).not.toHaveBeenCalled()
+    expect(uploadPart).not.toHaveBeenCalled()
+
+    await writer.write(deterministicBytes(100_000))
+    await writer.close()
+    await done
+
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(uploadPart).toHaveBeenCalledTimes(1)
+  })
+
   it('waits for pending part uploads before cleanup after a part failure', async () => {
     const secondUploadStarted = deferred<void>()
     const releaseSecondUpload = deferred<void>()

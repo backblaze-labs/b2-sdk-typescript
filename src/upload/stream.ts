@@ -283,6 +283,7 @@ export function createWriteStream(
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
       abortScope.signal.throwIfAborted()
+      if (chunk.byteLength === 0) return
 
       pending.push(chunk)
       pendingBytes += chunk.byteLength
