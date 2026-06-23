@@ -6,10 +6,8 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
-import type { ProgressListener } from './streams/progress.ts'
-import type { ContentSource } from './streams/source.ts'
 import type {
   BucketInfo,
   BucketRetentionPolicy,
@@ -36,7 +34,11 @@ import type { ReplicationConfiguration, ReplicationRule } from './types/replicat
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
-import type { UploadRetryListener } from './upload/retry.ts'
+import {
+  type BucketUploadOptions,
+  rejectSmallResumeFileId,
+  stripResumeOnlyOptions,
+} from './upload/options.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -101,6 +103,26 @@ export interface DeleteAllSkipEvent {
 /** Event yielded by {@link Bucket.deleteAll} as it streams through file versions. */
 export type DeleteAllEvent = DeleteAllDeleteEvent | DeleteAllErrorEvent | DeleteAllSkipEvent
 
+interface BucketDefaultRetentionSnapshot {
+  readonly retention?: BucketRetentionPolicy
+  readonly unreadable: boolean
+}
+
+function bucketDefaultRetentionSnapshot(info: BucketInfo): BucketDefaultRetentionSnapshot {
+  const fileLock = info.fileLockConfiguration
+  if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
+  if (fileLock.value === null) return { unreadable: false }
+  return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function resumeNeedsFreshBucketDefaults(options: BucketUploadOptions): boolean {
+  const resumeRequested = options.resume === true || options.resumeFileId !== undefined
+  return (
+    resumeRequested &&
+    (options.serverSideEncryption === undefined || options.fileRetention === undefined)
+  )
+}
+
 /**
  * Handle to a B2 bucket providing upload, download, listing, and management operations.
  *
@@ -120,18 +142,25 @@ export class Bucket {
   /** Full bucket metadata as returned by the B2 API. */
   readonly info: BucketInfo
   private readonly client: B2Client
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
+   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
    *
    * @internal
    */
-  constructor(client: B2Client, info: BucketInfo) {
+  constructor(
+    client: B2Client,
+    info: BucketInfo,
+    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
+  ) {
     this.client = client
     this.info = info
     this.id = info.bucketId
     this.name = info.bucketName
+    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -141,7 +170,7 @@ export class Bucket {
    * @returns A B2Object handle bound to this bucket and file name.
    */
   file(fileName: string): B2Object {
-    return new B2Object(this.client, this, fileName)
+    return new B2Object(this.client, this, fileName, this.uploadRetryOptions)
   }
 
   /**
@@ -151,70 +180,30 @@ export class Bucket {
    *
    * @returns Metadata for the uploaded file version.
    */
-  async upload(options: {
-    /** Destination file name (path) in the bucket. */
-    fileName: string
-    /** Data source to upload. Use {@link BufferSource}, {@link BlobSource}, or {@link StreamSource}. */
-    source: ContentSource
-    /** MIME type. Defaults to `"b2/x-auto"` (auto-detected by B2). */
-    contentType?: string
-    /** Custom key-value metadata stored with the file. */
-    fileInfo?: Record<string, string>
-    /** Server-side encryption settings. */
-    serverSideEncryption?: EncryptionSetting
-    /** File retention policy (requires file lock on the bucket). */
-    fileRetention?: FileRetentionValue
-    /** Legal hold status for the file. */
-    legalHold?: LegalHoldValue
-    /** Last-modified timestamp in milliseconds since epoch. */
-    lastModifiedMillis?: number
-    /** Part size override for multipart uploads, in bytes. */
-    partSize?: number
-    /** Number of concurrent part uploads for large files. */
-    concurrency?: number
-    /** Callback invoked with upload progress events. */
-    onProgress?: ProgressListener
-    /** Callback invoked before retrying with a fresh upload URL. */
-    onUploadRetry?: UploadRetryListener
-    /**
-     * Retry when an upload response body cannot be read after B2 may have stored
-     * the file. Defaults to false because retrying can create duplicate
-     * versions; set true only when at-least-once upload semantics are acceptable.
-     */
-    retryResponseBodyFailures?: boolean
-    /** Abort signal for cancelling the upload. */
-    signal?: AbortSignal
-    /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled.
-     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
-     */
-    resume?: boolean
-    /**
-     * Resume into a specific large-file ID. Overrides the `resume`
-     * discovery path. The local `partSize` must match the server-side
-     * plan.
-     */
-    resumeFileId?: LargeFileId
-  }): Promise<FileVersion> {
+  async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
+      const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
+      const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: getClientUploadRetryOptions(this.client),
+        retry: this.uploadRetryOptions,
+        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultRetention.retention !== undefined
+          ? { bucketDefaultRetention: bucketDefaultRetention.retention }
+          : {}),
+        ...(bucketDefaultRetention.unreadable ? { bucketDefaultRetentionUnreadable: true } : {}),
       })
     }
-
-    // Strip resume / resumeFileId from the small-file path: the
-    // signature there doesn't accept them, and they're meaningless for
-    // single-request uploads.
-    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
+    rejectSmallResumeFileId(options, 'Bucket.upload')
+    const smallOptions = stripResumeOnlyOptions(options)
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.uploadRetryOptions,
     })
   }
 
@@ -458,6 +447,7 @@ export class Bucket {
           pageSize: options?.pageSize ?? 100,
           ...(cursor !== undefined ? { startFileId: cursor } : {}),
           ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
         })
         return { page: resp, nextCursor: resp.nextFileId ?? undefined }
       },
@@ -490,6 +480,7 @@ export class Bucket {
             maxPartCount: options?.pageSize ?? DEFAULT_PAGE_SIZE,
             ...(cursor !== undefined ? { startPartNumber: cursor } : {}),
           },
+          options?.signal !== undefined ? { signal: options.signal } : undefined,
         )
         return { page: resp, nextCursor: resp.nextPartNumber ?? undefined }
       },
@@ -613,13 +604,15 @@ export class Bucket {
   async listUnfinishedLargeFiles(options?: {
     /** Restrict results to files whose name starts with this prefix. */
     namePrefix?: string
-    /** Start listing after this file ID (for pagination). */
+    /** Start listing at this file ID, inclusive (for pagination). */
     startFileId?: LargeFileId
     /**
      * Maximum number of files to return per request (1-100). Forwarded
      * to the raw API's `maxFileCount` parameter.
      */
     pageSize?: number
+    /** Abort signal for cancelling the list request. */
+    signal?: AbortSignal
   }) {
     return this.client.raw.listUnfinishedLargeFiles(
       this.client.accountInfo.getApiUrl(),
@@ -630,6 +623,7 @@ export class Bucket {
         ...(options?.startFileId !== undefined ? { startFileId: options.startFileId } : {}),
         ...(options?.pageSize !== undefined ? { maxFileCount: options.pageSize } : {}),
       },
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
   }
 

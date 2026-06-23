@@ -57,6 +57,68 @@ describe('createWriteStream branch coverage', () => {
     expect(result.contentLength).toBe(data.byteLength)
   })
 
+  it('applies backpressure instead of queueing stalled part buffers', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadStarts = 0
+    const uploadStartWaiters: Array<() => void> = []
+    const uploadReleases: Array<() => void> = []
+    const waitForUploadStart = async (count: number): Promise<void> => {
+      if (uploadStarts >= count) return
+      await new Promise<void>((resolve) => {
+        uploadStartWaiters.push(() => {
+          if (uploadStarts >= count) resolve()
+        })
+      })
+    }
+    const stalledTransport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part')) {
+          uploadStarts++
+          for (const waiter of uploadStartWaiters.splice(0)) waiter()
+          await new Promise<void>((resolve) => uploadReleases.push(resolve))
+        }
+        return inner.send(req)
+      },
+    }
+    const stallClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: stalledTransport,
+      retry: { maxRetries: 0 },
+    })
+    await stallClient.authorize()
+    const stallBucket = await stallClient.createBucket({
+      bucketName: 'stream-backpressure',
+      bucketType: BucketType.AllPrivate,
+    })
+    const { writable, done } = stallBucket.file('backpressure.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+
+    await writer.write(deterministicBytes(100_000))
+    await waitForUploadStart(1)
+
+    let secondWriteSettled = false
+    const secondWrite = writer.write(deterministicBytes(100_000)).then(() => {
+      secondWriteSettled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(secondWriteSettled).toBe(false)
+
+    uploadReleases.shift()?.()
+    await secondWrite
+    await waitForUploadStart(2)
+    uploadReleases.shift()?.()
+    await writer.close()
+    const result = await done
+
+    expect(result.fileName).toBe('backpressure.bin')
+    expect(result.contentLength).toBe(200_000)
+  })
+
   it('wraps a non-Error throw from uploadPart so done rejects with an Error', async () => {
     // Custom transport rejects b2_upload_part with a plain string (not an
     // Error instance). The engine's `errored` latch must wrap it via
@@ -148,4 +210,293 @@ describe('createWriteStream branch coverage', () => {
     expect(rejection).toBeInstanceOf(Error)
     expect(rejection.message).toContain('user-cancelled-as-string')
   })
+
+  it('cancels a multipart file when aborted while startLargeFile is in flight', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let startSeen!: () => void
+    let releaseStart!: () => void
+    const startSeenPromise = new Promise<void>((resolve) => {
+      startSeen = resolve
+    })
+    const releaseStartPromise = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let cancelCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          startSeen()
+          await releaseStartPromise
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelCalls++
+        }
+        return inner.send(req)
+      },
+    }
+    const raceClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await raceClient.authorize()
+    const raceBucket = await raceClient.createBucket({
+      bucketName: 'abort-start-race',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = raceBucket.file('abort-start-race.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await startSeenPromise
+
+    const abortPromise = writer.abort(new Error('abort while starting'))
+    const abortResult = await Promise.race([
+      abortPromise.then(() => 'aborted' as const),
+      delay(1_000).then(() => 'timed-out' as const),
+    ])
+    expect(abortResult).toBe('aborted')
+    releaseStart()
+    await abortPromise
+    await expect(done).rejects.toThrow('abort while starting')
+
+    for (let attempt = 0; attempt < 100 && cancelCalls === 0; attempt++) {
+      await delay(20)
+    }
+    expect(cancelCalls).toBe(1)
+  })
+
+  it('passes the abort signal to stalled startLargeFile requests', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let startSeen!: () => void
+    const startSeenPromise = new Promise<void>((resolve) => {
+      startSeen = resolve
+    })
+    let startSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          startSignal = req.signal
+          startSeen()
+          return rejectOnAbort(req.signal, 'stream start aborted')
+        }
+        return inner.send(req)
+      },
+    }
+    const startClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await startClient.authorize()
+    const startBucket = await startClient.createBucket({
+      bucketName: 'stream-start-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = startBucket.file('stream-start-signal.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await startSeenPromise
+
+    await writer.abort(new Error('stream start aborted'))
+    expect(startSignal?.aborted).toBe(true)
+    await expect(done).rejects.toThrow('stream start aborted')
+  })
+
+  it('passes abort signal to stalled finish and uses independent cleanup signal', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    const controller = new AbortController()
+    let finishSeen!: () => void
+    const finishSeenPromise = new Promise<void>((resolve) => {
+      finishSeen = resolve
+    })
+    let finishSignal: AbortSignal | undefined
+    let cancelSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_finish_large_file')) {
+          finishSignal = req.signal
+          finishSeen()
+          return rejectOnAbort(req.signal, 'stream finish aborted')
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelSignal = req.signal
+          return inner.send(req)
+        }
+        return inner.send(req)
+      },
+    }
+    const finishClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await finishClient.authorize()
+    const finishBucket = await finishClient.createBucket({
+      bucketName: 'stream-finish-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = finishBucket.file('stream-finish-signal.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await writer.write(deterministicBytes(100_000))
+    const closePromise = writer.close()
+    await finishSeenPromise
+    controller.abort(new Error('stream finish aborted'))
+
+    await expect(closePromise).rejects.toThrow('stream finish aborted')
+    await expect(done).rejects.toThrow('stream finish aborted')
+    expect(finishSignal?.aborted).toBe(true)
+    expect(cancelSignal?.aborted).toBe(false)
+  })
+
+  it('aborts an in-flight write-stream part request when the writer aborts', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadSeen!: () => void
+    const uploadSeenPromise = new Promise<void>((resolve) => {
+      uploadSeen = resolve
+    })
+    let observedSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?')) {
+          observedSignal = req.signal
+          uploadSeen()
+          return new Promise<HttpResponse>((_resolve, reject) => {
+            const rejectWithAbort = () => reject(req.signal?.reason ?? new Error('part aborted'))
+            if (req.signal?.aborted === true) {
+              rejectWithAbort()
+            } else {
+              req.signal?.addEventListener('abort', rejectWithAbort, { once: true })
+            }
+          })
+        }
+        return inner.send(req)
+      },
+    }
+    const abortClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await abortClient.authorize()
+    const abortBucket = await abortClient.createBucket({
+      bucketName: 'abort-inflight',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = abortBucket.file('abort-inflight.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await uploadSeenPromise
+
+    await writer.abort(new Error('stop in-flight part'))
+    expect(observedSignal?.aborted).toBe(true)
+    await expect(done).rejects.toThrow('stop in-flight part')
+  })
+
+  it('waits for in-flight write-stream parts before cancelling on abort', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadSeen!: () => void
+    const uploadSeenPromise = new Promise<void>((resolve) => {
+      uploadSeen = resolve
+    })
+    let releasePart!: () => void
+    const releasePartPromise = new Promise<void>((resolve) => {
+      releasePart = resolve
+    })
+    const events: string[] = []
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?')) {
+          uploadSeen()
+          await new Promise<void>((resolve) => {
+            const onAbort = () => {
+              events.push('part-aborted')
+              resolve()
+            }
+            if (req.signal?.aborted === true) {
+              onAbort()
+            } else {
+              req.signal?.addEventListener('abort', onAbort, { once: true })
+            }
+          })
+          await releasePartPromise
+          events.push('part-settled')
+          throw req.signal?.reason ?? new Error('part aborted')
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          events.push('cancel')
+        }
+        return inner.send(req)
+      },
+    }
+    const abortClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await abortClient.authorize()
+    const abortBucket = await abortClient.createBucket({
+      bucketName: 'abort-drain',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = abortBucket.file('abort-drain.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await uploadSeenPromise
+
+    const abortPromise = writer.abort(new Error('drain before cancel'))
+    await delay(20)
+    expect(events).toEqual(['part-aborted'])
+    releasePart()
+    await abortPromise
+
+    await expect(done).rejects.toThrow('drain before cancel')
+    expect(events).toEqual(['part-aborted', 'part-settled', 'cancel'])
+  })
 })
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function rejectOnAbort<T>(signal: AbortSignal | undefined, message: string): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    const rejectWithAbort = () => reject(signal?.reason ?? new Error(message))
+    if (signal?.aborted === true) {
+      rejectWithAbort()
+      return
+    }
+    signal?.addEventListener('abort', rejectWithAbort, { once: true })
+  })
+}

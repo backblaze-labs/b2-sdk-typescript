@@ -14,7 +14,12 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
-import { EncryptionMode } from '../types/encryption.ts'
+import {
+  EncryptionAlgorithm,
+  EncryptionMode,
+  type EncryptionSetting,
+  type PublicEncryptionSetting,
+} from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
@@ -23,7 +28,7 @@ import {
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
-import type { RetentionMode } from '../types/lock.ts'
+import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
@@ -117,6 +122,20 @@ function parseFileInfoHeaders(headers: Record<string, string>): Record<string, s
   return info
 }
 
+/**
+ * Compares B2 file names with deterministic JS string order, not locale collation.
+ *
+ * @param a - First file name.
+ * @param b - Second file name.
+ *
+ * @returns `-1` when `a` sorts first, `1` when `b` sorts first, otherwise `0`.
+ */
+function compareB2FileNames(a: string, b: string): number {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   validateBucketInfo,
@@ -156,6 +175,10 @@ interface LargeFileInProgress {
   readonly fileName: string
   readonly contentType: string
   readonly fileInfo: Record<string, string>
+  readonly fileRetention: FileRetentionValue | null
+  readonly legalHold: LegalHoldValue | null
+  readonly serverSideEncryption: EncryptionSetting
+  readonly uploadTimestamp: number
   readonly parts: Map<number, { data: Uint8Array; sha1: string }>
 }
 
@@ -168,6 +191,49 @@ interface StoredKey {
   readonly bucketId: string | null
   readonly namePrefix: string | null
   readonly expirationTimestamp: number | null
+}
+
+function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
+  if (encryption.mode === EncryptionMode.SseC) {
+    return { mode: encryption.mode, algorithm: encryption.algorithm }
+  }
+  if (encryption.mode === EncryptionMode.None) {
+    return { mode: null, algorithm: null }
+  }
+  return encryption
+}
+
+function uploadServerSideEncryption(
+  headers: Record<string, string>,
+  fallback: EncryptionSetting,
+): EncryptionSetting {
+  const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
+  if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
+    return {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: headers['x-bz-server-side-encryption-customer-key'] ?? '',
+      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] ?? '',
+    }
+  }
+
+  if (headers['x-bz-server-side-encryption'] === EncryptionAlgorithm.Aes256) {
+    return { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 }
+  }
+
+  return fallback
+}
+
+function defaultFileRetention(
+  policy: BucketInfo['defaultRetention'],
+  uploadTimestamp: number,
+): FileRetentionValue | null {
+  if (policy.mode === BucketRetentionMode.None || policy.period === null) return null
+  const days = policy.period.unit === 'days' ? policy.period.duration : policy.period.duration * 365
+  return {
+    mode: policy.mode as RetentionMode,
+    retainUntilTimestamp: uploadTimestamp + days * 24 * 60 * 60 * 1000,
+  }
 }
 
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
@@ -806,6 +872,9 @@ export class B2Simulator {
             fileName: string
             contentType: string
             fileInfo?: Record<string, string>
+            fileRetention?: FileRetentionValue
+            legalHold?: LegalHoldValue
+            serverSideEncryption?: EncryptionSetting
           },
         )
       case 'b2_get_upload_part_url':
@@ -1065,6 +1134,10 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
+      serverSideEncryption: uploadServerSideEncryption(
+        headers,
+        bucket.info.defaultServerSideEncryption,
+      ),
     })
     const stored: StoredFile = { fileVersion, data: storedData }
     const existing = bucket.files.get(fileName)
@@ -1150,7 +1223,7 @@ export class B2Simulator {
         partNumber,
         contentLength: partData.byteLength,
         contentSha1: sha1,
-        serverSideEncryption: { mode: EncryptionMode.None },
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: Date.now(),
       },
     }
@@ -1456,7 +1529,8 @@ export class B2Simulator {
   }
 
   private getUploadUrl(req: { bucketId: string }): SimulatorJsonResponse {
-    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const bucket = this.buckets.get(req.bucketId)
+    if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     return {
       status: 200,
       body: {
@@ -1492,7 +1566,7 @@ export class B2Simulator {
       .map(([_, versions]) => versions[versions.length - 1])
       .filter((v): v is StoredFile => v !== undefined)
       .map((v) => v.fileVersion)
-      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+      .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
 
     if (req.startFileName) {
       const start = req.startFileName
@@ -1523,7 +1597,7 @@ export class B2Simulator {
       .filter(([name]) => name.startsWith(prefix))
       .flatMap(([_, versions]) => versions.map((v) => v.fileVersion))
       .sort((a, b) => {
-        const nameCmp = a.fileName.localeCompare(b.fileName)
+        const nameCmp = compareB2FileNames(a.fileName, b.fileName)
         if (nameCmp !== 0) return nameCmp
         return b.uploadTimestamp - a.uploadTimestamp
       })
@@ -1750,8 +1824,12 @@ export class B2Simulator {
     fileName: string
     contentType: string
     fileInfo?: Record<string, string>
+    fileRetention?: FileRetentionValue
+    legalHold?: LegalHoldValue
+    serverSideEncryption?: EncryptionSetting
   }): SimulatorJsonResponse {
-    if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const bucket = this.buckets.get(req.bucketId)
+    if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
     const nameError = validateFileName(req.fileName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
@@ -1761,12 +1839,18 @@ export class B2Simulator {
     }
 
     const fid = this.genId('4_z')
+    const uploadTimestamp = this.monotonicTimestamp()
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
       fileName: req.fileName,
       contentType: req.contentType,
       fileInfo: req.fileInfo ?? {},
+      fileRetention:
+        req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
+      legalHold: req.legalHold ?? null,
+      serverSideEncryption: req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+      uploadTimestamp,
       parts: new Map(),
     }
     this.largeFiles.set(fid, large)
@@ -1780,6 +1864,20 @@ export class B2Simulator {
         bucketId: req.bucketId,
         contentType: req.contentType,
         fileInfo: large.fileInfo,
+        action: FileAction.Start,
+        contentLength: 0,
+        contentSha1: 'none',
+        contentMd5: null,
+        fileRetention: {
+          isClientAuthorizedToRead: true,
+          value: large.fileRetention,
+        },
+        legalHold: {
+          isClientAuthorizedToRead: true,
+          value: large.legalHold,
+        },
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
+        uploadTimestamp: large.uploadTimestamp,
       },
     }
   }
@@ -1889,6 +1987,9 @@ export class B2Simulator {
       contentSha1: 'none',
       fileInfo: large.fileInfo,
       action: FileAction.Upload,
+      fileRetention: large.fileRetention,
+      legalHold: large.legalHold,
+      serverSideEncryption: large.serverSideEncryption,
     })
     const stored: StoredFile = { fileVersion, data: combined }
     const existing = bucket.files.get(large.fileName)
@@ -1929,15 +2030,15 @@ export class B2Simulator {
     const prefix = req.namePrefix ?? ''
     const max = req.maxFileCount ?? 100
 
-    // Real B2 orders unfinished large files by fileName ascending. Sort
-    // here so pagination (via startFileId) is deterministic.
+    // Keep listing order deterministic; resume sorts scanned exact-name
+    // matches by uploadTimestamp before selecting one.
     const candidates = [...this.largeFiles.values()]
       .filter((f) => f.bucketId === req.bucketId)
       .filter((f) => f.fileName.startsWith(prefix))
-      .sort((a, b) => a.fileName.localeCompare(b.fileName))
+      .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
 
-    // `startFileId` is the cursor returned from a prior page. Skip past
-    // (and including) the entry with that fileId.
+    // `startFileId` is the inclusive cursor returned from a prior page.
+    // When present in the current listing, that entry is returned first.
     let startIndex = 0
     if (req.startFileId !== undefined) {
       const found = candidates.findIndex((f) => f.fileId === req.startFileId)
@@ -1951,7 +2052,21 @@ export class B2Simulator {
       accountId: this.accountId,
       bucketId: f.bucketId,
       contentType: f.contentType,
+      action: FileAction.Start,
+      contentLength: 0,
+      contentSha1: 'none',
+      contentMd5: null,
       fileInfo: f.fileInfo,
+      fileRetention: {
+        isClientAuthorizedToRead: true,
+        value: f.fileRetention,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: true,
+        value: f.legalHold,
+      },
+      serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
+      uploadTimestamp: f.uploadTimestamp,
     }))
     const hasMore = startIndex + max < candidates.length
     const nextFileId = hasMore ? (candidates[startIndex + max]?.fileId ?? null) : null
@@ -2274,6 +2389,9 @@ export class B2Simulator {
     readonly contentSha1: string
     readonly action: FileAction
     readonly fileInfo?: Record<string, string>
+    readonly fileRetention?: FileRetentionValue | null
+    readonly legalHold?: LegalHoldValue | null
+    readonly serverSideEncryption?: EncryptionSetting
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -2286,10 +2404,12 @@ export class B2Simulator {
       fileId: fileIdOf(this.genId('4_z')),
       fileInfo: params.fileInfo ?? {},
       fileName: params.fileName,
-      fileRetention: { isClientAuthorizedToRead: true, value: null },
-      legalHold: { isClientAuthorizedToRead: true, value: null },
+      fileRetention: { isClientAuthorizedToRead: true, value: params.fileRetention ?? null },
+      legalHold: { isClientAuthorizedToRead: true, value: params.legalHold ?? null },
       replicationStatus: null,
-      serverSideEncryption: { mode: EncryptionMode.None },
+      serverSideEncryption: publicServerSideEncryption(
+        params.serverSideEncryption ?? { mode: EncryptionMode.None },
+      ),
       uploadTimestamp: this.monotonicTimestamp(),
     }
   }

@@ -5,6 +5,7 @@ import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
@@ -165,6 +166,55 @@ describe('B2Simulator input validation: maxFileCount caps', () => {
   it('accepts pageSize equal to the documented cap', async () => {
     const page = await bucket.listFileNames({ pageSize: 10_000 })
     expect(page.files).toEqual([])
+  })
+})
+
+describe('B2Simulator listing order', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'listing-order',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  it('uses deterministic JS string order instead of locale collation', async () => {
+    await bucket.upload({
+      fileName: 'a-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await bucket.upload({
+      fileName: 'Z-small.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+
+    const names = await bucket.listFileNames()
+    expect(names.files.map((file) => file.fileName)).toEqual(['Z-small.txt', 'a-small.txt'])
+
+    const versions = await bucket.listFileVersions()
+    expect(versions.files.map((file) => file.fileName)).toEqual(['Z-small.txt', 'a-small.txt'])
+
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'a-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'Z-large.bin',
+      contentType: 'application/octet-stream',
+    })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    expect(unfinished.files.map((file) => file.fileName)).toEqual(['Z-large.bin', 'a-large.bin'])
   })
 })
 
@@ -440,7 +490,12 @@ describe('B2Simulator upload SHA-1 verification', () => {
   })
 
   /** Upload `data` straight through the raw client with an explicit sha1 header. */
-  async function rawUpload(fileName: string, data: Uint8Array, contentSha1: string) {
+  async function rawUpload(
+    fileName: string,
+    data: Uint8Array,
+    contentSha1: string,
+    serverSideEncryption?: EncryptionSetting,
+  ) {
     const apiUrl = client.accountInfo.getApiUrl()
     const authToken = client.accountInfo.getAuthToken()
     const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
@@ -454,6 +509,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
         contentType: 'text/plain',
         contentLength: data.byteLength,
         contentSha1,
+        ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
       },
       data as BodyInit,
     )
@@ -471,6 +527,73 @@ describe('B2Simulator upload SHA-1 verification', () => {
     const hash = await sha1Hex(data)
     const fv = await rawUpload('match.txt', data, hash)
     expect(fv.contentSha1).toBe(hash)
+  })
+
+  it('returns B2 null no-encryption shapes from public upload responses', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const small = await rawUpload(
+      'no-encryption-small.txt',
+      new TextEncoder().encode('plain'),
+      await sha1Hex(new TextEncoder().encode('plain')),
+    )
+    expect(small.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const start = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'no-encryption-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    expect(start.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'no-encryption-large.bin',
+    })
+    expect(unfinished.files[0]?.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: start.fileId,
+    })
+    const part = new Uint8Array(1024).fill(1)
+    const uploadedPart = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: part.byteLength,
+        contentSha1: await sha1Hex(part),
+      },
+      part as BodyInit,
+    )
+    expect(uploadedPart.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: start.fileId,
+      partSha1Array: [uploadedPart.contentSha1],
+    })
+    expect(finished.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+
+    const listed = await bucket.listFileNames({ prefix: 'no-encryption' })
+    expect(listed.files.map((file) => file.serverSideEncryption)).toEqual([
+      { mode: null, algorithm: null },
+      { mode: null, algorithm: null },
+    ])
+  })
+
+  it('returns explicit encryption settings from single-file upload responses', async () => {
+    const sseB2Data = new TextEncoder().encode('managed key')
+    const sseB2 = await rawUpload('sse-b2-small.txt', sseB2Data, await sha1Hex(sseB2Data), SSE_B2)
+    expect(sseB2.serverSideEncryption).toEqual(SSE_B2)
+
+    const sseCData = new TextEncoder().encode('customer key')
+    const sseC = await rawUpload(
+      'sse-c-small.txt',
+      sseCData,
+      await sha1Hex(sseCData),
+      sseCustomer('customer-key', 'customer-key-md5'),
+    )
+    expect(sseC.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
   })
 
   it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {

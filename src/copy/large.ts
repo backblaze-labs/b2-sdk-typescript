@@ -157,7 +157,12 @@ export async function copyLargeFile(
       partSha1Array: partSha1s,
     })
   } catch (err) {
-    await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+    await cancelLargeFileBestEffort(
+      raw,
+      accountInfo,
+      largeFileId,
+      options.signal === undefined ? undefined : { signal: options.signal },
+    )
     throw err
   }
 }

@@ -9,18 +9,43 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
-import type { ContentSource } from './streams/source.ts'
+import type { BucketRetentionPolicy } from './types/bucket.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
-import type { FileId, LargeFileId } from './types/ids.ts'
+import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
 import { uploadLargeFile } from './upload/large.ts'
+import {
+  type B2ObjectUploadOptions,
+  rejectSmallResumeFileId,
+  stripResumeOnlyOptions,
+} from './upload/options.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
+
+interface BucketDefaultRetentionSnapshot {
+  readonly retention?: BucketRetentionPolicy
+  readonly unreadable: boolean
+}
+
+function bucketDefaultRetentionSnapshot(info: Bucket['info']): BucketDefaultRetentionSnapshot {
+  const fileLock = info.fileLockConfiguration
+  if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
+  if (fileLock.value === null) return { unreadable: false }
+  return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function resumeNeedsFreshBucketDefaults(options: B2ObjectUploadOptions): boolean {
+  const resumeRequested = options.resume === true || options.resumeFileId !== undefined
+  return (
+    resumeRequested &&
+    (options.serverSideEncryption === undefined || options.fileRetention === undefined)
+  )
+}
 
 /** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
 export interface DownloadCallOptions {
@@ -87,18 +112,26 @@ export class B2Object {
   readonly fileName: string
   private readonly client: B2Client
   private readonly bucket: Bucket
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param bucket - The parent Bucket this object belongs to.
    * @param fileName - The file path within the bucket.
+   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
    *
    * @internal
    */
-  constructor(client: B2Client, bucket: Bucket, fileName: string) {
+  constructor(
+    client: B2Client,
+    bucket: Bucket,
+    fileName: string,
+    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
+  ) {
     this.client = client
     this.bucket = bucket
     this.fileName = fileName
+    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -107,68 +140,42 @@ export class B2Object {
    *
    * @returns Metadata for the uploaded file version.
    */
-  async upload(options: {
-    /** Data source to upload. */
-    source: ContentSource
-    /** MIME type. Defaults to auto-detection by B2. */
-    contentType?: string
-    /** Custom key-value metadata stored with the file. */
-    fileInfo?: Record<string, string>
-    /** Server-side encryption settings. */
-    serverSideEncryption?: EncryptionSetting
-    /** File retention policy (requires file lock). */
-    fileRetention?: FileRetentionValue
-    /** Legal hold status. */
-    legalHold?: LegalHoldValue
-    /** Last-modified timestamp in milliseconds since epoch. */
-    lastModifiedMillis?: number
-    /** Part size override for multipart uploads, in bytes. */
-    partSize?: number
-    /** Number of concurrent part uploads for large files. */
-    concurrency?: number
-    /** Callback invoked with upload progress events. */
-    onProgress?: ProgressListener
-    /** Callback invoked before retrying with a fresh upload URL. */
-    onUploadRetry?: UploadRetryListener
-    /**
-     * Retry when an upload response body cannot be read after B2 may have stored
-     * the file. Defaults to false because retrying can create duplicate
-     * versions; set true only when at-least-once upload semantics are acceptable.
-     */
-    retryResponseBodyFailures?: boolean
-    /** Abort signal for cancelling the upload. */
-    signal?: AbortSignal
-    /**
-     * Deprecated compatibility flag. Automatic same-name resume is disabled.
-     * Without `resumeFileId`, this flag is ignored and a fresh upload is started.
-     */
-    resume?: boolean
-    /**
-     * Resume into a specific large-file ID. Matching parts are skipped after
-     * their local SHA-1 is recomputed and matches the server-reported part SHA-1.
-     */
-    resumeFileId?: LargeFileId
-  }): Promise<FileVersion> {
+  async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
+      const bucketInfo = resumeNeedsFreshBucketDefaults(options)
+        ? await this.fetchFreshBucketInfo()
+        : this.bucket.info
+      const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
-        retry: getClientUploadRetryOptions(this.client),
+        retry: this.uploadRetryOptions,
+        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultRetention.retention !== undefined
+          ? { bucketDefaultRetention: bucketDefaultRetention.retention }
+          : {}),
+        ...(bucketDefaultRetention.unreadable ? { bucketDefaultRetentionUnreadable: true } : {}),
       })
     }
-
-    // Small-file path doesn't accept resume options.
-    const { resume: _resume, resumeFileId: _resumeFileId, ...smallOptions } = options
+    rejectSmallResumeFileId(options, 'B2Object.upload')
+    const smallOptions = stripResumeOnlyOptions(options)
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.uploadRetryOptions,
     })
+  }
+
+  private async fetchFreshBucketInfo(): Promise<Bucket['info']> {
+    const fresh = await this.client.listBuckets({ bucketId: this.bucket.id })
+    const found = fresh[0]
+    if (!found) throw new Error(`Bucket ${this.bucket.id} not found`)
+    return found.info
   }
 
   /**
@@ -295,8 +302,8 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the part. Defaults to false because retrying can create duplicate bytes;
-     * set true only when at-least-once upload semantics are acceptable.
+     * the part. Upload POST network errors still retry when this is false because
+     * re-posting the same part number is idempotent. Defaults to true.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */
@@ -306,7 +313,7 @@ export class B2Object {
       ...(options ?? {}),
       bucketId: this.bucket.id,
       fileName: this.fileName,
-      retry: getClientUploadRetryOptions(this.client),
+      retry: this.uploadRetryOptions,
     })
   }
 

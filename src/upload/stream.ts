@@ -9,9 +9,14 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { cancelLargeFileBestEffort } from './cancel.ts'
+import { createUploadAbortScope } from './abort-scope.ts'
+import { cancelLargeFileBestEffort, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
-import { type UploadRetryListener, uploadPartWithFreshUrl } from './retry.ts'
+import {
+  resolveRetryResponseBodyFailures,
+  type UploadRetryListener,
+  uploadPartWithFreshUrl,
+} from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
 export interface CreateWriteStreamOptions {
@@ -43,7 +48,8 @@ export interface CreateWriteStreamOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Defaults to false because retrying can create duplicate bytes.
+   * the part. Upload POST network errors still retry when this is false because
+   * re-posting the same part number is idempotent. Defaults to true.
    */
   readonly retryResponseBodyFailures?: boolean
 }
@@ -88,9 +94,11 @@ export function createWriteStream(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const tracker = new ProgressTracker(options.onProgress, null, null)
   const sem = new Semaphore(concurrency)
+  const abortScope = createUploadAbortScope(options.signal)
 
   let largeFileId: LargeFileId | null = null
   let startPromise: Promise<LargeFileId> | null = null
+  let cancelAfterStartScheduled = false
   let nextPartNumber = 1
   let pendingBytes = 0
   const pending: Uint8Array[] = []
@@ -123,27 +131,40 @@ export function createWriteStream(
     if (largeFileId !== null) return Promise.resolve(largeFileId)
     if (startPromise !== null) return startPromise
     startPromise = (async () => {
-      const resp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        bucketId: options.bucketId,
-        fileName: options.fileName,
-        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-      })
+      const resp = await raw.startLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+          fileInfo: options.fileInfo ?? {},
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+        },
+        { signal: abortScope.signal },
+      )
       largeFileId = resp.fileId
+      if (abortScope.signal.aborted) {
+        scheduleCancelLargeFileAfterStart(Promise.resolve(largeFileId))
+      }
       return largeFileId
     })()
     return startPromise
   }
 
   async function shipPart(data: Uint8Array, partNumber: number): Promise<void> {
+    if (errored !== null) throw errored
+    abortScope.signal.throwIfAborted()
     const fileId = await ensureStarted()
+    if (errored !== null) throw errored
+    abortScope.signal.throwIfAborted()
 
     const sha1 = new IncrementalSha1()
     await sha1.update(data)
     const sha1Hex = await sha1.digest()
+    abortScope.signal.throwIfAborted()
 
     const result = await uploadPartWithFreshUrl(raw, accountInfo, fileId, {
       fileName: options.fileName,
@@ -152,9 +173,12 @@ export function createWriteStream(
       contentLength: data.byteLength,
       contentSha1: sha1Hex,
       retry: options.retry,
-      signal: options.signal,
+      signal: abortScope.signal,
       onUploadRetry: options.onUploadRetry,
-      retryResponseBodyFailures: options.retryResponseBodyFailures,
+      retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+        options.retryResponseBodyFailures,
+        'multipart',
+      ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
         : {}),
@@ -164,12 +188,87 @@ export function createWriteStream(
     tracker.completePart()
   }
 
-  function dispatchPart(): void {
+  function markErrored(err: unknown): Error {
+    const error = toError(err)
+    errored = error
+    abortScope.abort(error)
+    return error
+  }
+
+  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
+    if (cancelAfterStartScheduled) return
+    cancelAfterStartScheduled = true
+    void started
+      .then((fileId) =>
+        cancelLargeFileBestEffort(
+          raw,
+          accountInfo,
+          fileId,
+          options.signal === undefined ? undefined : { signal: options.signal },
+        ),
+      )
+      .catch(() => {
+        // If start failed, no file ID is available to cancel.
+      })
+  }
+
+  function startPartWithAcquiredSlot(data: Uint8Array, partNumber: number): void {
+    const task = (async () => {
+      try {
+        await shipPart(data, partNumber)
+      } catch (err) {
+        markErrored(err)
+        throw err
+      } finally {
+        sem.release()
+      }
+    })()
+    inflight.push(task)
+    // Swallow rejection here; we check `errored` later.
+    task.catch(() => {})
+  }
+
+  async function acquirePartSlot(): Promise<void> {
+    await sem.acquire()
+    if (errored !== null) {
+      sem.release()
+      throw errored
+    }
+    try {
+      abortScope.signal.throwIfAborted()
+    } catch (err) {
+      sem.release()
+      throw err
+    }
+  }
+
+  async function waitForInflightPartsToSettle(
+    timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
+  ): Promise<void> {
+    if (inflight.length === 0) return
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        Promise.allSettled(inflight).then(() => undefined),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+    }
+  }
+
+  async function dispatchPart(): Promise<void> {
     if (pending.length === 0) return
+    await acquirePartSlot()
     let data: Uint8Array
     if (pending.length === 1) {
       const head = pending[0]
-      if (!head) return
+      if (!head) {
+        sem.release()
+        return
+      }
       data = head
     } else {
       const total = pending.reduce((sum, chunk) => sum + chunk.byteLength, 0)
@@ -183,63 +282,49 @@ export function createWriteStream(
     pending.length = 0
     pendingBytes = 0
     const partNumber = nextPartNumber++
-    const task = (async () => {
-      await sem.acquire()
-      try {
-        await shipPart(data, partNumber)
-      } catch (err) {
-        errored = toError(err)
-        throw err
-      } finally {
-        sem.release()
-      }
-    })()
-    inflight.push(task)
-    // Swallow rejection here; we check `errored` later.
-    task.catch(() => {})
+    startPartWithAcquiredSlot(data, partNumber)
   }
 
   const writable = new WritableStream<Uint8Array>({
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
-      options.signal?.throwIfAborted()
+      abortScope.signal.throwIfAborted()
 
       pending.push(chunk)
       pendingBytes += chunk.byteLength
       while (pendingBytes >= partSize) {
+        await acquirePartSlot()
+        if (errored) {
+          sem.release()
+          throw errored
+        }
         // Pull exactly partSize bytes off the front
         const carved = carveExact(pending, partSize)
         const partNumber = nextPartNumber++
         pendingBytes -= partSize
-        const task = (async () => {
-          await sem.acquire()
-          try {
-            await shipPart(carved, partNumber)
-          } catch (err) {
-            errored = toError(err)
-            throw err
-          } finally {
-            sem.release()
-          }
-        })()
-        inflight.push(task)
-        task.catch(() => {})
+        startPartWithAcquiredSlot(carved, partNumber)
       }
     },
 
     async close(): Promise<void> {
       try {
         if (errored) throw errored
-        options.signal?.throwIfAborted()
+        abortScope.signal.throwIfAborted()
 
         // Ship any remaining bytes as the last part. If the total fit in one
         // single buffered batch (no parts shipped yet), we have to use the
         // multipart path anyway since we already called startLargeFile lazily.
         if (pendingBytes > 0) {
-          dispatchPart()
+          await dispatchPart()
         }
 
-        await Promise.all(inflight)
+        const settled = await Promise.allSettled(inflight)
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        )
+        if (rejected !== undefined && errored === null) {
+          markErrored(rejected.reason)
+        }
         if (errored) throw errored
 
         if (largeFileId === null) {
@@ -253,27 +338,58 @@ export function createWriteStream(
           accountInfo.getApiUrl(),
           accountInfo.getAuthToken(),
           { fileId: largeFileId, partSha1Array: partSha1s },
+          { signal: abortScope.signal },
         )
         resolveDone(result)
+        abortScope.dispose()
       } catch (err) {
+        markErrored(err)
+        const settled = await Promise.allSettled(inflight)
+        const rejected = settled.find(
+          (result): result is PromiseRejectedResult => result.status === 'rejected',
+        )
+        const observedError =
+          errored ?? (rejected !== undefined ? toError(rejected.reason) : toError(err))
         // Capture into a const so the cancel closure sees a non-null
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
         if (fileIdToCancel !== null) {
-          await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
+          await cancelLargeFileBestEffort(
+            raw,
+            accountInfo,
+            fileIdToCancel,
+            options.signal === undefined ? undefined : { signal: options.signal },
+          )
         }
-        rejectDone(err)
-        throw err
+        rejectDone(observedError)
+        abortScope.dispose()
+        throw observedError
       }
     },
 
     async abort(reason: unknown): Promise<void> {
+      const abortError = markErrored(reason)
+      pending.length = 0
+      pendingBytes = 0
       const fileIdToCancel = largeFileId
-      if (fileIdToCancel !== null) {
-        await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
+      if (fileIdToCancel === null && startPromise !== null) {
+        // Do not await an in-flight start request here. A stalled
+        // b2_start_large_file must not make writer.abort() hang; if it later
+        // returns a file ID, cancel it best-effort in the background.
+        scheduleCancelLargeFileAfterStart(startPromise)
       }
-      rejectDone(toError(reason))
+      if (fileIdToCancel !== null) {
+        await waitForInflightPartsToSettle()
+        await cancelLargeFileBestEffort(
+          raw,
+          accountInfo,
+          fileIdToCancel,
+          options.signal === undefined ? undefined : { signal: options.signal },
+        )
+      }
+      rejectDone(abortError)
+      abortScope.dispose()
     },
   })
 

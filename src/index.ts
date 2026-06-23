@@ -27,7 +27,6 @@ export {
 export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
 export type { DownloadResult, HeadResult } from './download/single.ts'
 export type { B2ErrorOptions } from './errors/index.ts'
-
 export {
   AccessDeniedError,
   B2Error,
@@ -61,6 +60,7 @@ export {
   OutOfRangeError,
   RangeNotSatisfiableError,
   RequestTimeoutError,
+  ResumeFileIdMismatchError,
   ServiceUnavailableError,
   TooManyBucketsError,
   TooManyFilesError,
@@ -80,6 +80,7 @@ export {
   type DownloadFileOptions,
   RawClient,
   type RawClientOptions,
+  type RawRequestOptions,
   type SseCDownloadKey,
 } from './raw/index.ts'
 export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
@@ -120,6 +121,16 @@ export {
 export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 export { EventType } from './types/notifications.ts'
+export type {
+  ResumePartReusedEvent,
+  ResumePartReusedListener,
+} from './upload/large.ts'
+export type { B2ObjectUploadOptions, BucketUploadOptions, UploadOptions } from './upload/options.ts'
+export type {
+  ResumeCandidateRejectedEvent,
+  ResumeCandidateRejectedListener,
+  ResumeCandidateRejectedReason,
+} from './upload/resume.ts'
 export type { UploadRetryEvent, UploadRetryListener } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'

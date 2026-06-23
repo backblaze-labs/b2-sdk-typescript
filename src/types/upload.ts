@@ -1,4 +1,5 @@
-import type { EncryptionSetting } from './encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
+import type { FileAction } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
@@ -73,8 +74,44 @@ export interface StartLargeFileRequest {
   readonly legalHold?: LegalHoldValue
 }
 
+/** Object Lock retention settings as returned by B2 response objects. */
+export interface ReadableFileRetention {
+  /** Whether the caller is authorized to read retention settings. */
+  readonly isClientAuthorizedToRead: boolean
+  /** Retention settings, or null when none are set or unreadable. */
+  readonly value: FileRetentionValue | null
+}
+
+/** Legal hold status as returned by B2 response objects. */
+export interface ReadableLegalHold {
+  /** Whether the caller is authorized to read legal hold status. */
+  readonly isClientAuthorizedToRead: boolean
+  /** Legal hold value, or null when none is set or unreadable. */
+  readonly value: LegalHoldValue | null
+}
+
+/** Optional metadata fields B2 may return for unfinished large-file records. */
+export interface UnfinishedLargeFileMetadata {
+  /** Action that created this unfinished file version. */
+  readonly action?: FileAction
+  /** When present, always 0 for unfinished large files. */
+  readonly contentLength?: number
+  /** When present, always `'none'` for unfinished large files. */
+  readonly contentSha1?: string
+  /** When present, always null for unfinished large files. */
+  readonly contentMd5?: string | null
+  /** Object Lock retention settings for this unfinished file, when readable. */
+  readonly fileRetention?: ReadableFileRetention
+  /** Legal hold status for this unfinished file, when readable. */
+  readonly legalHold?: ReadableLegalHold
+  /** Server-side encryption applied to this unfinished file. */
+  readonly serverSideEncryption?: PublicEncryptionSetting
+  /** UTC timestamp (milliseconds) when this unfinished upload was started. */
+  readonly uploadTimestamp?: number
+}
+
 /** Response from the `b2_start_large_file` API call. */
-export interface StartLargeFileResponse {
+export interface StartLargeFileResponse extends UnfinishedLargeFileMetadata {
   /** ID assigned to this large file upload. Use this to upload parts and finish the file. */
   readonly fileId: LargeFileId
   /** Name of the file being uploaded. */
@@ -133,7 +170,7 @@ export interface UploadPartResponse {
   /** SHA-1 checksum of the uploaded part content. */
   readonly contentSha1: string
   /** Server-side encryption applied to this part. */
-  readonly serverSideEncryption: EncryptionSetting
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
   readonly uploadTimestamp: number
 }
@@ -173,14 +210,14 @@ export interface ListUnfinishedLargeFilesRequest {
   readonly bucketId: BucketId
   /** Only return files whose names start with this prefix. */
   readonly namePrefix?: string
-  /** File ID to start listing from (exclusive). Used for pagination. */
+  /** File ID to start listing from (inclusive). Used for pagination. */
   readonly startFileId?: LargeFileId
   /** Maximum number of files to return. */
   readonly maxFileCount?: number
 }
 
 /** Metadata for an in-progress large file upload that has not yet been finished or cancelled. */
-export interface UnfinishedLargeFile {
+export interface UnfinishedLargeFile extends UnfinishedLargeFileMetadata {
   /** ID of the large file. */
   readonly fileId: LargeFileId
   /** Name of the file. */

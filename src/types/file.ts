@@ -1,4 +1,4 @@
-import type { EncryptionSetting } from './encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
 import type { AccountId, BucketId, FileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
@@ -77,7 +77,7 @@ export interface FileVersion {
   /** Replication status, or null if replication is not configured. */
   readonly replicationStatus: 'pending' | 'completed' | 'failed' | 'replica' | null
   /** Server-side encryption settings applied to this file version. */
-  readonly serverSideEncryption: EncryptionSetting
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this version was uploaded. */
   readonly uploadTimestamp: number
 }

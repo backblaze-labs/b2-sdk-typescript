@@ -40,8 +40,11 @@ export type {
 export type {
   EncryptionSetting,
   NoEncryption,
+  NoEncryptionWireSetting,
+  PublicEncryptionSetting,
   SseB2Setting,
   SseCCustomerSetting,
+  SseCPublicSetting,
 } from './encryption.ts'
 // `EncryptionAlgorithm` and `EncryptionMode` are forwarded as both type and value.
 export {
@@ -129,9 +132,12 @@ export type {
   ListUnfinishedLargeFilesRequest,
   ListUnfinishedLargeFilesResponse,
   PartInfo,
+  ReadableFileRetention,
+  ReadableLegalHold,
   StartLargeFileRequest,
   StartLargeFileResponse,
   UnfinishedLargeFile,
+  UnfinishedLargeFileMetadata,
   UploadFileHeaders,
   UploadPartHeaders,
   UploadPartResponse,

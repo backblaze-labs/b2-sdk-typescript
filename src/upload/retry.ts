@@ -42,10 +42,9 @@ interface UploadLayerRetryOptions {
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
    * Whether response-body read failures after an upload POST should be retried.
-   * Defaults to false. Set true to re-send a payload when B2 may have stored it
-   * but the success response was lost.
+   * The caller resolves its public default before entering this helper.
    */
-  readonly retryResponseBodyFailures?: boolean | undefined
+  readonly retryResponseBodyFailures: boolean
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
@@ -59,6 +58,27 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 }
 
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
+
+/**
+ * Resolves the public per-upload-mode default for `retryResponseBodyFailures`.
+ * For single-request uploads, this value gates unreadable response bodies and
+ * ambiguous upload POST network errors after the payload may have been sent.
+ * For multipart uploads, this value gates unreadable response bodies; upload
+ * POST network errors are retried regardless because B2 keeps the latest write
+ * for a part number before finishLargeFile.
+ *
+ * @param value - Caller-provided override, if any.
+ * @param mode - Upload path whose default should be applied.
+ *
+ * @returns The boolean value passed to the upload retry helper.
+ */
+export function resolveRetryResponseBodyFailures(
+  value: boolean | undefined,
+  mode: 'single' | 'multipart',
+): boolean {
+  const defaultValue = mode === 'multipart'
+  return value ?? defaultValue
+}
 
 /**
  * Fetches a small-file upload URL, bypassing the pool.
@@ -82,8 +102,10 @@ export async function fetchFreshUploadUrl(
     {
       bucketId,
     },
-    signal,
-    freshUrlRetryOverride,
+    {
+      ...(signal !== undefined ? { signal } : {}),
+      retry: freshUrlRetryOverride,
+    },
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
@@ -110,8 +132,10 @@ export async function fetchFreshPartUploadUrl(
     {
       fileId,
     },
-    signal,
-    freshUrlRetryOverride,
+    {
+      ...(signal !== undefined ? { signal } : {}),
+      retry: freshUrlRetryOverride,
+    },
   )
   return { uploadUrl: resp.uploadUrl, authorizationToken: resp.authorizationToken }
 }
@@ -180,9 +204,11 @@ export function uploadPartWithFreshUrl(
  * Runs an upload operation with B2's documented retry flow: evict the failed
  * upload URL, back off, fetch a fresh upload URL, and retry there.
  *
- * Sending the POST again after a lost success response can create a duplicate
- * file version. That response-body retry is disabled by default and requires
- * `retryResponseBodyFailures: true`.
+ * For single-request file uploads, sending the POST again after a lost success
+ * response can create a duplicate file version. Multipart retries re-send the
+ * same part number instead. Response-body retry defaults are caller-specific:
+ * single-request uploads keep them off by default, while multipart callers can
+ * enable them by default because re-sending the same part number is idempotent.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
@@ -193,6 +219,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     let uploadEntry: UploadUrlEntry | undefined
+    let uploadStarted = false
 
     try {
       options.signal?.throwIfAborted()
@@ -201,6 +228,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
           ? (options.checkout() ?? (await options.fetchFresh()))
           : await options.fetchFresh()
 
+      uploadStarted = true
       const result = await options.upload(uploadEntry)
       options.returnEntry(uploadEntry)
       return result
@@ -219,14 +247,17 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
+      if (
+        !isUploadRetryable(retryError, { ...options, uploadStarted }) ||
+        attempt === retryOptions.maxRetries
+      ) {
         throw retryError
       }
 
       const retryAttempt = attempt + 1
       const retryAfter = retryError instanceof B2Error ? retryError.retryAfter : undefined
       const delayMs = computeBackoff(attempt, retryOptions, retryAfter)
-      options.onUploadRetry?.({
+      notifyUploadRetry(options, {
         fileName: options.fileName,
         partNumber: options.partNumber,
         attempt: retryAttempt,
@@ -244,8 +275,28 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
   throw new NetworkError('Upload retry budget exhausted')
 }
 
-function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
-  if (err instanceof NetworkError) return !(err.cause instanceof B2SsrfError)
+function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryEvent): void {
+  try {
+    options.onUploadRetry?.(event)
+  } catch {
+    // Telemetry observers must not replace the underlying upload failure or
+    // prevent a retry that can recover with a fresh upload URL.
+  }
+}
+
+function isUploadRetryable(
+  err: unknown,
+  options: UploadLayerRetryOptions & {
+    readonly partNumber: number | null
+    readonly uploadStarted: boolean
+  },
+): err is B2Error | NetworkError {
+  if (err instanceof NetworkError) {
+    if (err.cause instanceof B2SsrfError) return false
+    if (!options.uploadStarted) return true
+    if (options.partNumber === null && !options.retryResponseBodyFailures) return false
+    return true
+  }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
   return err instanceof B2Error && err.retryable
@@ -259,7 +310,7 @@ function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOption
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
-    if (options.retryResponseBodyFailures !== true) return err
+    if (!options.retryResponseBodyFailures) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }

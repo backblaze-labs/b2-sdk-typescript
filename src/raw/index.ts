@@ -73,23 +73,49 @@ export interface RawClientOptions {
 }
 
 /** Optional request controls for {@link RawClient.listFileNames}. */
-export interface ListFileNamesOptions {
-  /** Optional abort signal for the listing request. */
-  readonly signal?: AbortSignal
-}
+export type ListFileNamesOptions = RawRequestOptions
 
 /** Optional request controls for {@link RawClient.listFileVersions}. */
-export interface ListFileVersionsOptions {
-  /** Optional abort signal for the listing request. */
+export type ListFileVersionsOptions = RawRequestOptions
+
+/** Optional controls for raw JSON API requests. */
+export interface RawRequestOptions {
+  /** Abort signal for cancelling the request. */
   readonly signal?: AbortSignal
+  /** Per-request retry override. */
+  readonly retry?: Partial<RetryOptions>
 }
 
-/** Optional controls for RawClient JSON POST calls. */
-export interface JsonPostOptions {
-  /** Optional abort signal for cancellation. */
-  readonly signal?: AbortSignal
-  /** Optional per-request retry override. */
-  readonly retry?: Partial<RetryOptions>
+/**
+ * @deprecated Use {@link RawRequestOptions}.
+ */
+export type JsonPostOptions = RawRequestOptions
+
+function normalizeRawRequestOptions(
+  optionsOrSignal?: RawRequestOptions | AbortSignal,
+  retry?: Partial<RetryOptions>,
+): RawRequestOptions | undefined {
+  if (optionsOrSignal === undefined) {
+    return retry === undefined ? undefined : { retry }
+  }
+  if (isAbortSignal(optionsOrSignal)) {
+    return {
+      signal: optionsOrSignal,
+      ...(retry !== undefined ? { retry } : {}),
+    }
+  }
+  return retry === undefined ? optionsOrSignal : { ...optionsOrSignal, retry }
+}
+
+function isAbortSignal(value: unknown): value is AbortSignal {
+  // Back-compat only: legacy upload-URL overloads accepted an AbortSignal as
+  // the fourth positional argument. Prefer the RawRequestOptions bag.
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'aborted' in value &&
+    typeof (value as AbortSignal).addEventListener === 'function'
+  )
 }
 
 /**
@@ -206,14 +232,16 @@ export class RawClient {
   // --- Files ---
 
   /**
-   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}.
+   * Calls `b2_get_upload_url` with legacy positional request controls.
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param signal - An optional abort signal for cancellation.
+   * @param signal - Optional abort signal for cancellation.
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload URL and authorization token.
+   *
+   * @deprecated Use the options-bag overload: `getUploadUrl(apiUrl, authToken, request, { signal, retry })`.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -221,11 +249,46 @@ export class RawClient {
     request: GetUploadUrlRequest,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<GetUploadUrlResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The upload URL and authorization token.
+   */
+  async getUploadUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadUrlRequest,
+    options?: RawRequestOptions,
+  ): Promise<GetUploadUrlResponse>
+  /**
+   * Implementation for both upload URL request-control signatures.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The upload URL and authorization token.
+   */
+  async getUploadUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadUrlRequest,
+    optionsOrSignal?: RawRequestOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadUrlResponse> {
-    return this.postJson<GetUploadUrlResponse>(apiUrl, authToken, 'b2_get_upload_url', request, {
-      ...(signal !== undefined ? { signal } : {}),
-      ...(retry !== undefined ? { retry } : {}),
-    })
+    return this.postJson<GetUploadUrlResponse>(
+      apiUrl,
+      authToken,
+      'b2_get_upload_url',
+      request,
+      normalizeRawRequestOptions(optionsOrSignal, retry),
+    )
   }
 
   /**
@@ -415,7 +478,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyFileRequest,
-    options?: JsonPostOptions,
+    options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
       await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),
@@ -445,6 +508,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The started large file metadata with file ID.
    */
@@ -452,19 +516,28 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: StartLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<StartLargeFileResponse> {
-    return this.postJson<StartLargeFileResponse>(apiUrl, authToken, 'b2_start_large_file', request)
+    return this.postJson<StartLargeFileResponse>(
+      apiUrl,
+      authToken,
+      'b2_start_large_file',
+      request,
+      options,
+    )
   }
 
   /**
-   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}.
+   * Calls `b2_get_upload_part_url` with legacy positional request controls.
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param signal - An optional abort signal for cancellation.
+   * @param signal - Optional abort signal for cancellation.
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload part URL and authorization token.
+   *
+   * @deprecated Use the options-bag overload: `getUploadPartUrl(apiUrl, authToken, request, { signal, retry })`.
    */
   async getUploadPartUrl(
     apiUrl: string,
@@ -472,16 +545,45 @@ export class RawClient {
     request: GetUploadPartUrlRequest,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<GetUploadPartUrlResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The upload part URL and authorization token.
+   */
+  async getUploadPartUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadPartUrlRequest,
+    options?: RawRequestOptions,
+  ): Promise<GetUploadPartUrlResponse>
+  /**
+   * Implementation for both upload part URL request-control signatures.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The upload part URL and authorization token.
+   */
+  async getUploadPartUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadPartUrlRequest,
+    optionsOrSignal?: RawRequestOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<GetUploadPartUrlResponse> {
     return this.postJson<GetUploadPartUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_part_url',
       request,
-      {
-        ...(signal !== undefined ? { signal } : {}),
-        ...(retry !== undefined ? { retry } : {}),
-      },
+      normalizeRawRequestOptions(optionsOrSignal, retry),
     )
   }
 
@@ -527,6 +629,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The completed file version metadata.
    */
@@ -534,9 +637,10 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: FinishLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request),
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request, options),
     )
   }
 
@@ -545,6 +649,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The cancelled large file metadata.
    */
@@ -552,12 +657,14 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CancelLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<CancelLargeFileResponse> {
     return this.postJson<CancelLargeFileResponse>(
       apiUrl,
       authToken,
       'b2_cancel_large_file',
       request,
+      options,
     )
   }
 
@@ -566,6 +673,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry.
    *
    * @returns The list of unfinished large files and optional continuation token.
    */
@@ -573,12 +681,14 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListUnfinishedLargeFilesRequest,
+    options?: RawRequestOptions,
   ): Promise<ListUnfinishedLargeFilesResponse> {
     return this.postJson<ListUnfinishedLargeFilesResponse>(
       apiUrl,
       authToken,
       'b2_list_unfinished_large_files',
       request,
+      options,
     )
   }
 
@@ -587,6 +697,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry.
    *
    * @returns The list of uploaded parts and optional continuation token.
    */
@@ -594,8 +705,9 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: ListPartsRequest,
+    options?: RawRequestOptions,
   ): Promise<ListPartsResponse> {
-    return this.postJson<ListPartsResponse>(apiUrl, authToken, 'b2_list_parts', request)
+    return this.postJson<ListPartsResponse>(apiUrl, authToken, 'b2_list_parts', request, options)
   }
 
   // --- Downloads ---
@@ -854,7 +966,7 @@ export class RawClient {
     authToken: string,
     endpoint: string,
     body: unknown,
-    options?: JsonPostOptions,
+    options?: RawRequestOptions,
   ): Promise<T> {
     const response = await this.transport.send({
       url: `${apiUrl}/b2api/v3/${endpoint}`,

@@ -112,7 +112,7 @@ describe('uploadLargeFile resume', () => {
     bucket = await client.createBucket({ bucketName: 'resume-test', bucketType: 'allPrivate' })
   })
 
-  it('resume: true starts fresh without same-name discovery', async () => {
+  it('resume: true starts fresh when no compatible candidate exists', async () => {
     const data = deterministicBytes(5_000_010)
     const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
 
@@ -127,7 +127,7 @@ describe('uploadLargeFile resume', () => {
 
     expect(result.fileName).toBe('resume-reupload.bin')
     expect(result.contentLength).toBe(data.byteLength)
-    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+    expect(listUnfinishedLargeFiles).toHaveBeenCalledTimes(1)
   })
 
   it('resumeFileId skips matching server parts after hashing local bytes', async () => {
@@ -138,7 +138,11 @@ describe('uploadLargeFile resume', () => {
     const startResp = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
-      { bucketId: bucket.id, fileName: 'resumed.bin', contentType: 'application/octet-stream' },
+      {
+        bucketId: bucket.id,
+        fileName: 'resumed.bin',
+        contentType: 'application/octet-stream',
+      },
     )
 
     const partUrl = await client.raw.getUploadPartUrl(
@@ -171,6 +175,7 @@ describe('uploadLargeFile resume', () => {
       bucketId: bucket.id,
       fileName: 'resumed.bin',
       source: new BufferSource(data),
+      contentType: 'application/octet-stream',
       partSize: 5_000_000,
       concurrency: 1,
       resumeFileId: startResp.fileId,
@@ -208,6 +213,7 @@ describe('uploadLargeFile resume', () => {
       bucketId: bucket.id,
       fileName: 'explicit.bin',
       source: new BufferSource(data),
+      contentType: 'application/octet-stream',
       partSize: 5_000_000,
       concurrency: 1,
       resumeFileId: start.fileId,
