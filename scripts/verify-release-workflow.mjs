@@ -98,6 +98,26 @@ function executableLines(body) {
     .filter((line) => line !== '' && !line.startsWith('#'))
 }
 
+function stripYamlLineComment(line) {
+  return line.replace(/\s+#.*$/, '').trimEnd()
+}
+
+function hasOidcWritePermission(body) {
+  const lines = body.split('\n')
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^ {4}permissions:\s*$/.test(stripYamlLineComment(lines[index]))) continue
+
+    for (let childIndex = index + 1; childIndex < lines.length; childIndex += 1) {
+      const line = stripYamlLineComment(lines[childIndex])
+      if (line.trim() === '') continue
+      if (/^ {4}\S/.test(line)) break
+      if (/^ {6}id-token:\s*write\s*$/.test(line)) return true
+    }
+  }
+
+  return false
+}
+
 function rejectOidcJobHazards(jobName, body, errors) {
   if (/actions\/checkout@/.test(body)) {
     errors.push(
@@ -197,6 +217,16 @@ const workflow = (await read('.github/workflows/release.yml')).replace(/\r\n?/g,
 const { hasJobsSection, jobs } = extractJobs(workflow)
 if (!hasJobsSection) errors.push('release workflow does not define a jobs section.')
 
+if (
+  !hasOidcWritePermission(`  publish:
+    permissions:
+      contents: read
+      id-token: write # OIDC token for npm trusted publishing
+    steps: []`)
+) {
+  errors.push('release workflow OIDC permission detector must accept inline id-token comments.')
+}
+
 const buildJob = jobs.find((job) => job.name === 'build')?.body ?? ''
 const packageTypeJob = jobs.find((job) => job.name === 'package-type-analysis')?.body ?? ''
 const publishJob = jobs.find((job) => job.name === 'publish')?.body ?? ''
@@ -208,8 +238,7 @@ if (publishJob === '') errors.push('release.yml must define a publish job.')
 if (githubReleaseJob === '') errors.push('release.yml must define a github-release job.')
 
 for (const { body, name } of jobs) {
-  const hasOidcWrite = /^\s{4}permissions:\n(?:^\s{6}.+\n)*?^\s{6}id-token:\s*write\s*$/m.test(body)
-  if (hasOidcWrite) rejectOidcJobHazards(name, body, errors)
+  if (hasOidcWritePermission(body)) rejectOidcJobHazards(name, body, errors)
   rejectUnsealedArtifactHazards(name, body, errors)
   rejectInstallScripts(name, body, errors)
 }
