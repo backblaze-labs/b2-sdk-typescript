@@ -1,3 +1,40 @@
+const RESERVED_SYNC_TEMP_FILE_RE = /^\.b2sdk-[0-9a-f]{24}-[^/\\]+-[0-9a-f]{32}\.partial$/i
+const UUID_HEX_RE = /^[0-9a-f]{32}$/i
+
+/**
+ * Rejects sync paths whose basename is reserved for SDK-owned temporary files.
+ * @param relativePath - Sync-relative path using slash separators.
+ *
+ * @throws If any path segment uses the SDK's reserved temporary-file pattern.
+ *
+ * @internal
+ */
+export function assertSyncPathAllowed(relativePath: string): void {
+  const parts = relativePath.split(/[\\/]+/).filter(Boolean)
+  if (parts.some((part) => RESERVED_SYNC_TEMP_FILE_RE.test(part))) {
+    throw new Error(`Sync path uses reserved SDK temporary-file name: ${relativePath}`)
+  }
+}
+
+/**
+ * Creates a download staging basename inside the SDK-reserved temp namespace.
+ * @param finalName - Final destination basename.
+ * @param uuid - UUID used to make the temp basename unique.
+ *
+ * @returns A basename that local and B2 scanners reject as SDK-owned temp data.
+ *
+ * @throws If the provided UUID cannot be normalized to 32 hex characters.
+ *
+ * @internal
+ */
+export function makeReservedSyncTempFileName(finalName: string, uuid: string): string {
+  const hex = uuid.replaceAll('-', '').toLowerCase()
+  if (!UUID_HEX_RE.test(hex)) {
+    throw new Error('invalid sync temporary-file nonce')
+  }
+  return `.b2sdk-${hex.slice(0, 24)}-${finalName}-${hex}.partial`
+}
+
 /**
  * Validates B2 relative names before they are materialized on a local filesystem.
  *
@@ -10,6 +47,7 @@
  * @internal
  */
 export function safeRelativePathSegments(relPath: string): string[] {
+  assertSyncPathAllowed(relPath)
   if (
     relPath.length === 0 ||
     relPath.includes('\0') ||

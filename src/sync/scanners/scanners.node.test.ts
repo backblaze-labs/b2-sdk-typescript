@@ -10,10 +10,7 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
-import {
-  DOWNLOAD_STAGING_DIRECTORY_NAME,
-  DOWNLOAD_STAGING_MARKER_NAME,
-} from '../download-staging.ts'
+import { makeReservedSyncTempFileName } from '../path-safety.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -34,8 +31,10 @@ const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
-const reservedTempName =
-  '.b2sdk-aaaaaaaaaaaaaaaaaaaaaaaa-z-00000000000000000000000000000000.partial'
+const reservedTempName = makeReservedSyncTempFileName(
+  'payload.bin',
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+)
 
 /**
  * Advance the fake clock by 1 ms so the simulator assigns a distinct

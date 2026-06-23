@@ -16,6 +16,7 @@ import {
   resolveLargeFileErrorAfterCleanup,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
+import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import {
   resolveRetryResponseBodyFailures,
   type UploadRetryOptions,
@@ -329,12 +330,13 @@ export function createWriteStream(
           throw new Error('createWriteStream closed without any data written.')
         }
 
-        const result = await raw.finishLargeFile(
-          accountInfo.getApiUrl(),
-          accountInfo.getAuthToken(),
-          { fileId: largeFileId, partSha1Array: partSha1s },
-          { signal: abortScope.signal },
-        )
+        const result = await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+          fileId: largeFileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          partSha1s,
+          signal: abortScope.signal,
+        })
         abortScope.dispose()
         resolveDone(result)
       } catch (err) {

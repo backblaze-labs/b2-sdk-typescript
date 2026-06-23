@@ -238,7 +238,7 @@ jobs:
 
       - name: Create GitHub Release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           RELEASE_TAG="$(cat .release/release-tag.txt)"
           VERSION="$(cat .release/package-version.txt)"

@@ -6,6 +6,7 @@ import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { createAbortScope, throwRejectedOrAbortReason } from '../upload/abort-scope.ts'
 import { type CleanupFailureListener, cleanupAfterLargeFileError } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
+import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 
@@ -156,16 +157,13 @@ export async function copyLargeFile(
 
     throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
-    abortScope.signal.throwIfAborted()
-    return await raw.finishLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      {
-        fileId: largeFileId,
-        partSha1Array: partSha1s,
-      },
-      { signal: abortScope.signal },
-    )
+    return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+      fileId: largeFileId,
+      bucketId: destBucketId,
+      fileName: options.fileName,
+      partSha1s,
+      signal: abortScope.signal,
+    })
   } catch (err) {
     abortScope.abort(err)
     return await cleanupAfterLargeFileError(err, raw, accountInfo, {

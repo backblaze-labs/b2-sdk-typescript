@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deferred, makeClient, readStream } from '../test-utils/index.ts'
@@ -147,7 +148,7 @@ describe('copyLargeFile', () => {
     expect(cancelLargeFile).toHaveBeenCalledTimes(1)
   })
 
-  it('passes the abort signal to multipart finish', async () => {
+  it('reports reconciliation metadata when aborting while multipart-copy finish is pending', async () => {
     const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await c.authorize()
     const bucket = await c.createBucket({
@@ -176,6 +177,7 @@ describe('copyLargeFile', () => {
       },
     )
     const cancelLargeFile = vi.spyOn(c.raw, 'cancelLargeFile')
+    const cleanupFailures: unknown[] = []
 
     const copy = copyLargeFile(c.raw, c.accountInfo, {
       sourceFileId: uploaded.fileId,
@@ -183,14 +185,26 @@ describe('copyLargeFile', () => {
       partSize: 100_000,
       concurrency: 1,
       signal: controller.signal,
+      onCleanupFailure: (event) => {
+        expect(event.reason).toBe('finish-ambiguous')
+        cleanupFailures.push(event)
+      },
     })
     const finishSignal = await finishStarted.promise
 
     controller.abort(new Error('copy finish abort'))
 
-    await expect(copy).rejects.toThrow('copy finish abort')
+    const err = await copy.then(
+      () => null,
+      (rejection) => rejection,
+    )
+    expect(err).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((err as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((err as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((err as FinishLargeFileResponseBodyError).fileName).toBe('copy-finish-abort-dst.bin')
     expect(finishSignal.aborted).toBe(true)
-    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+    expect(cleanupFailures).toHaveLength(1)
   })
 
   it('forwards contentType, fileInfo, and SSE overrides through the single-copy fast path', async () => {

@@ -1,5 +1,4 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
@@ -16,6 +15,7 @@ import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createAbortScope, throwRejectedOrAbortReason } from './abort-scope.ts'
 import { cleanupAfterLargeFileError, type CleanupFailureOptions } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
+import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import {
   findResumeCandidate,
   type ResumeCandidateCriteria,
@@ -335,14 +335,13 @@ export async function uploadLargeFile(
         partSha1s,
         tracker,
       )
-      return await finishLargeFileWithAbortReconciliation(
-        raw,
-        accountInfo,
-        options,
-        largeFileId,
+      return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+        fileId: largeFileId,
+        bucketId: options.bucketId,
+        fileName: options.fileName,
         partSha1s,
-        abortScope.signal,
-      )
+        signal: abortScope.signal,
+      })
     } catch (err) {
       abortScope.abort(err)
       return await cleanupAfterUploadLargeFileError(
@@ -422,14 +421,13 @@ export async function uploadLargeFile(
 
     throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
-    const result = await finishLargeFileWithAbortReconciliation(
-      raw,
-      accountInfo,
-      options,
-      largeFileId,
+    const result = await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+      fileId: largeFileId,
+      bucketId: options.bucketId,
+      fileName: options.fileName,
       partSha1s,
-      abortScope.signal,
-    )
+      signal: abortScope.signal,
+    })
 
     return result
   } catch (err) {
@@ -468,48 +466,6 @@ async function cleanupAfterUploadLargeFileError(
     },
     { cancelOnError: createdLargeFile },
   )
-}
-
-async function finishLargeFileWithAbortReconciliation(
-  raw: RawClient,
-  accountInfo: AccountInfo,
-  options: UploadLargeFileOptions,
-  largeFileId: LargeFileId,
-  partSha1s: readonly string[],
-  signal: AbortSignal | undefined,
-): Promise<FileVersion> {
-  signal?.throwIfAborted()
-  try {
-    return await raw.finishLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      {
-        fileId: largeFileId,
-        partSha1Array: partSha1s,
-      },
-      signal === undefined ? undefined : { signal },
-    )
-  } catch (err) {
-    if (isAbortFromSignal(err, signal)) {
-      throw new FinishLargeFileResponseBodyError(
-        'b2_finish_large_file was aborted after dispatch; final file state is ambiguous.',
-        {
-          cause: err,
-          fileId: largeFileId,
-          bucketId: options.bucketId,
-          fileName: options.fileName,
-        },
-      )
-    }
-    throw err
-  }
-}
-
-function isAbortFromSignal(err: unknown, signal: AbortSignal | undefined): boolean {
-  if (signal?.aborted !== true) return false
-  if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
-  if (err instanceof DOMException && err.name === 'AbortError') return true
-  return err instanceof Error && err.name === 'AbortError'
 }
 
 /**

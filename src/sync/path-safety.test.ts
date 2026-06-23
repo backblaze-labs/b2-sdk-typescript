@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   assertPathInsideRoot,
   hasErrorCode,
+  makeReservedSyncTempFileName,
   noFollowFlag,
   safeRelativePathSegments,
 } from './path-safety.ts'
@@ -38,6 +39,17 @@ describe('safeRelativePathSegments', () => {
     'trailing-space ',
   ])('rejects unsafe local destination path %s', (relPath) => {
     expect(() => safeRelativePathSegments(relPath)).toThrow('unsafe local destination path')
+  })
+
+  it('rejects SDK-reserved temporary file names', () => {
+    const tempName = makeReservedSyncTempFileName(
+      'payload.bin',
+      'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    )
+
+    expect(() => safeRelativePathSegments(`nested/${tempName}`)).toThrow(
+      'reserved SDK temporary-file name',
+    )
   })
 })
 

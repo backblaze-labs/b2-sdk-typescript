@@ -687,7 +687,28 @@ describe('createWriteStream branch coverage', () => {
     expect(cleanupFailures).toHaveLength(1)
   })
 
-  it('passes the abort signal to finish during close', async () => {
+  it('cancels when the stream aborts before finish dispatch', async () => {
+    const controller = new AbortController()
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const { writable, done } = bucket.file('abort-stream-before-finish.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+
+    controller.abort(new Error('stream abort before finish'))
+
+    await expect(writer.close()).rejects.toThrow('stream abort before finish')
+    await expect(done).rejects.toThrow('stream abort before finish')
+    expect(finishLargeFile).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports reconciliation metadata when aborting while stream finish is pending', async () => {
     const controller = new AbortController()
     const finishStarted = Promise.withResolvers<AbortSignal>()
     vi.spyOn(client.raw, 'finishLargeFile').mockImplementation(
@@ -704,11 +725,16 @@ describe('createWriteStream branch coverage', () => {
       },
     )
     const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const cleanupFailures: unknown[] = []
 
     const { writable, done } = bucket.file('abort-stream-finish.bin').createWriteStream({
       partSize: 100_000,
       concurrency: 1,
       signal: controller.signal,
+      onCleanupFailure: (event) => {
+        expect(event.reason).toBe('finish-ambiguous')
+        cleanupFailures.push(event)
+      },
     })
     const writer = writable.getWriter()
     await writer.write(deterministicBytes(200_000))
@@ -717,10 +743,18 @@ describe('createWriteStream branch coverage', () => {
 
     controller.abort(new Error('stream finish abort'))
 
-    await expect(close).rejects.toThrow('stream finish abort')
-    await expect(done).rejects.toThrow('stream finish abort')
+    const err = await close.then(
+      () => null,
+      (rejection) => rejection,
+    )
+    expect(err).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((err as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((err as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((err as FinishLargeFileResponseBodyError).fileName).toBe('abort-stream-finish.bin')
+    await expect(done).rejects.toBe(err)
     expect(finishSignal.aborted).toBe(true)
-    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+    expect(cleanupFailures).toHaveLength(1)
   })
 
   it('aborts a stalled in-flight part request when writer.abort() is called', async () => {

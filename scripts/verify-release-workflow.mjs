@@ -52,6 +52,7 @@ const dynamicPackageExecution =
   /\b(?:npx|pnpm\s+(?:dlx|exec)|npm\s+exec|yarn\s+(?:dlx|exec)|bunx|bun\s+x)\b/
 const dependencyInstall = /\b(?:pnpm|npm|yarn|bun)\s+(?:install|i|ci)\b/
 const packageScriptRun = /\b(?:pnpm|npm|yarn|bun)\s+run\b/
+const checkedOutRepositoryScript = /\b(?:node|bun)\s+(?:\.\/)?scripts\//
 
 async function read(rel) {
   return await fs.readFile(join(repo, rel), 'utf8')
@@ -96,8 +97,16 @@ function executableLines(body) {
 }
 
 function rejectOidcJobHazards(jobName, body, errors) {
+  if (/actions\/checkout@/.test(body)) {
+    errors.push(`release.yml ${jobName} job must not checkout repository code with id-token: write.`)
+  }
   if (dependencyInstall.test(body)) {
     errors.push(`release.yml ${jobName} job must not install dependencies with id-token: write.`)
+  }
+  if (checkedOutRepositoryScript.test(body)) {
+    errors.push(
+      `release.yml ${jobName} job must not execute checked-out repository scripts with id-token: write.`,
+    )
   }
   if (dynamicPackageExecution.test(body)) {
     errors.push(

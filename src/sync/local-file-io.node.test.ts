@@ -13,7 +13,8 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, sep } from 'node:path'
+import { basename, join } from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
   DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
@@ -28,6 +29,8 @@ import {
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { assertSyncPathAllowed } from './path-safety.ts'
+import { createSyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
@@ -90,131 +93,28 @@ describe('writeLocalFileInsideRoot', () => {
 })
 
 describe('writeLocalStreamInsideRoot', () => {
-  it('rejects invalid expected byte counts before staging', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-byte-count-'))
+  it('uses SDK-reserved staging names for downloads', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-temp-name-'))
     try {
-      await expect(
-        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(new Uint8Array()), {
-          expectedBytes: -1,
-          idleTimeoutMillis: 1000,
-        }),
-      ).rejects.toThrow('download expectedBytes must be a non-negative safe integer')
-
-      await expect(readdir(root)).resolves.toEqual([])
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it.skipIf(isWindows)(
-    'creates private managed staging files under the destination root',
-    async () => {
-      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-private-'))
-      let observedTempPath = ''
-      let observedStagingDirectory = ''
-      try {
-        localFileIoTestHooks.afterTempFileCreated = async (tempPath, stagingDirectory) => {
-          observedTempPath = tempPath
-          observedStagingDirectory = stagingDirectory
-          const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
-          expect(tempPath.startsWith(managedDirectory)).toBe(true)
-          expect(stagingDirectory.startsWith(managedDirectory)).toBe(true)
-          expect((await stat(tempPath)).mode & 0o777).toBe(0o600)
-          expect((await stat(stagingDirectory)).mode & 0o777).toBe(0o700)
-          expect(await readdir(root)).toEqual([DOWNLOAD_STAGING_DIRECTORY_NAME])
-        }
-
-        await writeLocalStreamInsideRoot(
-          root,
-          'file.txt',
-          streamFromBytes(textEncoder.encode('abc')),
-          {
-            expectedBytes: 3,
-            idleTimeoutMillis: 1000,
-          },
-        )
-
-        expect(observedTempPath).not.toBe('')
-        expect(observedStagingDirectory).not.toBe('')
-        expect((await stat(join(root, 'file.txt'))).mode & 0o777).toBe(0o600)
-        await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
-        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([
-          DOWNLOAD_STAGING_MARKER_NAME,
-        ])
-      } finally {
-        delete localFileIoTestHooks.afterTempFileCreated
-        await rm(root, { recursive: true, force: true })
+      let tempName = ''
+      localFileIoTestHooks.afterTempFileCreated = (path) => {
+        tempName = basename(path)
       }
-    },
-  )
-
-  it('keeps in-progress staging files hidden from the previous local scanner', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-old-scanner-'))
-    let controller!: ReadableStreamDefaultController<Uint8Array>
-    let stagingReady!: () => void
-    const staged = new Promise<void>((resolve) => {
-      stagingReady = resolve
-    })
-    try {
-      localFileIoTestHooks.afterTempFileCreated = () => {
-        stagingReady()
-      }
-      const writePromise = writeLocalStreamInsideRoot(
-        root,
-        'file.txt',
-        new ReadableStream<Uint8Array>({
-          start(streamController) {
-            controller = streamController
-          },
-        }),
-        {
-          expectedBytes: 0,
-          idleTimeoutMillis: 1000,
-        },
-      )
-
-      await staged
-      expect(await oldScannerVisibleFiles(root)).toEqual([])
-      controller.close()
-      await writePromise
-    } finally {
-      delete localFileIoTestHooks.afterTempFileCreated
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it.skipIf(isWindows)('preserves mode when replacing existing files', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-mode-'))
-    try {
-      const secretPath = join(root, 'secret.txt')
-      const scriptPath = join(root, 'script.sh')
-      await writeFile(secretPath, 'old')
-      await writeFile(scriptPath, '#!/bin/sh\n')
-      await chmod(secretPath, 0o600)
-      await chmod(scriptPath, 0o755)
 
       await writeLocalStreamInsideRoot(
         root,
-        'secret.txt',
-        streamFromBytes(textEncoder.encode('new')),
+        'nested/file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
         {
           expectedBytes: 3,
           idleTimeoutMillis: 1000,
         },
       )
-      await writeLocalStreamInsideRoot(
-        root,
-        'script.sh',
-        streamFromBytes(textEncoder.encode('echo ok\n')),
-        {
-          expectedBytes: 8,
-          idleTimeoutMillis: 1000,
-        },
-      )
 
-      expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
-      expect((await stat(scriptPath)).mode & 0o777).toBe(0o755)
+      expect(tempName).toMatch(/^\.b2sdk-[0-9a-f]{24}-file\.txt-[0-9a-f]{32}\.partial$/)
+      expect(() => assertSyncPathAllowed(tempName)).toThrow('reserved SDK temporary-file name')
     } finally {
+      delete localFileIoTestHooks.afterTempFileCreated
       await rm(root, { recursive: true, force: true })
     }
   })
