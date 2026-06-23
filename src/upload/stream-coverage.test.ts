@@ -687,6 +687,42 @@ describe('createWriteStream branch coverage', () => {
     expect(cleanupFailures).toHaveLength(1)
   })
 
+  it('passes the abort signal to finish during close', async () => {
+    const controller = new AbortController()
+    const finishStarted = Promise.withResolvers<AbortSignal>()
+    vi.spyOn(client.raw, 'finishLargeFile').mockImplementation(
+      async (_apiUrl, _authToken, _request, options) => {
+        if (options?.signal === undefined) throw new Error('expected finish abort signal')
+        finishStarted.resolve(options.signal)
+        return await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      },
+    )
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const { writable, done } = bucket.file('abort-stream-finish.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+    const close = writer.close()
+    const finishSignal = await finishStarted.promise
+
+    controller.abort(new Error('stream finish abort'))
+
+    await expect(close).rejects.toThrow('stream finish abort')
+    await expect(done).rejects.toThrow('stream finish abort')
+    expect(finishSignal.aborted).toBe(true)
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+  })
+
   it('aborts a stalled in-flight part request when writer.abort() is called', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 200_000 })
     const inner = sim.transport()

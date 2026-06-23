@@ -147,6 +147,52 @@ describe('copyLargeFile', () => {
     expect(cancelLargeFile).toHaveBeenCalledTimes(1)
   })
 
+  it('passes the abort signal to multipart finish', async () => {
+    const { client: c } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-finish-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const uploaded = await bucket.upload({
+      fileName: 'copy-finish-abort-src.bin',
+      source: new BufferSource(new Uint8Array(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const controller = new AbortController()
+    const finishStarted = Promise.withResolvers<AbortSignal>()
+    vi.spyOn(c.raw, 'finishLargeFile').mockImplementation(
+      async (_apiUrl, _authToken, _request, options) => {
+        if (options?.signal === undefined) throw new Error('expected finish abort signal')
+        finishStarted.resolve(options.signal)
+        return await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      },
+    )
+    const cancelLargeFile = vi.spyOn(c.raw, 'cancelLargeFile')
+
+    const copy = copyLargeFile(c.raw, c.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'copy-finish-abort-dst.bin',
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const finishSignal = await finishStarted.promise
+
+    controller.abort(new Error('copy finish abort'))
+
+    await expect(copy).rejects.toThrow('copy finish abort')
+    expect(finishSignal.aborted).toBe(true)
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+  })
+
   it('forwards contentType, fileInfo, and SSE overrides through the single-copy fast path', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()

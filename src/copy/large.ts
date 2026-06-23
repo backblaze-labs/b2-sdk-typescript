@@ -157,10 +157,15 @@ export async function copyLargeFile(
     throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
 
     abortScope.signal.throwIfAborted()
-    return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      fileId: largeFileId,
-      partSha1Array: partSha1s,
-    })
+    return await raw.finishLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        fileId: largeFileId,
+        partSha1Array: partSha1s,
+      },
+      { signal: abortScope.signal },
+    )
   } catch (err) {
     abortScope.abort(err)
     return await cleanupAfterLargeFileError(err, raw, accountInfo, {
