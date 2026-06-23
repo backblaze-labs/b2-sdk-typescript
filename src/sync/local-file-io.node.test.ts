@@ -181,6 +181,31 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('rejects download streams that emit too many empty chunks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-empty-chunks-'))
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (let index = 0; index < 1025; index++) controller.enqueue(new Uint8Array(0))
+        },
+      })
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', body, {
+          expectedBytes: 1,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('download read stalled')
+
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+      await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([
+        DOWNLOAD_STAGING_MARKER_NAME,
+      ])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isWindows)('propagates replacement mode lookup errors', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stat-error-'))
     try {
@@ -337,12 +362,16 @@ describe('writeLocalStreamInsideRoot', () => {
       const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
       const staleDirectory = join(managedDirectory, '2000-01-01-old.download')
       const unmarkedDirectory = join(managedDirectory, '2000-01-01-unmarked.download')
+      const staleMarker = join(staleDirectory, DOWNLOAD_STAGING_MARKER_NAME)
+      const stalePayload = join(staleDirectory, 'partial.bin')
       await mkdir(staleDirectory, { recursive: true, mode: 0o700 })
       await mkdir(unmarkedDirectory, { recursive: true, mode: 0o700 })
-      await writeFile(join(staleDirectory, '.b2sdk-staging-marker'), '')
-      await writeFile(join(staleDirectory, 'partial.bin'), 'old')
+      await writeFile(staleMarker, '')
+      await writeFile(stalePayload, 'old')
       await writeFile(join(unmarkedDirectory, 'partial.bin'), 'keep')
       const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(staleMarker, old, old)
+      await utimes(stalePayload, old, old)
       await utimes(staleDirectory, old, old)
       await utimes(unmarkedDirectory, old, old)
 
@@ -364,6 +393,37 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('does not reap an old staging entry with a recently active partial file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-active-stage-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const activeDirectory = join(managedDirectory, '2000-01-01-active.download')
+      const activeMarker = join(activeDirectory, DOWNLOAD_STAGING_MARKER_NAME)
+      const activePartial = join(activeDirectory, 'partial.bin')
+      await mkdir(activeDirectory, { recursive: true, mode: 0o700 })
+      await writeFile(activeMarker, '')
+      await writeFile(activePartial, 'still-writing')
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(activeMarker, old, old)
+      await utimes(activeDirectory, old, old)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(readFile(activePartial, 'utf8')).resolves.toBe('still-writing')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('reaps stale SDK-owned staging directories on later downloads to the same root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-repeat-stage-'))
     try {
@@ -379,10 +439,14 @@ describe('writeLocalStreamInsideRoot', () => {
 
       const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
       const staleDirectory = join(managedDirectory, '2000-01-01-second.download')
+      const staleMarker = join(staleDirectory, DOWNLOAD_STAGING_MARKER_NAME)
+      const stalePayload = join(staleDirectory, 'partial.bin')
       await mkdir(staleDirectory, { recursive: true, mode: 0o700 })
-      await writeFile(join(staleDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
-      await writeFile(join(staleDirectory, 'partial.bin'), 'old')
+      await writeFile(staleMarker, '')
+      await writeFile(stalePayload, 'old')
       const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(staleMarker, old, old)
+      await utimes(stalePayload, old, old)
       await utimes(staleDirectory, old, old)
 
       await writeLocalStreamInsideRoot(
@@ -586,9 +650,13 @@ describe('writeLocalStreamInsideRoot', () => {
       }
       for (let index = 0; index < 12; index++) {
         const directory = join(managedDirectory, `sdk-${index}.download`)
+        const marker = join(directory, DOWNLOAD_STAGING_MARKER_NAME)
+        const payload = join(directory, 'payload.bin')
         await mkdir(directory)
-        await writeFile(join(directory, '.b2sdk-staging-marker'), '')
-        await writeFile(join(directory, 'payload.bin'), 'stale')
+        await writeFile(marker, '')
+        await writeFile(payload, 'stale')
+        await utimes(marker, old, old)
+        await utimes(payload, old, old)
         await utimes(directory, old, old)
       }
 
@@ -610,6 +678,51 @@ describe('writeLocalStreamInsideRoot', () => {
         readFile(join(managedDirectory, 'sdk-0.download', 'payload.bin')),
       ).rejects.toThrow()
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('sanitizes staging cleanup warning entry names and paths', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-warning-'))
+    const originalEmitWarning = process.emitWarning
+    const warnings: string[] = []
+    const maliciousName = `2000-\nFORGED.download`
+    try {
+      process.emitWarning = ((warning: string | Error) => {
+        warnings.push(warning instanceof Error ? warning.message : warning)
+      }) as typeof process.emitWarning
+
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const directory = join(managedDirectory, maliciousName)
+      const marker = join(directory, DOWNLOAD_STAGING_MARKER_NAME)
+      const payload = join(directory, 'payload.bin')
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await writeFile(marker, '')
+      await writeFile(payload, 'stale')
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(marker, old, old)
+      await utimes(payload, old, old)
+      await utimes(directory, old, old)
+      await chmod(directory, 0o500)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      expect(warnings.length).toBeGreaterThan(0)
+      expect(warnings.some((warning) => warning.includes(root))).toBe(false)
+      expect(warnings.some((warning) => warning.includes('/tmp'))).toBe(false)
+      expect(warnings.some((warning) => warning.includes('\n'))).toBe(false)
+      expect(warnings.join(' ')).toContain('2000-?FORGED.download')
+    } finally {
+      process.emitWarning = originalEmitWarning
+      await chmod(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME, maliciousName), 0o700).catch(() => {})
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -693,6 +806,26 @@ describe('deleteLocalFileInsideRoot', () => {
       delete localFileIoTestHooks.beforeLocalDeleteUnlink
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects when the scanned leaf is replaced before unlink', async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-leaf-')))
+    try {
+      const scannedPath = await makeScannedPath(root, 'victim.txt', 'original')
+
+      localFileIoTestHooks.beforeLocalDeleteUnlink = async () => {
+        await rename(join(root, 'victim.txt'), join(root, 'victim.old'))
+        await writeFile(join(root, 'victim.txt'), 'replace!')
+      }
+
+      await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
+        'local file changed before delete',
+      )
+      await expect(readFile(join(root, 'victim.txt'), 'utf8')).resolves.toBe('replace!')
+    } finally {
+      delete localFileIoTestHooks.beforeLocalDeleteUnlink
+      await rm(root, { recursive: true, force: true })
     }
   })
 

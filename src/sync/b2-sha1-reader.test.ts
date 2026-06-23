@@ -41,6 +41,31 @@ describe('readStreamChunkWithTimeout', () => {
     }
   })
 
+  it('skips bounded empty chunks before returning data', async () => {
+    const reader = streamFromChunks([
+      new Uint8Array(0),
+      new Uint8Array(0),
+      textEncoder.encode('abc'),
+    ]).getReader()
+    try {
+      const result = await readStreamChunkWithTimeout(reader, 1000, 'stalled')
+      expect(result).toMatchObject({ done: false, value: textEncoder.encode('abc') })
+    } finally {
+      reader.releaseLock()
+    }
+  })
+
+  it('rejects too many empty chunks as a stalled read', async () => {
+    const reader = streamFromChunks(
+      Array.from({ length: 1025 }, () => new Uint8Array(0)),
+    ).getReader()
+    try {
+      await expect(readStreamChunkWithTimeout(reader, 1000, 'stalled')).rejects.toThrow('stalled')
+    } finally {
+      reader.releaseLock()
+    }
+  })
+
   it('rejects reads that make no progress before the timeout', async () => {
     const reader = new ReadableStream<Uint8Array>().getReader()
     const promise = readStreamChunkWithTimeout(reader, 1, 'stalled')
@@ -99,6 +124,20 @@ describe('hashReadableStreamSha1', () => {
         expectedBytes: 4,
       }),
     ).rejects.toThrow('ended after 3 bytes, expected 4')
+  })
+
+  it('rejects SHA-1 streams that emit too many empty chunks', async () => {
+    await expect(
+      hashReadableStreamSha1(
+        streamFromChunks(Array.from({ length: 1025 }, () => new Uint8Array(0))),
+        undefined,
+        {
+          idleTimeoutMillis: 1000,
+          maxBytes: 4,
+          expectedBytes: 4,
+        },
+      ),
+    ).rejects.toThrow('sha1 B2 read stalled')
   })
 })
 

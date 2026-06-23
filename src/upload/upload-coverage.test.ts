@@ -237,6 +237,95 @@ class FailingSecondSliceAfterFirstUploadSource implements ContentSource {
   }
 }
 
+class AbortAwareParallelReadSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  siblingBytesRead = 0
+  siblingCancelled = false
+  private readonly siblingStarted: Promise<void>
+  private resolveSiblingStarted!: () => void
+
+  constructor(partSize: number) {
+    this.size = partSize * 2
+    this.siblingStarted = new Promise((resolve) => {
+      this.resolveSiblingStarted = resolve
+    })
+  }
+
+  slice(start: number, end: number): ContentSource {
+    const length = end - start
+    if (start === 0) {
+      return {
+        canSlice: true,
+        size: length,
+        slice: () => {
+          throw new Error('nested slice should not be used')
+        },
+        stream: () => {
+          throw new Error('failing slice stream should not be used')
+        },
+        toArrayBuffer: async () => {
+          await this.siblingStarted
+          throw new Error('simulated source mutation')
+        },
+      }
+    }
+
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () => {
+        throw new Error('sibling slice stream should not be used')
+      },
+      toArrayBuffer: (options: { readonly signal?: AbortSignal } = {}) =>
+        this.readSiblingSlice(length, options.signal),
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
+
+  private readSiblingSlice(length: number, signal: AbortSignal | undefined): Promise<ArrayBuffer> {
+    this.resolveSiblingStarted()
+    return new Promise((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const cleanup = () => {
+        if (timeout !== undefined) clearTimeout(timeout)
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => {
+        this.siblingCancelled = true
+        cleanup()
+        reject(signal?.reason ?? new Error('sibling read aborted'))
+      }
+      const readNext = () => {
+        if (signal?.aborted === true) {
+          onAbort()
+          return
+        }
+        if (this.siblingBytesRead >= length) {
+          cleanup()
+          resolve(new ArrayBuffer(length))
+          return
+        }
+        this.siblingBytesRead += Math.min(1024, length - this.siblingBytesRead)
+        timeout = setTimeout(readNext, 0)
+      }
+
+      signal?.addEventListener('abort', onAbort, { once: true })
+      readNext()
+    })
+  }
+}
+
 describe('uploadLargeFile cleanup paths', () => {
   it('evicts the part upload URL and rethrows when b2_upload_part fails', async () => {
     // Wrap the simulator so the second `b2_upload_part` call returns 400.
@@ -743,6 +832,31 @@ describe('uploadLargeFile cleanup paths', () => {
       { bucketId: bucket.id },
     )
     expect(unfinished.files.find((f) => f.fileName === 'changed.bin')).toBeUndefined()
+  })
+
+  it('aborts in-flight parallel source reads after a sibling read fails', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-read-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const source = new AbortAwareParallelReadSource(partSize)
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'changed-during-read.bin',
+        source,
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow('simulated source mutation')
+
+    expect(source.siblingCancelled).toBe(true)
+    expect(source.siblingBytesRead).toBeLessThan(partSize)
   })
 
   it('accepts an untriggered abort signal for multipart uploads', async () => {

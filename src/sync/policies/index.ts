@@ -15,7 +15,14 @@ import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 export interface ActionFactory {
   /** Creates an action to upload a local file to B2. */
   upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction
-  /** Creates an action to download a B2 file to the local filesystem. */
+  /**
+   * Creates an action to download a B2 file to the local filesystem.
+   *
+   * `generateActions` passes `null` when the B2 source has no scanned local
+   * destination, a `LocalSyncPath` when the download replaces an existing
+   * scanned destination file, and leaves the value `undefined` only for
+   * callers that invoke a factory without destination scan context.
+   */
   download(source: B2SyncPath, scannedDest?: LocalSyncPath | null): SyncAction
   /**
    * Creates an action to server-side copy a B2 file to a sync-relative destination path.

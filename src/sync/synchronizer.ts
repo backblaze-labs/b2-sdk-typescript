@@ -711,7 +711,9 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  * who flipped lock state mid-sync (rare) should refresh before
  * synchronize().
  *
- * @param config - The synchronizer configuration containing source, destination, and options.
+ * @param config - Synchronizer configuration containing source, destination, and options.
+ * @param localRootContexts - Resolved filesystem roots captured before action creation.
+ *
  * @returns An action factory bound to the provided configuration.
  */
 function createActionFactory(

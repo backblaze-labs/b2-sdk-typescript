@@ -1,4 +1,3 @@
-import { resolve } from 'node:path'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   isManagedDownloadStagingRoot,
@@ -37,6 +36,7 @@ type LocalNodeDeps = {
   lstat(path: string): Promise<LocalStats>
   join(...paths: string[]): string
   relative(from: string, to: string): string
+  resolve(...paths: string[]): string
   sep: string
 }
 
@@ -59,7 +59,7 @@ export class LocalFolder implements SyncFolder {
    * @param root - Absolute or relative path to the local directory to scan.
    */
   constructor(root: string) {
-    this.root = resolve(root)
+    this.root = resolvePathAtConstruction(root)
     registerLocalFilesystemRoot(this)
   }
 
@@ -70,8 +70,9 @@ export class LocalFolder implements SyncFolder {
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
     validateSyncFilters(options)
     const nodeDeps = await loadLocalNodeDeps()
+    const root = nodeDeps.resolve(this.root)
     const collected: LocalSyncPath[] = []
-    await this.walk(this.root, collected, options, scanEntryLimit(options), nodeDeps)
+    await this.walk(root, root, collected, options, scanEntryLimit(options), nodeDeps)
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
       throwIfScanAborted(options)
@@ -81,6 +82,7 @@ export class LocalFolder implements SyncFolder {
 
   /**
    * Recursively collects files from {@link dir} into {@link out}.
+   * @param root - Resolved scan root used for relative path calculation.
    * @param dir - Absolute path of the directory to scan.
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
@@ -88,6 +90,7 @@ export class LocalFolder implements SyncFolder {
    * @param nodeDeps - Lazy-loaded Node filesystem and path helpers.
    */
   private async walk(
+    root: string,
     dir: string,
     out: LocalSyncPath[],
     options: SyncScanOptions,
@@ -101,18 +104,18 @@ export class LocalFolder implements SyncFolder {
     } catch (err) {
       const error = this.emitScanError(
         options,
-        relativePathFromRoot(this.root, dir, nodeDeps),
+        relativePathFromRoot(root, dir, nodeDeps),
         'directory',
         err,
       )
-      if (dir === this.root) throw error
+      if (dir === root) throw error
       return
     }
 
     for (const entry of entries) {
       throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
-      const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
+      const rel = relativePathFromRoot(root, fullPath, nodeDeps)
       if (
         rel === DOWNLOAD_STAGING_DIRECTORY_NAME &&
         entry.isDirectory() &&
@@ -135,7 +138,7 @@ export class LocalFolder implements SyncFolder {
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
         if (directoryMayContainSyncPaths(rel, options)) {
-          await this.walk(fullPath, out, options, maxScanEntries, nodeDeps)
+          await this.walk(root, fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
         if (!pathPassesSyncFilters(rel, options)) {
@@ -155,12 +158,7 @@ export class LocalFolder implements SyncFolder {
           /* v8 ignore stop */
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
-          this.emitScanError(
-            options,
-            relativePathFromRoot(this.root, fullPath, nodeDeps),
-            'file',
-            err,
-          )
+          this.emitScanError(options, relativePathFromRoot(root, fullPath, nodeDeps), 'file', err)
           continue
         }
         assertScanEntryLimit(out.length + 1, maxScanEntries)
@@ -199,8 +197,68 @@ async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
     lstat: fsPromises.lstat as LocalNodeDeps['lstat'],
     join: path.join,
     relative: path.relative,
+    resolve: path.resolve,
     sep: path.sep,
   }
+}
+
+function resolvePathAtConstruction(root: string): string {
+  const processLike = (
+    globalThis as {
+      process?: { cwd?: () => string; platform?: string }
+    }
+  ).process
+  if (typeof processLike?.cwd !== 'function') return root
+
+  const cwd = processLike.cwd()
+  if (processLike.platform === 'win32') return resolveWindowsPath(cwd, root)
+  return resolvePosixPath(cwd, root)
+}
+
+function resolvePosixPath(cwd: string, root: string): string {
+  const joined = root.startsWith('/') ? root : `${cwd}/${root}`
+  const resolved = normalizePathSegments(joined.split('/'), '/')
+  return resolved === '' ? '/' : `/${resolved}`
+}
+
+function resolveWindowsPath(cwd: string, root: string): string {
+  const normalizedRoot = root.replaceAll('/', '\\')
+  const normalizedCwd = cwd.replaceAll('/', '\\')
+  const drive = /^[A-Za-z]:/.exec(normalizedCwd)?.[0] ?? ''
+  if (/^\\\\/.test(normalizedRoot)) return normalizeUncPath(normalizedRoot)
+  if (/^[A-Za-z]:\\/.test(normalizedRoot)) {
+    const prefix = normalizedRoot.slice(0, 2)
+    const rest = normalizedRoot.slice(3).split('\\')
+    return `${prefix}\\${normalizePathSegments(rest, '\\')}`
+  }
+  if (normalizedRoot.startsWith('\\')) {
+    return `${drive}\\${normalizePathSegments(normalizedRoot.slice(1).split('\\'), '\\')}`
+  }
+  const base = /^[A-Za-z]:\\/.test(normalizedCwd) ? normalizedCwd : `${drive}\\`
+  const prefix = /^[A-Za-z]:/.exec(base)?.[0] ?? drive
+  const baseRest = base.slice(prefix.length).replace(/^\\/, '').split('\\')
+  const resolved = normalizePathSegments([...baseRest, ...normalizedRoot.split('\\')], '\\')
+  return `${prefix}\\${resolved}`
+}
+
+function normalizeUncPath(path: string): string {
+  const parts = path.split('\\').filter((part) => part !== '')
+  const [server, share, ...rest] = parts
+  if (server === undefined || share === undefined) return path
+  return `\\\\${server}\\${share}\\${normalizePathSegments(rest, '\\')}`
+}
+
+function normalizePathSegments(segments: readonly string[], separator: '/' | '\\'): string {
+  const out: string[] = []
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      out.pop()
+      continue
+    }
+    out.push(segment)
+  }
+  return out.join(separator)
 }
 
 function relativePathFromRoot(root: string, path: string, nodeDeps: LocalNodeDeps): string {

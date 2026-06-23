@@ -414,6 +414,8 @@ export async function deleteLocalFileInsideRoot(
         throw new Error('unsafe local delete path: parent changed before unlink')
       }
     }
+    const finalStats = await lstat(unlinkPath)
+    assertSameScannedRegularFile(finalStats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
     await unlink(unlinkPath)
   } finally {
     /* v8 ignore next -- best-effort cleanup */

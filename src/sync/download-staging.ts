@@ -11,7 +11,18 @@ export const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker'
 const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
 const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_STAGING_CLEANUP_CONCURRENCY = 8
+const MAX_CLEANUP_WARNING_ENTRIES = 3
 const reapedManagedDirectories = new Map<string, Promise<void>>()
+
+type StagingActivitySnapshot = {
+  readonly newestActivityMs: number
+  readonly signature: string
+}
+
+type CleanupWarning = {
+  readonly entryName: string
+  readonly operation: 'inspect' | 'remove'
+}
 
 /**
  * Creates a private SDK-managed staging directory under a local sync root.
@@ -215,39 +226,40 @@ async function reapStaleDownloadStagingDirectories(
   path: typeof import('node:path'),
   nowMillis: number,
 ): Promise<void> {
-  const { lstat, readdir, realpath, rm } = await import('node:fs/promises')
+  const { readdir, realpath, rm } = await import('node:fs/promises')
   let entries: import('node:fs').Dirent[]
   try {
     entries = await readdir(managedDirectory, { withFileTypes: true })
   } catch (err) {
     if (hasErrorCode(err, 'ENOENT')) return
-    emitCleanupWarning(`failed to inspect B2 SDK download staging entries: ${errorMessage(err)}`)
+    emitCleanupWarning('failed to inspect B2 SDK download staging entries')
     return
   }
 
-  const cleanupErrors: string[] = []
+  const cleanupErrors: CleanupWarning[] = []
   await forEachWithConcurrency(entries, MAX_STAGING_CLEANUP_CONCURRENCY, async (entry) => {
     if (!entry.isDirectory() || !entry.name.endsWith(DOWNLOAD_STAGING_ENTRY_SUFFIX)) return
     const candidate = path.join(managedDirectory, entry.name)
-    let stats: Awaited<ReturnType<typeof lstat>>
-    try {
-      const markerStats = await lstat(path.join(candidate, DOWNLOAD_STAGING_MARKER_NAME))
-      if (!markerStats.isFile()) return
-      stats = await lstat(candidate)
-    } catch {
-      return
-    }
-    if (nowMillis - stats.mtimeMs < STALE_DOWNLOAD_STAGING_AGE_MS) return
-    const realCandidate = await realpath(candidate).catch((err: unknown) => {
-      cleanupErrors.push(`${candidate}: ${errorMessage(err)}`)
+    const activity = await readManagedStagingEntryActivity(candidate, path)
+    if (activity === undefined || !stagingActivityIsStale(activity, nowMillis)) return
+    const realCandidate = await realpath(candidate).catch(() => {
+      cleanupErrors.push({ entryName: entry.name, operation: 'inspect' })
       return undefined
     })
     if (realCandidate === undefined) return
     try {
       assertPathInsideRoot(managedDirectory, realCandidate, path)
+      const latestActivity = await readManagedStagingEntryActivity(candidate, path)
+      if (
+        latestActivity === undefined ||
+        latestActivity.signature !== activity.signature ||
+        !stagingActivityIsStale(latestActivity, nowMillis)
+      ) {
+        return
+      }
       await rm(realCandidate, { recursive: true, force: true })
-    } catch (err) {
-      cleanupErrors.push(`${candidate}: ${errorMessage(err)}`)
+    } catch {
+      cleanupErrors.push({ entryName: entry.name, operation: 'remove' })
     }
   })
 
@@ -255,10 +267,77 @@ async function reapStaleDownloadStagingDirectories(
     const noun = cleanupErrors.length === 1 ? 'entry' : 'entries'
     emitCleanupWarning(
       `failed to reap ${cleanupErrors.length} stale B2 SDK download staging ${noun}: ${cleanupErrors
-        .slice(0, 3)
+        .slice(0, MAX_CLEANUP_WARNING_ENTRIES)
+        .map(formatCleanupWarning)
         .join('; ')}`,
     )
   }
+}
+
+async function readManagedStagingEntryActivity(
+  candidate: string,
+  path: typeof import('node:path'),
+): Promise<StagingActivitySnapshot | undefined> {
+  const { lstat, readdir } = await import('node:fs/promises')
+
+  try {
+    const [directoryStats, markerStats] = await Promise.all([
+      lstat(candidate),
+      lstat(path.join(candidate, DOWNLOAD_STAGING_MARKER_NAME)),
+    ])
+    if (!directoryStats.isDirectory() || !markerStats.isFile()) return undefined
+
+    const entries = await readdir(candidate, { withFileTypes: true })
+    const statsParts = [
+      `.:${stagingStatsSignature(directoryStats)}`,
+      `${DOWNLOAD_STAGING_MARKER_NAME}:${stagingStatsSignature(markerStats)}`,
+    ]
+    let newestActivityMs = Math.max(
+      stagingStatsActivityMs(directoryStats),
+      stagingStatsActivityMs(markerStats),
+    )
+
+    for (const entry of [...entries].sort((a, b) =>
+      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+    )) {
+      const stats = await lstat(path.join(candidate, entry.name))
+      statsParts.push(`${entry.name}:${stagingStatsSignature(stats)}`)
+      newestActivityMs = Math.max(newestActivityMs, stagingStatsActivityMs(stats))
+    }
+
+    return { newestActivityMs, signature: statsParts.join('|') }
+  } catch {
+    return undefined
+  }
+}
+
+function stagingStatsActivityMs(stats: { readonly mtimeMs: number }) {
+  return stats.mtimeMs
+}
+
+function stagingStatsSignature(stats: {
+  readonly ctimeMs: number
+  readonly dev: number | bigint
+  readonly ino: number | bigint
+  readonly mtimeMs: number
+  readonly size: number
+}): string {
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+}
+
+function stagingActivityIsStale(activity: StagingActivitySnapshot, nowMillis: number): boolean {
+  return nowMillis - activity.newestActivityMs >= STALE_DOWNLOAD_STAGING_AGE_MS
+}
+
+function formatCleanupWarning(error: CleanupWarning): string {
+  return `${error.operation} ${safeWarningName(error.entryName)}`
+}
+
+function safeWarningName(name: string): string {
+  const chars = Array.from(name)
+  const bounded = chars.slice(0, 80).join('')
+  const suffix = chars.length > 80 ? '...' : ''
+  return JSON.stringify(`${bounded.replace(/[^A-Za-z0-9._-]/g, '?')}${suffix}`)
 }
 
 async function forEachWithConcurrency<T>(
@@ -286,8 +365,4 @@ function emitCleanupWarning(message: string): void {
     }
   ).process
   processLike?.emitWarning?.(message, { code: 'B2SDK_DOWNLOAD_STAGING_CLEANUP_FAILED' })
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
 }

@@ -62,7 +62,7 @@ export interface ContentSource {
   /** Open the content as a ReadableStream. */
   stream(): ReadableStream<Uint8Array>
   /** Read the entire content into an ArrayBuffer. */
-  toArrayBuffer(): Promise<ArrayBuffer>
+  toArrayBuffer(options?: { readonly signal?: AbortSignal }): Promise<ArrayBuffer>
 }
 
 /** ContentSource backed by a Blob or File. */
@@ -101,10 +101,15 @@ export class BlobSource implements ContentSource {
 
   /**
    * Read the entire Blob content into an ArrayBuffer.
+   * @param options - Optional abort signal used while reading.
+   *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  toArrayBuffer(): Promise<ArrayBuffer> {
-    return this.blob.arrayBuffer()
+  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    options.signal?.throwIfAborted()
+    if (options.signal === undefined) return this.blob.arrayBuffer()
+    const bytes = await collectStream(this.stream(), options)
+    return arrayBufferFor(bytes)
   }
 }
 
@@ -150,9 +155,12 @@ export class BufferSource implements ContentSource {
 
   /**
    * Read the entire buffer content into an ArrayBuffer.
+   * @param options - Optional abort signal checked before returning the buffer.
+   *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  toArrayBuffer(): Promise<ArrayBuffer> {
+  toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    options.signal?.throwIfAborted()
     return Promise.resolve(
       this.buffer.buffer.slice(
         this.buffer.byteOffset,
@@ -308,10 +316,12 @@ export class FileSource implements ContentSource {
 
   /**
    * Read this file range into an ArrayBuffer.
+   * @param options - Optional abort signal used while reading.
+   *
    * @returns A promise that resolves with the bytes in this source's range.
    */
-  async toArrayBuffer(): Promise<ArrayBuffer> {
-    const bytes = await collectStream(this.stream())
+  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    const bytes = await collectStream(this.stream(), options)
     if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
       return bytes.buffer as ArrayBuffer
     }
@@ -367,10 +377,12 @@ export class StreamSource implements ContentSource {
 
   /**
    * Read the entire stream into an ArrayBuffer.
+   * @param options - Optional abort signal used while reading.
+   *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  async toArrayBuffer(): Promise<ArrayBuffer> {
-    const bytes = await collectStream(this.stream())
+  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    const bytes = await collectStream(this.stream(), options)
     return arrayBufferFor(bytes)
   }
 }

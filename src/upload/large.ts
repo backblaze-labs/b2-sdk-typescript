@@ -381,7 +381,7 @@ export async function uploadLargeFile(
         abortScope.signal.throwIfAborted()
 
         const partSource = options.source.slice(part.offset, part.offset + part.length)
-        const data = new Uint8Array(await partSource.toArrayBuffer())
+        const data = new Uint8Array(await partSource.toArrayBuffer({ signal: abortScope.signal }))
         abortScope.signal.throwIfAborted()
 
         const partSha1 = new IncrementalSha1()
