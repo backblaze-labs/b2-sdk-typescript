@@ -237,6 +237,50 @@ describe('FetchTransport', () => {
     expect(cancel).toHaveBeenCalledWith('caller stopped reading')
   })
 
+  it('cancels the response body when a helper read is aborted', async () => {
+    const controller = new AbortController()
+    const response = new Response(new ReadableStream<Uint8Array>(), { status: 200 })
+    const cancelSpy = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'cancel')
+    fetchSpy.mockResolvedValue(response)
+
+    const transport = new FetchTransport()
+    const httpResponse = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      signal: controller.signal,
+      retry: { requestTimeoutMs: 10_000 },
+    })
+
+    const read = expect(httpResponse.json()).rejects.toBe('caller cancelled')
+    controller.abort('caller cancelled')
+    await read
+
+    expect(cancelSpy).toHaveBeenCalledWith('caller cancelled')
+  })
+
+  it('cancels the locked response reader when a stream read is aborted', async () => {
+    const controller = new AbortController()
+    const cancel = vi.fn()
+    fetchSpy.mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      signal: controller.signal,
+      retry: { requestTimeoutMs: 10_000 },
+    })
+    const reader = response.body?.getReader()
+
+    const read = expect(reader?.read()).rejects.toBe('caller cancelled')
+    controller.abort('caller cancelled')
+    await read
+
+    expect(cancel).toHaveBeenCalledWith('caller cancelled')
+  })
+
   it.each([
     'json',
     'text',

@@ -259,10 +259,11 @@ async function readTimedResponseBody<T>(
   read: () => Promise<T>,
 ): Promise<T> {
   try {
-    return await raceBodyReadWithAbort(timeoutScope, read())
+    return await raceBodyReadWithAbort(timeoutScope, read(), (reason) =>
+      cancelResponseBody(response, reason),
+    )
   } catch (err) {
     if (timeoutScope.timedOut) {
-      await cancelResponseBody(response)
       throw createRequestTimeoutError(timeoutScope)
     }
     throw err
@@ -287,7 +288,9 @@ function createTimedResponseBody(
     async pull(controller) {
       reader ??= body.getReader()
       try {
-        const result = await raceBodyReadWithAbort(timeoutScope, reader.read())
+        const result = await raceBodyReadWithAbort(timeoutScope, reader.read(), (reason) =>
+          reader?.cancel(reason),
+        )
         if (result.done) {
           dispose()
           controller.close()
@@ -298,7 +301,6 @@ function createTimedResponseBody(
       } catch (err) {
         dispose()
         if (timeoutScope.timedOut) {
-          await reader.cancel().catch(() => {})
           controller.error(createRequestTimeoutError(timeoutScope))
           return
         }
@@ -323,15 +325,23 @@ function createTimedResponseBody(
 async function raceBodyReadWithAbort<T>(
   timeoutScope: RequestTimeoutScope,
   read: Promise<T>,
+  abortCleanup?: ((reason: unknown) => Promise<void> | void) | undefined,
 ): Promise<T> {
   const signal = timeoutScope.signal
   if (signal === undefined) return read
-  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
+  if (signal.aborted) {
+    const reason = abortReason()
+    await runAbortCleanup(abortCleanup, reason)
+    throw reason
+  }
 
   let removeAbortListener: (() => void) | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
-      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      const reason = abortReason()
+      reject(reason)
+      void runAbortCleanup(abortCleanup, reason)
     }
     signal.addEventListener('abort', onAbort, { once: true })
     removeAbortListener = () => signal.removeEventListener('abort', onAbort)
@@ -341,6 +351,17 @@ async function raceBodyReadWithAbort<T>(
     return await Promise.race([read, abort])
   } finally {
     removeAbortListener?.()
+  }
+}
+
+async function runAbortCleanup(
+  abortCleanup: ((reason: unknown) => Promise<void> | void) | undefined,
+  reason: unknown,
+): Promise<void> {
+  try {
+    await abortCleanup?.(reason)
+  } catch {
+    // Abort cleanup is best-effort and must not mask the abort reason.
   }
 }
 
@@ -357,11 +378,11 @@ function canFollowSameOriginRedirect(request: HttpRequest, location: string): bo
   }
 }
 
-async function cancelResponseBody(response: Response): Promise<void> {
+async function cancelResponseBody(response: Response, reason?: unknown): Promise<void> {
   try {
-    await response.body?.cancel()
+    await response.body?.cancel(reason)
   } catch {
-    // Best-effort cleanup before throwing the redirect error.
+    // Best-effort cleanup before throwing the primary error.
   }
 }
 

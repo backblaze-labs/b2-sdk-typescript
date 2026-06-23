@@ -40,13 +40,17 @@ export interface UploadRetryOptions {
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
-   * Whether response-body read failures after an upload POST should be retried.
-   * The caller resolves its public default before entering this helper.
+   * Whether ambiguous failures after an upload POST should be retried,
+   * including response-body read failures and transport errors where B2 may
+   * have stored the payload before the success response was lost.
+   * Defaults to false. Set true only when duplicate versions or parts are
+   * acceptable.
    */
-  readonly retryResponseBodyFailures: boolean
+  readonly retryResponseBodyFailures?: boolean | undefined
 }
 
-interface UploadLayerRetryOptions extends UploadRetryOptions {
+interface UploadLayerRetryOptions extends Omit<UploadRetryOptions, 'retryResponseBodyFailures'> {
+  readonly retryResponseBodyFailures: boolean
   /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
   readonly signal?: AbortSignal | undefined
 }
