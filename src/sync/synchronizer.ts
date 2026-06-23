@@ -656,16 +656,18 @@ function requireLocalRoot(
 }
 
 async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<LocalRootContexts> {
-  if (config.source.type !== 'local' && config.dest.type !== 'local') return {}
+  const sourceIsLocalFilesystem = isLocalFilesystemFolder(config.source)
+  const destIsLocalFilesystem = isLocalFilesystemFolder(config.dest)
+  if (!sourceIsLocalFilesystem && !destIsLocalFilesystem) return {}
 
   const path = await import('node:path')
   const sourceContext = config.dest.type === 'b2' ? 'upload' : 'sync'
   const destContext = config.source.type === 'b2' ? 'download' : 'sync'
   return {
-    ...(isLocalFilesystemFolder(config.source)
+    ...(sourceIsLocalFilesystem
       ? { source: path.resolve(requireLocalRoot(config.source, 'source', sourceContext)) }
       : {}),
-    ...(isLocalFilesystemFolder(config.dest)
+    ...(destIsLocalFilesystem
       ? { dest: path.resolve(requireLocalRoot(config.dest, 'destination', destContext)) }
       : {}),
   }
