@@ -43,7 +43,7 @@ export function localFileIdentityFromStats(stats: LocalFileStatsLike): LocalFile
 export function assertSameScannedRegularFile(
   stats: LocalRegularFileStatsLike,
   path: LocalSyncPath,
-  operation: 'upload' | 'delete' | 'sha1 comparison' = 'upload',
+  operation: 'upload' | 'download' | 'delete' | 'sha1 comparison' = 'upload',
 ): void {
   const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {

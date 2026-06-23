@@ -77,6 +77,7 @@ export async function writeLocalStreamInsideRoot(
   body: ReadableStream<Uint8Array>,
   options: {
     readonly expectedBytes: number
+    readonly expectedDestination?: LocalSyncPath | null
     readonly idleTimeoutMillis: number
     readonly signal?: AbortSignal
   },
@@ -85,6 +86,7 @@ export async function writeLocalStreamInsideRoot(
   const { chmod, lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
   const path = await import('node:path')
   const { randomUUID } = await import('node:crypto')
+  assertValidExpectedBytes(options.expectedBytes)
   const segments = safeRelativePathSegments(relPath)
   const rootRealPath = await realpath(root)
 
@@ -222,6 +224,11 @@ export async function writeLocalStreamInsideRoot(
     const finalPathBeforeRename = path.join(parentRealPathBeforeRename, path.basename(destPath))
     assertPathInsideRoot(rootRealPath, finalPathBeforeRename, path)
     await localFileIoTestHooks.beforeFinalRename?.(parentRealPathBeforeRename)
+    if (anchoredParentPath === undefined && parentRealPathBeforeRename !== rootRealPath) {
+      throw new Error(
+        'unsafe local destination path: stable parent handle unavailable for final publish',
+      )
+    }
     let publishPath = finalWritePath
     if (anchoredParentPath === undefined) {
       const [parentRealPathAfterHook, parentStatsAfterHook] = await Promise.all([
@@ -237,6 +244,7 @@ export async function writeLocalStreamInsideRoot(
       publishPath = path.join(parentRealPathAfterHook, path.basename(destPath))
       assertPathInsideRoot(rootRealPath, publishPath, path)
     }
+    await assertExpectedDownloadDestination(lstat, publishPath, options.expectedDestination)
     await rename(tmpPath, publishPath)
     completed = true
   } catch (err) {
@@ -255,6 +263,38 @@ export async function writeLocalStreamInsideRoot(
     await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
     /* v8 ignore next -- best-effort cleanup */
     await parentHandle?.close().catch(() => {})
+  }
+}
+
+function assertValidExpectedBytes(expectedBytes: number): void {
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0) {
+    throw new Error('download expectedBytes must be a non-negative safe integer')
+  }
+}
+
+async function assertExpectedDownloadDestination(
+  lstat: typeof import('node:fs/promises')['lstat'],
+  finalPath: string,
+  expectedDestination: LocalSyncPath | null | undefined,
+): Promise<void> {
+  if (expectedDestination === undefined) return
+
+  try {
+    const stats = await lstat(finalPath)
+    if (expectedDestination === null) {
+      throw new Error('local destination changed before download: file was created')
+    }
+    assertSameScannedRegularFile(
+      stats,
+      { ...expectedDestination, absolutePath: finalPath },
+      'download',
+    )
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) {
+      if (expectedDestination === null) return
+      throw new Error('local file changed before download: file missing')
+    }
+    throw err
   }
 }
 

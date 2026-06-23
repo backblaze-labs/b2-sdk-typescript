@@ -32,13 +32,23 @@ export async function createDownloadStagingDirectory(
   statForDeviceCheck: DeviceStatFn,
   beforeStagingMarkerWrite?: (directory: string) => Promise<void> | void,
 ): Promise<string> {
-  const { chmod, mkdir, readdir, realpath, rm } = await import('node:fs/promises')
+  const { chmod, lstat, mkdir, readdir, realpath, rm } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
-  await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE, recursive: true })
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(managedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
+  try {
+    await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
+  } catch (err) {
+    if (!hasErrorCode(err, 'EEXIST')) throw err
+  }
+  const managedStats = await lstat(managedDirectory)
+  if (!managedStats.isDirectory()) {
+    throw new Error(
+      `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is not a directory`,
+    )
+  }
   const realManagedDirectory = await realpath(managedDirectory)
   assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
+  /* v8 ignore next -- best-effort chmod */
+  await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   await assertDownloadPathSameDevice(
     rootRealPath,
     realManagedDirectory,

@@ -538,6 +538,13 @@ function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
   return Math.floor(value)
 }
 
+function assertValidB2ContentLength(contentLength: number): number {
+  if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+    throw new Error('B2 contentLength must be a non-negative safe integer')
+  }
+  return contentLength
+}
+
 function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefined {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
@@ -551,7 +558,7 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
   )
 
   return async (path, signal) => {
-    const expectedBytes = Math.max(0, Math.floor(path.selectedVersion.contentLength))
+    const expectedBytes = assertValidB2ContentLength(path.selectedVersion.contentLength)
     const maxBytes = normalizeSha1VerificationMaxBytes(
       expectedBytes,
       config.options.sha1VerificationMaxBytes,
@@ -769,7 +776,7 @@ function createActionFactory(
       )
     },
 
-    download(source: B2SyncPath): SyncAction {
+    download(source: B2SyncPath, scannedDest?: LocalSyncPath | null): SyncAction {
       const bucket = downConfig.bucket
       assertBucket(bucket, 'download')
       const root =
@@ -784,6 +791,7 @@ function createActionFactory(
         const idleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
           config.options.downloadIdleTimeoutMillis,
         )
+        const expectedBytes = assertValidB2ContentLength(source.selectedVersion.contentLength)
         await ensureLocalSyncRootDirectory(root, relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
@@ -794,7 +802,8 @@ function createActionFactory(
         })
         try {
           await writeLocalStreamInsideRoot(root, relPath, result.body, {
-            expectedBytes: source.selectedVersion.contentLength,
+            expectedBytes,
+            ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
             ...(signal !== undefined ? { signal } : {}),
           })

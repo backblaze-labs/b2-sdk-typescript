@@ -588,7 +588,7 @@ describe('synchronize download safety', () => {
         options: {
           compareMode: 'size',
           keepMode: 'no-delete',
-          downloadInactivityTimeoutMs: 10,
+          downloadIdleTimeoutMillis: 10,
         },
         bucket,
       }
