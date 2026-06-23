@@ -8,8 +8,6 @@ import {
 } from './download/single.ts'
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
-import type { ProgressListener } from './streams/progress.ts'
-import type { ContentSource } from './streams/source.ts'
 import type {
   BucketInfo,
   BucketRetentionPolicy,
@@ -35,13 +33,12 @@ import type {
 import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
 import { Semaphore } from './upload/concurrency.ts'
+import { uploadLargeFile } from './upload/large.ts'
 import {
-  type ResumePartReusedListener,
-  type UploadLargeFileOptions,
-  uploadLargeFile,
-} from './upload/large.ts'
-import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
-import type { UploadRetryListener } from './upload/retry.ts'
+  type BucketUploadOptions,
+  rejectSmallResumeFileId,
+  stripResumeOnlyOptions,
+} from './upload/options.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -163,63 +160,7 @@ export class Bucket {
    *
    * @returns Metadata for the uploaded file version.
    */
-  async upload(options: {
-    /** Destination file name (path) in the bucket. */
-    fileName: string
-    /** Data source to upload. Use {@link BufferSource}, {@link BlobSource}, or {@link StreamSource}. */
-    source: ContentSource
-    /** MIME type. Defaults to `"b2/x-auto"` (auto-detected by B2). */
-    contentType?: string
-    /** Custom key-value metadata stored with the file. */
-    fileInfo?: Record<string, string>
-    /** Server-side encryption settings. */
-    serverSideEncryption?: EncryptionSetting
-    /** File retention policy (requires file lock on the bucket). */
-    fileRetention?: FileRetentionValue
-    /** Legal hold status for the file. */
-    legalHold?: LegalHoldValue
-    /** Last-modified timestamp in milliseconds since epoch. */
-    lastModifiedMillis?: number
-    /** Part size override for multipart uploads, in bytes. */
-    partSize?: number
-    /** Number of concurrent part uploads for large files. */
-    concurrency?: number
-    /** Callback invoked with upload progress events. */
-    onProgress?: ProgressListener
-    /** Callback invoked before retrying with a fresh upload URL. */
-    onUploadRetry?: UploadRetryListener
-    /**
-     * Retry when an upload response body cannot be read after B2 may have stored
-     * the payload. Single-request uploads default to false because this ambiguous
-     * retry can create duplicate file versions; retryable 5xx responses and
-     * network failures may still retry unless `retry.maxRetries` is 0.
-     * If enabled for a single-request upload, file retention and legal hold
-     * settings apply to each duplicate version and can prevent deletion until
-     * retention expires or the hold is cleared.
-     * Multipart part uploads default to true because re-posting the same part
-     * number is idempotent.
-     */
-    retryResponseBodyFailures?: boolean
-    /** Abort signal for cancelling the upload. */
-    signal?: AbortSignal
-    /** See {@link UploadLargeFileOptions.resume}. Ignored on the small-file path. */
-    resume?: NonNullable<UploadLargeFileOptions['resume']>
-    /** See {@link UploadLargeFileOptions.resumeMaxListPages}. */
-    resumeMaxListPages?: NonNullable<UploadLargeFileOptions['resumeMaxListPages']>
-    /** See {@link UploadLargeFileOptions.resumeMaxPartCandidates}. */
-    resumeMaxPartCandidates?: NonNullable<UploadLargeFileOptions['resumeMaxPartCandidates']>
-    /** See {@link UploadLargeFileOptions.resumeMaxPartPages}. */
-    resumeMaxPartPages?: NonNullable<UploadLargeFileOptions['resumeMaxPartPages']>
-    /**
-     * See {@link UploadLargeFileOptions.resumeFileId}. Only supported on the
-     * large-file path; small-file uploads throw.
-     */
-    resumeFileId?: NonNullable<UploadLargeFileOptions['resumeFileId']>
-    /** Diagnostic callback invoked when resume discovery rejects a candidate. */
-    onResumeCandidateRejected?: ResumeCandidateRejectedListener
-    /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
-    onResumePartReused?: ResumePartReusedListener
-  }): Promise<FileVersion> {
+  async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
 
@@ -230,22 +171,8 @@ export class Bucket {
         retry: this.uploadRetryOptions,
       })
     }
-    if (options.resumeFileId !== undefined) {
-      throw new Error('Bucket.upload: resumeFileId is only supported for multipart uploads.')
-    }
-
-    // Strip resume-only options from the small-file path: the signature
-    // there doesn't accept them, and they're meaningless for single-request uploads.
-    const {
-      resume: _resume,
-      resumeFileId: _resumeFileId,
-      onResumeCandidateRejected: _onResumeCandidateRejected,
-      onResumePartReused: _onResumePartReused,
-      resumeMaxListPages: _resumeMaxListPages,
-      resumeMaxPartCandidates: _resumeMaxPartCandidates,
-      resumeMaxPartPages: _resumeMaxPartPages,
-      ...smallOptions
-    } = options
+    rejectSmallResumeFileId(options, 'Bucket.upload')
+    const smallOptions = stripResumeOnlyOptions(options)
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,

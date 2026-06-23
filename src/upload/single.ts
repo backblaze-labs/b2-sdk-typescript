@@ -46,10 +46,9 @@ export interface UploadFileOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the file. Defaults to false because this ambiguous retry can create a
-   * duplicate B2 file version. Retryable 5xx responses and network failures
-   * may still retry a single-file upload with a fresh URL; set `retry.maxRetries`
-   * to 0 when strict at-most-once upload attempts are required.
+   * the file, or when the upload POST fails with an ambiguous network error.
+   * Defaults to false because re-sending a single-file upload can create a
+   * duplicate B2 file version.
    */
   readonly retryResponseBodyFailures?: boolean
 }

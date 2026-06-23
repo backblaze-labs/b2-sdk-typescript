@@ -101,6 +101,8 @@ export interface UploadLargeFileOptions {
    * budget in sequential B2 list calls; pass `signal` to bound wall-clock time.
    * SSE-C uploads are never auto-resumed because B2 does not expose the
    * customer key identity needed to verify a compatible unfinished file.
+   * Candidates with unreadable Object Lock retention or legal-hold fields are
+   * rejected because automatic discovery cannot prove they are unlocked.
    */
   readonly resume?: boolean
   /**
@@ -129,6 +131,8 @@ export interface UploadLargeFileOptions {
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
    * {@link ResumeFileIdMismatchError}.
+   * When `fileRetention` and `legalHold` are omitted, this explicit ID is the
+   * trust decision for unreadable Object Lock fields on that unfinished file.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -228,6 +232,7 @@ export async function uploadLargeFile(
   let largeFileId: LargeFileId
   let preUploaded: ReadonlyMap<number, string>
   let createdLargeFile = false
+  const controlOptions = options.signal !== undefined ? { signal: options.signal } : undefined
 
   if (options.resumeFileId !== undefined) {
     const candidate = await findResumeCandidate(
@@ -261,6 +266,7 @@ export async function uploadLargeFile(
         accountInfo.getApiUrl(),
         accountInfo.getAuthToken(),
         startLargeFileRequest,
+        controlOptions,
       )
       largeFileId = startResp.fileId
       preUploaded = new Map<number, string>()
@@ -271,6 +277,7 @@ export async function uploadLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       startLargeFileRequest,
+      controlOptions,
     )
     largeFileId = startResp.fileId
     preUploaded = new Map<number, string>()
@@ -288,23 +295,37 @@ export async function uploadLargeFile(
   // shipped, then dropped before the next read starts, so the peak
   // memory footprint is ~partSize bytes regardless of total file size.
   if (!options.source.canSlice) {
+    const abortScope = createUploadAbortScope(options.signal)
     try {
       await uploadPartsSequentially(
         raw,
         accountInfo,
         options,
+        abortScope.signal,
         largeFileId,
         parts,
         partSha1s,
         tracker,
       )
-      return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        fileId: largeFileId,
-        partSha1Array: partSha1s,
-      })
+      return await raw.finishLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          fileId: largeFileId,
+          partSha1Array: partSha1s,
+        },
+        { signal: abortScope.signal },
+      )
     } catch (err) {
-      if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+      abortScope.abort(err)
+      if (createdLargeFile) {
+        await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, {
+          signal: abortScope.signal,
+        })
+      }
       throw err
+    } finally {
+      abortScope.dispose()
     }
   }
 
@@ -384,14 +405,24 @@ export async function uploadLargeFile(
       throw rejected.reason
     }
 
-    const result = await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      fileId: largeFileId,
-      partSha1Array: partSha1s,
-    })
+    const result = await raw.finishLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        fileId: largeFileId,
+        partSha1Array: partSha1s,
+      },
+      { signal: abortScope.signal },
+    )
 
     return result
   } catch (err) {
-    if (createdLargeFile) await cancelLargeFileBestEffort(raw, accountInfo, largeFileId)
+    abortScope.abort(err)
+    if (createdLargeFile) {
+      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, {
+        signal: abortScope.signal,
+      })
+    }
     throw err
   } finally {
     abortScope.dispose()
@@ -413,6 +444,7 @@ export async function uploadLargeFile(
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state.
  * @param options - The original `uploadLargeFile` options.
+ * @param signal - Abort signal shared by part uploads and control-plane calls.
  * @param largeFileId - ID of the in-progress large file (already started).
  * @param parts - Pre-planned part layout (used for part numbers + count).
  * @param partSha1s - Output array, written in-place at index `partNumber - 1`.
@@ -423,6 +455,7 @@ async function uploadPartsSequentially(
   raw: RawClient,
   accountInfo: AccountInfo,
   options: UploadLargeFileOptions,
+  signal: AbortSignal,
   largeFileId: LargeFileId,
   parts: readonly RangePlan[],
   partSha1s: string[],
@@ -437,7 +470,7 @@ async function uploadPartsSequentially(
 
   try {
     for (const planned of parts) {
-      options.signal?.throwIfAborted()
+      signal.throwIfAborted()
 
       const buf = new Uint8Array(planned.length)
       let filled = 0
@@ -460,6 +493,7 @@ async function uploadPartsSequentially(
         }
       }
 
+      signal.throwIfAborted()
       // For the LAST part the stream may run dry mid-buffer, leaving a
       // shorter chunk. B2 accepts a final part smaller than `partSize`.
       const data = filled === buf.byteLength ? buf : buf.subarray(0, filled)
@@ -478,6 +512,7 @@ async function uploadPartsSequentially(
       const partSha1 = new IncrementalSha1()
       await partSha1.update(data)
       const sha1Hex = await partSha1.digest()
+      signal.throwIfAborted()
 
       const result = await uploadPartWithFreshUrl(raw, accountInfo, largeFileId, {
         fileName: options.fileName,
@@ -486,7 +521,7 @@ async function uploadPartsSequentially(
         contentLength: data.byteLength,
         contentSha1: sha1Hex,
         retry: options.retry,
-        signal: options.signal,
+        signal,
         onUploadRetry: options.onUploadRetry,
         retryResponseBodyFailures: resolveRetryResponseBodyFailures(
           options.retryResponseBodyFailures,

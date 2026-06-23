@@ -131,15 +131,20 @@ export function createWriteStream(
     if (largeFileId !== null) return Promise.resolve(largeFileId)
     if (startPromise !== null) return startPromise
     startPromise = (async () => {
-      const resp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-        bucketId: options.bucketId,
-        fileName: options.fileName,
-        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-      })
+      const resp = await raw.startLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+          fileInfo: options.fileInfo ?? {},
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+        },
+        { signal: abortScope.signal },
+      )
       largeFileId = resp.fileId
       if (abortScope.signal.aborted) {
         scheduleCancelLargeFileAfterStart(Promise.resolve(largeFileId))
@@ -194,7 +199,9 @@ export function createWriteStream(
     if (cancelAfterStartScheduled) return
     cancelAfterStartScheduled = true
     void started
-      .then((fileId) => cancelLargeFileBestEffort(raw, accountInfo, fileId))
+      .then((fileId) =>
+        cancelLargeFileBestEffort(raw, accountInfo, fileId, { signal: abortScope.signal }),
+      )
       .catch(() => {
         // If start failed, no file ID is available to cancel.
       })
@@ -295,6 +302,7 @@ export function createWriteStream(
           accountInfo.getApiUrl(),
           accountInfo.getAuthToken(),
           { fileId: largeFileId, partSha1Array: partSha1s },
+          { signal: abortScope.signal },
         )
         resolveDone(result)
         abortScope.dispose()
@@ -311,7 +319,9 @@ export function createWriteStream(
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
         if (fileIdToCancel !== null) {
-          await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
+          await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel, {
+            signal: abortScope.signal,
+          })
         }
         rejectDone(observedError)
         abortScope.dispose()
@@ -331,7 +341,9 @@ export function createWriteStream(
         scheduleCancelLargeFileAfterStart(startPromise)
       }
       if (fileIdToCancel !== null) {
-        await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel)
+        await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel, {
+          signal: abortScope.signal,
+        })
       }
       rejectDone(abortError)
       abortScope.dispose()

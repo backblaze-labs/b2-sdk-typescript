@@ -503,6 +503,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The started large file metadata with file ID.
    */
@@ -510,8 +511,15 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: StartLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<StartLargeFileResponse> {
-    return this.postJson<StartLargeFileResponse>(apiUrl, authToken, 'b2_start_large_file', request)
+    return this.postJson<StartLargeFileResponse>(
+      apiUrl,
+      authToken,
+      'b2_start_large_file',
+      request,
+      options,
+    )
   }
 
   /**
@@ -616,6 +624,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The completed file version metadata.
    */
@@ -623,9 +632,10 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: FinishLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request),
+      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request, options),
     )
   }
 
@@ -634,6 +644,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The cancelled large file metadata.
    */
@@ -641,12 +652,14 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CancelLargeFileRequest,
+    options?: RawRequestOptions,
   ): Promise<CancelLargeFileResponse> {
     return this.postJson<CancelLargeFileResponse>(
       apiUrl,
       authToken,
       'b2_cancel_large_file',
       request,
+      options,
     )
   }
 

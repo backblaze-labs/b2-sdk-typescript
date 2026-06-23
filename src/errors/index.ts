@@ -29,10 +29,27 @@ import {
   KNOWN_B2_ERROR_CODES,
   type KnownB2ErrorCode,
 } from '../types/errors.ts'
+import type { LargeFileId } from '../types/ids.ts'
 
-// Defined with the resume planner to avoid splitting the error from its
-// compatibility checks, then re-exported from the public errors subpath.
-export { ResumeFileIdMismatchError } from '../upload/resume.ts'
+/** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
+export class ResumeFileIdMismatchError extends Error {
+  /** Caller-supplied unfinished large file ID that failed verification. */
+  readonly fileId: LargeFileId
+  /** Requested destination file name. */
+  readonly fileName: string
+
+  /**
+   * Creates a new resume-file ID mismatch error.
+   * @param fileId - Caller-supplied unfinished large file ID that failed verification.
+   * @param fileName - Requested destination file name.
+   */
+  constructor(fileId: LargeFileId, fileName: string) {
+    super('uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.')
+    this.name = 'ResumeFileIdMismatchError'
+    this.fileId = fileId
+    this.fileName = fileName
+  }
+}
 
 /** Metadata captured from B2 error response headers. */
 export interface B2ErrorOptions {

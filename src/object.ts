@@ -12,17 +12,16 @@ import {
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
-import type { ContentSource } from './streams/source.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
+import { uploadLargeFile } from './upload/large.ts'
 import {
-  type ResumePartReusedListener,
-  type UploadLargeFileOptions,
-  uploadLargeFile,
-} from './upload/large.ts'
-import type { ResumeCandidateRejectedListener } from './upload/resume.ts'
+  type B2ObjectUploadOptions,
+  rejectSmallResumeFileId,
+  stripResumeOnlyOptions,
+} from './upload/options.ts'
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
@@ -120,61 +119,7 @@ export class B2Object {
    *
    * @returns Metadata for the uploaded file version.
    */
-  async upload(options: {
-    /** Data source to upload. */
-    source: ContentSource
-    /** MIME type. Defaults to auto-detection by B2. */
-    contentType?: string
-    /** Custom key-value metadata stored with the file. */
-    fileInfo?: Record<string, string>
-    /** Server-side encryption settings. */
-    serverSideEncryption?: EncryptionSetting
-    /** File retention policy (requires file lock). */
-    fileRetention?: FileRetentionValue
-    /** Legal hold status. */
-    legalHold?: LegalHoldValue
-    /** Last-modified timestamp in milliseconds since epoch. */
-    lastModifiedMillis?: number
-    /** Part size override for multipart uploads, in bytes. */
-    partSize?: number
-    /** Number of concurrent part uploads for large files. */
-    concurrency?: number
-    /** Callback invoked with upload progress events. */
-    onProgress?: ProgressListener
-    /** Callback invoked before retrying with a fresh upload URL. */
-    onUploadRetry?: UploadRetryListener
-    /**
-     * Retry when an upload response body cannot be read after B2 may have stored
-     * the payload. Single-request uploads default to false because this ambiguous
-     * retry can create duplicate file versions; retryable 5xx responses and
-     * network failures may still retry unless `retry.maxRetries` is 0.
-     * If enabled for a single-request upload, file retention and legal hold
-     * settings apply to each duplicate version and can prevent deletion until
-     * retention expires or the hold is cleared.
-     * Multipart part uploads default to true because re-posting the same part
-     * number is idempotent.
-     */
-    retryResponseBodyFailures?: boolean
-    /** Abort signal for cancelling the upload. */
-    signal?: AbortSignal
-    /** See {@link UploadLargeFileOptions.resume}. Ignored on the small-file path. */
-    resume?: NonNullable<UploadLargeFileOptions['resume']>
-    /** See {@link UploadLargeFileOptions.resumeMaxListPages}. */
-    resumeMaxListPages?: NonNullable<UploadLargeFileOptions['resumeMaxListPages']>
-    /** See {@link UploadLargeFileOptions.resumeMaxPartCandidates}. */
-    resumeMaxPartCandidates?: NonNullable<UploadLargeFileOptions['resumeMaxPartCandidates']>
-    /** See {@link UploadLargeFileOptions.resumeMaxPartPages}. */
-    resumeMaxPartPages?: NonNullable<UploadLargeFileOptions['resumeMaxPartPages']>
-    /**
-     * See {@link UploadLargeFileOptions.resumeFileId}. Only supported on the
-     * large-file path; small-file uploads throw.
-     */
-    resumeFileId?: NonNullable<UploadLargeFileOptions['resumeFileId']>
-    /** Diagnostic callback invoked when resume discovery rejects a candidate. */
-    onResumeCandidateRejected?: ResumeCandidateRejectedListener
-    /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
-    onResumePartReused?: ResumePartReusedListener
-  }): Promise<FileVersion> {
+  async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
 
@@ -186,21 +131,8 @@ export class B2Object {
         retry: this.uploadRetryOptions,
       })
     }
-    if (options.resumeFileId !== undefined) {
-      throw new Error('B2Object.upload: resumeFileId is only supported for multipart uploads.')
-    }
-
-    // Small-file path doesn't accept resume options.
-    const {
-      resume: _resume,
-      resumeFileId: _resumeFileId,
-      onResumeCandidateRejected: _onResumeCandidateRejected,
-      onResumePartReused: _onResumePartReused,
-      resumeMaxListPages: _resumeMaxListPages,
-      resumeMaxPartCandidates: _resumeMaxPartCandidates,
-      resumeMaxPartPages: _resumeMaxPartPages,
-      ...smallOptions
-    } = options
+    rejectSmallResumeFileId(options, 'B2Object.upload')
+    const smallOptions = stripResumeOnlyOptions(options)
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.bucket.id,

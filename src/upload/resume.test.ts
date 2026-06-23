@@ -670,20 +670,36 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
-  it('accepts unreadable retention and legal hold when the caller did not request them', async () => {
+  it('rejects unreadable retention and legal hold during automatic discovery', async () => {
     const fileInfo = { owner: 'unit' }
+    const rejected: Array<{ fileId: LargeFileId | undefined; reason: string }> = []
     const raw = {
       async listUnfinishedLargeFiles() {
         return {
           files: [
             {
-              fileId: 'restricted-object-lock',
+              fileId: 'restricted-retention',
               fileName: 'target.bin',
               contentType: 'application/octet-stream',
               fileInfo,
               uploadTimestamp: 1000,
               fileRetention: {
                 isClientAuthorizedToRead: false,
+                value: null,
+              },
+              legalHold: {
+                isClientAuthorizedToRead: true,
+                value: null,
+              },
+            },
+            {
+              fileId: 'restricted-legal-hold',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo,
+              uploadTimestamp: 2000,
+              fileRetention: {
+                isClientAuthorizedToRead: true,
                 value: null,
               },
               legalHold: {
@@ -695,12 +711,8 @@ describe('findResumeCandidate', () => {
           nextFileId: null,
         }
       },
-      async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        expect(req.fileId).toBe('restricted-object-lock')
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'restricted-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+      async listParts() {
+        throw new Error('listParts should not be called for unreadable Object Lock state')
       },
     } as unknown as RawClient
 
@@ -718,11 +730,18 @@ describe('findResumeCandidate', () => {
           { partNumber: 1, length: 100 },
           { partNumber: 2, length: 100 },
         ],
+        onCandidateRejected: (event) =>
+          rejected.push({ fileId: event.fileId, reason: event.reason }),
       },
     )
 
-    expect(result?.fileId).toBe('restricted-object-lock' as LargeFileId)
-    expect(result?.uploadedPartSha1s.get(1)).toBe('restricted-p1')
+    expect(result).toBeNull()
+    expect(rejected).toEqual(
+      expect.arrayContaining([
+        { fileId: 'restricted-retention' as LargeFileId, reason: 'retention-mismatch' },
+        { fileId: 'restricted-legal-hold' as LargeFileId, reason: 'legal-hold-mismatch' },
+      ]),
+    )
   })
 
   it('rejects unreadable retention and legal hold when the caller requested them', async () => {
@@ -1727,9 +1746,7 @@ describe('findResumeCandidate', () => {
       maxFileCount: 1,
       startFileId: 'target-id',
     })
-    expect(listCalls[0]).toMatchObject({
-      namePrefix: 'target.bin',
-    })
+    expect(listCalls[0]?.namePrefix).toBeUndefined()
   })
 
   it('accepts an explicit resumeFileId with unreadable omitted retention state', async () => {

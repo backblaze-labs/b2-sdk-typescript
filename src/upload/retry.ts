@@ -242,7 +242,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
+      if (!isUploadRetryable(retryError, options) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
 
@@ -276,8 +276,15 @@ function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryE
   }
 }
 
-function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
-  if (err instanceof NetworkError) return !(err.cause instanceof B2SsrfError)
+function isUploadRetryable(
+  err: unknown,
+  options: UploadLayerRetryOptions & { readonly partNumber: number | null },
+): err is B2Error | NetworkError {
+  if (err instanceof NetworkError) {
+    if (err.cause instanceof B2SsrfError) return false
+    if (options.partNumber === null && !options.retryResponseBodyFailures) return false
+    return true
+  }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
   return err instanceof B2Error && err.retryable

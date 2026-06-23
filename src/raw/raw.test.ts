@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { B2RealmConfigurationError } from '../errors/index.ts'
-import { recordingTransport } from '../test-utils/index.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { bucketId, largeFileId } from '../types/ids.ts'
 import { RawClient } from './index.ts'
 
 describe('RawClient authorizeAccount', () => {
@@ -51,3 +53,79 @@ describe('RawClient authorizeAccount', () => {
     expect(seenUrls).toEqual([])
   })
 })
+
+describe('RawClient upload URL request controls', () => {
+  it('forwards options-bag signal and retry controls to upload URL methods', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const controller = new AbortController()
+    const retry = { maxRetries: 2 }
+
+    await raw.getUploadUrl(
+      'https://api.example.test',
+      'auth',
+      { bucketId: bucketId('bucket') },
+      { signal: controller.signal, retry },
+    )
+    await raw.getUploadPartUrl(
+      'https://api.example.test',
+      'auth',
+      { fileId: largeFileId('large-file') },
+      { signal: controller.signal, retry },
+    )
+
+    expect(seenRequests).toHaveLength(2)
+    expect(seenRequests[0]?.signal).toBe(controller.signal)
+    expect(seenRequests[0]?.retry).toBe(retry)
+    expect(seenRequests[1]?.signal).toBe(controller.signal)
+    expect(seenRequests[1]?.retry).toBe(retry)
+  })
+
+  it('forwards legacy positional signal and retry controls to upload URL methods', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const controller = new AbortController()
+    const retry = { maxRetries: 1 }
+
+    await raw.getUploadUrl(
+      'https://api.example.test',
+      'auth',
+      { bucketId: bucketId('bucket') },
+      controller.signal,
+      retry,
+    )
+    await raw.getUploadPartUrl(
+      'https://api.example.test',
+      'auth',
+      { fileId: largeFileId('large-file') },
+      controller.signal,
+      retry,
+    )
+
+    expect(seenRequests).toHaveLength(2)
+    expect(seenRequests[0]?.signal).toBe(controller.signal)
+    expect(seenRequests[0]?.retry).toBe(retry)
+    expect(seenRequests[1]?.signal).toBe(controller.signal)
+    expect(seenRequests[1]?.retry).toBe(retry)
+  })
+})
+
+function makeUploadUrlRawClient(): { raw: RawClient; seenRequests: HttpRequest[] } {
+  const seenRequests: HttpRequest[] = []
+  const transport: HttpTransport = {
+    async send(request: HttpRequest): Promise<HttpResponse> {
+      seenRequests.push(request)
+      if (request.url.includes('b2_get_upload_part_url')) {
+        return jsonResponse({
+          fileId: largeFileId('large-file'),
+          uploadUrl: 'https://upload.example.test/part',
+          authorizationToken: 'part-auth',
+        })
+      }
+      return jsonResponse({
+        bucketId: bucketId('bucket'),
+        uploadUrl: 'https://upload.example.test/file',
+        authorizationToken: 'file-auth',
+      })
+    },
+  }
+  return { raw: new RawClient({ transport }), seenRequests }
+}

@@ -17,6 +17,7 @@ import { bestEffort } from '../util/best-effort.ts'
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state for the API URL + token.
  * @param fileId - The in-progress large file ID to cancel.
+ * @param options - Optional request controls for bounding the cleanup call.
  *
  * @returns A promise that always resolves, regardless of the cancel
  *   call's outcome.
@@ -25,8 +26,9 @@ export async function cancelLargeFileBestEffort(
   raw: RawClient,
   accountInfo: AccountInfo,
   fileId: LargeFileId,
+  options?: { readonly signal?: AbortSignal },
 ): Promise<void> {
   await bestEffort(() =>
-    raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), { fileId }),
+    raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), { fileId }, options),
   )
 }

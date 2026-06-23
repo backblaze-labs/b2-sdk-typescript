@@ -1,4 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { ResumeFileIdMismatchError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import {
   EncryptionMode,
@@ -14,6 +15,8 @@ import type {
   UnfinishedLargeFile,
 } from '../types/upload.ts'
 
+export { ResumeFileIdMismatchError }
+
 /** Compatibility-only file-info key read from legacy unfinished uploads; new uploads do not write it. */
 export const RESUME_SOURCE_SIZE_INFO_KEY = 'b2_sdk_resume_source_size'
 
@@ -23,26 +26,6 @@ export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
 const DEFAULT_MAX_RESUME_PART_PAGES = 10
-
-/** Thrown when an explicit resumeFileId is not compatible with the requested upload. */
-export class ResumeFileIdMismatchError extends Error {
-  /** Caller-supplied unfinished large file ID that failed verification. */
-  readonly fileId: LargeFileId
-  /** Requested destination file name. */
-  readonly fileName: string
-
-  /**
-   * Creates a new resume-file ID mismatch error.
-   * @param fileId - Caller-supplied unfinished large file ID that failed verification.
-   * @param fileName - Requested destination file name.
-   */
-  constructor(fileId: LargeFileId, fileName: string) {
-    super('uploadLargeFile: resumeFileId does not identify a compatible unfinished large file.')
-    this.name = 'ResumeFileIdMismatchError'
-    this.fileId = fileId
-    this.fileName = fileName
-  }
-}
 
 /** One planned part from the local upload source. */
 export interface ResumePartPlan {
@@ -170,7 +153,7 @@ export async function findResumeCandidate(
       {
         bucketId,
         maxFileCount: explicitResumeFileId !== undefined ? 1 : 100,
-        namePrefix: fileName,
+        ...(explicitResumeFileId === undefined ? { namePrefix: fileName } : {}),
         ...(startFileId !== undefined ? { startFileId } : {}),
       },
       criteria.signal !== undefined ? { signal: criteria.signal } : undefined,
@@ -334,10 +317,18 @@ function candidateMetadataRejectReason(
     criteria.serverSideEncryption,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
-  if (!fileRetentionMatches(candidate.fileRetention, criteria.fileRetention)) {
+  if (
+    !fileRetentionMatches(
+      candidate.fileRetention,
+      criteria.fileRetention,
+      criteria.resumeFileId !== undefined,
+    )
+  ) {
     return 'retention-mismatch'
   }
-  if (!legalHoldMatches(candidate.legalHold, criteria.legalHold)) {
+  if (
+    !legalHoldMatches(candidate.legalHold, criteria.legalHold, criteria.resumeFileId !== undefined)
+  ) {
     return 'legal-hold-mismatch'
   }
 
@@ -429,10 +420,11 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
 function fileRetentionMatches(
   candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
+  explicitResume: boolean,
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return explicitResume
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -452,10 +444,11 @@ function fileRetentionValueEquals(
 function legalHoldMatches(
   candidate: ReadableLegalHold | undefined,
   expected: LegalHoldValue | undefined,
+  explicitResume: boolean,
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return explicitResume
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false

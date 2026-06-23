@@ -209,6 +209,103 @@ describe('createWriteStream branch coverage', () => {
     expect(cancelCalls).toBe(1)
   })
 
+  it('passes the abort signal to stalled startLargeFile requests', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let startSeen!: () => void
+    const startSeenPromise = new Promise<void>((resolve) => {
+      startSeen = resolve
+    })
+    let startSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          startSignal = req.signal
+          startSeen()
+          return rejectOnAbort(req.signal, 'stream start aborted')
+        }
+        return inner.send(req)
+      },
+    }
+    const startClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await startClient.authorize()
+    const startBucket = await startClient.createBucket({
+      bucketName: 'stream-start-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = startBucket.file('stream-start-signal.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await startSeenPromise
+
+    await writer.abort(new Error('stream start aborted'))
+    expect(startSignal?.aborted).toBe(true)
+    await expect(done).rejects.toThrow('stream start aborted')
+  })
+
+  it('passes abort signals to stalled finish and cleanup requests', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    const controller = new AbortController()
+    let finishSeen!: () => void
+    const finishSeenPromise = new Promise<void>((resolve) => {
+      finishSeen = resolve
+    })
+    let finishSignal: AbortSignal | undefined
+    let cancelSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_finish_large_file')) {
+          finishSignal = req.signal
+          finishSeen()
+          return rejectOnAbort(req.signal, 'stream finish aborted')
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelSignal = req.signal
+          return rejectOnAbort(req.signal, 'stream cancel aborted')
+        }
+        return inner.send(req)
+      },
+    }
+    const finishClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await finishClient.authorize()
+    const finishBucket = await finishClient.createBucket({
+      bucketName: 'stream-finish-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = finishBucket.file('stream-finish-signal.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await writer.write(deterministicBytes(100_000))
+    const closePromise = writer.close()
+    await finishSeenPromise
+    controller.abort(new Error('stream finish aborted'))
+
+    await expect(closePromise).rejects.toThrow('stream finish aborted')
+    await expect(done).rejects.toThrow('stream finish aborted')
+    expect(finishSignal?.aborted).toBe(true)
+    expect(cancelSignal?.aborted).toBe(true)
+  })
+
   it('aborts an in-flight write-stream part request when the writer aborts', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
@@ -262,4 +359,15 @@ describe('createWriteStream branch coverage', () => {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function rejectOnAbort<T>(signal: AbortSignal | undefined, message: string): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    const rejectWithAbort = () => reject(signal?.reason ?? new Error(message))
+    if (signal?.aborted === true) {
+      rejectWithAbort()
+      return
+    }
+    signal?.addEventListener('abort', rejectWithAbort, { once: true })
+  })
 }
