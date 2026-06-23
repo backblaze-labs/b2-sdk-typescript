@@ -22,6 +22,7 @@ import {
 } from './b2-sha1-reader.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import { deleteLocalFileInsideRoot, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import { isLocalFilesystemRoot } from './local-filesystem-root.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
@@ -87,11 +88,6 @@ export interface LocalSyncFolder extends SyncFolder {
   readonly type: 'local'
   /** Absolute filesystem path to the local root directory. */
   readonly root: string
-  /**
-   * Marks SDK local folders that are backed by the filesystem.
-   * @internal
-   */
-  readonly localFilesystemRoot?: true
 }
 
 /** A sync folder constrained to a B2 bucket prefix. */
@@ -681,9 +677,7 @@ async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<Loc
 }
 
 function isLocalFilesystemFolder(folder: SyncFolder | undefined): folder is LocalSyncFolder {
-  return (
-    folder?.type === 'local' && (folder as Partial<LocalSyncFolder>).localFilesystemRoot === true
-  )
+  return folder?.type === 'local' && isLocalFilesystemRoot(folder)
 }
 /**
  * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.

@@ -432,17 +432,15 @@ describe('synchronize download safety', () => {
         }),
       )
 
+      const dest = new LocalFolder('dest')
+      dest.scan = async function* () {
+        process.chdir(otherRoot)
+        yield* []
+      }
+
       const config: SynchronizerDownConfig = {
         source: makeB2MemoryFolder([makeB2Path('file.txt', 2)]),
-        dest: {
-          type: 'local',
-          localFilesystemRoot: true,
-          root: 'dest',
-          async *scan() {
-            process.chdir(otherRoot)
-            yield* []
-          },
-        },
+        dest,
         options: { compareMode: 'size', keepMode: 'no-delete' },
         bucket,
       }
@@ -922,6 +920,224 @@ describe('synchronize download safety', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+  it('rejects backslashes in object keys before downloading', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-backslash-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+
+      const bucket = makeMockDownloadBucket()
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('foo\\bar', 2)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(bucket.downloadById).not.toHaveBeenCalled()
+      expect(await readdir(destRoot)).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not reap SDK-looking partial files while scanning a download destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-reap-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const staleName = '.b2sdk-111111111111111111111111-p-22222222222222222222222222222222.partial'
+      const freshName = '.b2sdk-333333333333333333333333-p-44444444444444444444444444444444.partial'
+      const stalePath = join(destRoot, staleName)
+      const freshPath = join(destRoot, freshName)
+      await writeFile(stalePath, 'stale')
+      await writeFile(freshPath, 'fresh')
+
+      const bucket = makeMockDownloadBucket()
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      await collectEvents(config)
+      expect((await readdir(destRoot)).sort()).toEqual([freshName, staleName].sort())
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)(
+    'does not download through a symlinked root swapped after scan',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-root-swap-'))
+      try {
+        const originalRoot = join(root, 'original')
+        const swappedRoot = join(root, 'swapped')
+        const linkRoot = join(root, 'dest-link')
+        await mkdir(originalRoot)
+        await mkdir(swappedRoot)
+        await symlink(originalRoot, linkRoot, 'dir')
+
+        const bucket = makeMockDownloadBucket(
+          vi.fn().mockResolvedValue({
+            body: streamFromBytes(new TextEncoder().encode('safe')),
+          }),
+        )
+        const config: SynchronizerDownConfig = {
+          source: makeB2MemoryFolder([makeB2Path('file.txt', 4)]),
+          dest: new LocalFolder(linkRoot),
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket,
+        }
+
+        const gen = synchronize(config as SupportedSynchronizerConfig)
+        const first = await gen.next()
+        expect(first.done).toBe(false)
+        expect(first.value.type).toBe('compare')
+
+        await rm(linkRoot)
+        await symlink(swappedRoot, linkRoot, 'dir')
+
+        const rest: SyncEvent[] = []
+        for await (const event of gen) rest.push(event)
+        expect(rest.some((event) => event.type === 'error')).toBe(true)
+        expect(bucket.downloadById).not.toHaveBeenCalled()
+        await expect(readFile(join(swappedRoot, 'file.txt'))).rejects.toThrow()
+        await expect(readFile(join(originalRoot, 'file.txt'))).rejects.toThrow()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+})
+
+describe('synchronize delete-local safety', () => {
+  it('refuses scanner-provided absolute paths outside the destination root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-abs-'))
+    try {
+      const destRoot = join(root, 'dest')
+      const outsideRoot = join(root, 'outside')
+      await mkdir(destRoot)
+      await mkdir(outsideRoot)
+      const insidePath = join(destRoot, 'victim.txt')
+      const outsidePath = join(outsideRoot, 'victim.txt')
+      await writeFile(insidePath, 'inside')
+      await writeFile(outsidePath, 'outside')
+
+      const dest = {
+        type: 'local' as const,
+        root: destRoot,
+        async *scan() {
+          yield {
+            relativePath: 'victim.txt',
+            absolutePath: outsidePath,
+            modTimeMillis: Date.now(),
+            size: 6,
+          }
+        },
+      }
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([]),
+        dest,
+        options: { compareMode: 'size', keepMode: 'delete' },
+        bucket: makeMockDownloadBucket(),
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(insidePath))).toBe('inside')
+      expect(new TextDecoder().decode(await readFile(outsidePath))).toBe('outside')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not delete through a scanner-provided parent symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-swap-'))
+    try {
+      const destRoot = join(root, 'dest')
+      const subDir = join(destRoot, 'sub')
+      const outsideRoot = join(root, 'outside')
+      await mkdir(subDir, { recursive: true })
+      await mkdir(outsideRoot)
+      const insidePath = join(subDir, 'victim.txt')
+      const outsidePath = join(outsideRoot, 'victim.txt')
+      await writeFile(insidePath, 'inside')
+      await writeFile(outsidePath, 'outside')
+
+      const dest = {
+        type: 'local' as const,
+        root: destRoot,
+        async *scan() {
+          await rm(subDir, { recursive: true, force: true })
+          await symlink(outsideRoot, subDir, 'dir')
+          yield {
+            relativePath: 'sub/victim.txt',
+            absolutePath: insidePath,
+            modTimeMillis: Date.now(),
+            size: 6,
+          }
+        },
+      }
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([]),
+        dest,
+        options: { compareMode: 'size', keepMode: 'delete' },
+        bucket: makeMockDownloadBucket(),
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(outsidePath))).toBe('outside')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('does not delete through a symlinked root swapped after scan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-root-swap-'))
+    try {
+      const originalRoot = join(root, 'original')
+      const swappedRoot = join(root, 'swapped')
+      const linkRoot = join(root, 'dest-link')
+      await mkdir(originalRoot)
+      await mkdir(swappedRoot)
+      await writeFile(join(originalRoot, 'gone.txt'), 'original')
+      await writeFile(join(swappedRoot, 'gone.txt'), 'swapped')
+      await symlink(originalRoot, linkRoot, 'dir')
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([]),
+        dest: new LocalFolder(linkRoot),
+        options: { compareMode: 'size', keepMode: 'delete' },
+        bucket: makeMockDownloadBucket(),
+      }
+
+      const gen = synchronize(config as SupportedSynchronizerConfig)
+      const first = await gen.next()
+      expect(first.done).toBe(false)
+      expect(first.value.type).toBe('compare')
+
+      await rm(linkRoot)
+      await symlink(swappedRoot, linkRoot, 'dir')
+
+      const rest: SyncEvent[] = []
+      for await (const event of gen) rest.push(event)
+      expect(rest.some((event) => event.type === 'error')).toBe(true)
+      await expect(readFile(join(originalRoot, 'gone.txt'), 'utf8')).resolves.toBe('original')
+      await expect(readFile(join(swappedRoot, 'gone.txt'), 'utf8')).resolves.toBe('swapped')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
 })
 
 describe('synchronize upload safety', () => {

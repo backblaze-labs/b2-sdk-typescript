@@ -11,16 +11,20 @@
  * lock-leak bugs.
  *
  * @param stream - Readable stream to consume. Will be fully drained.
+ * @param options - Optional abort signal used to stop a pending read.
  *
  * @returns A new `Uint8Array` containing every byte the stream produced.
  */
-export async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+export async function collectStream(
+  stream: ReadableStream<Uint8Array>,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<Uint8Array> {
   const reader = stream.getReader()
   try {
     const chunks: Uint8Array[] = []
     let total = 0
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await readStreamChunkWithSignal(reader, options.signal)
       if (done) break
       chunks.push(value)
       total += value.byteLength
@@ -38,4 +42,42 @@ export async function collectStream(stream: ReadableStream<Uint8Array>): Promise
     // the error path where a mid-read throw left the reader locked.
     reader.releaseLock()
   }
+}
+
+/**
+ * Reads one chunk and rejects when the supplied signal aborts.
+ * @param reader - Stream reader to read from.
+ * @param signal - Optional abort signal that cancels the read.
+ *
+ * @returns The next stream read result.
+ *
+ * @internal
+ */
+export async function readStreamChunkWithSignal<T>(
+  reader: ReadableStreamDefaultReader<T>,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<T>> {
+  if (signal === undefined) return reader.read()
+  signal.throwIfAborted()
+
+  let removeAbortListener: (() => void) | undefined
+  const abortPromise = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      const reason = abortReason(signal)
+      void reader.cancel(reason).catch(() => {})
+      reject(reason)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([reader.read(), abortPromise])
+  } finally {
+    removeAbortListener?.()
+  }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError')
 }

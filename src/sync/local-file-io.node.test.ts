@@ -16,8 +16,11 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  deleteLocalFileInsideRoot,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
+  DOWNLOAD_STAGING_MARKER_NAME,
+} from './download-staging.ts'
+import {
+  deleteLocalFileInsideRoot,
   localFileIoTestHooks,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
@@ -82,7 +85,9 @@ describe('writeLocalStreamInsideRoot', () => {
         expect(observedStagingDirectory).not.toBe('')
         expect((await stat(join(root, 'file.txt'))).mode & 0o777).toBe(0o600)
         await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
-        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([])
+        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([
+          DOWNLOAD_STAGING_MARKER_NAME,
+        ])
       } finally {
         delete localFileIoTestHooks.afterTempFileCreated
         await rm(root, { recursive: true, force: true })
@@ -238,7 +243,7 @@ describe('writeLocalStreamInsideRoot', () => {
           idleTimeoutMillis: 1000,
         }),
       ).rejects.toThrow('cannot stage download across filesystems')
-      await expect(readdir(managedDirectory)).resolves.toEqual([])
+      await expect(readdir(managedDirectory)).resolves.toEqual([DOWNLOAD_STAGING_MARKER_NAME])
     } finally {
       delete localFileIoTestHooks.statForDeviceCheck
       await rm(root, { recursive: true, force: true })
@@ -304,6 +309,111 @@ describe('writeLocalStreamInsideRoot', () => {
       delete localFileIoTestHooks.beforeFinalRename
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)(
+    'rejects a parent symlink swap before final rename without fd anchoring',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-race-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-race-out-'))
+      try {
+        await mkdir(join(root, 'safe'))
+        await writeFile(join(outside, 'payload.txt'), 'outside')
+        localFileIoTestHooks.disableProcFdAnchoring = true
+        localFileIoTestHooks.beforeFinalRename = async () => {
+          await rename(join(root, 'safe'), join(root, 'safe-real'))
+          await symlink(outside, join(root, 'safe'), 'dir')
+        }
+
+        await expect(
+          writeLocalStreamInsideRoot(
+            root,
+            'safe/payload.txt',
+            streamFromBytes(textEncoder.encode('abc')),
+            {
+              expectedBytes: 3,
+              idleTimeoutMillis: 1000,
+            },
+          ),
+        ).rejects.toThrow('parent changed before final publish')
+
+        await expect(readFile(join(outside, 'payload.txt'), 'utf8')).resolves.toBe('outside')
+        await expect(readFile(join(root, 'safe-real', 'payload.txt'))).rejects.toThrow()
+      } finally {
+        delete localFileIoTestHooks.beforeFinalRename
+        delete localFileIoTestHooks.disableProcFdAnchoring
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('handles concurrent first downloads into a fresh staging root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-race-'))
+    try {
+      await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          writeLocalStreamInsideRoot(
+            root,
+            `file-${index}.txt`,
+            streamFromBytes(textEncoder.encode(`content-${index}`)),
+            {
+              expectedBytes: `content-${index}`.length,
+              idleTimeoutMillis: 1000,
+            },
+          ),
+        ),
+      )
+
+      await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([
+        DOWNLOAD_STAGING_MARKER_NAME,
+      ])
+      await expect(readFile(join(root, 'file-11.txt'), 'utf8')).resolves.toBe('content-11')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('bounds cleanup over a large attacker-controlled staging tree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-many-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await mkdir(managedDirectory, { recursive: true })
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      for (let index = 0; index < 80; index++) {
+        const directory = join(managedDirectory, `attacker-${index}.download`)
+        await mkdir(directory)
+        await writeFile(join(directory, 'payload.bin'), 'keep')
+        await utimes(directory, old, old)
+      }
+      for (let index = 0; index < 12; index++) {
+        const directory = join(managedDirectory, `sdk-${index}.download`)
+        await mkdir(directory)
+        await writeFile(join(directory, '.b2sdk-staging-marker'), '')
+        await writeFile(join(directory, 'payload.bin'), 'stale')
+        await utimes(directory, old, old)
+      }
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(
+        readFile(join(managedDirectory, 'attacker-79.download', 'payload.bin'), 'utf8'),
+      ).resolves.toBe('keep')
+      await expect(
+        readFile(join(managedDirectory, 'sdk-0.download', 'payload.bin')),
+      ).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
     }
   })
 })

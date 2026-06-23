@@ -1,5 +1,11 @@
 import { readStreamChunkWithTimeout } from './b2-sha1-reader.ts'
 import {
+  assertDownloadPathSameDevice,
+  createDownloadStagingDirectory,
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+} from './download-staging.ts'
+import { assertSameScannedRegularFile } from './local-file-identity.ts'
+import {
   assertPathInsideRoot,
   hasErrorCode,
   noFollowFlag,
@@ -11,12 +17,7 @@ import type { LocalSyncPath } from './types.ts'
 type DeviceStat = { readonly dev: number | bigint }
 type DeviceStatFn = (path: string) => Promise<DeviceStat>
 
-/** @internal */
-export const DOWNLOAD_STAGING_DIRECTORY_NAME = '.b2sdk-download-staging'
-
-const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
-const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker'
-const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000
+export { DOWNLOAD_STAGING_DIRECTORY_NAME }
 
 /** @internal */
 export const localFileIoTestHooks: {
@@ -25,6 +26,7 @@ export const localFileIoTestHooks: {
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
+  disableProcFdAnchoring?: boolean
   statForDeviceCheck?: DeviceStatFn
 } = {}
 
@@ -118,7 +120,11 @@ export async function writeLocalStreamInsideRoot(
   let anchoredParentPath: string | undefined
   const platform = (globalThis as { process?: { platform?: string } }).process?.platform
   /* v8 ignore start -- Linux-only fd-relative path support is covered by Linux CI */
-  if (platform === 'linux' && constants.O_DIRECTORY !== undefined) {
+  if (
+    platform === 'linux' &&
+    constants.O_DIRECTORY !== undefined &&
+    localFileIoTestHooks.disableProcFdAnchoring !== true
+  ) {
     try {
       parentHandle = await open(
         parentRealPath,
@@ -169,6 +175,7 @@ export async function writeLocalStreamInsideRoot(
   /* v8 ignore stop */
   const tmpRealPath = await realpath(tmpPath)
   assertPathInsideRoot(stagingDirectory, tmpRealPath, path)
+  const writeHandle = handle
   const reader = body.getReader()
   let completed = false
   try {
@@ -184,7 +191,7 @@ export async function writeLocalStreamInsideRoot(
       if (bytesWritten + value.byteLength > options.expectedBytes) {
         throw new Error(`download read exceeded ${options.expectedBytes} byte limit`)
       }
-      await writeAll(handle, value, bytesWritten)
+      await writeAll(writeHandle, value, bytesWritten)
       bytesWritten += value.byteLength
     }
     if (bytesWritten !== options.expectedBytes) {
@@ -192,15 +199,33 @@ export async function writeLocalStreamInsideRoot(
         `download read ended after ${bytesWritten} bytes, expected ${options.expectedBytes}`,
       )
     }
-    await handle.close()
+    await writeHandle.close()
     handle = undefined
     if (publishMode !== PRIVATE_DOWNLOAD_FILE_MODE) await chmod(tmpPath, publishMode)
 
-    const parentRealPathBeforeRename = await realpath(path.dirname(destPath))
+    const [parentRealPathBeforeRename, parentStatsBeforeRename] = await Promise.all([
+      realpath(path.dirname(destPath)),
+      stat(path.dirname(destPath)),
+    ])
     const finalPathBeforeRename = path.join(parentRealPathBeforeRename, path.basename(destPath))
     assertPathInsideRoot(rootRealPath, finalPathBeforeRename, path)
     await localFileIoTestHooks.beforeFinalRename?.(parentRealPathBeforeRename)
-    await rename(tmpPath, anchoredParentPath === undefined ? finalPathBeforeRename : finalWritePath)
+    let publishPath = finalWritePath
+    if (anchoredParentPath === undefined) {
+      const [parentRealPathAfterHook, parentStatsAfterHook] = await Promise.all([
+        realpath(path.dirname(destPath)),
+        stat(path.dirname(destPath)),
+      ])
+      if (
+        parentRealPathAfterHook !== parentRealPathBeforeRename ||
+        !sameParentIdentity(parentStatsAfterHook, parentStatsBeforeRename)
+      ) {
+        throw new Error('unsafe local destination path: parent changed before final publish')
+      }
+      publishPath = path.join(parentRealPathAfterHook, path.basename(destPath))
+      assertPathInsideRoot(rootRealPath, publishPath, path)
+    }
+    await rename(tmpPath, publishPath)
     completed = true
   } catch (err) {
     /* v8 ignore next -- best-effort cleanup */
@@ -222,8 +247,6 @@ export async function writeLocalStreamInsideRoot(
 }
 
 const PRIVATE_DOWNLOAD_FILE_MODE = 0o600
-const PRIVATE_DOWNLOAD_DIRECTORY_MODE = 0o700
-
 async function replacementFileMode(filePath: string): Promise<number> {
   const { lstat } = await import('node:fs/promises')
   try {
@@ -231,67 +254,6 @@ async function replacementFileMode(filePath: string): Promise<number> {
     return stats.isFile() ? stats.mode & 0o777 : PRIVATE_DOWNLOAD_FILE_MODE
   } catch (err) {
     if (hasErrorCode(err, 'ENOENT')) return PRIVATE_DOWNLOAD_FILE_MODE
-    throw err
-  }
-}
-
-async function assertDownloadPathSameDevice(
-  rootRealPath: string,
-  candidateRealPath: string,
-  statForDeviceCheck: DeviceStatFn,
-  message: string,
-): Promise<void> {
-  const [rootStats, candidateStats] = await Promise.all([
-    statForDeviceCheck(rootRealPath),
-    statForDeviceCheck(candidateRealPath),
-  ])
-  if (rootStats.dev !== candidateStats.dev) throw new Error(message)
-}
-
-async function createDownloadStagingDirectory(
-  rootRealPath: string,
-  path: typeof import('node:path'),
-  randomUUID: () => string,
-  statForDeviceCheck: DeviceStatFn,
-): Promise<string> {
-  const { chmod, mkdir, realpath, rm, writeFile } = await import('node:fs/promises')
-  const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
-  await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE, recursive: true })
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(managedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  const realManagedDirectory = await realpath(managedDirectory)
-  assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
-  await assertDownloadPathSameDevice(
-    rootRealPath,
-    realManagedDirectory,
-    statForDeviceCheck,
-    'unsafe local destination path: cannot stage download across filesystems',
-  )
-  await reapStaleDownloadStagingDirectories(realManagedDirectory, path, Date.now())
-
-  const stagingDirectory = path.join(
-    realManagedDirectory,
-    `${Date.now()}-${randomUUID()}${DOWNLOAD_STAGING_ENTRY_SUFFIX}`,
-  )
-  await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  try {
-    const realStagingDirectory = await realpath(stagingDirectory)
-    assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
-    await assertDownloadPathSameDevice(
-      rootRealPath,
-      realStagingDirectory,
-      statForDeviceCheck,
-      'unsafe local destination path: cannot stage download across filesystems',
-    )
-    await writeFile(path.join(realStagingDirectory, DOWNLOAD_STAGING_MARKER_NAME), '', {
-      mode: PRIVATE_DOWNLOAD_FILE_MODE,
-    })
-    return realStagingDirectory
-  } catch (err) {
-    /* v8 ignore next -- best-effort cleanup */
-    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
     throw err
   }
 }
@@ -368,41 +330,11 @@ export async function deleteLocalFileInsideRoot(
   }
 }
 
-async function reapStaleDownloadStagingDirectories(
-  managedDirectory: string,
-  path: typeof import('node:path'),
-  nowMillis: number,
-): Promise<void> {
-  const { lstat, readdir, realpath, rm } = await import('node:fs/promises')
-  let entries: import('node:fs').Dirent[]
-  try {
-    entries = await readdir(managedDirectory, { withFileTypes: true })
-  } catch (err) {
-    /* v8 ignore next -- managed directory was just created */
-    if (hasErrorCode(err, 'ENOENT')) return
-    throw err
-  }
-
-  await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.isDirectory() || !entry.name.endsWith(DOWNLOAD_STAGING_ENTRY_SUFFIX)) return
-      const candidate = path.join(managedDirectory, entry.name)
-      let stats: Awaited<ReturnType<typeof lstat>>
-      try {
-        const markerStats = await lstat(path.join(candidate, DOWNLOAD_STAGING_MARKER_NAME))
-        if (!markerStats.isFile()) return
-        stats = await lstat(candidate)
-      } catch {
-        return
-      }
-      if (nowMillis - stats.mtimeMs < STALE_DOWNLOAD_STAGING_AGE_MS) return
-      /* v8 ignore next -- stale directory can disappear during cleanup */
-      const realCandidate = await realpath(candidate).catch(() => undefined)
-      if (realCandidate === undefined) return
-      assertPathInsideRoot(managedDirectory, realCandidate, path)
-      await rm(realCandidate, { recursive: true, force: true })
-    }),
-  )
+function sameParentIdentity(
+  current: { readonly dev: number | bigint; readonly ino: number | bigint },
+  expected: { readonly dev: number | bigint; readonly ino: number | bigint },
+): boolean {
+  return current.dev === expected.dev && current.ino === expected.ino
 }
 
 async function writeAll(
@@ -428,43 +360,5 @@ async function writeAll(
     /* v8 ignore next -- defensive: FileHandle.write should progress for non-empty chunks. */
     if (bytesWritten <= 0) throw new Error('download write made no progress')
     offset += bytesWritten
-  }
-}
-
-export function assertSameScannedRegularFile(
-  stats: {
-    isFile(): boolean
-    readonly dev: number
-    readonly ino: number
-    readonly mtimeMs: number
-    readonly ctimeMs: number
-    readonly size: number
-  },
-  path: LocalSyncPath,
-  operation: 'upload' | 'delete' | 'sha1 comparison' = 'upload',
-): void {
-  const reason = `local file changed before ${operation}`
-  if (!stats.isFile()) {
-    if (operation === 'delete') {
-      throw Object.assign(new Error(`${reason}: not a regular file`), { code: 'EISDIR' })
-    }
-    throw new Error(`${reason}: not a regular file`)
-  }
-  if (stats.size !== path.size) {
-    throw new Error(`${reason}: size changed`)
-  }
-
-  const identity = path.fileIdentity
-  if (identity === undefined) return
-
-  if (
-    stats.dev !== identity.deviceId ||
-    stats.ino !== identity.inode ||
-    stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis ||
-    (identity.changeTimeMillis !== undefined &&
-      Math.floor(stats.ctimeMs) !== identity.changeTimeMillis)
-  ) {
-    throw new Error(reason)
   }
 }

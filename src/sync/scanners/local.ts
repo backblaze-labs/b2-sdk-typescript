@@ -4,7 +4,12 @@ import {
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
-import { DOWNLOAD_STAGING_DIRECTORY_NAME } from '../local-file-io.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  isManagedDownloadStagingRoot,
+} from '../download-staging.ts'
+import { localFileIdentityFromStats } from '../local-file-identity.ts'
+import { registerLocalFilesystemRoot } from '../local-filesystem-root.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
@@ -45,8 +50,6 @@ export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
-  /** @internal */
-  readonly localFilesystemRoot = true
   /** Absolute path to the local root directory. */
   readonly root: string
 
@@ -56,6 +59,7 @@ export class LocalFolder implements SyncFolder {
    */
   constructor(root: string) {
     this.root = root
+    registerLocalFilesystemRoot(this)
   }
 
   /**
@@ -108,7 +112,14 @@ export class LocalFolder implements SyncFolder {
       throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
       const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
-      if (dir === this.root && entry.name === DOWNLOAD_STAGING_DIRECTORY_NAME) continue
+      if (
+        dir === this.root &&
+        entry.isDirectory() &&
+        entry.name === DOWNLOAD_STAGING_DIRECTORY_NAME &&
+        (await isManagedDownloadStagingRoot(fullPath))
+      ) {
+        continue
+      }
       if (rel.includes('\\')) {
         emitScannerSkip(options, {
           type: 'skip',
@@ -157,13 +168,7 @@ export class LocalFolder implements SyncFolder {
           absolutePath: fullPath,
           modTimeMillis: Math.floor(s.mtimeMs),
           size: s.size,
-          fileIdentity: {
-            deviceId: s.dev,
-            inode: s.ino,
-            size: s.size,
-            modTimeMillis: Math.floor(s.mtimeMs),
-            changeTimeMillis: Math.floor(s.ctimeMs),
-          },
+          fileIdentity: localFileIdentityFromStats(s),
         })
       }
     }

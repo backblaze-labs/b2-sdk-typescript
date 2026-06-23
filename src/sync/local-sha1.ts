@@ -1,7 +1,7 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { toError } from '../util/to-error.ts'
-import { assertSameScannedRegularFile } from './local-file-io.ts'
+import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
 

@@ -10,7 +10,10 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
-import { DOWNLOAD_STAGING_DIRECTORY_NAME } from '../local-file-io.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  DOWNLOAD_STAGING_MARKER_NAME,
+} from '../download-staging.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -149,6 +152,7 @@ describe('LocalFolder', () => {
 
   it('ignores the managed download staging directory at the scan root', async () => {
     await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, DOWNLOAD_STAGING_MARKER_NAME), '')
     await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'partial.bin'), 'partial')
     await writeFile(join(tmpDir, 'real.txt'), 'real')
 
@@ -156,6 +160,18 @@ describe('LocalFolder', () => {
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
+  })
+
+  it('scans an unmarked root entry with the staging directory name', async () => {
+    await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'user.txt'), 'user')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual([
+      `${DOWNLOAD_STAGING_DIRECTORY_NAME}/user.txt`,
+    ])
   })
 
   it('surfaces non-existent root scan errors', async () => {
@@ -1463,7 +1479,7 @@ describe('B2Folder', () => {
     expect(skips).toEqual(['outside-prefix:root/active/wrong-prefix.txt'])
   })
 
-  it('does not match sibling keys that only share a prefix string', async () => {
+  it('preserves raw slashless B2 prefix scope', async () => {
     function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
@@ -1500,8 +1516,11 @@ describe('B2Folder', () => {
     const folder = new B2Folder(mockBucket as unknown as Bucket, 'photos')
     const entries = await collect<B2SyncPath>(folder.scan())
 
-    expect(entries.map((entry) => entry.relativePath)).toEqual(['cat.jpg'])
-    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual(['photos/cat.jpg'])
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['-archive/secret.jpg', 'cat.jpg'])
+    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual([
+      'photos-archive/secret.jpg',
+      'photos/cat.jpg',
+    ])
   })
 
   it('skips folder marker keys that equal the normalized prefix', async () => {
