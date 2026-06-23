@@ -227,21 +227,6 @@ export class RawClient {
   // --- Files ---
 
   /**
-   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
-   *
-   * @returns The upload URL and authorization token.
-   */
-  async getUploadUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadUrlRequest,
-    options?: RawRequestOptions,
-  ): Promise<GetUploadUrlResponse>
-  /**
    * Calls `b2_get_upload_url` with legacy positional request controls.
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
@@ -259,6 +244,21 @@ export class RawClient {
     request: GetUploadUrlRequest,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<GetUploadUrlResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-url | b2_get_upload_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The upload URL and authorization token.
+   */
+  async getUploadUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadUrlRequest,
+    options?: RawRequestOptions,
   ): Promise<GetUploadUrlResponse>
   /**
    * Implementation for both upload URL request-control signatures.
@@ -523,21 +523,6 @@ export class RawClient {
   }
 
   /**
-   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}.
-   * @param apiUrl - The B2 API base URL.
-   * @param authToken - The authorization token.
-   * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
-   *
-   * @returns The upload part URL and authorization token.
-   */
-  async getUploadPartUrl(
-    apiUrl: string,
-    authToken: string,
-    request: GetUploadPartUrlRequest,
-    options?: RawRequestOptions,
-  ): Promise<GetUploadPartUrlResponse>
-  /**
    * Calls `b2_get_upload_part_url` with legacy positional request controls.
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
@@ -555,6 +540,21 @@ export class RawClient {
     request: GetUploadPartUrlRequest,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<GetUploadPartUrlResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-get-upload-part-url | b2_get_upload_part_url}.
+   * @param apiUrl - The B2 API base URL.
+   * @param authToken - The authorization token.
+   * @param request - The API request parameters.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The upload part URL and authorization token.
+   */
+  async getUploadPartUrl(
+    apiUrl: string,
+    authToken: string,
+    request: GetUploadPartUrlRequest,
+    options?: RawRequestOptions,
   ): Promise<GetUploadPartUrlResponse>
   /**
    * Implementation for both upload part URL request-control signatures.
