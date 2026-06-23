@@ -181,6 +181,8 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  *
  * @returns An async generator that yields comparison and action events.
  */
+export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
+export function synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent>
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
   assertSupportedCompareMode(options.compareMode)

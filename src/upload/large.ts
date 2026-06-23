@@ -437,9 +437,7 @@ export async function uploadLargeFile(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     )
     if (rejected !== undefined) {
-      if (abortScope.signal.aborted && abortScope.signal.reason !== undefined) {
-        throw abortScope.signal.reason
-      }
+      if (abortScope.signal.aborted) abortScope.signal.throwIfAborted()
       /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
       throw rejected.reason
     }
