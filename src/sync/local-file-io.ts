@@ -29,9 +29,7 @@ export const localFileIoTestHooks: {
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
-  beforeStagingMarkerWrite?: (path: string) => Promise<void> | void
-  disableProcFdAnchoring?: boolean
-  statForDeviceCheck?: DeviceStatFn
+  platform?: string
 } = {}
 
 interface ScannedLocalFileHandle {
@@ -670,8 +668,8 @@ function assertSameScannedRegularFile(
   if (identity === undefined) return
 
   if (
-    stats.dev !== identity.deviceId ||
-    stats.ino !== identity.inode ||
+    (shouldComparePosixFileIdentity() &&
+      (stats.dev !== identity.deviceId || stats.ino !== identity.inode)) ||
     stats.size !== identity.size ||
     Math.floor(stats.mtimeMs) !== identity.modTimeMillis ||
     (shouldComparePosixChangeTime() &&
@@ -682,7 +680,16 @@ function assertSameScannedRegularFile(
   }
 }
 
+function shouldComparePosixFileIdentity(): boolean {
+  return currentPlatform() !== 'win32'
+}
+
 function shouldComparePosixChangeTime(): boolean {
+  return currentPlatform() !== 'win32'
+}
+
+function currentPlatform(): string | undefined {
+  if (localFileIoTestHooks.platform !== undefined) return localFileIoTestHooks.platform
   const processLike = (globalThis as { process?: { platform?: string } }).process
-  return processLike?.platform !== 'win32'
+  return processLike?.platform
 }

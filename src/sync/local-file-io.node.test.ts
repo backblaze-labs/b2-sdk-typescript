@@ -75,9 +75,65 @@ async function oldScannerVisibleFiles(root: string, dir = root): Promise<string[
     if (entry.isFile() && !/^\.b2sdk-.*\.partial$/.test(entry.name)) {
       visible.push(relative(root, fullPath).split(sep).join('/'))
     }
-  }
-  return visible.sort()
-}
+  })
+
+  it('ignores Windows dev and inode drift when size and mtime still match', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-win-identity-'))
+    try {
+      const path = await makeScannedPath(root, 'file.txt', 'abc')
+      const identity = path.fileIdentity
+      expect(identity).toBeDefined()
+
+      localFileIoTestHooks.platform = 'win32'
+      const result = await readScannedLocalFile({
+        ...path,
+        fileIdentity: {
+          deviceId: (identity?.deviceId ?? 0) + 1,
+          inode: (identity?.inode ?? 0) + 1,
+          size: identity?.size ?? path.size,
+          modTimeMillis: identity?.modTimeMillis ?? path.modTimeMillis,
+        },
+      })
+      expect([...result]).toEqual([...textEncoder.encode('abc')])
+    } finally {
+      delete localFileIoTestHooks.platform
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a scanned file removed before upload', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-'))
+    try {
+      const path = await makeScannedPath(root, 'file.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+
+      await expect(readScannedLocalFile(path)).rejects.toThrow(
+        'local file changed before upload: could not open scanned file: ENOENT',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('rejects a scanned file replaced by a FIFO without hanging', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-fifo-'))
+    try {
+      const path = await makeScannedPath(root, 'pipe.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+      await execFileAsync('mkfifo', [path.absolutePath])
+
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('timed out waiting for FIFO rejection')), 1500)
+      })
+
+      await expect(Promise.race([readScannedLocalFile(path), timeout])).rejects.toThrow(
+        'local file changed before upload: not a regular file',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('writeLocalFileInsideRoot', () => {
   it('writes bytes under the resolved root', async () => {
