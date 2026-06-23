@@ -131,6 +131,85 @@ describe('sync temp files', () => {
     }
   })
 
+  it.skipIf(isBun)('retries a cached sweep after cleanup failure', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'blocked')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const join = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('blocked')
+      })
+      .mockReturnValue(`/tmp/mock/${name}`)
+    const rm = vi.fn()
+    const stat = vi.fn().mockResolvedValue({ mtimeMs: Date.now() })
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    vi.doMock('node:path', () => ({ join }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+      const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper('run')
+
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).rejects.toThrow('blocked')
+      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
+      expect(join).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.doUnmock('node:path')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('ignores stale partials that disappear before stat', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'gone')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const stat = vi.fn().mockRejectedValue(new Error('missing'))
+    const rm = vi.fn()
+    const events: string[] = []
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+        onEvent: (event) => events.push(event.action),
+      })
+
+      expect(stat).toHaveBeenCalledTimes(1)
+      expect(rm).not.toHaveBeenCalled()
+      expect(events).toEqual([])
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('reports retained stale partials when removal fails', async () => {
+    vi.resetModules()
+    const name = syncDownloadTempName('other', 'locked')
+    const readdir = vi.fn().mockResolvedValue([{ isFile: () => true, name }])
+    const stat = vi.fn().mockResolvedValue({ mtimeMs: 0 })
+    const rm = vi.fn().mockRejectedValue(new Error('locked'))
+    const events: string[] = []
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+        onEvent: (event) => events.push(`${event.action}:${event.name}`),
+      })
+
+      expect(rm).toHaveBeenCalledTimes(1)
+      expect(events).toEqual([`retained-stale:${name}`])
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
   it.skipIf(isBun)('bounds partial cleanup filesystem concurrency', async () => {
     vi.resetModules()
     const entries = Array.from({ length: 25 }, (_, index) => ({

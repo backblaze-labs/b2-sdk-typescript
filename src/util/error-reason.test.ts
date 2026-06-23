@@ -16,4 +16,10 @@ describe('sanitizeErrorReason', () => {
     expect(sanitizeErrorReason(new Error('x'.repeat(250)))).toHaveLength(200)
     expect(sanitizeErrorReason(new Error(`   ${'x'.repeat(10_000)}`))).toHaveLength(200)
   })
+
+  it('uses a generic label when neither message nor name is safe', () => {
+    const error = new Error('/tmp/secret.txt')
+    error.name = ''
+    expect(sanitizeErrorReason(error)).toBe('Error')
+  })
 })

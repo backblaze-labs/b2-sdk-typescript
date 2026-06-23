@@ -263,7 +263,8 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
   }
   // Copy subarray and SharedArrayBuffer-backed views so WebCrypto hashes
   // exactly `data`'s visible bytes with a plain ArrayBuffer.
-  /* v8 ignore next 2 -- WebCrypto fallback, only reachable when node:crypto is unavailable */
+  /* v8 ignore start -- WebCrypto fallback, only reachable when node:crypto is unavailable */
   const hashBuffer = await crypto.subtle.digest('SHA-1', arrayBufferFor(data))
   return hexEncode(new Uint8Array(hashBuffer))
+  /* v8 ignore stop */
 }

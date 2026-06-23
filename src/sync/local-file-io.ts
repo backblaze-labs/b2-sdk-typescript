@@ -14,6 +14,7 @@ import type { LocalSyncPath } from './types.ts'
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
+  beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
 } = {}
 
@@ -270,6 +271,7 @@ export async function deleteLocalFileInsideRoot(
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   try {
+    await localFileIoTestHooks.beforeLocalDeleteOpenParent?.(parentRealPath)
     parentHandle = await open(
       parentRealPath,
       constants.O_RDONLY | constants.O_DIRECTORY | noFollowFlag(constants),

@@ -21,6 +21,16 @@ function streamFromChunks(chunks: Uint8Array[]): ReadableStream<Uint8Array> {
 }
 
 describe('readStreamChunkWithTimeout', () => {
+  it('returns stream chunks without scheduling a timeout when the timeout is infinite', async () => {
+    const reader = streamFromChunks([textEncoder.encode('abc')]).getReader()
+    try {
+      const result = await readStreamChunkWithTimeout(reader, Number.POSITIVE_INFINITY, 'stalled')
+      expect(result).toMatchObject({ done: false, value: textEncoder.encode('abc') })
+    } finally {
+      reader.releaseLock()
+    }
+  })
+
   it('returns stream chunks before the idle timeout', async () => {
     const reader = streamFromChunks([textEncoder.encode('abc')]).getReader()
     try {

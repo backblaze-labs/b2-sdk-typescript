@@ -1755,6 +1755,69 @@ describe('synchronize', () => {
       )
     })
 
+    it.skipIf(!isNode)('reports local uploads configured without a local root', async () => {
+      const sourceFile = makeLocalSyncPath('rootless-upload.txt', 1000, 3)
+      const mockBucket = makeMockBucket()
+
+      const config: SynchronizerUpConfig = {
+        source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root: '' },
+        dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          path: 'rootless-upload.txt',
+          message: 'Local sync root required for filesystem mutation',
+        }),
+      )
+      expect(mockBucket.upload).not.toHaveBeenCalled()
+    })
+
+    it.skipIf(!isNode)(
+      'reports non-ENOENT errors while checking upload source path components',
+      async () => {
+        const { mkdtemp, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-lstat-error-'))
+        const longSegment = 'a'.repeat(5000)
+        const relativePath = `${longSegment}/payload.txt`
+        const mockBucket = makeMockBucket()
+        try {
+          const sourceFile: LocalSyncPath = {
+            ...makeLocalSyncPath(relativePath, 1000, 3),
+            absolutePath: join(root, relativePath),
+          }
+
+          const config: SynchronizerUpConfig = {
+            source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'error',
+              path: relativePath,
+            }),
+          )
+          expect(mockBucket.upload).not.toHaveBeenCalled()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
     it('rethrows scan errors without diagnostics before starting actions', async () => {
       const sourceFile = makeB2SyncPath('copied.txt', 2000, 50)
       const source: SyncFolder = {

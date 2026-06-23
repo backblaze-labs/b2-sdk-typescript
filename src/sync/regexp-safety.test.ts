@@ -78,4 +78,13 @@ describe('sync regexp safety', () => {
       'Sync filter RegExp is too complex',
     )
   })
+
+  it('treats malformed brace quantifiers as literals', () => {
+    const openBrace = /a{/
+    const namedBrace = /a{b}/
+
+    expect(() => validateSyncFilters({ include: [openBrace, namedBrace] })).not.toThrow()
+    expect(regexpMatchesSyncPath('a{', openBrace)).toBe(true)
+    expect(regexpMatchesSyncPath('a{b}', namedBrace)).toBe(true)
+  })
 })
