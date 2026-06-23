@@ -10,7 +10,6 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
-import { syncTempFileName, syncTempRunId } from '../temp-files.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -296,7 +295,7 @@ describe('LocalFolder', () => {
     ])
   })
 
-  it('skips SDK partial download files while scanning', async () => {
+  it('scans partial-looking files as ordinary local files', async () => {
     const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
     const previousTempPath = join(tmpDir, '.b2sdk-abandoned.partial.previous')
     await writeFile(tempPath, 'partial')
@@ -306,7 +305,11 @@ describe('LocalFolder', () => {
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual([
+      '.b2sdk-abandoned.partial',
+      '.b2sdk-abandoned.partial.previous',
+      'keep.txt',
+    ])
     await expect(access(tempPath)).resolves.toBeFalsy()
     await expect(access(previousTempPath)).resolves.toBeFalsy()
   })
@@ -343,20 +346,6 @@ describe('LocalFolder', () => {
     await expect(access(partialDir)).resolves.toBeFalsy()
   })
 
-  it('skips reserved sync download temp directories', async () => {
-    const reservedDir = syncTempFileName(
-      '1234567890abcdef12345678',
-      syncTempRunId(1234, '1234567890abcdef1234567890abcdef'),
-    )
-    await mkdir(join(tmpDir, reservedDir), { recursive: true })
-    await writeFile(join(tmpDir, reservedDir, 'hidden.txt'), 'hidden')
-    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
-
-    const folder = new LocalFolder(tmpDir)
-    const entries = await collect<LocalSyncPath>(folder.scan())
-
-    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
-  })
 })
 
 // ---------------------------------------------------------------------------

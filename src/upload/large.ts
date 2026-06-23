@@ -504,7 +504,7 @@ async function uploadPartsSequentially(
   tracker: ProgressTracker,
 ): Promise<void> {
   const reader = options.source.stream().getReader()
-  let partNumber = 1
+  let bytesRead = 0
   // Carry-over bytes from a previous read when the read returned more
   // than we needed to fill one part. Kept as an array to avoid an
   // allocation per loop iteration on a typical multi-part upload.
@@ -526,7 +526,12 @@ async function uploadPartsSequentially(
 
       while (filled < buf.byteLength) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) {
+          throw new Error(
+            `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
+          )
+        }
+        bytesRead += value.byteLength
         const take = Math.min(value.byteLength, buf.byteLength - filled)
         buf.set(value.subarray(0, take), filled)
         filled += take
@@ -536,20 +541,7 @@ async function uploadPartsSequentially(
       }
 
       signal.throwIfAborted()
-      // For the LAST part the stream may run dry mid-buffer, leaving a
-      // shorter chunk. B2 accepts a final part smaller than `partSize`.
-      const data = filled === buf.byteLength ? buf : buf.subarray(0, filled)
-      /* v8 ignore start -- defensive: only fires when the source's advertised
-         size over-reports the actual emitted byte count, which a well-behaved
-         ContentSource implementation cannot do. Kept so callers feeding the
-         engine a buggy custom stream get an actionable error rather than a
-         B2 wire-level failure. */
-      if (data.byteLength === 0) {
-        throw new Error(
-          `uploadLargeFile: source stream ended before part ${partNumber}; advertised size does not match emitted bytes.`,
-        )
-      }
-      /* v8 ignore stop */
+      const data = buf
 
       const partSha1 = new IncrementalSha1()
       await partSha1.update(data)
@@ -577,9 +569,24 @@ async function uploadPartsSequentially(
       partSha1s[planned.partNumber - 1] = result.contentSha1
       tracker.addBytes(data.byteLength)
       tracker.completePart()
-
-      partNumber++
     }
+
+    if (carry !== null && carry.byteLength > 0) {
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
+      )
+    }
+
+    const extra = await reader.read()
+    if (!extra.done) {
+      bytesRead += extra.value.byteLength
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
+      )
+    }
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
   } finally {
     // Releasing the lock lets the underlying stream propagate close /
     // error events to any upstream producer (e.g. a Node `Readable`).

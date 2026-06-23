@@ -7,12 +7,12 @@ import {
   safeRelativePathSegments,
 } from './path-safety.ts'
 import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
-import { type SyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
+  afterTempFileCreated?: (path: string, stagingDirectory: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
@@ -102,12 +102,11 @@ export async function writeLocalStreamInsideRoot(
   options: {
     readonly expectedBytes: number
     readonly idleTimeoutMillis: number
-    readonly downloadTempFileSweeper?: SyncDownloadTempFileSweeper
     readonly signal?: AbortSignal
   },
 ): Promise<void> {
   const { constants } = await import('node:fs')
-  const { lstat, mkdir, open, realpath, rename, rm } = await import('node:fs/promises')
+  const { chmod, lstat, mkdir, open, realpath, rename, rm } = await import('node:fs/promises')
   const path = await import('node:path')
   const { randomUUID } = await import('node:crypto')
   const segments = safeRelativePathSegments(relPath)
@@ -134,7 +133,6 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
-  await options.downloadTempFileSweeper?.(parentRealPath)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -156,25 +154,28 @@ export async function writeLocalStreamInsideRoot(
   }
   /* v8 ignore stop */
   const finalName = path.basename(destPath)
-  const tmpOwnerToken = options.downloadTempFileSweeper?.ownerToken ?? randomUUID()
-  const tmpName = syncDownloadTempName(tmpOwnerToken, randomUUID())
-  const tmpPath = path.join(anchoredParentPath ?? parentRealPath, tmpName)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
-  let handle: Awaited<ReturnType<typeof open>>
+  const publishMode = await replacementFileMode(finalPath)
+  const stagingDirectory = await createDownloadStagingDirectory(rootRealPath, path, randomUUID)
+  const tmpPath = path.join(stagingDirectory, `${randomUUID()}.partial`)
+  let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(
       tmpPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(constants),
-      0o666,
+      PRIVATE_DOWNLOAD_FILE_MODE,
     )
+    await chmod(tmpPath, PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
+    await localFileIoTestHooks.afterTempFileCreated?.(tmpPath, stagingDirectory)
     /* v8 ignore start -- defensive cleanup before the main write try/finally exists */
   } catch (err) {
     await parentHandle?.close().catch(() => {})
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
     throw err
   }
   /* v8 ignore stop */
   const tmpRealPath = await realpath(tmpPath)
-  assertPathInsideRoot(rootRealPath, tmpRealPath, path)
+  assertPathInsideRoot(stagingDirectory, tmpRealPath, path)
   const reader = body.getReader()
   let completed = false
   try {
@@ -199,6 +200,8 @@ export async function writeLocalStreamInsideRoot(
       )
     }
     await handle.close()
+    handle = undefined
+    if (publishMode !== PRIVATE_DOWNLOAD_FILE_MODE) await chmod(tmpPath, publishMode)
 
     const parentRealPathBeforeRename = await realpath(path.dirname(destPath))
     const finalPathBeforeRename = path.join(parentRealPathBeforeRename, path.basename(destPath))
@@ -214,13 +217,58 @@ export async function writeLocalStreamInsideRoot(
     reader.releaseLock()
     if (!completed) {
       /* v8 ignore next -- best-effort cleanup */
-      await handle.close().catch(() => {})
+      await handle?.close().catch(() => {})
       /* v8 ignore next -- best-effort cleanup */
       await rm(tmpPath, { force: true }).catch(() => {})
     }
     /* v8 ignore next -- best-effort cleanup */
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
     await parentHandle?.close().catch(() => {})
   }
+}
+
+const PRIVATE_DOWNLOAD_FILE_MODE = 0o600
+const PRIVATE_DOWNLOAD_DIRECTORY_MODE = 0o700
+
+async function replacementFileMode(filePath: string): Promise<number> {
+  const { lstat } = await import('node:fs/promises')
+  try {
+    const stats = await lstat(filePath)
+    return stats.isFile() ? stats.mode & 0o777 : PRIVATE_DOWNLOAD_FILE_MODE
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) return PRIVATE_DOWNLOAD_FILE_MODE
+    throw err
+  }
+}
+
+async function createDownloadStagingDirectory(
+  rootRealPath: string,
+  path: typeof import('node:path'),
+  randomUUID: () => string,
+): Promise<string> {
+  const { chmod, mkdir, realpath, stat } = await import('node:fs/promises')
+  const rootParent = path.dirname(rootRealPath)
+  if (rootParent === rootRealPath) {
+    throw new Error('unsafe local destination path: cannot stage download outside filesystem root')
+  }
+
+  const [rootStats, parentStats] = await Promise.all([stat(rootRealPath), stat(rootParent)])
+  if (rootStats.dev !== parentStats.dev) {
+    throw new Error(
+      'unsafe local destination path: cannot stage download outside sync root on a different filesystem',
+    )
+  }
+
+  const stagingDirectory = path.join(
+    rootParent,
+    `.b2sdk-${path.basename(rootRealPath)}-${randomUUID()}.download`,
+  )
+  await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
+  await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
+  const realStagingDirectory = await realpath(stagingDirectory)
+  assertPathInsideRoot(rootParent, realStagingDirectory, path)
+  return realStagingDirectory
 }
 
 /**
@@ -321,7 +369,7 @@ async function writeAll(
   }
 }
 
-function assertSameScannedRegularFile(
+export function assertSameScannedRegularFile(
   stats: {
     isFile(): boolean
     readonly dev: number

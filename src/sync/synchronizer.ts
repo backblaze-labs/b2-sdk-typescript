@@ -39,10 +39,6 @@ import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
 } from './sha1-options.ts'
-import {
-  createSyncDownloadTempFileSweeper,
-  type SyncDownloadTempFileSweeper,
-} from './temp-files.ts'
 import type {
   B2SyncPath,
   LocalSyncPath,
@@ -210,18 +206,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const downloadTempFileSweeper = createSyncDownloadTempFileSweeper(undefined, {
-    onEvent(event) {
-      queueEvent({
-        type: 'skip',
-        path: event.name,
-        size: 0,
-        reason: 'stale-download-partial',
-        message: event.message,
-      })
-    },
-  })
-  const factory = createActionFactory(config, downloadTempFileSweeper)
+  const factory = createActionFactory(config)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
   const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
@@ -692,14 +677,9 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  * synchronize().
  *
  * @param config - The synchronizer configuration containing source, destination, and options.
- * @param downloadTempFileSweeper - Per-run sweeper for owned download temp files.
- *
  * @returns An action factory bound to the provided configuration.
  */
-function createActionFactory(
-  config: SynchronizerConfig,
-  downloadTempFileSweeper: SyncDownloadTempFileSweeper,
-): ActionFactory {
+function createActionFactory(config: SynchronizerConfig): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
   const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? b2FolderRawPrefix(config.dest) ?? '')
@@ -772,7 +752,6 @@ function createActionFactory(
           await writeLocalStreamInsideRoot(root, relPath, result.body, {
             expectedBytes: source.selectedVersion.contentLength,
             idleTimeoutMillis,
-            downloadTempFileSweeper,
             ...(signal !== undefined ? { signal } : {}),
           })
         } catch (err) {
@@ -997,6 +976,9 @@ async function createContainedScannedFileSource(
   await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)
   const fileSource = await FileSource.fromPath(targetPath)
+  if (path.fileIdentity !== undefined) {
+    fileSource.assertMatchesScannedIdentity(path.fileIdentity)
+  }
   await resolveContainedLocalPath(root, path.relativePath, targetPath)
   await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)

@@ -12,6 +12,13 @@ interface FileIdentity {
   readonly mtimeMs: number
 }
 
+interface ScannedFileIdentity {
+  readonly deviceId: number
+  readonly inode: number
+  readonly size: number
+  readonly modTimeMillis: number
+}
+
 interface FileStatsLike {
   readonly dev: number
   readonly ino: number
@@ -234,6 +241,25 @@ export class FileSource implements ContentSource {
       this.identity,
       this.offset + sliceStart,
     )
+  }
+
+  /**
+   * Verifies that this source was opened from a previously scanned local file identity.
+   * @param identity - Scanned local file identity to compare against.
+   *
+   * @throws If the source identity differs from the scanned identity.
+   *
+   * @internal
+   */
+  assertMatchesScannedIdentity(identity: ScannedFileIdentity): void {
+    if (
+      this.identity.dev !== identity.deviceId ||
+      this.identity.ino !== identity.inode ||
+      this.identity.size !== identity.size ||
+      Math.floor(this.identity.mtimeMs) !== identity.modTimeMillis
+    ) {
+      throw new Error(`FileSource file changed after validation: ${this.filePath}`)
+    }
   }
 
   /**

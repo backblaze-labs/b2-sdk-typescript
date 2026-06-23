@@ -58,6 +58,8 @@ export {
 export type {
   B2SyncFolder,
   LocalSyncFolder,
+  SupportedSynchronizerConfig,
+  SynchronizerB2Config,
   SynchronizerConfig,
   SynchronizerDownConfig,
   SynchronizerUpConfig,

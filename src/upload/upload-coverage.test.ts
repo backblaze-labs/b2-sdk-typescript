@@ -3336,6 +3336,101 @@ describe('uploadSmallFile cleanup path', () => {
     expect(result.contentSha1).toBeNull()
   })
 
+  it('rejects a streaming multipart source that ends before its advertised size', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-short',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize + 7)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'short.bin',
+        source: new StreamSource(readable, payload.byteLength + 1),
+        partSize,
+      }),
+    ).rejects.toThrow(
+      `uploadLargeFile: source stream ended after ${payload.byteLength} bytes, expected ${payload.byteLength + 1}.`,
+    )
+    expect(await bucket.getFileInfoByName('short.bin')).toBeNull()
+  })
+
+  it('rejects a streaming multipart source that emits more than its advertised size', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-long',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const advertisedSize = partSize + 7
+    const payload = deterministicBytes(advertisedSize + 1)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'long.bin',
+        source: new StreamSource(readable, advertisedSize),
+        partSize,
+      }),
+    ).rejects.toThrow(
+      `uploadLargeFile: source stream emitted more than advertised ${advertisedSize} bytes.`,
+    )
+    expect(await bucket.getFileInfoByName('long.bin')).toBeNull()
+  })
+
+  it('cancels a streaming multipart source when the upload aborts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-abort-cancel',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const controller = new AbortController()
+    const reason = new Error('stop streaming upload')
+    controller.abort(reason)
+    let cancelReason: unknown
+    const readable = new ReadableStream<Uint8Array>({
+      pull(streamController) {
+        streamController.enqueue(deterministicBytes(100_000))
+      },
+      cancel(value) {
+        cancelReason = value
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'abort-stream.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
+    expect(await bucket.getFileInfoByName('abort-stream.bin')).toBeNull()
+  })
+
   it('rejects resumeFileId on streaming sources before listing parts', async () => {
     const { client } = makeSmallPartClient()
     await client.authorize()
