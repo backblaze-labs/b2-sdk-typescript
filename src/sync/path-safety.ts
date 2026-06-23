@@ -38,7 +38,7 @@ export function safeRelativePathSegments(relPath: string): string[] {
   return segments
 }
 
-const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9]|lpt[0-9])(?:\..*)?$/i
 
 /**
  * Throws if {@link target} is outside {@link root} or names the root itself.

@@ -21,7 +21,11 @@ import {
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
-import { readScannedLocalFile, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import {
+  deleteLocalFileInsideRoot,
+  readScannedLocalFile,
+  writeLocalStreamInsideRoot,
+} from './local-file-io.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
@@ -51,6 +55,7 @@ import type {
   SyncFolder,
   SyncOptions,
   SyncScanOptions,
+  SyncSkipEvent,
 } from './types.ts'
 
 const MAX_BUFFERED_SCAN_EVENTS = 100
@@ -175,9 +180,6 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
     ...(direction === 'b2-to-local' ? { requireLocalSafePaths: true } : {}),
-    onSkip(event) {
-      bufferScanEvent(scanEvents, event, direction)
-    },
     onError: (event) => {
       scanHadError = true
       recordSyncError(event)
@@ -278,7 +280,14 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   async function collectPairs(): Promise<SyncPair[]> {
     const pairs: SyncPair[] = []
-    for await (const pair of zipFolders(source, dest, scanOptions)) {
+    for await (const pair of zipFolders(source, dest, scanOptions, {
+      onSourceSkip(event) {
+        bufferScanEvent(scanEvents, event, direction, 'source')
+      },
+      onDestSkip(event) {
+        bufferScanEvent(scanEvents, event, direction, 'dest')
+      },
+    })) {
       if (options.signal?.aborted) return pairs
       pairs.push(pair)
     }
@@ -785,13 +794,15 @@ function createActionFactory(
         path.relativePath,
         path.absolutePath,
         async (absPath, signal) => {
-          const { unlink } = await import('node:fs/promises')
           signal?.throwIfAborted()
-          const verifiedTargetPath = await resolveLocalDeletePath(root, path.relativePath, absPath)
+          if (absPath !== path.absolutePath) {
+            throw new Error(`Refusing to delete outside sync root: ${path.relativePath}`)
+          }
           signal?.throwIfAborted()
           try {
-            await unlink(verifiedTargetPath)
+            await deleteLocalFileInsideRoot(root, path)
           } catch (err) {
+            if (isLocalDeleteSafetyError(err)) throw err
             throw new Error(`failed to delete local file: ${localFilesystemErrorReason(err)}`)
           }
         },
@@ -888,22 +899,6 @@ async function readContainedScannedLocalFile(
   return data
 }
 
-async function resolveLocalDeletePath(
-  root: string,
-  relativePath: string,
-  scannerAbsolutePath: string,
-): Promise<string> {
-  // Derive the intended path from the relative sync path.
-  const expectedPath = await resolveContainedLocalPath(root, relativePath)
-  // Cross-check the scanner-provided absolute path against the same containment rules.
-  const scannerPath = await resolveContainedLocalPath(root, relativePath, scannerAbsolutePath)
-  if (expectedPath !== scannerPath) {
-    throw new Error(`Refusing to delete outside sync root: ${relativePath}`)
-  }
-  // Revalidate immediately before unlink so stale scanner metadata cannot reopen containment.
-  return resolveContainedLocalPath(root, relativePath, expectedPath)
-}
-
 async function ensureLocalSyncRootDirectory(root: string, relativePath: string): Promise<void> {
   if (root === '') {
     throw new Error('Local sync root required for filesystem mutation')
@@ -934,13 +929,13 @@ function bufferScanEvent(
   buffer: ScanEventBuffer,
   event: SyncEvent,
   direction: SyncDirection,
+  scanSide: 'source' | 'dest',
 ): void {
   if (event.type === 'skip' && event.reason === 'filesystem-error') {
     buffer.fatalFilesystemErrorMessage ??= event.message
   }
-  if (sourceSkipMakesInventoryIncomplete(event, direction)) {
-    buffer.sourceInventoryIncompleteMessage ??=
-      'not removed because the source scan skipped unsafe B2 names'
+  if (sourceSkipMakesInventoryIncomplete(event, direction, scanSide)) {
+    buffer.sourceInventoryIncompleteMessage ??= sourceInventoryIncompleteMessage(direction)
   }
   if (buffer.events.length < MAX_BUFFERED_SCAN_EVENTS) {
     buffer.events.push(event)
@@ -981,16 +976,47 @@ function scanFilesystemError(scanEvents: ScanEventBuffer): Error | undefined {
     : new Error(scanEvents.fatalFilesystemErrorMessage)
 }
 
-function sourceSkipMakesInventoryIncomplete(event: SyncEvent, direction: SyncDirection): boolean {
-  if (direction !== 'b2-to-local' || event.type !== 'skip' || event.b2FileName === undefined) {
-    return false
+function sourceSkipMakesInventoryIncomplete(
+  event: SyncEvent,
+  direction: SyncDirection,
+  scanSide: 'source' | 'dest',
+): event is SyncSkipEvent {
+  if (scanSide !== 'source' || event.type !== 'skip') return false
+
+  if (direction === 'local-to-b2') {
+    return (
+      event.reason === 'unsafe-name' ||
+      event.reason === 'stale-download-partial' ||
+      event.reason === 'path-too-long-for-regexp'
+    )
   }
+
+  if (direction === 'b2-to-local' || direction === 'b2-to-b2') {
+    return (
+      event.reason === 'unsafe-name' ||
+      event.reason === 'local-unsafe-name' ||
+      event.reason === 'relative-path-collision' ||
+      event.reason === 'local-path-collision' ||
+      event.reason === 'path-too-long-for-regexp'
+    )
+  }
+
+  return false
+}
+
+function sourceInventoryIncompleteMessage(direction: SyncDirection): string {
+  return direction === 'local-to-b2'
+    ? 'not removed because the source scan skipped local paths'
+    : 'not removed because the source scan skipped unsafe B2 names'
+}
+
+function isLocalDeleteSafetyError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
   return (
-    event.reason === 'unsafe-name' ||
-    event.reason === 'local-unsafe-name' ||
-    event.reason === 'relative-path-collision' ||
-    event.reason === 'local-path-collision' ||
-    event.reason === 'path-too-long-for-regexp'
+    err.message === 'Local sync root required for filesystem mutation' ||
+    err.message.startsWith('Refusing to ') ||
+    err.message.startsWith('Local sync root is not a directory: ') ||
+    err.message.startsWith('unsafe local delete path: ')
   )
 }
 

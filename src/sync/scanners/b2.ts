@@ -130,6 +130,17 @@ export class B2Folder implements SyncFolder {
           continue
         }
 
+        if (options.requireLocalSafePaths === true && fv.fileName.includes('\\')) {
+          this.emitSkip(
+            options,
+            fv.fileName,
+            fv.fileName,
+            'local-unsafe-name',
+            'object name contains a backslash that is unsafe for local filesystem destinations',
+          )
+          continue
+        }
+
         const relativePath = this.tryToRelativePath(fv.fileName)
         if (relativePath === null) {
           this.emitSkip(

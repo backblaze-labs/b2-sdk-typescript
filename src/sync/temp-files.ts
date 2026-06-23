@@ -1,6 +1,7 @@
 export const SYNC_DOWNLOAD_TEMP_PREFIX = '.b2sdk-'
 export const SYNC_DOWNLOAD_TEMP_SUFFIX = '.partial'
 export const DEFAULT_STALE_SYNC_DOWNLOAD_TEMP_MILLIS = 24 * 60 * 60 * 1000
+const MAX_SYNC_DOWNLOAD_TEMP_CLEANUP_CONCURRENCY = 8
 
 export interface SyncDownloadTempFileSweepEvent {
   readonly action: 'removed-stale' | 'retained-stale'
@@ -85,18 +86,18 @@ export async function removeSyncDownloadTempFiles(
   }
 
   const { join } = await import('node:path')
-  await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && isSyncDownloadTempName(entry.name))
-      .map(async (entry) => {
-        const path = join(directory, entry.name)
-        if (isOwnedSyncDownloadTempName(entry.name, ownerToken)) {
-          await rm(path, { force: true })
-          return
-        }
+  await forEachWithConcurrency(
+    entries.filter((entry) => entry.isFile() && isSyncDownloadTempName(entry.name)),
+    MAX_SYNC_DOWNLOAD_TEMP_CLEANUP_CONCURRENCY,
+    async (entry) => {
+      const path = join(directory, entry.name)
+      if (isOwnedSyncDownloadTempName(entry.name, ownerToken)) {
+        await rm(path, { force: true }).catch(() => {})
+        return
+      }
 
-        await removeStaleSyncDownloadTempFile(directory, entry.name, path, stat, rm, options)
-      }),
+      await removeStaleSyncDownloadTempFile(directory, entry.name, path, stat, rm, options)
+    },
   )
 }
 
@@ -179,6 +180,22 @@ function emitSweepEvent(
   } catch {
     // Diagnostics hooks must not change cleanup behavior.
   }
+}
+
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let index = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (index < items.length) {
+      const item = items[index]
+      index += 1
+      if (item !== undefined) await fn(item)
+    }
+  })
+  await Promise.all(workers)
 }
 
 function randomSyncDownloadTempOwnerToken(): string {

@@ -123,6 +123,13 @@ export class LocalFolder implements SyncFolder {
         }
       } else if (entry.isFile()) {
         if (isSyncDownloadTempName(entry.name)) {
+          emitScannerSkip(options, {
+            type: 'skip',
+            path: rel,
+            size: 0,
+            reason: 'stale-download-partial',
+            message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
+          })
           continue
         }
         if (!pathPassesSyncFilters(rel, options)) {

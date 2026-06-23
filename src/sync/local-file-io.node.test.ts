@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
+  deleteLocalFileInsideRoot,
   localFileIoTestHooks,
   readScannedLocalFile,
   writeLocalFileInsideRoot,
@@ -213,6 +214,32 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'safe-real', 'payload.txt'), 'utf8')).resolves.toBe('abc')
     } finally {
       delete localFileIoTestHooks.beforeFinalRename
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('deleteLocalFileInsideRoot', () => {
+  it.skipIf(!isLinux)('does not follow a parent symlink swap during unlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-root-'))
+    const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-out-'))
+    try {
+      await mkdir(join(root, 'safe'))
+      const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
+      await writeFile(join(outside, 'victim.txt'), 'keep')
+
+      localFileIoTestHooks.beforeLocalDeleteUnlink = async () => {
+        await rename(join(root, 'safe'), join(root, 'safe-real'))
+        await symlink(outside, join(root, 'safe'), 'dir')
+      }
+
+      await deleteLocalFileInsideRoot(root, scannedPath)
+
+      await expect(readFile(join(outside, 'victim.txt'), 'utf8')).resolves.toBe('keep')
+      await expect(readFile(join(root, 'safe-real', 'victim.txt'))).rejects.toThrow()
+    } finally {
+      delete localFileIoTestHooks.beforeLocalDeleteUnlink
       await rm(root, { recursive: true, force: true })
       await rm(outside, { recursive: true, force: true })
     }

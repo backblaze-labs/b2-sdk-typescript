@@ -20,7 +20,7 @@ import {
   syncSha1StateOf,
   untrustedSha1,
 } from './sha1-metadata.ts'
-import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath } from './types.ts'
+import type { B2SyncPath, LocalSyncPath, SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
 
 function makeSyncPath(
   relativePath: string,
@@ -1087,6 +1087,50 @@ describe('zipFolders', () => {
     }
 
     expect(pairs).toEqual([])
+  })
+
+  it('keeps SDK filtering immutable when a custom scanner mutates options', async () => {
+    const source: SyncFolder = {
+      type: 'local',
+      async *scan(options: SyncScanOptions = {}) {
+        expect(Object.isFrozen(options)).toBe(true)
+        expect(Object.isFrozen(options.exclude)).toBe(true)
+
+        const mutable = options as {
+          exclude?: string[]
+          maxScanEntries?: number
+        }
+        try {
+          mutable.exclude = []
+        } catch {
+          // Frozen scanner options should reject policy replacement.
+        }
+        try {
+          mutable.exclude?.push('docs/**')
+        } catch {
+          // Frozen filter arrays should reject policy mutation.
+        }
+        try {
+          mutable.maxScanEntries = Number.POSITIVE_INFINITY
+        } catch {
+          // Frozen scanner options should reject scan limit mutation.
+        }
+
+        yield makeSyncPath('secrets/id_rsa', 1000, 10)
+        yield makeSyncPath('docs/readme.md', 1000, 20)
+      },
+    }
+    const dest = makeMemoryFolder([])
+
+    const pairs: Array<[string | null, string | null]> = []
+    for await (const [s, d] of zipFolders(source, dest, {
+      exclude: ['secrets/**'],
+      maxScanEntries: 1,
+    })) {
+      pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
+    }
+
+    expect(pairs).toEqual([['docs/readme.md', null]])
   })
 
   it('sorts custom folders that apply filters but do not declare sorted output', async () => {

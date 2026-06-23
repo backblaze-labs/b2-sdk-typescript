@@ -111,21 +111,57 @@ describe('sync temp files', () => {
     await expect(access(secondPartialPath)).rejects.toThrow()
   })
 
-  it.skipIf(isBun)('retries sweeps after a failed sweep', async () => {
+  it.skipIf(isBun)('isolates owned partial cleanup failures', async () => {
     vi.resetModules()
     const readdir = vi
       .fn()
       .mockResolvedValue([{ isFile: () => true, name: syncDownloadTempName('run', 'locked') }])
-    const rm = vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValueOnce(undefined)
+    const rm = vi.fn().mockRejectedValueOnce(new Error('locked'))
     const stat = vi.fn()
     vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
     try {
       const tempFiles = await import('./temp-files.ts')
       const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper('run')
 
-      await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).rejects.toThrow('locked')
       await expect(removeSyncDownloadTempFilesOnce('/tmp/mock')).resolves.toBeUndefined()
-      expect(rm).toHaveBeenCalledTimes(2)
+      expect(rm).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.doUnmock('node:fs/promises')
+      vi.resetModules()
+    }
+  })
+
+  it.skipIf(isBun)('bounds partial cleanup filesystem concurrency', async () => {
+    vi.resetModules()
+    const entries = Array.from({ length: 25 }, (_, index) => ({
+      isFile: () => true,
+      name: syncDownloadTempName('other', index.toString()),
+    }))
+    let activeOperations = 0
+    let maxActiveOperations = 0
+    async function trackIo<T>(value: T): Promise<T> {
+      activeOperations++
+      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      activeOperations--
+      return value
+    }
+
+    const readdir = vi.fn().mockResolvedValue(entries)
+    const stat = vi.fn().mockImplementation(() => trackIo({ mtimeMs: 0 }))
+    const rm = vi.fn().mockImplementation(() => trackIo(undefined))
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
+    try {
+      const tempFiles = await import('./temp-files.ts')
+
+      await tempFiles.removeSyncDownloadTempFiles('/tmp/mock', 'run', {
+        staleMillis: 1,
+        nowMillis: () => 10_000,
+      })
+
+      expect(maxActiveOperations).toBeLessThanOrEqual(8)
+      expect(stat).toHaveBeenCalledTimes(entries.length)
+      expect(rm).toHaveBeenCalledTimes(entries.length)
     } finally {
       vi.doUnmock('node:fs/promises')
       vi.resetModules()

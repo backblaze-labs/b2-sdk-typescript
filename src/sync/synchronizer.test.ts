@@ -30,6 +30,7 @@ const isNode = typeof (globalThis as Record<string, unknown>)['process'] !== 'un
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
+const isLinux = processLike?.platform === 'linux'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -470,7 +471,32 @@ describe('synchronize', () => {
         type,
         appliesScanFilters: true,
         appliesScanSorting: true,
-        async *scan() {
+        async *scan(options: SyncScanOptions = {}) {
+          const mutable = options as {
+            exclude?: string[]
+            include?: string[]
+            maxScanEntries?: number
+          }
+          try {
+            mutable.exclude = []
+          } catch {
+            // Scanner options are frozen at runtime.
+          }
+          try {
+            mutable.include = []
+          } catch {
+            // Scanner options are frozen at runtime.
+          }
+          try {
+            mutable.exclude?.splice(0)
+          } catch {
+            // Filter arrays are frozen independently from the SDK filter copy.
+          }
+          try {
+            mutable.maxScanEntries = Number.POSITIVE_INFINITY
+          } catch {
+            // Scan limits are frozen at runtime.
+          }
           yield* paths
         },
       })
@@ -614,6 +640,57 @@ describe('synchronize', () => {
       },
     )
 
+    it.skipIf(!isNode)(
+      'does not delete remote files when local source partials are skipped',
+      async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-partial-source-'))
+        try {
+          const partialName = '.b2sdk-user-data.partial'
+          await writeFile(join(root, partialName), 'keep')
+          const mockBucket = makeMockBucket()
+          const dest = makeMemoryFolder([makeB2SyncPath(partialName, 1000, 4)], 'b2')
+
+          const config: SynchronizerUpConfig = {
+            source: new LocalFolder(root),
+            dest: { ...dest, type: 'b2' },
+            options: {
+              compareMode: 'modtime',
+              keepMode: 'delete',
+            },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'skip',
+              reason: 'stale-download-partial',
+              path: partialName,
+            }),
+          )
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'skip',
+              path: partialName,
+              message: 'not removed because the source scan skipped local paths',
+            }),
+          )
+          expect(events.some((event) => event.type === 'delete-remote')).toBe(false)
+          expect(events.some((event) => event.type === 'hide')).toBe(false)
+          expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+          expect(mockBucket.hideFile).not.toHaveBeenCalled()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
     it('keeps local deletes blocked after skipped B2 source names', async () => {
       const fileVersion: FileVersion = {
         accountId: 'acc' as unknown as AccountId,
@@ -706,6 +783,131 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode || process.platform === 'win32')(
+      'does not delete remote files when unsafe local source names are skipped',
+      async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-unsafe-source-'))
+        try {
+          await writeFile(join(root, 'a\\b.txt'), 'backslash')
+          const mockBucket = makeMockBucket()
+          const config: SynchronizerUpConfig = {
+            source: new LocalFolder(root),
+            dest: { ...makeMemoryFolder([makeB2SyncPath('a/b.txt', 1000, 9)], 'b2'), type: 'b2' },
+            options: {
+              compareMode: 'modtime',
+              keepMode: 'delete',
+            },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: 'skip', reason: 'unsafe-name', path: 'a\\b.txt' }),
+          )
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: 'skip',
+              path: 'a/b.txt',
+              message: 'not removed because the source scan skipped local paths',
+            }),
+          )
+          expect(events.some((event) => event.type === 'delete-remote')).toBe(false)
+          expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it('keeps local deletes blocked after custom B2 regexp input-limit skips', async () => {
+      const skippedPath = 'docs/token.txt'
+      const source: SyncFolder = {
+        type: 'b2',
+        async *scan(options: SyncScanOptions = {}) {
+          options.onSkip?.({
+            type: 'skip',
+            path: skippedPath,
+            size: 0,
+            reason: 'path-too-long-for-regexp',
+            message:
+              'Skipped sync path "docs/token.txt": path exceeds the RegExp filter input limit',
+          })
+          yield* [] as SyncPath[]
+        },
+      }
+      const dest = makeMemoryFolder([makeLocalSyncPath(skippedPath, 1000, 6)], 'local')
+      const config: SynchronizerDownConfig = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'local', root: '/tmp' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'delete',
+          dryRun: true,
+        },
+        bucket: makeMockBucket() as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          reason: 'path-too-long-for-regexp',
+          path: skippedPath,
+        }),
+      )
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          path: skippedPath,
+          message: 'not removed because the source scan skipped unsafe B2 names',
+        }),
+      )
+      expect(events.some((event) => event.type === 'delete-local')).toBe(false)
+    })
+
+    it('skips raw B2 keys with backslashes before local download', async () => {
+      const rawPath = 'docs\\payroll.csv'
+      const fileVersion = makeB2SyncPath('docs/payroll.csv', 1000, 3, rawPath).selectedVersion
+      const bucket = {
+        ...makeMockBucket(),
+        listFileVersions: vi.fn().mockResolvedValue({
+          files: [fileVersion],
+          nextFileName: null,
+          nextFileId: null,
+        }),
+      }
+      const source = new B2Folder(bucket as unknown as Bucket)
+      const config: SynchronizerDownConfig = {
+        source,
+        dest: { ...makeMemoryFolder([], 'local'), type: 'local', root: '/tmp' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'no-delete',
+          dryRun: true,
+        },
+        bucket: bucket as unknown as Bucket,
+      }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          reason: 'local-unsafe-name',
+          path: rawPath,
+          b2FileName: rawPath,
+        }),
+      )
+      expect(events.some((event) => event.type === 'download-done')).toBe(false)
+    })
 
     it('does not delete local files when slashless B2 prefixes include slash-prefixed keys', async () => {
       const fileVersion: FileVersion = {
@@ -4888,7 +5090,7 @@ describe('synchronize', () => {
   })
 
   describe('download direction with deletion', () => {
-    it.skipIf(!isNode)('deletes orphan local files with delete keep mode', async () => {
+    it.skipIf(!isNode || !isLinux)('deletes orphan local files with delete keep mode', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile, stat } = await import('node:fs/promises')
       const { join } = await import('node:path')
@@ -4967,7 +5169,7 @@ describe('synchronize', () => {
       expect(events.some((event) => event.type === 'delete-local')).toBe(false)
     })
 
-    it.skipIf(!isNode)('sanitizes local delete filesystem errors', async () => {
+    it.skipIf(!isNode || !isLinux)('sanitizes local delete filesystem errors', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdir, mkdtemp, rm } = await import('node:fs/promises')
       const { join } = await import('node:path')

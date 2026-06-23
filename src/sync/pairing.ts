@@ -2,7 +2,13 @@ import { filterSyncPaths } from './filters.ts'
 import { compareSyncRelativePaths } from './path-order.ts'
 import { validateSyncFilters } from './regexp-safety.ts'
 import { assertScanEntryLimit, scanEntryLimit } from './scan-limit.ts'
-import type { SyncFolder, SyncPath, SyncScanOptions } from './types.ts'
+import type {
+  SyncFilterPattern,
+  SyncFolder,
+  SyncPath,
+  SyncScanOptions,
+  SyncSkipEvent,
+} from './types.ts'
 
 /** A paired tuple of source and destination files. Either side may be null if the file is absent. */
 export type SyncPair = readonly [SyncPath | null, SyncPath | null]
@@ -15,15 +21,22 @@ export type SyncPair = readonly [SyncPath | null, SyncPath | null]
  * @param source - The source folder to scan.
  * @param dest - The destination folder to scan.
  * @param options - Optional scan controls and filters shared by both folders.
+ * @param scanCallbacks - Optional internal source/destination skip callbacks.
  */
 export async function* zipFolders(
   source: SyncFolder,
   dest: SyncFolder,
   options: SyncScanOptions = {},
+  scanCallbacks: {
+    readonly onSourceSkip?: (event: SyncSkipEvent) => void
+    readonly onDestSkip?: (event: SyncSkipEvent) => void
+  } = {},
 ): AsyncGenerator<SyncPair> {
   validateSyncFilters(options)
-  const sourceIter = scanWithFilters(source, options)[Symbol.asyncIterator]()
-  const destIter = scanWithFilters(dest, options)[Symbol.asyncIterator]()
+  const sourceOptions = scanOptionsSnapshot(options, scanCallbacks.onSourceSkip)
+  const destOptions = scanOptionsSnapshot(options, scanCallbacks.onDestSkip)
+  const sourceIter = scanWithFilters(source, sourceOptions)[Symbol.asyncIterator]()
+  const destIter = scanWithFilters(dest, destOptions)[Symbol.asyncIterator]()
   let sourceDone = false
   let destDone = false
 
@@ -83,11 +96,11 @@ async function closeScanIterator(
 
 function scanWithFilters(
   folder: SyncFolder,
-  filters: SyncScanOptions | undefined,
+  options: { readonly scanner: SyncScanOptions; readonly sdk: SyncScanOptions },
 ): AsyncIterable<SyncPath> {
-  const scanned = filterSyncPaths(folder.scan(filters), filters)
+  const scanned = filterSyncPaths(folder.scan(options.scanner), options.sdk)
   if (folder.appliesScanSorting === true) return scanned
-  return sortSyncPaths(scanned, filters)
+  return sortSyncPaths(scanned, options.sdk)
 }
 
 async function* sortSyncPaths(
@@ -102,4 +115,57 @@ async function* sortSyncPaths(
   }
   collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
   yield* collected
+}
+
+function scanOptionsSnapshot(
+  options: SyncScanOptions,
+  onSkip: ((event: SyncSkipEvent) => void) | undefined,
+): { readonly scanner: SyncScanOptions; readonly sdk: SyncScanOptions } {
+  const onSkipSnapshot =
+    options.onSkip === undefined && onSkip === undefined
+      ? undefined
+      : (event: SyncSkipEvent): void => {
+          options.onSkip?.(event)
+          onSkip?.(event)
+        }
+
+  return {
+    scanner: frozenScanOptions(
+      options,
+      frozenPatterns(options.include),
+      frozenPatterns(options.exclude),
+      onSkipSnapshot,
+    ),
+    sdk: frozenScanOptions(
+      options,
+      frozenPatterns(options.include),
+      frozenPatterns(options.exclude),
+      onSkipSnapshot,
+    ),
+  }
+}
+
+function frozenScanOptions(
+  options: SyncScanOptions,
+  include: readonly SyncFilterPattern[] | undefined,
+  exclude: readonly SyncFilterPattern[] | undefined,
+  onSkip: ((event: SyncSkipEvent) => void) | undefined,
+): SyncScanOptions {
+  return Object.freeze({
+    ...(include !== undefined ? { include } : {}),
+    ...(exclude !== undefined ? { exclude } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.onError !== undefined ? { onError: options.onError } : {}),
+    ...(onSkip !== undefined ? { onSkip } : {}),
+    ...(options.requireLocalSafePaths !== undefined
+      ? { requireLocalSafePaths: options.requireLocalSafePaths }
+      : {}),
+    ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
+  })
+}
+
+function frozenPatterns(
+  patterns: readonly SyncFilterPattern[] | undefined,
+): readonly SyncFilterPattern[] | undefined {
+  return patterns === undefined ? undefined : Object.freeze([...patterns])
 }
