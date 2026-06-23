@@ -13,18 +13,20 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, sep } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
 } from './download-staging.ts'
+import { localFileIdentityFromStats } from './local-file-identity.ts'
 import {
   deleteLocalFileInsideRoot,
   localFileIoTestHooks,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
 const isWindows = process.platform === 'win32'
@@ -37,6 +39,24 @@ function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+async function makeScannedPath(
+  root: string,
+  relativePath: string,
+  contents: string,
+): Promise<LocalSyncPath> {
+  const absolutePath = join(root, ...relativePath.split('/'))
+  await mkdir(dirname(absolutePath), { recursive: true })
+  await writeFile(absolutePath, contents)
+  const stats = await stat(absolutePath)
+  return {
+    relativePath,
+    absolutePath,
+    modTimeMillis: Math.floor(stats.mtimeMs),
+    size: stats.size,
+    fileIdentity: localFileIdentityFromStats(stats),
+  }
 }
 
 describe('writeLocalFileInsideRoot', () => {
@@ -615,23 +635,39 @@ describe('deleteLocalFileInsideRoot', () => {
     }
   })
 
-  it('fails closed when anchored deletion is unavailable', async () => {
+  it('uses a parent recheck when anchored deletion is unavailable', async () => {
     const root = await realpath(
       await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-unavailable-')),
     )
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
     try {
-      const scannedPath = await makeScannedPath(root, 'victim.txt', 'delete-me')
+      const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
       Object.defineProperty(process, 'platform', { value: 'darwin' })
 
-      await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
-        'unsafe local delete path: anchored deletion is not available',
-      )
-      await expect(readFile(scannedPath.absolutePath, 'utf8')).resolves.toBe('delete-me')
+      await deleteLocalFileInsideRoot(root, scannedPath)
+      await expect(readFile(scannedPath.absolutePath)).rejects.toThrow()
     } finally {
       if (platformDescriptor !== undefined) {
         Object.defineProperty(process, 'platform', platformDescriptor)
       }
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('fails closed for nested deletes when fd anchoring is deliberately disabled', async () => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-disabled-anchor-')),
+    )
+    try {
+      const scannedPath = await makeScannedPath(root, 'safe/victim.txt', 'delete-me')
+      localFileIoTestHooks.disableProcFdAnchoring = true
+
+      await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
+        'unsafe local delete path: stable parent handle unavailable for unlink',
+      )
+      await expect(readFile(scannedPath.absolutePath, 'utf8')).resolves.toBe('delete-me')
+    } finally {
+      delete localFileIoTestHooks.disableProcFdAnchoring
       await rm(root, { recursive: true, force: true })
     }
   })

@@ -322,7 +322,7 @@ export async function deleteLocalFileInsideRoot(
   }
 
   const { constants } = await import('node:fs')
-  const { lstat, open, realpath, unlink } = await import('node:fs/promises')
+  const { lstat, open, realpath, stat, unlink } = await import('node:fs/promises')
   const path = await import('node:path')
   const segments = safeRelativePathSegments(scannedPath.relativePath)
   const safeRoot = path.resolve(root)
@@ -342,38 +342,70 @@ export async function deleteLocalFileInsideRoot(
     throw new Error(`Refusing to delete outside sync root: ${scannedPath.relativePath}`)
   }
 
-  const parentRealPath = await realpath(path.dirname(expectedPath))
+  const [parentRealPath, parentStats] = await Promise.all([
+    realpath(path.dirname(expectedPath)),
+    stat(path.dirname(expectedPath)),
+  ])
   const finalPath = path.join(parentRealPath, path.basename(expectedPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
 
   const platform = (globalThis as { process?: { platform?: string } }).process?.platform
-  if (platform !== 'linux' || constants.O_DIRECTORY === undefined) {
-    throw new Error('unsafe local delete path: anchored deletion is not available')
-  }
-
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
-  try {
-    await localFileIoTestHooks.beforeLocalDeleteOpenParent?.(parentRealPath)
-    parentHandle = await open(
-      parentRealPath,
-      constants.O_RDONLY | constants.O_DIRECTORY | noFollowFlag(constants),
-    )
-  } catch (err) {
-    if (hasErrorCode(err, 'ELOOP') || hasErrorCode(err, 'ENOTDIR')) {
-      throw new Error('unsafe local delete path: parent is not a directory')
+  let anchoredParentPath: string | undefined
+  /* v8 ignore start -- Linux-only fd-relative path support is covered by Linux CI */
+  if (
+    platform === 'linux' &&
+    constants.O_DIRECTORY !== undefined &&
+    localFileIoTestHooks.disableProcFdAnchoring !== true
+  ) {
+    try {
+      await localFileIoTestHooks.beforeLocalDeleteOpenParent?.(parentRealPath)
+      parentHandle = await open(
+        parentRealPath,
+        constants.O_RDONLY | constants.O_DIRECTORY | noFollowFlag(constants),
+      )
+      anchoredParentPath = `/proc/self/fd/${parentHandle.fd}`
+    } catch (err) {
+      if (hasErrorCode(err, 'ELOOP') || hasErrorCode(err, 'ENOTDIR')) {
+        throw new Error('unsafe local delete path: parent is not a directory')
+      }
+      throw err
     }
-    throw err
   }
+  /* v8 ignore stop */
 
   try {
-    const anchoredPath = path.join(`/proc/self/fd/${parentHandle.fd}`, path.basename(expectedPath))
-    const stats = await lstat(anchoredPath)
-    assertSameScannedRegularFile(stats, scannedPath, 'delete')
+    const unlinkPath =
+      anchoredParentPath === undefined
+        ? finalPath
+        : path.join(anchoredParentPath, path.basename(expectedPath))
+    const stats = await lstat(unlinkPath)
+    assertSameScannedRegularFile(stats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
     await localFileIoTestHooks.beforeLocalDeleteUnlink?.(parentRealPath)
-    await unlink(anchoredPath)
+    if (
+      anchoredParentPath === undefined &&
+      localFileIoTestHooks.disableProcFdAnchoring === true &&
+      parentRealPath !== rootRealPath
+    ) {
+      throw new Error('unsafe local delete path: stable parent handle unavailable for unlink')
+    }
+
+    if (anchoredParentPath === undefined) {
+      const [parentRealPathBeforeUnlink, parentStatsBeforeUnlink] = await Promise.all([
+        realpath(path.dirname(expectedPath)),
+        stat(path.dirname(expectedPath)),
+      ])
+      if (
+        parentRealPathBeforeUnlink !== parentRealPath ||
+        !sameParentIdentity(parentStatsBeforeUnlink, parentStats)
+      ) {
+        throw new Error('unsafe local delete path: parent changed before unlink')
+      }
+    }
+    await unlink(unlinkPath)
   } finally {
     /* v8 ignore next -- best-effort cleanup */
-    await parentHandle.close().catch(() => {})
+    await parentHandle?.close().catch(() => {})
   }
 }
 
