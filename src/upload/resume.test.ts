@@ -1733,6 +1733,101 @@ describe('findResumeCandidate', () => {
     expect(rejected).toEqual(['part-length-mismatch'])
   })
 
+  it('rejects candidates when bounded part listing is truncated', async () => {
+    const listPartRequests: Array<{ maxPartCount?: number; startPartNumber?: number }> = []
+    const rejected: string[] = []
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(
+        _apiUrl: string,
+        _authToken: string,
+        req: { maxPartCount?: number; startPartNumber?: number },
+      ) {
+        listPartRequests.push({
+          ...(req.maxPartCount !== undefined ? { maxPartCount: req.maxPartCount } : {}),
+          ...(req.startPartNumber !== undefined ? { startPartNumber: req.startPartNumber } : {}),
+        })
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'p1', contentLength: 100 }],
+          nextPartNumber: 2,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      {
+        ...defaultResumeCriteria(),
+        maxPartPages: 1,
+        onCandidateRejected: (event) => rejected.push(event.reason),
+      },
+    )
+
+    expect(result).toBeNull()
+    expect(listPartRequests).toEqual([{ maxPartCount: 3 }])
+    expect(rejected).toEqual(['part-length-mismatch'])
+  })
+
+  it('accepts candidates that match a readable no-retention bucket default', async () => {
+    const scenarios = [
+      {},
+      { fileRetention: { isClientAuthorizedToRead: false, value: null } },
+      { fileRetention: { isClientAuthorizedToRead: true, value: null } },
+    ]
+
+    for (const [index, scenario] of scenarios.entries()) {
+      const raw = {
+        async listUnfinishedLargeFiles() {
+          return {
+            files: [
+              {
+                fileId: `target-id-${index}`,
+                fileName: 'target.bin',
+                contentType: 'application/octet-stream',
+                fileInfo: {},
+                ...scenario,
+              },
+            ],
+            nextFileId: null,
+          }
+        },
+        async listParts() {
+          return {
+            parts: [{ partNumber: 1, contentSha1: `p1-${index}`, contentLength: 100 }],
+            nextPartNumber: null,
+          }
+        },
+      } as unknown as RawClient
+
+      const result = await findResumeCandidate(
+        raw,
+        makeAccountInfo(),
+        bucketId('bucket1'),
+        'target.bin',
+        defaultResumeCriteria({
+          defaultFileRetention: { mode: BucketRetentionMode.None, period: null },
+        }),
+      )
+
+      expect(result?.fileId).toBe(`target-id-${index}` as LargeFileId)
+    }
+  })
+
   it('continues resume discovery when a diagnostic callback throws', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -2062,6 +2157,27 @@ describe('findResumeCandidate', () => {
     ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 
+  it('allows callers to disable the SDK resume discovery timeout', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return { files: [], nextFileId: null }
+      },
+      async listParts() {
+        throw new Error('listParts should not be called when no candidate exists')
+      },
+    } as unknown as RawClient
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      defaultResumeCriteria({ discoveryTimeoutMs: Number.POSITIVE_INFINITY }),
+    )
+
+    expect(result).toBeNull()
+  })
+
   it('honors an abort signal before discovery list calls', async () => {
     const controller = new AbortController()
     controller.abort()
@@ -2111,5 +2227,64 @@ describe('findResumeCandidate', () => {
       message: 'Resume discovery aborted',
       name: 'AbortError',
     })
+  })
+
+  it('reports aborts and timeouts when DOMException is unavailable', async () => {
+    const originalDomException = globalThis.DOMException
+    Object.defineProperty(globalThis, 'DOMException', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+
+    try {
+      const signal = {
+        aborted: true,
+        addEventListener() {},
+        removeEventListener() {},
+        throwIfAborted() {},
+      } as unknown as AbortSignal
+      const raw = {
+        async listUnfinishedLargeFiles() {
+          return { files: [], nextFileId: null }
+        },
+      } as unknown as RawClient
+
+      await expect(
+        findResumeCandidate(
+          raw,
+          makeAccountInfo(),
+          bucketId('bucket1'),
+          'target.bin',
+          defaultResumeCriteria({ signal }),
+        ),
+      ).rejects.toMatchObject({
+        message: 'Resume discovery aborted',
+        name: 'AbortError',
+      })
+
+      await expect(
+        findResumeCandidate(
+          {
+            async listUnfinishedLargeFiles() {
+              return new Promise<never>(() => {})
+            },
+          } as unknown as RawClient,
+          makeAccountInfo(),
+          bucketId('bucket1'),
+          'target.bin',
+          defaultResumeCriteria({ discoveryTimeoutMs: 1 }),
+        ),
+      ).rejects.toMatchObject({
+        message: 'Resume discovery timed out after 1 ms',
+        name: 'TimeoutError',
+      })
+    } finally {
+      Object.defineProperty(globalThis, 'DOMException', {
+        configurable: true,
+        writable: true,
+        value: originalDomException,
+      })
+    }
   })
 })

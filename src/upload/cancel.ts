@@ -35,7 +35,7 @@ export async function cancelLargeFileBestEffort(
 ): Promise<void> {
   await bestEffort(async () => {
     const requestOptions =
-      options?.signal !== undefined ? options : cleanupRequestOptions(undefined)
+      options?.signal !== undefined ? { signal: options.signal } : cleanupRequestOptions(undefined)
     const request = raw.cancelLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
@@ -113,14 +113,7 @@ function abortFallbackCleanup(
   cleanup()
 }
 
-async function waitForCleanup(
-  request: Promise<unknown>,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  if (signal === undefined) {
-    await request
-    return
-  }
+async function waitForCleanup(request: Promise<unknown>, signal: AbortSignal): Promise<void> {
   if (signal.aborted) throw cleanupAbortReason(signal)
 
   let removeAbortListener: (() => void) | undefined

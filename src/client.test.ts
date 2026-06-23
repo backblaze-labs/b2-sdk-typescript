@@ -23,6 +23,19 @@ describe('B2Client with simulator', () => {
     expect(client.accountInfo.getAbsoluteMinimumPartSize()).toBe(5_000_000)
   })
 
+  it('reauthorizes and retries after an expired auth token', async () => {
+    const { client: expiringClient, sim } = makeClient({
+      sim: { strictAuth: true, authTokenTtlMs: 1000 },
+    })
+    await expiringClient.authorize()
+    const originalToken = expiringClient.accountInfo.getAuthToken()
+
+    sim.advanceTime(2000)
+
+    await expect(expiringClient.listBuckets()).resolves.toEqual([])
+    expect(expiringClient.accountInfo.getAuthToken()).not.toBe(originalToken)
+  })
+
   it('keeps resolved upload retry options off the public client shape', () => {
     const retryClient = new B2Client({
       applicationKeyId: 'test-key-id',

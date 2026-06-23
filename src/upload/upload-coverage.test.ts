@@ -410,6 +410,58 @@ describe('uploadLargeFile cleanup paths', () => {
     }
   })
 
+  it('uses Error-shaped cleanup timeout reasons when DOMException is unavailable', async () => {
+    const originalTimeout = AbortSignal.timeout
+    const originalAny = AbortSignal.any
+    const originalDomException = globalThis.DOMException
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+    Object.defineProperty(AbortSignal, 'any', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+    Object.defineProperty(globalThis, 'DOMException', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+
+    try {
+      const timeoutOptions = cleanupRequestOptions(undefined, 1)
+      await new Promise<void>((resolve) => {
+        if (timeoutOptions.signal.aborted) {
+          resolve()
+          return
+        }
+        timeoutOptions.signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+      expect(timeoutOptions.signal.reason).toMatchObject({
+        message: 'Cleanup timed out',
+        name: 'TimeoutError',
+      })
+    } finally {
+      Object.defineProperty(AbortSignal, 'timeout', {
+        configurable: true,
+        writable: true,
+        value: originalTimeout,
+      })
+      Object.defineProperty(AbortSignal, 'any', {
+        configurable: true,
+        writable: true,
+        value: originalAny,
+      })
+      Object.defineProperty(globalThis, 'DOMException', {
+        configurable: true,
+        writable: true,
+        value: originalDomException,
+      })
+    }
+  })
+
   it('clears fallback cleanup timers after successful cancellation', async () => {
     const originalTimeout = AbortSignal.timeout
     const originalAny = AbortSignal.any
