@@ -53,7 +53,7 @@ export class UploadAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal for canceling the upload.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -84,7 +84,7 @@ export class DownloadAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal for canceling the download.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -115,7 +115,7 @@ export class CopyAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal for canceling the copy.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -145,7 +145,7 @@ export class HideAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal for canceling the hide request.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -181,7 +181,7 @@ export class DeleteRemoteAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal for canceling the delete request.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -213,7 +213,7 @@ export class DeleteLocalAction implements SyncAction {
    * @param dryRun - Whether to simulate the action without making changes.
    * @param signal - Optional abort signal checked before deleting.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(dryRun: boolean, signal?: AbortSignal): Promise<SyncEvent> {
     if (!dryRun) {
@@ -243,7 +243,7 @@ export class SkipAction implements SyncAction {
    * @param _dryRun - Whether to simulate the action (unused for no-op).
    * @param _signal - Unused abort signal accepted for the shared action interface.
    *
-   * @returns An async generator yielding sync progress events.
+   * @returns A promise resolving to the sync event produced by the action.
    */
   async execute(_dryRun: boolean, _signal?: AbortSignal): Promise<SyncEvent> {
     return { type: 'skip', path: this.relativePath, size: 0, message: this.reason }

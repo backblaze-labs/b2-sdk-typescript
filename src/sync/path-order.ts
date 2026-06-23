@@ -33,6 +33,5 @@ export function compareSyncPathNames(a: string, b: string): number {
 export function compareCodeUnits(left: string, right: string): number {
   if (left < right) return -1
   if (left > right) return 1
-  /* v8 ignore next -- compareSyncRelativePaths only calls this for distinct strings. */
   return 0
 }
