@@ -8,7 +8,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { createAbortScope } from './abort-scope.ts'
+import { abortReason, createAbortScope } from './abort-scope.ts'
 import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
@@ -490,8 +490,4 @@ function waitForAbort(signal: AbortSignal): {
       if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
     },
   }
-}
-
-function abortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('Aborted', 'AbortError')
 }

@@ -51,6 +51,16 @@ describe('safeRelativePathSegments', () => {
       'reserved SDK temporary-file name',
     )
   })
+
+  it.each([
+    '',
+    'nested/file.txt',
+    'nested\\file.txt',
+  ])('rejects invalid temporary-file basename %s', (finalName) => {
+    expect(() =>
+      makeReservedSyncTempFileName(finalName, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+    ).toThrow('invalid sync temporary-file basename')
+  })
 })
 
 describe('assertPathInsideRoot', () => {

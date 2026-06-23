@@ -28,6 +28,9 @@ export function assertSyncPathAllowed(relativePath: string): void {
  * @internal
  */
 export function makeReservedSyncTempFileName(finalName: string, uuid: string): string {
+  if (finalName.length === 0 || /[\\/]/.test(finalName)) {
+    throw new Error('invalid sync temporary-file basename')
+  }
   const hex = uuid.replaceAll('-', '').toLowerCase()
   if (!UUID_HEX_RE.test(hex)) {
     throw new Error('invalid sync temporary-file nonce')

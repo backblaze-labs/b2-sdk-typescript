@@ -569,6 +569,29 @@ describe('toContentSource', () => {
     expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
   })
 
+  it('treats async iterator return failures during cancel as best effort', async () => {
+    const cancelReason = new Error('stop reading')
+    let returnedReason: unknown
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            return new Promise(() => {})
+          },
+          async return(reason?: unknown): Promise<IteratorResult<Uint8Array>> {
+            returnedReason = reason
+            throw new Error('return failed')
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.stream().cancel(cancelReason)).resolves.toBeUndefined()
+    expect(returnedReason).toBe(cancelReason)
+  })
+
   it('returns async iterators when pull throws', async () => {
     let returned = false
     const iterable = {

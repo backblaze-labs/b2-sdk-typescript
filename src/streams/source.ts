@@ -36,14 +36,17 @@ function asyncIterableToReadableStream(
       }
     },
     async cancel(reason) {
-      await iterator.return?.(reason)
+      await returnAsyncIteratorBestEffort(iterator, reason)
     },
   })
 }
 
-async function returnAsyncIteratorBestEffort(iterator: AsyncIterator<Uint8Array>): Promise<void> {
+async function returnAsyncIteratorBestEffort(
+  iterator: AsyncIterator<Uint8Array>,
+  reason?: unknown,
+): Promise<void> {
   try {
-    await iterator.return?.()
+    await iterator.return?.(reason)
   } catch {
     // Iterator cleanup is secondary and must not mask the pull error.
   }
