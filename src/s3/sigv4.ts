@@ -142,10 +142,11 @@ function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: s
 }
 
 function canonicalHostHeader(endpoint: URL): string {
-  if (endpoint.port === '' || (endpoint.protocol === 'https:' && endpoint.port === '443')) {
-    return endpoint.hostname
+  const host = endpoint.host
+  if (endpoint.protocol === 'https:' && host.endsWith(':443')) {
+    return host.slice(0, -4)
   }
-  return `${endpoint.hostname}:${endpoint.port}`
+  return host
 }
 
 function parseEndpoint(endpoint: string): URL {

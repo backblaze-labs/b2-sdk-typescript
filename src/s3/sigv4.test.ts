@@ -91,6 +91,30 @@ describe('presignS3Request', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[a-f0-9]{64}$/)
   })
 
+  it('signs bracketed IPv6 literal hosts', async () => {
+    const url = new URL(
+      await presignS3Request(
+        'GET',
+        {
+          endpoint: 'https://[::1]:8443',
+          region: 'us-west-004',
+          accessKeyId: 'key-id',
+          secretAccessKey: 'key-secret',
+          bucketName: 'my-bucket',
+          fileName: 'file.txt',
+          signingDate: SIGNING_DATE,
+        },
+        [['x-id', 'GetObject']],
+        [],
+      ),
+    )
+
+    expect(url.host).toBe('[::1]:8443')
+    expect(url.searchParams.get('X-Amz-Signature')).toBe(
+      '2a91722a5bf2dc43b29618531bf8a3ba65105b9e8218de2bd1a0df2150031411',
+    )
+  })
+
   it('wraps malformed endpoint URL errors with presign context', async () => {
     let error: unknown
     try {
