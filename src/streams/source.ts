@@ -31,7 +31,7 @@ function asyncIterableToReadableStream(
         controller.enqueue(value)
       } catch (err) {
         /* v8 ignore next -- Iterator-return failure must not mask the pull error. */
-        await iterator.return?.().catch(() => {})
+        await returnAsyncIteratorBestEffort(iterator)
         throw err
       }
     },
@@ -39,6 +39,14 @@ function asyncIterableToReadableStream(
       await iterator.return?.(reason)
     },
   })
+}
+
+async function returnAsyncIteratorBestEffort(iterator: AsyncIterator<Uint8Array>): Promise<void> {
+  try {
+    await iterator.return?.()
+  } catch {
+    // Iterator cleanup is secondary and must not mask the pull error.
+  }
 }
 
 function isAsyncIterable(input: unknown): input is AsyncIterable<Uint8Array> {

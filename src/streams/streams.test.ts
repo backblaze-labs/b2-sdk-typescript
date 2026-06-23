@@ -591,6 +591,50 @@ describe('toContentSource', () => {
     expect(returned).toBe(true)
   })
 
+  it('preserves pull errors when iterator return is synchronous', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          return(): IteratorResult<Uint8Array> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } as unknown as AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
+  it('preserves pull errors when iterator return throws', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          return(): IteratorResult<Uint8Array> {
+            returned = true
+            throw new Error('return failed')
+          },
+        }
+      },
+    } as unknown as AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
   it('returns async iterators when they yield invalid chunks', async () => {
     let returned = false
     const iterable = {
