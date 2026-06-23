@@ -55,8 +55,17 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
  * after applying your own content and response-header policy.
  */
 export interface TrustedUnsafeS3PresignOptIn {
+  /**
+   * Internal marker used only by the runtime identity check.
+   *
+   * @internal
+   */
   readonly __trustedUnsafeS3PresignOptIn: 'trustedUnsafeS3PresignOptIn'
 }
+
+const trustedUnsafeS3PresignOptInValue: TrustedUnsafeS3PresignOptIn = Object.freeze({
+  __trustedUnsafeS3PresignOptIn: 'trustedUnsafeS3PresignOptIn',
+})
 
 /**
  * Server-side opt-in token for unsafe S3 presign options.
@@ -66,9 +75,8 @@ export interface TrustedUnsafeS3PresignOptIn {
  * `allowInlineResponseContentDisposition` only when active content or inline
  * rendering from the storage origin is intentional and trusted.
  */
-export const trustedUnsafeS3PresignOptIn = Object.freeze({
-  __trustedUnsafeS3PresignOptIn: 'trustedUnsafeS3PresignOptIn',
-} as const) satisfies TrustedUnsafeS3PresignOptIn
+export const trustedUnsafeS3PresignOptIn: TrustedUnsafeS3PresignOptIn =
+  trustedUnsafeS3PresignOptInValue
 
 /**
  * Configuration for deriving S3-compatible client settings from B2 auth state.

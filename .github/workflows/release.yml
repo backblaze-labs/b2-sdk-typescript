@@ -166,6 +166,8 @@ jobs:
       # A version containing a hyphen is a prerelease and goes to the `next`
       # dist-tag so it never becomes `latest`.
       - name: Publish to npm
+        env:
+          ALLOW_REGISTRY_ARTIFACT_MISMATCH: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_registry_artifact_mismatch || false }}
         run: |
           NAME="$(cat .release/package-name.txt)"
           VERSION="$(cat .release/package-version.txt)"
@@ -193,7 +195,7 @@ jobs:
               OBSERVED="sha1-$PUBLISHED_SHASUM"
             fi
             if [ "$EXPECTED" != "$OBSERVED" ]; then
-              if [ "${{ github.event_name == 'workflow_dispatch' && inputs.allow_registry_artifact_mismatch || false }}" = "true" ]; then
+              if [ "$ALLOW_REGISTRY_ARTIFACT_MISMATCH" = "true" ]; then
                 echo "::warning::$NAME@$VERSION is already published with different bytes; bootstrap override allowed this mismatch."
                 echo "::warning::Expected verified artifact integrity: $EXPECTED"
                 echo "::warning::Observed registry integrity: $OBSERVED"
