@@ -20,6 +20,7 @@ import {
   normalizeSha1VerificationMaxBytes,
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
+import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import { readScannedLocalFile, writeLocalStreamInsideRoot } from './local-file-io.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
@@ -750,7 +751,11 @@ function createActionFactory(
           signal?.throwIfAborted()
           const verifiedTargetPath = await resolveLocalDeletePath(root, path.relativePath, absPath)
           signal?.throwIfAborted()
-          await unlink(verifiedTargetPath)
+          try {
+            await unlink(verifiedTargetPath)
+          } catch (err) {
+            throw new Error(`failed to delete local file: ${localFilesystemErrorReason(err)}`)
+          }
         },
       )
     },

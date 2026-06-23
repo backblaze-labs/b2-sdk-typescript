@@ -1,4 +1,4 @@
-import { sanitizeErrorReason } from '../../util/error-reason.ts'
+import { localFilesystemErrorReason } from '../filesystem-errors.ts'
 import {
   directoryMayContainSyncPaths,
   pathPassesSyncFilters,
@@ -175,7 +175,7 @@ export class LocalFolder implements SyncFolder {
       type: 'error',
       path,
       size: 0,
-      message: `failed to scan local ${kind}: ${sanitizeErrorReason(err)}`,
+      message: `failed to scan local ${kind}: ${localFilesystemErrorReason(err)}`,
     }
     options.onError?.(event)
     return new Error(event.message)

@@ -4671,6 +4671,44 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('sanitizes local delete filesystem errors', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdir, mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-delete-error-'))
+      try {
+        const dirPath = join(root, 'orphan-dir')
+        await mkdir(dirPath)
+        const source = makeMemoryFolder([], 'b2')
+        const destPath: LocalSyncPath = {
+          relativePath: 'orphan-dir',
+          absolutePath: dirPath,
+          modTimeMillis: 1000,
+          size: 0,
+        }
+        const dest = makeMemoryFolder([destPath], 'local')
+
+        const config: SynchronizerDownConfig = {
+          source: { ...source, type: 'b2' },
+          dest: { ...dest, type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'delete' },
+          bucket: makeMockBucket() as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+        const error = events.find(
+          (event): event is Extract<SyncEvent, { type: 'error' }> =>
+            event.type === 'error' && event.path === 'orphan-dir',
+        )
+
+        expect(error?.message).toMatch(/^failed to delete local file: (EACCES|EISDIR|EPERM)$/)
+        expect(error?.message).not.toContain(root)
+        expect(error?.message).not.toContain(dirPath)
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)('refuses local deletes outside the sync root', async () => {
       const { access, mkdtemp, rm, writeFile } = await import('node:fs/promises')
       const { tmpdir } = await import('node:os')

@@ -136,13 +136,12 @@ describe('LocalFolder', () => {
         }),
       ),
     ).rejects.toThrow('failed to scan local directory')
-    expect(errors).toContainEqual(
-      expect.objectContaining({
-        type: 'error',
-        path: '',
-        message: expect.stringContaining('failed to scan local directory'),
-      }),
-    )
+    expect(errors[0]).toMatchObject({
+      type: 'error',
+      path: '',
+      message: 'failed to scan local directory: ENOENT',
+    })
+    expect(JSON.stringify(errors[0])).not.toContain(tmpDir)
   })
 
   it('stops local scans when the signal is already aborted', async () => {
@@ -185,13 +184,14 @@ describe('LocalFolder', () => {
       )
 
       expect(entries.map((entry) => entry.relativePath)).toEqual(['readable.txt'])
-      expect(errors).toContainEqual(
-        expect.objectContaining({
-          type: 'error',
-          path: 'blocked',
-          message: expect.stringContaining('failed to scan local directory'),
-        }),
+      expect(errors[0]).toMatchObject({
+        type: 'error',
+        path: 'blocked',
+      })
+      expect((errors[0] as { readonly message?: string }).message).toMatch(
+        /^failed to scan local directory: (EACCES|EPERM)$/,
       )
+      expect(JSON.stringify(errors[0])).not.toContain(blockedDir)
     } finally {
       await chmod(blockedDir, 0o700).catch(() => {})
     }
