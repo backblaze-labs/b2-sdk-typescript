@@ -36,6 +36,9 @@ jobs:
       # name in RELEASE.md, README h1 + install snippets, CHANGELOG entry.
       # Cheap (<100 ms) and catches the kind of drift only a human review would.
       - run: pnpm run verify:metadata
+      # Release workflow trust-boundary checks: artifact build isolation,
+      # pinned package-type analysis, npm integrity comparison, and gh repo context.
+      - run: pnpm run verify:release
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})

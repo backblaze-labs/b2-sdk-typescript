@@ -69,19 +69,6 @@ export function assertNativeDownloadFileName(fileName: string): void {
 }
 
 /**
- * Validate a B2 file name for the deprecated native URL helper that percent
- * encodes the whole name as one component. Slash-boundary and dot-segment names
- * embedded in longer paths are safe in that legacy URL shape and remain
- * accepted for compatibility. Exact "." or ".." names are rejected because
- * common URL parsers can normalize the resulting bearer URL path.
- *
- * @param fileName - B2 file name supplied by the caller.
- */
-export function assertLegacyNativeDownloadFileName(fileName: string): void {
-  assertB2FileNameCore(fileName)
-}
-
-/**
  * Validate a B2 file name for URL signing safety.
  *
  * This is presign-safety validation, not full native B2 file-name validation.

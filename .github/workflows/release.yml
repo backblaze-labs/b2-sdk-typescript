@@ -82,6 +82,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm run verify:metadata
+      - run: pnpm run verify:release
       - run: pnpm run verify:exports
 
       - name: Verify tracked files are unchanged before packing
@@ -133,7 +134,7 @@ jobs:
       - run: pnpm build
 
       - name: Verify package types resolve cleanly (attw)
-        run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
+        run: npx --yes -p @arethetypeswrong/cli@0.18.3 attw --pack . --profile node16
 
   publish:
     name: Publish to npm
@@ -240,8 +241,8 @@ jobs:
           VERSION="$(cat .release/package-version.txt)"
           PRERELEASE=""
           [[ "$VERSION" == *-* ]] && PRERELEASE="--prerelease"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --notes-file .release/release-notes.md $PRERELEASE
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file .release/release-notes.md $PRERELEASE
           else
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file .release/release-notes.md $PRERELEASE
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$RELEASE_TAG" --notes-file .release/release-notes.md $PRERELEASE
           fi

@@ -129,7 +129,7 @@ Run the full local gate before releasing (CI runs it too, but catching it locall
 ```bash
 pnpm install --frozen-lockfile
 pnpm run verify     # lint + lint:docs + lint:spelling + typecheck + typecheck:examples
-                    # + test + build + docs + verify:metadata + verify:exports
+                    # + test + build + docs + verify:metadata + verify:release + verify:exports
 ```
 
 `pnpm run verify` must exit `0`. For extra confidence on the published artifact:
@@ -164,7 +164,7 @@ git push --follow-tags               # pushes the version commit AND the tag
 Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
 1. Checks out the tag and verifies the tag matches `package.json` version.
-2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational and runs in a separate job that never creates the npm artifact.
+2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
 3. `pnpm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
 
