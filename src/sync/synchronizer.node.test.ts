@@ -411,6 +411,52 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it.skipIf(isBun)('uses the initially resolved destination root for downloads', async () => {
+    const originalCwd = process.cwd()
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cwd-'))
+    try {
+      const destRoot = join(root, 'dest')
+      const otherRoot = join(root, 'other')
+      await mkdir(destRoot)
+      await mkdir(otherRoot)
+      process.chdir(root)
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockResolvedValue({
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('ok'))
+              controller.close()
+            },
+          }),
+        }),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('file.txt', 2)]),
+        dest: {
+          type: 'local',
+          root: 'dest',
+          async *scan() {
+            process.chdir(otherRoot)
+            yield* []
+          },
+        },
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'download-done')).toBe(true)
+      expect(events.some((event) => event.type === 'error')).toBe(false)
+      expect(new TextDecoder().decode(await readFile(join(destRoot, 'file.txt')))).toBe('ok')
+      await expect(readFile(join(otherRoot, 'dest', 'file.txt'))).rejects.toThrow()
+    } finally {
+      process.chdir(originalCwd)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('creates nested destination directories inside the root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-nested-'))
     try {

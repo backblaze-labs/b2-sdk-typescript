@@ -151,6 +151,11 @@ interface PreparedActionPlan {
   readonly actions: readonly SyncAction[]
 }
 
+interface LocalRootContexts {
+  readonly source?: string
+  readonly dest?: string
+}
+
 /**
  * Infers the sync direction from the source and destination folder types.
  * @param source - The folder to read files from.
@@ -185,6 +190,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
+  const localRootContexts = await resolveLocalRootContexts(config)
   const queuedEvents: SyncEvent[] = []
   const failedPaths: string[] = []
   const failedPathSet = new Set<string>()
@@ -206,7 +212,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const factory = createActionFactory(config)
+  const factory = createActionFactory(config, localRootContexts)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
   const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
@@ -639,6 +645,18 @@ function requireLocalRoot(
   return root
 }
 
+async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<LocalRootContexts> {
+  const path = await import('node:path')
+  return {
+    ...(config.source.type === 'local'
+      ? { source: path.resolve(requireLocalRoot(config.source, 'source', 'sync')) }
+      : {}),
+    ...(config.dest.type === 'local'
+      ? { dest: path.resolve(requireLocalRoot(config.dest, 'destination', 'sync')) }
+      : {}),
+  }
+}
+
 /**
  * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
  *
@@ -679,7 +697,10 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  * @param config - The synchronizer configuration containing source, destination, and options.
  * @returns An action factory bound to the provided configuration.
  */
-function createActionFactory(config: SynchronizerConfig): ActionFactory {
+function createActionFactory(
+  config: SynchronizerConfig,
+  localRootContexts: LocalRootContexts,
+): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
   const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? b2FolderRawPrefix(config.dest) ?? '')
@@ -695,7 +716,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
       assertBucket(bucket, 'upload')
-      const root = requireLocalRoot(upConfig.source, 'source', 'upload')
+      const root = localRootContexts.source ?? requireLocalRoot(upConfig.source, 'source', 'upload')
 
       return new UploadAction(
         source.relativePath,
@@ -729,7 +750,8 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     download(source: B2SyncPath): SyncAction {
       const bucket = downConfig.bucket
       assertBucket(bucket, 'download')
-      const root = requireLocalRoot(downConfig.dest, 'destination', 'download')
+      const root =
+        localRootContexts.dest ?? requireLocalRoot(downConfig.dest, 'destination', 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
         safeRelativePathSegments(relPath)
@@ -818,7 +840,7 @@ function createActionFactory(config: SynchronizerConfig): ActionFactory {
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
-      const root = localSyncRoot(downConfig.dest)
+      const root = localRootContexts.dest ?? localSyncRoot(downConfig.dest)
       return new DeleteLocalAction(
         path.relativePath,
         path.absolutePath,
