@@ -26,7 +26,7 @@ import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
-import { DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
+import { cleanupRequestOptions, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
 import { type ResumePartReusedEvent, uploadLargeFile } from './large.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
@@ -311,6 +311,52 @@ describe('uploadLargeFile cleanup paths', () => {
       expect(cleanupSignal?.aborted).toBe(true)
     } finally {
       timeoutSpy.mockRestore()
+    }
+  })
+
+  it('falls back when AbortSignal cleanup helpers are unavailable', async () => {
+    const originalTimeout = AbortSignal.timeout
+    const originalAny = AbortSignal.any
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+    Object.defineProperty(AbortSignal, 'any', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+
+    try {
+      const caller = new AbortController()
+      const callerOptions = cleanupRequestOptions(caller.signal, 10_000)
+      const callerReason = new Error('caller cleanup abort')
+      caller.abort(callerReason)
+      expect(callerOptions.signal.aborted).toBe(true)
+      expect(callerOptions.signal.reason).toBe(callerReason)
+
+      const timeoutOptions = cleanupRequestOptions(undefined, 1)
+      await new Promise<void>((resolve) => {
+        if (timeoutOptions.signal.aborted) {
+          resolve()
+          return
+        }
+        timeoutOptions.signal.addEventListener('abort', () => resolve(), { once: true })
+      })
+      expect(timeoutOptions.signal.aborted).toBe(true)
+      expect((timeoutOptions.signal.reason as Error).name).toBe('TimeoutError')
+    } finally {
+      Object.defineProperty(AbortSignal, 'timeout', {
+        configurable: true,
+        writable: true,
+        value: originalTimeout,
+      })
+      Object.defineProperty(AbortSignal, 'any', {
+        configurable: true,
+        writable: true,
+        value: originalAny,
+      })
     }
   })
 

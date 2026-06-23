@@ -54,9 +54,57 @@ export function cleanupRequestOptions(
   signal: AbortSignal | undefined,
   timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
 ): { readonly signal: AbortSignal } {
-  const timeoutSignal = AbortSignal.timeout(timeoutMs)
-  if (signal === undefined || signal.aborted) return { signal: timeoutSignal }
-  return { signal: AbortSignal.any([signal, timeoutSignal]) }
+  return { signal: createCleanupSignal(signal, timeoutMs) }
+}
+
+function createCleanupSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') {
+    if (signal === undefined || signal.aborted) return AbortSignal.timeout(timeoutMs)
+    if (typeof AbortSignal.any === 'function') {
+      return AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+    }
+  }
+
+  return createFallbackCleanupSignal(signal, timeoutMs)
+}
+
+function createFallbackCleanupSignal(
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => {
+    abortFallbackCleanup(controller, cleanupTimeoutReason(), cleanup)
+  }, timeoutMs)
+
+  const onAbort = () => {
+    const reason =
+      signal === undefined
+        ? cleanupDomException('Cleanup aborted', 'AbortError')
+        : cleanupAbortReason(signal)
+    abortFallbackCleanup(controller, reason, cleanup)
+  }
+  const cleanup = () => {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', onAbort)
+  }
+
+  if (signal === undefined || signal.aborted) {
+    return controller.signal
+  }
+
+  signal.addEventListener('abort', onAbort, { once: true })
+  controller.signal.addEventListener('abort', cleanup, { once: true })
+  return controller.signal
+}
+
+function abortFallbackCleanup(
+  controller: AbortController,
+  reason: unknown,
+  cleanup: () => void,
+): void {
+  if (!controller.signal.aborted) controller.abort(reason)
+  cleanup()
 }
 
 async function waitForCleanup(
@@ -85,5 +133,16 @@ async function waitForCleanup(
 }
 
 function cleanupAbortReason(signal: AbortSignal): unknown {
-  return signal.reason ?? new DOMException('Cleanup aborted', 'AbortError')
+  return signal.reason ?? cleanupDomException('Cleanup aborted', 'AbortError')
+}
+
+function cleanupTimeoutReason(): unknown {
+  return cleanupDomException('Cleanup timed out', 'TimeoutError')
+}
+
+function cleanupDomException(message: string, name: string): Error {
+  if (typeof DOMException === 'function') return new DOMException(message, name)
+  const error = new Error(message)
+  error.name = name
+  return error
 }
