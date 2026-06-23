@@ -225,27 +225,46 @@ function resolveWindowsPath(cwd: string, root: string): string {
   const normalizedRoot = root.replaceAll('/', '\\')
   const normalizedCwd = cwd.replaceAll('/', '\\')
   const drive = /^[A-Za-z]:/.exec(normalizedCwd)?.[0] ?? ''
+  const cwdUnc = splitUncPath(normalizedCwd)
   if (/^\\\\/.test(normalizedRoot)) return normalizeUncPath(normalizedRoot)
   if (/^[A-Za-z]:\\/.test(normalizedRoot)) {
     const prefix = normalizedRoot.slice(0, 2)
     const rest = normalizedRoot.slice(3).split('\\')
-    return `${prefix}\\${normalizePathSegments(rest, '\\')}`
+    return joinWindowsRoot(prefix, normalizePathSegments(rest, '\\'))
   }
   if (normalizedRoot.startsWith('\\')) {
-    return `${drive}\\${normalizePathSegments(normalizedRoot.slice(1).split('\\'), '\\')}`
+    const rest = normalizePathSegments(normalizedRoot.slice(1).split('\\'), '\\')
+    return joinWindowsRoot(cwdUnc?.prefix ?? drive, rest)
+  }
+  if (cwdUnc !== undefined) {
+    const resolved = normalizePathSegments([...cwdUnc.rest, ...normalizedRoot.split('\\')], '\\')
+    return joinWindowsRoot(cwdUnc.prefix, resolved)
   }
   const base = /^[A-Za-z]:\\/.test(normalizedCwd) ? normalizedCwd : `${drive}\\`
   const prefix = /^[A-Za-z]:/.exec(base)?.[0] ?? drive
   const baseRest = base.slice(prefix.length).replace(/^\\/, '').split('\\')
   const resolved = normalizePathSegments([...baseRest, ...normalizedRoot.split('\\')], '\\')
-  return `${prefix}\\${resolved}`
+  return joinWindowsRoot(prefix, resolved)
 }
 
 function normalizeUncPath(path: string): string {
+  const unc = splitUncPath(path)
+  if (unc === undefined) return path
+  return joinWindowsRoot(unc.prefix, normalizePathSegments(unc.rest, '\\'))
+}
+
+function splitUncPath(
+  path: string,
+): { readonly prefix: string; readonly rest: string[] } | undefined {
+  if (!path.startsWith('\\\\')) return undefined
   const parts = path.split('\\').filter((part) => part !== '')
   const [server, share, ...rest] = parts
-  if (server === undefined || share === undefined) return path
-  return `\\\\${server}\\${share}\\${normalizePathSegments(rest, '\\')}`
+  if (server === undefined || share === undefined) return undefined
+  return { prefix: `\\\\${server}\\${share}`, rest }
+}
+
+function joinWindowsRoot(prefix: string, rest: string): string {
+  return rest === '' ? `${prefix}\\` : `${prefix}\\${rest}`
 }
 
 function normalizePathSegments(segments: readonly string[], separator: '/' | '\\'): string {

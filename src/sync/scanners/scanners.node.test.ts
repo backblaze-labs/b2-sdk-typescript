@@ -241,6 +241,23 @@ describe('LocalFolder', () => {
     }
   })
 
+  it('preserves UNC roots when binding relative Windows paths', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('\\\\server\\share\\dir')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(new LocalFolder('dest').root).toBe('\\\\server\\share\\dir\\dest')
+      expect(new LocalFolder('\\dest').root).toBe('\\\\server\\share\\dest')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
   it('uses forward slashes in relative paths even on the current platform', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
     await writeFile(join(tmpDir, 'a', 'b', 'file.txt'), 'content')
