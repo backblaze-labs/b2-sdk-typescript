@@ -4,6 +4,7 @@ import {
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
+import { DOWNLOAD_STAGING_DIRECTORY_NAME } from '../local-file-io.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
@@ -19,6 +20,7 @@ type LocalDirent = {
 type LocalStats = {
   readonly dev: number
   readonly ino: number
+  readonly ctimeMs: number
   readonly mtimeMs: number
   readonly size: number
   isFile(): boolean
@@ -104,6 +106,7 @@ export class LocalFolder implements SyncFolder {
       throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
       const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
+      if (dir === this.root && entry.name === DOWNLOAD_STAGING_DIRECTORY_NAME) continue
       if (rel.includes('\\')) {
         emitScannerSkip(options, {
           type: 'skip',
@@ -157,6 +160,7 @@ export class LocalFolder implements SyncFolder {
             inode: s.ino,
             size: s.size,
             modTimeMillis: Math.floor(s.mtimeMs),
+            changeTimeMillis: Math.floor(s.ctimeMs),
           },
         })
       }

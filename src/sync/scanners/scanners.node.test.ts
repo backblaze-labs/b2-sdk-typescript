@@ -10,6 +10,7 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
+import { DOWNLOAD_STAGING_DIRECTORY_NAME } from '../local-file-io.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -144,6 +145,17 @@ describe('LocalFolder', () => {
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries).toEqual([])
+  })
+
+  it('ignores the managed download staging directory at the scan root', async () => {
+    await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'partial.bin'), 'partial')
+    await writeFile(join(tmpDir, 'real.txt'), 'real')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
   })
 
   it('surfaces non-existent root scan errors', async () => {

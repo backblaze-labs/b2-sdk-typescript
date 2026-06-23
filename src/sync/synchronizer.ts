@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { FileSource } from '../streams/source.ts'
+import { assertFileSourceMatchesIdentity, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -1005,7 +1005,7 @@ async function createContainedScannedFileSource(
   throwIfAborted(signal)
   const fileSource = await FileSource.fromPath(targetPath)
   if (path.fileIdentity !== undefined) {
-    fileSource.assertMatchesScannedIdentity(path.fileIdentity)
+    assertFileSourceMatchesIdentity(fileSource, path.fileIdentity)
   }
   await resolveContainedLocalPath(root, path.relativePath, targetPath)
   await assertScannedLocalFileStillCurrent(targetPath, path)

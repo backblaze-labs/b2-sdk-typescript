@@ -140,6 +140,8 @@ export interface LocalFileIdentity {
   readonly size: number
   /** Modification time observed during the scan, floored to milliseconds. */
   readonly modTimeMillis: number
+  /** Change time observed during the scan, floored to milliseconds when available. */
+  readonly changeTimeMillis?: number
 }
 
 /** A file on the local filesystem discovered during a scan. */

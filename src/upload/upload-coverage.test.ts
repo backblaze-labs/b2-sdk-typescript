@@ -768,6 +768,35 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(result.fileName).toBe('live-signal.bin')
   })
 
+  it('rejects a stream source that emits extra bytes after planned parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-after-plan',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'stream-extra.bin',
+        source: new StreamSource(readable, partSize),
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('source stream emitted more than advertised')
+  })
+
   it('preserves the initiating multipart failure over sibling aborts', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()

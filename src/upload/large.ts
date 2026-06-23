@@ -438,7 +438,7 @@ export async function uploadLargeFile(
     )
     if (rejected !== undefined) {
       if (abortScope.signal.aborted) abortScope.signal.throwIfAborted()
-      /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
+      /* v8 ignore next -- task failures abort the scope; this is defensive for unexpected rejections. */
       throw rejected.reason
     }
 

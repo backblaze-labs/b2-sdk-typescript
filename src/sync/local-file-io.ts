@@ -1,4 +1,3 @@
-import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { readStreamChunkWithTimeout } from './b2-sha1-reader.ts'
 import {
   assertPathInsideRoot,
@@ -9,6 +8,16 @@ import {
 import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
 
+type DeviceStat = { readonly dev: number | bigint }
+type DeviceStatFn = (path: string) => Promise<DeviceStat>
+
+/** @internal */
+export const DOWNLOAD_STAGING_DIRECTORY_NAME = '.b2sdk-download-staging'
+
+const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
+const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker'
+const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000
+
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
@@ -16,44 +25,8 @@ export const localFileIoTestHooks: {
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
+  statForDeviceCheck?: DeviceStatFn
 } = {}
-
-/**
- * Reads a previously scanned local file while rejecting symlink swaps and metadata drift.
- *
- * @param path - Scanned local path and file identity.
- *
- * @returns The file bytes.
- *
- * @internal
- */
-export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
-  const { constants } = await import('node:fs')
-  const { open } = await import('node:fs/promises')
-  const flags =
-    constants.O_RDONLY |
-    noFollowFlag(constants) |
-    ((constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0)
-  const handle = await open(path.absolutePath, flags).catch((err: unknown) => {
-    if (hasErrorCode(err, 'ELOOP')) {
-      throw new Error('local file changed before upload: not a regular file')
-    }
-    throw new Error(
-      `local file changed before upload: could not open scanned file: ${sanitizeErrorReason(err)}`,
-    )
-  })
-  try {
-    const stats = await handle.stat()
-    assertSameScannedRegularFile(stats, path)
-    const data = await handle.readFile()
-    if (data.byteLength !== path.size) {
-      throw new Error('local file changed before upload: size changed while reading')
-    }
-    return data
-  } finally {
-    await handle.close()
-  }
-}
 
 /**
  * Writes bytes under a local sync root after path containment checks.
@@ -133,7 +106,8 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
-  await assertDownloadDestinationSameDevice(rootRealPath, parentRealPath, stat)
+  const statForDeviceCheck = localFileIoTestHooks.statForDeviceCheck ?? stat
+  await assertDownloadDestinationSameDevice(rootRealPath, parentRealPath, statForDeviceCheck)
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -246,9 +220,12 @@ async function replacementFileMode(filePath: string): Promise<number> {
 async function assertDownloadDestinationSameDevice(
   rootRealPath: string,
   parentRealPath: string,
-  stat: typeof import('node:fs/promises').stat,
+  statForDeviceCheck: DeviceStatFn,
 ): Promise<void> {
-  const [rootStats, parentStats] = await Promise.all([stat(rootRealPath), stat(parentRealPath)])
+  const [rootStats, parentStats] = await Promise.all([
+    statForDeviceCheck(rootRealPath),
+    statForDeviceCheck(parentRealPath),
+  ])
   if (rootStats.dev !== parentStats.dev) {
     throw new Error('unsafe local destination path: cannot publish download across filesystems')
   }
@@ -259,27 +236,25 @@ async function createDownloadStagingDirectory(
   path: typeof import('node:path'),
   randomUUID: () => string,
 ): Promise<string> {
-  const { chmod, mkdir, realpath, stat } = await import('node:fs/promises')
-  const rootParent = path.dirname(rootRealPath)
-  if (rootParent === rootRealPath) {
-    throw new Error('unsafe local destination path: cannot stage download outside filesystem root')
-  }
-
-  const [rootStats, parentStats] = await Promise.all([stat(rootRealPath), stat(rootParent)])
-  if (rootStats.dev !== parentStats.dev) {
-    throw new Error(
-      'unsafe local destination path: cannot stage download outside sync root on a different filesystem',
-    )
-  }
+  const { chmod, mkdir, realpath, writeFile } = await import('node:fs/promises')
+  const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
+  await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE, recursive: true })
+  await chmod(managedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
+  const realManagedDirectory = await realpath(managedDirectory)
+  assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
+  await reapStaleDownloadStagingDirectories(realManagedDirectory, path, Date.now())
 
   const stagingDirectory = path.join(
-    rootParent,
-    `.b2sdk-${path.basename(rootRealPath)}-${randomUUID()}.download`,
+    realManagedDirectory,
+    `${Date.now()}-${randomUUID()}${DOWNLOAD_STAGING_ENTRY_SUFFIX}`,
   )
   await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
   await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   const realStagingDirectory = await realpath(stagingDirectory)
-  assertPathInsideRoot(rootParent, realStagingDirectory, path)
+  assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
+  await writeFile(path.join(realStagingDirectory, DOWNLOAD_STAGING_MARKER_NAME), '', {
+    mode: PRIVATE_DOWNLOAD_FILE_MODE,
+  })
   return realStagingDirectory
 }
 
@@ -355,6 +330,41 @@ export async function deleteLocalFileInsideRoot(
   }
 }
 
+async function reapStaleDownloadStagingDirectories(
+  managedDirectory: string,
+  path: typeof import('node:path'),
+  nowMillis: number,
+): Promise<void> {
+  const { lstat, readdir, realpath, rm } = await import('node:fs/promises')
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await readdir(managedDirectory, { withFileTypes: true })
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) return
+    throw err
+  }
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory() || !entry.name.endsWith(DOWNLOAD_STAGING_ENTRY_SUFFIX)) return
+      const candidate = path.join(managedDirectory, entry.name)
+      let stats: Awaited<ReturnType<typeof lstat>>
+      try {
+        const markerStats = await lstat(path.join(candidate, DOWNLOAD_STAGING_MARKER_NAME))
+        if (!markerStats.isFile()) return
+        stats = await lstat(candidate)
+      } catch {
+        return
+      }
+      if (nowMillis - stats.mtimeMs < STALE_DOWNLOAD_STAGING_AGE_MS) return
+      const realCandidate = await realpath(candidate).catch(() => undefined)
+      if (realCandidate === undefined) return
+      assertPathInsideRoot(managedDirectory, realCandidate, path)
+      await rm(realCandidate, { recursive: true, force: true })
+    }),
+  )
+}
+
 async function writeAll(
   handle: {
     write(
@@ -387,10 +397,11 @@ export function assertSameScannedRegularFile(
     readonly dev: number
     readonly ino: number
     readonly mtimeMs: number
+    readonly ctimeMs: number
     readonly size: number
   },
   path: LocalSyncPath,
-  operation: 'upload' | 'delete' = 'upload',
+  operation: 'upload' | 'delete' | 'sha1 comparison' = 'upload',
 ): void {
   const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {
@@ -410,7 +421,9 @@ export function assertSameScannedRegularFile(
     stats.dev !== identity.deviceId ||
     stats.ino !== identity.inode ||
     stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
+    Math.floor(stats.mtimeMs) !== identity.modTimeMillis ||
+    (identity.changeTimeMillis !== undefined &&
+      Math.floor(stats.ctimeMs) !== identity.changeTimeMillis)
   ) {
     throw new Error(reason)
   }

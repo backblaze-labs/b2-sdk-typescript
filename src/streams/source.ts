@@ -10,13 +10,7 @@ interface FileIdentity {
   readonly ino: number
   readonly size: number
   readonly mtimeMs: number
-}
-
-interface ScannedFileIdentity {
-  readonly deviceId: number
-  readonly inode: number
-  readonly size: number
-  readonly modTimeMillis: number
+  readonly ctimeMs: number
 }
 
 interface FileStatsLike {
@@ -38,6 +32,8 @@ interface FileHandleLike {
   stat(): Promise<FileStatsLike>
   close(): Promise<void>
 }
+
+const fileSourceIdentities = new WeakMap<object, FileIdentity>()
 
 /**
  * Uniform adapter for upload content. Wraps File, Blob, Buffer, file paths,
@@ -175,10 +171,10 @@ export class BufferSource implements ContentSource {
  * opens paths with no-follow semantics where Node exposes them. On platforms
  * without `O_NOFOLLOW`, a swapped symlink is opened and then rejected by the
  * post-open identity check. Each slice must still point at the same regular
- * file identity, size, and mtime captured by {@link FileSource.fromPath};
- * ctime-only metadata changes do not abort unchanged bytes. Concurrent part
- * uploads may open one descriptor per in-flight part; the SDK's upload
- * concurrency bounds that descriptor count.
+ * file identity, size, mtime, and ctime captured by
+ * {@link FileSource.fromPath}. Concurrent part uploads may open one
+ * descriptor per in-flight part; the SDK's upload concurrency bounds that
+ * descriptor count.
  */
 export class FileSource implements ContentSource {
   /** Absolute or relative path to the underlying local file. */
@@ -204,6 +200,7 @@ export class FileSource implements ContentSource {
     this.size = size
     this.offset = offset
     this.identity = identity
+    fileSourceIdentities.set(this, identity)
   }
 
   /**
@@ -241,25 +238,6 @@ export class FileSource implements ContentSource {
       this.identity,
       this.offset + sliceStart,
     )
-  }
-
-  /**
-   * Verifies that this source was opened from a previously scanned local file identity.
-   * @param identity - Scanned local file identity to compare against.
-   *
-   * @throws If the source identity differs from the scanned identity.
-   *
-   * @internal
-   */
-  assertMatchesScannedIdentity(identity: ScannedFileIdentity): void {
-    if (
-      this.identity.dev !== identity.deviceId ||
-      this.identity.ino !== identity.inode ||
-      this.identity.size !== identity.size ||
-      Math.floor(this.identity.mtimeMs) !== identity.modTimeMillis
-    ) {
-      throw new Error(`FileSource file changed after validation: ${this.filePath}`)
-    }
   }
 
   /**
@@ -452,7 +430,8 @@ function assertSameIdentity(filePath: string, stats: FileStatsLike, identity: Fi
     stats.dev !== identity.dev ||
     stats.ino !== identity.ino ||
     stats.size !== identity.size ||
-    stats.mtimeMs !== identity.mtimeMs
+    stats.mtimeMs !== identity.mtimeMs ||
+    stats.ctimeMs !== identity.ctimeMs
   ) {
     throw new Error(`FileSource file changed after validation: ${filePath}`)
   }
@@ -464,6 +443,43 @@ function identityFromStats(stats: FileStatsLike): FileIdentity {
     ino: stats.ino,
     size: stats.size,
     mtimeMs: stats.mtimeMs,
+    ctimeMs: stats.ctimeMs,
+  }
+}
+
+/**
+ * Verifies an internal FileSource against a sync scanner identity without
+ * exposing sync-only methods on the public FileSource class.
+ * @param source - FileSource instance created for the local file.
+ * @param identity - Previously scanned local file identity.
+ *
+ * @throws If the source identity differs from the scanned identity.
+ *
+ * @internal
+ */
+export function assertFileSourceMatchesIdentity(
+  source: FileSource,
+  identity: {
+    readonly deviceId: number
+    readonly inode: number
+    readonly size: number
+    readonly modTimeMillis: number
+    readonly changeTimeMillis?: number
+  },
+): void {
+  const sourceIdentity = fileSourceIdentities.get(source)
+  if (sourceIdentity === undefined) {
+    throw new Error(`FileSource file changed after validation: ${source.filePath}`)
+  }
+  if (
+    sourceIdentity.dev !== identity.deviceId ||
+    sourceIdentity.ino !== identity.inode ||
+    sourceIdentity.size !== identity.size ||
+    Math.floor(sourceIdentity.mtimeMs) !== identity.modTimeMillis ||
+    (identity.changeTimeMillis !== undefined &&
+      Math.floor(sourceIdentity.ctimeMs) !== identity.changeTimeMillis)
+  ) {
+    throw new Error(`FileSource file changed after validation: ${source.filePath}`)
   }
 }
 

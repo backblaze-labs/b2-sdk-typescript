@@ -1,17 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { sha1Hex } from '../streams/hash.ts'
 import { formatHashError, isAbortError, readLocalSha1File } from './local-sha1.ts'
-import type { LocalSyncPath } from './types.ts'
+import type { LocalFileIdentity, LocalSyncPath } from './types.ts'
 
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 
-function makeLocalPath(relativePath: string, absolutePath: string, size: number): LocalSyncPath {
+function makeLocalPath(
+  relativePath: string,
+  absolutePath: string,
+  size: number,
+  fileIdentity?: LocalFileIdentity,
+): LocalSyncPath {
   return {
     relativePath,
     absolutePath,
     modTimeMillis: 1000,
     size,
+    ...(fileIdentity !== undefined ? { fileIdentity } : {}),
   }
 }
 
@@ -65,7 +71,7 @@ describe('readLocalSha1File', () => {
       await writeFile(filePath, 'abc')
 
       await expect(readLocalSha1File(makeLocalPath('changed.txt', filePath, 4))).rejects.toThrow(
-        'file size changed before sha1 comparison',
+        'local file changed before sha1 comparison: size changed',
       )
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -84,7 +90,38 @@ describe('readLocalSha1File', () => {
       await symlink(targetPath, linkPath)
 
       await expect(readLocalSha1File(makeLocalPath('link.txt', linkPath, 3))).rejects.toThrow(
-        'not a regular file',
+        'local file changed before sha1 comparison: not a regular file',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects same-size rewrites whose mtime was restored before hashing', async () => {
+    const { tmpdir } = await import('node:os')
+    const { mkdtemp, rm, stat, utimes, writeFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-sha1-ctime-'))
+    try {
+      const filePath = join(root, 'changed.txt')
+      await writeFile(filePath, 'safe')
+      const originalTime = new Date('2024-01-01T00:00:00.000Z')
+      await utimes(filePath, originalTime, originalTime)
+      const stats = await stat(filePath)
+      const path = makeLocalPath('changed.txt', filePath, 4, {
+        deviceId: stats.dev,
+        inode: stats.ino,
+        size: stats.size,
+        modTimeMillis: Math.floor(stats.mtimeMs),
+        changeTimeMillis: Math.floor(stats.ctimeMs),
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await writeFile(filePath, 'evil')
+      await utimes(filePath, originalTime, originalTime)
+
+      await expect(readLocalSha1File(path)).rejects.toThrow(
+        'local file changed before sha1 comparison',
       )
     } finally {
       await rm(root, { recursive: true, force: true })

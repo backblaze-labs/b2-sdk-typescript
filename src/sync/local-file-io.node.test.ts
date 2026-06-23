@@ -1,32 +1,31 @@
-import { execFile } from 'node:child_process'
 import {
+  chmod,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
   deleteLocalFileInsideRoot,
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
   localFileIoTestHooks,
-  readScannedLocalFile,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
-import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
 const isWindows = process.platform === 'win32'
 const isLinux = process.platform === 'linux'
-const execFileAsync = promisify(execFile)
 
 function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -36,96 +35,6 @@ function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
     },
   })
 }
-
-async function makeScannedPath(root: string, name: string, data: string): Promise<LocalSyncPath> {
-  const absolutePath = join(root, name)
-  const bytes = textEncoder.encode(data)
-  await writeFile(absolutePath, bytes)
-  const stats = await stat(absolutePath)
-  return {
-    relativePath: name,
-    absolutePath,
-    modTimeMillis: Math.floor(stats.mtimeMs),
-    size: bytes.byteLength,
-    fileIdentity: {
-      deviceId: stats.dev,
-      inode: stats.ino,
-      size: stats.size,
-      modTimeMillis: Math.floor(stats.mtimeMs),
-    },
-  }
-}
-
-describe('readScannedLocalFile', () => {
-  it('reads a scanned regular file when identity still matches', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-read-'))
-    try {
-      const path = await makeScannedPath(root, 'file.txt', 'abc')
-
-      const result = await readScannedLocalFile(path)
-      expect(result).toBeInstanceOf(Uint8Array)
-      expect([...result]).toEqual([...textEncoder.encode('abc')])
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('rejects a scanned file whose identity changed', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-identity-'))
-    try {
-      const path = await makeScannedPath(root, 'file.txt', 'abc')
-      const identity = path.fileIdentity
-      expect(identity).toBeDefined()
-
-      await expect(
-        readScannedLocalFile({
-          ...path,
-          fileIdentity: {
-            deviceId: identity?.deviceId ?? 0,
-            inode: (identity?.inode ?? 0) + 1,
-            size: identity?.size ?? path.size,
-            modTimeMillis: identity?.modTimeMillis ?? path.modTimeMillis,
-          },
-        }),
-      ).rejects.toThrow('local file changed before upload')
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it('rejects a scanned file removed before upload', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-'))
-    try {
-      const path = await makeScannedPath(root, 'file.txt', 'abc')
-      await rm(path.absolutePath, { force: true })
-
-      await expect(readScannedLocalFile(path)).rejects.toThrow(
-        'local file changed before upload: could not open scanned file: ENOENT',
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it.skipIf(isWindows)('rejects a scanned file replaced by a FIFO without hanging', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-fifo-'))
-    try {
-      const path = await makeScannedPath(root, 'pipe.txt', 'abc')
-      await rm(path.absolutePath, { force: true })
-      await execFileAsync('mkfifo', [path.absolutePath])
-
-      const timeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('timed out waiting for FIFO rejection')), 1500)
-      })
-
-      await expect(Promise.race([readScannedLocalFile(path), timeout])).rejects.toThrow(
-        'local file changed before upload: not a regular file',
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-})
 
 describe('writeLocalFileInsideRoot', () => {
   it('writes bytes under the resolved root', async () => {
@@ -141,6 +50,82 @@ describe('writeLocalFileInsideRoot', () => {
 })
 
 describe('writeLocalStreamInsideRoot', () => {
+  it.skipIf(isWindows)(
+    'creates private managed staging files under the destination root',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-private-'))
+      let observedTempPath = ''
+      let observedStagingDirectory = ''
+      try {
+        localFileIoTestHooks.afterTempFileCreated = async (tempPath, stagingDirectory) => {
+          observedTempPath = tempPath
+          observedStagingDirectory = stagingDirectory
+          const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+          expect(tempPath.startsWith(managedDirectory)).toBe(true)
+          expect(stagingDirectory.startsWith(managedDirectory)).toBe(true)
+          expect((await stat(tempPath)).mode & 0o777).toBe(0o600)
+          expect((await stat(stagingDirectory)).mode & 0o777).toBe(0o700)
+          expect(await readdir(root)).toEqual([DOWNLOAD_STAGING_DIRECTORY_NAME])
+        }
+
+        await writeLocalStreamInsideRoot(
+          root,
+          'file.txt',
+          streamFromBytes(textEncoder.encode('abc')),
+          {
+            expectedBytes: 3,
+            idleTimeoutMillis: 1000,
+          },
+        )
+
+        expect(observedTempPath).not.toBe('')
+        expect(observedStagingDirectory).not.toBe('')
+        expect((await stat(join(root, 'file.txt'))).mode & 0o777).toBe(0o600)
+        await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([])
+      } finally {
+        delete localFileIoTestHooks.afterTempFileCreated
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.skipIf(isWindows)('preserves mode when replacing existing files', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-mode-'))
+    try {
+      const secretPath = join(root, 'secret.txt')
+      const scriptPath = join(root, 'script.sh')
+      await writeFile(secretPath, 'old')
+      await writeFile(scriptPath, '#!/bin/sh\n')
+      await chmod(secretPath, 0o600)
+      await chmod(scriptPath, 0o755)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'secret.txt',
+        streamFromBytes(textEncoder.encode('new')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+      await writeLocalStreamInsideRoot(
+        root,
+        'script.sh',
+        streamFromBytes(textEncoder.encode('echo ok\n')),
+        {
+          expectedBytes: 8,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
+      expect((await stat(scriptPath)).mode & 0o777).toBe(0o755)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects download bodies that exceed the expected byte count', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-overlong-'))
     try {
@@ -166,6 +151,83 @@ describe('writeLocalStreamInsideRoot', () => {
         }),
       ).rejects.toThrow('download read ended after 3 bytes, expected 4')
       await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects destination parents on a different device', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-dev-parent-'))
+    const subdir = join(root, 'sub')
+    try {
+      await mkdir(subdir)
+      const realSubdir = await realpath(subdir)
+      localFileIoTestHooks.statForDeviceCheck = async (candidate) => ({
+        dev: candidate === realSubdir ? 2 : 1,
+      })
+      await expect(
+        writeLocalStreamInsideRoot(
+          root,
+          'sub/file.txt',
+          streamFromBytes(textEncoder.encode('abc')),
+          {
+            expectedBytes: 3,
+            idleTimeoutMillis: 1000,
+          },
+        ),
+      ).rejects.toThrow('cannot publish download across filesystems')
+    } finally {
+      delete localFileIoTestHooks.statForDeviceCheck
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('allows a destination root whose parent is on a different device', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-dev-root-'))
+    try {
+      const rootParent = await realpath(join(root, '..'))
+      localFileIoTestHooks.statForDeviceCheck = async (candidate) => ({
+        dev: candidate === rootParent ? 2 : 1,
+      })
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+    } finally {
+      delete localFileIoTestHooks.statForDeviceCheck
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reaps stale SDK-owned staging directories before creating a new one', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stale-stage-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const staleDirectory = join(managedDirectory, '2000-01-01-old.download')
+      await mkdir(staleDirectory, { recursive: true, mode: 0o700 })
+      await writeFile(join(staleDirectory, '.b2sdk-staging-marker'), '')
+      await writeFile(join(staleDirectory, 'partial.bin'), 'old')
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(staleDirectory, old, old)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(readFile(join(staleDirectory, 'partial.bin'))).rejects.toThrow()
     } finally {
       await rm(root, { recursive: true, force: true })
     }

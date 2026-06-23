@@ -158,21 +158,22 @@ describe('FileSource', () => {
     }
   })
 
-  it('allows metadata-only ctime changes before reading unchanged bytes', async () => {
+  it('rejects same-size rewrites when mtime is restored before reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-ctime-'))
     try {
       const filePath = join(root, 'data.bin')
-      const payload = new TextEncoder().encode('safe')
-      await writeFile(filePath, payload)
+      await writeFile(filePath, new TextEncoder().encode('safe'))
       const originalTime = new Date('2024-01-01T00:00:00.000Z')
       await utimes(filePath, originalTime, originalTime)
 
       const source = await FileSource.fromPath(filePath)
-      await writeFile(filePath, payload)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await writeFile(filePath, new TextEncoder().encode('evil'))
       await utimes(filePath, originalTime, originalTime)
 
-      const bytes = new Uint8Array(await source.toArrayBuffer())
-      expect(bytes).toEqual(payload)
+      await expect(source.toArrayBuffer()).rejects.toThrow(
+        `FileSource file changed after validation: ${filePath}`,
+      )
     } finally {
       await rm(root, { recursive: true, force: true })
     }

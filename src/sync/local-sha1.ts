@@ -1,6 +1,7 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { toError } from '../util/to-error.ts'
+import { assertSameScannedRegularFile } from './local-file-io.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
 
@@ -80,7 +81,7 @@ export async function readLocalSha1File(
       timeoutMillis,
       'sha1 file status',
     )
-    if (!preOpenStat.isFile()) throw new Error('not a regular file')
+    assertSameScannedRegularFile(preOpenStat, path, 'sha1 comparison')
 
     file = await openWithTimeout(open(path.absolutePath, flags), timeoutMillis)
 
@@ -89,11 +90,10 @@ export async function readLocalSha1File(
       timeoutMillis,
       'sha1 file status',
     )
-    if (!postOpenStat.isFile()) throw new Error('not a regular file')
+    assertSameScannedRegularFile(postOpenStat, path, 'sha1 comparison')
 
     const stat = await withTimeout(file.stat(), timeoutMillis, 'sha1 file status')
-    if (!stat.isFile()) throw new Error('not a regular file')
-    if (stat.size !== path.size) throw new Error('file size changed before sha1 comparison')
+    assertSameScannedRegularFile(stat, path, 'sha1 comparison')
 
     stream = file.createReadStream({
       ...(path.size > 0 ? { start: 0, end: path.size - 1 } : {}),

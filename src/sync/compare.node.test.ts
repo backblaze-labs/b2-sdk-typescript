@@ -86,7 +86,8 @@ describe('preparePairForCompare default local SHA-1 reader', () => {
       expect(result.events[0]).toMatchObject({
         type: 'error',
         path: 'directory',
-        message: 'failed to hash local file for sha1 comparison: not a regular file',
+        message:
+          'failed to hash local file for sha1 comparison: local file changed before sha1 comparison: not a regular file',
       })
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -111,7 +112,7 @@ describe('preparePairForCompare default local SHA-1 reader', () => {
         type: 'error',
         path: 'changed.txt',
         message:
-          'failed to hash local file for sha1 comparison: file size changed before sha1 comparison',
+          'failed to hash local file for sha1 comparison: local file changed before sha1 comparison: size changed',
       })
     } finally {
       await rm(root, { recursive: true, force: true })
