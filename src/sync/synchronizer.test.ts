@@ -5141,6 +5141,37 @@ describe('synchronize', () => {
       expect(errors[1]).not.toHaveProperty('failedPathOmittedCount')
     })
 
+    it('deduplicates failed paths on aggregate error events', async () => {
+      const mockBucket = makeMockBucket()
+      mockBucket.copyFile = vi.fn().mockRejectedValue(new Error('copy boom'))
+
+      const source = makeMemoryFolder(
+        [makeB2SyncPath('repeat.txt', 2000, 100), makeB2SyncPath('repeat.txt', 2000, 100)],
+        'b2',
+      )
+      const dest = makeMemoryFolder([], 'b2')
+
+      const config = {
+        source: { ...source, type: 'b2' },
+        dest: { ...dest, type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'no-delete' },
+        bucket: mockBucket as unknown as Bucket,
+        prefix: '',
+      } as unknown as SynchronizerUpConfig
+
+      const events = await collectEvents(config)
+      const summary = events.find(
+        (event): event is Extract<SyncEvent, { type: 'error' }> =>
+          event.type === 'error' && event.path === '',
+      )
+
+      expect(summary).toMatchObject({
+        failureCount: 2,
+        failedPaths: ['repeat.txt'],
+      })
+      expect(summary).not.toHaveProperty('failedPathOmittedCount')
+    })
+
     it('bounds failed paths on aggregate error events', async () => {
       const mockBucket = makeMockBucket()
       mockBucket.copyFile = vi.fn().mockRejectedValue(new Error('copy boom'))

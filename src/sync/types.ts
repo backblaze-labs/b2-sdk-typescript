@@ -262,7 +262,7 @@ export interface SyncErrorEvent {
   readonly message: string
   /** Number of failed actions represented by an aggregate run-level error event. */
   readonly failureCount?: number
-  /** Bounded relative paths of failed actions represented by an aggregate run-level error event. */
+  /** Bounded distinct relative paths of failed actions represented by an aggregate error event. */
   readonly failedPaths?: readonly string[]
   /** Number of failed action paths omitted from a bounded aggregate error event. */
   readonly failedPathOmittedCount?: number
@@ -307,7 +307,10 @@ export interface SyncOptions extends SyncFilterOptions {
    * budget before they can be treated as equal.
    */
   readonly sha1VerificationMaxBytes?: number
-  /** Idle timeout in milliseconds for B2-to-local download body reads. Defaults to 60 seconds. */
+  /**
+   * Idle timeout in milliseconds for B2-to-local download body reads. Must be positive, or
+   * `Infinity` to disable the timeout. Defaults to 60 seconds.
+   */
   readonly downloadIdleTimeoutMillis?: number
   /** Maximum scanner entries retained before failing with a defined scan-limit error. */
   readonly maxScanEntries?: number

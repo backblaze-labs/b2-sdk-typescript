@@ -163,6 +163,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const nowMillis = Date.now()
   const queuedEvents: SyncEvent[] = []
   const failedPaths: string[] = []
+  const failedPathSet = new Set<string>()
   let errorCount = 0
   let failedPathOmittedCount = 0
   let scanHadError = false
@@ -446,6 +447,8 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
 
   function recordFailurePath(path: string): void {
     if (path === '') return
+    if (failedPathSet.has(path)) return
+    failedPathSet.add(path)
     if (failedPaths.length < MAX_AGGREGATE_FAILED_PATHS) {
       failedPaths.push(path)
     } else {
@@ -502,7 +505,7 @@ function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
   if (value === undefined) return DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS
   if (value === Number.POSITIVE_INFINITY) return value
   if (!Number.isFinite(value) || value < 1) {
-    throw new Error('downloadIdleTimeoutMillis must be a positive finite number or Infinity')
+    throw new RangeError('downloadIdleTimeoutMillis must be a positive finite number or Infinity')
   }
   return Math.floor(value)
 }
