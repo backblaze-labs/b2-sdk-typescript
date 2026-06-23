@@ -624,10 +624,11 @@ async function throwIfSignalAbortedAfterResponse(
   response: HttpResponse,
 ): Promise<void> {
   if (signal?.aborted !== true) return
+  const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
   try {
-    await response.body?.cancel()
+    await response.body?.cancel(reason)
   } catch {
     // Best-effort cleanup before preserving the caller's abort reason.
   }
-  throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  throw reason
 }

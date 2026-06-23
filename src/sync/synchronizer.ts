@@ -29,7 +29,6 @@ import {
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
-import { assertSyncPathAllowed } from './paths.ts'
 import {
   assertSupportedCompareMode,
   type B2Sha1Reader,
@@ -834,7 +833,6 @@ function createActionFactory(
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
-        assertSyncPathAllowed(relPath)
         safeRelativePathSegments(relPath)
         const b2FileName =
           sourceB2Prefix === undefined

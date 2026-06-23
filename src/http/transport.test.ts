@@ -1335,7 +1335,7 @@ describe('RetryTransport', () => {
       await expect(transport.send({ ...baseRequest, signal: controller.signal })).rejects.toBe(
         'caller cancelled',
       )
-      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(cancel).toHaveBeenCalledWith('caller cancelled')
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
   })
