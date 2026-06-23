@@ -8,7 +8,7 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { abortReason, createAbortScope } from './abort-scope.ts'
+import { abortReason, createAbortScope, raceWithAbort } from './abort-scope.ts'
 import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,
@@ -125,28 +125,32 @@ export function createWriteStream(
   function ensureStarted(): Promise<LargeFileId> {
     if (largeFileId !== null) return Promise.resolve(largeFileId)
     if (startPromise !== null) return startPromise
-    startPromise = (async () => {
-      const resp = await raw.startLargeFile(
-        accountInfo.getApiUrl(),
-        accountInfo.getAuthToken(),
-        {
-          bucketId: options.bucketId,
-          fileName: options.fileName,
-          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-          fileInfo: options.fileInfo ?? {},
-          ...(options.serverSideEncryption !== undefined
-            ? { serverSideEncryption: options.serverSideEncryption }
-            : {}),
-        },
-        { signal: abortScope.signal },
-      )
+    const rawStart = raw.startLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId: options.bucketId,
+        fileName: options.fileName,
+        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+        fileInfo: options.fileInfo ?? {},
+        ...(options.serverSideEncryption !== undefined
+          ? { serverSideEncryption: options.serverSideEncryption }
+          : {}),
+      },
+      { signal: abortScope.signal },
+    )
+    const started = rawStart.then((resp) => {
       largeFileId = resp.fileId
-      if (abortScope.signal.aborted) {
-        scheduleCancelLargeFileAfterStart(Promise.resolve(largeFileId))
+      if (abortScope.signal.aborted || errored !== null) {
+        cancelStartedLargeFile(largeFileId)
       }
       return largeFileId
-    })()
-    return startPromise
+    })
+    startPromise = started
+    return raceWithAbort(started, abortScope.signal).catch((err) => {
+      if (abortScope.signal.aborted) scheduleCancelLargeFileAfterStart(started)
+      throw err
+    })
   }
 
   async function shipPart(data: Uint8Array, partNumber: number): Promise<void> {
@@ -190,18 +194,15 @@ export function createWriteStream(
     return error
   }
 
-  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
+  function cancelStartedLargeFile(fileId: LargeFileId): void {
     if (cancelAfterStartScheduled) return
     cancelAfterStartScheduled = true
+    void cancelLargeFileBestEffort(raw, accountInfo, fileId, cleanupWriteStreamOptions(options))
+  }
+
+  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
     void started
-      .then((fileId) =>
-        cancelLargeFileBestEffort(
-          raw,
-          accountInfo,
-          fileId,
-          cleanupWriteStreamOptions(options),
-        ),
-      )
+      .then((fileId) => cancelStartedLargeFile(fileId))
       .catch(() => {
         // If start failed, no file ID is available to cancel.
       })

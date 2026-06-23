@@ -27,6 +27,7 @@ type LocalStats = {
   readonly ino: number
   readonly ctimeMs: number
   readonly mtimeMs: number
+  readonly ctimeMs: number
   readonly size: number
   isFile(): boolean
 }

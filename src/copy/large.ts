@@ -220,7 +220,14 @@ function cancelLargeFileAfterStart(
   onCleanupFailure: CleanupFailureListener | undefined,
 ): void {
   void started
-    .then((resp) => cancelLargeFileBestEffort(raw, accountInfo, resp.fileId, onCleanupFailure))
+    .then((resp) =>
+      cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        resp.fileId,
+        onCleanupFailure === undefined ? undefined : { onCleanupFailure },
+      ),
+    )
     .catch(() => {
       // If start failed, no file ID is available to cancel.
     })

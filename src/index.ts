@@ -133,7 +133,6 @@ export type {
   ResumePartReusedEvent,
   ResumePartReusedListener,
 } from './upload/large.ts'
-export type { B2ObjectUploadOptions, BucketUploadOptions, UploadOptions } from './upload/options.ts'
 export type {
   ResumeCandidateRejectedEvent,
   ResumeCandidateRejectedListener,
@@ -151,6 +150,7 @@ export type {
   B2ObjectWriteStreamOptions,
   BucketUploadOptions,
   HighLevelUploadOptions,
+  UploadOptions,
 } from './upload/options.ts'
 export type { UploadRetryEvent, UploadRetryListener, UploadRetryOptions } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'

@@ -3753,7 +3753,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 })
 
 describe('uploadLargeFile control-plane aborts', () => {
-  it('passes the caller signal to stalled startLargeFile requests', async () => {
+  it('passes a linked abort signal to stalled startLargeFile requests', async () => {
     const controller = new AbortController()
     let startSignal: AbortSignal | undefined
     const raw = {
@@ -3773,10 +3773,12 @@ describe('uploadLargeFile control-plane aborts', () => {
     controller.abort(new Error('start aborted'))
 
     await expect(upload).rejects.toThrow('start aborted')
-    expect(startSignal).toBe(controller.signal)
+    expect(startSignal).toBeDefined()
+    expect(startSignal).not.toBe(controller.signal)
+    expect(startSignal?.aborted).toBe(true)
   })
 
-  it('passes the abort-scope signal to stalled finishLargeFile requests', async () => {
+  it('classifies stalled finish aborts as ambiguous without cleanup', async () => {
     const controller = new AbortController()
     const finishStarted = Promise.withResolvers<void>()
     let finishSignal: AbortSignal | undefined
@@ -3817,9 +3819,9 @@ describe('uploadLargeFile control-plane aborts', () => {
     await finishStarted.promise
     controller.abort(new Error('finish aborted'))
 
-    await expect(upload).rejects.toThrow('finish aborted')
+    await expect(upload).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal?.aborted).toBe(false)
+    expect(cancelSignal).toBeUndefined()
   })
 
   it('uses an independent cleanup signal after multipart scope aborts', async () => {
@@ -3855,20 +3857,26 @@ describe('uploadLargeFile control-plane aborts', () => {
 
   it('rejects an unknown explicit resumeFileId before inspecting or uploading parts', async () => {
     const partSize = 100_000
+    const { client } = makeSmallPartClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'unknown-explicit-resume',
+      bucketType: BucketType.AllPrivate,
+    })
     const listParts = vi.spyOn(client.raw, 'listParts')
     const uploadPart = vi.spyOn(client.raw, 'uploadPart')
     const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
 
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
-        bucketId: bucketId as never,
+        bucketId: bucket.id,
         fileName: 'unknown-resume.bin',
         source: new BufferSource(deterministicBytes(partSize * 2)),
         partSize,
         concurrency: 1,
         resumeFileId: '4_z_unknown' as never,
       }),
-    ).rejects.toThrow(/resumeFileId does not match/)
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
 
     expect(listParts).not.toHaveBeenCalled()
     expect(uploadPart).not.toHaveBeenCalled()

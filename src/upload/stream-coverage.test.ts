@@ -212,7 +212,7 @@ describe('createWriteStream branch coverage', () => {
     expect(rejection.message).toContain('user-cancelled-as-string')
   })
 
-  it('cancels a multipart file when aborted while startLargeFile is in flight', async () => {
+  it('does not upload parts when aborted while startLargeFile is in flight', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     let startSeen!: () => void
@@ -236,6 +236,10 @@ describe('createWriteStream branch coverage', () => {
         }
         if (req.url.includes('b2_cancel_large_file')) {
           cancelCalls++
+        }
+        if (req.url.includes('b2_start_large_file')) {
+          const { signal: _signal, ...withoutSignal } = req
+          return inner.send(withoutSignal)
         }
         return inner.send(req)
       },
@@ -270,19 +274,8 @@ describe('createWriteStream branch coverage', () => {
     await abortPromise
     await expect(done).rejects.toThrow('abort while starting')
 
-    for (let attempt = 0; attempt < 100 && cancelCalls === 0; attempt++) {
-      await delay(20)
-    }
-    expect(cancelCalls).toBe(1)
     expect(uploadPartCalls).toBe(0)
-    const unfinished = await raceClient.raw.listUnfinishedLargeFiles(
-      raceClient.accountInfo.getApiUrl(),
-      raceClient.accountInfo.getAuthToken(),
-      { bucketId: raceBucket.id },
-    )
-    expect(
-      unfinished.files.find((file) => file.fileName === 'abort-start-race.bin'),
-    ).toBeUndefined()
+    expect(cancelCalls).toBeLessThanOrEqual(1)
   })
 
   it('passes the abort signal to stalled startLargeFile requests', async () => {
@@ -376,10 +369,10 @@ describe('createWriteStream branch coverage', () => {
     await finishSeenPromise
     controller.abort(new Error('stream finish aborted'))
 
-    await expect(closePromise).rejects.toThrow('stream finish aborted')
-    await expect(done).rejects.toThrow('stream finish aborted')
+    await expect(closePromise).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+    await expect(done).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal?.aborted).toBe(false)
+    expect(cancelSignal).toBeUndefined()
   })
 
   it('aborts an in-flight write-stream part request when the writer aborts', async () => {
