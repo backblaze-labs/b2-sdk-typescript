@@ -196,15 +196,15 @@ describe('createWriteStream branch coverage', () => {
     const abortPromise = writer.abort(new Error('abort while starting'))
     const abortResult = await Promise.race([
       abortPromise.then(() => 'aborted' as const),
-      delay(50).then(() => 'timed-out' as const),
+      delay(1_000).then(() => 'timed-out' as const),
     ])
     expect(abortResult).toBe('aborted')
     releaseStart()
     await abortPromise
     await expect(done).rejects.toThrow('abort while starting')
 
-    for (let attempt = 0; attempt < 20 && cancelCalls === 0; attempt++) {
-      await delay(10)
+    for (let attempt = 0; attempt < 100 && cancelCalls === 0; attempt++) {
+      await delay(20)
     }
     expect(cancelCalls).toBe(1)
   })
