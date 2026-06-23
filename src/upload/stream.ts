@@ -207,6 +207,29 @@ export function createWriteStream(
       })
   }
 
+  async function settleInflightForClose(): Promise<PromiseSettledResult<void>[]> {
+    const settled = Promise.allSettled(inflight)
+    if (startPromise === null || largeFileId !== null) return await settled
+
+    const abortWaiter = waitForAbort(abortScope.signal)
+    try {
+      const first = await Promise.race([
+        settled.then(() => 'settled' as const),
+        startPromise.then(
+          () => 'start-settled' as const,
+          () => 'start-settled' as const,
+        ),
+        abortWaiter.promise.then(() => 'aborted' as const),
+      ])
+      if (first === 'aborted' && largeFileId === null) {
+        throw abortReason(abortScope.signal)
+      }
+      return await settled
+    } finally {
+      abortWaiter.dispose()
+    }
+  }
+
   function startPartWithAcquiredSlot(data: Uint8Array, partNumber: number): void {
     const task = (async () => {
       try {
@@ -314,7 +337,7 @@ export function createWriteStream(
           await dispatchPart()
         }
 
-        const settled = await Promise.allSettled(inflight)
+        const settled = await settleInflightForClose()
         const rejected = settled.find(
           (result): result is PromiseRejectedResult => result.status === 'rejected',
         )
@@ -340,17 +363,24 @@ export function createWriteStream(
         abortScope.dispose()
         resolveDone(result)
       } catch (err) {
-        markErrored(err)
-        const settled = await Promise.allSettled(inflight)
-        const rejected = settled.find(
-          (result): result is PromiseRejectedResult => result.status === 'rejected',
-        )
-        const observedError =
-          errored ?? (rejected !== undefined ? toError(rejected.reason) : toError(err))
+        const closeError = toError(err)
+        if (errored === null) errored = closeError
+        abortScope.abort(errored)
+        const observedError = errored
+        const fileIdToCancel = largeFileId
+        if (fileIdToCancel === null && startPromise !== null) {
+          // Mirror writer.abort(): close() must not wait for non-abortable
+          // b2_start_large_file. If a file ID arrives later, cancel it in the
+          // background.
+          scheduleCancelLargeFileAfterStart(startPromise)
+          abortScope.dispose()
+          rejectDone(observedError)
+          throw observedError
+        }
+        await Promise.allSettled(inflight)
         // Capture into a const so the cancel closure sees a non-null
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
-        const fileIdToCancel = largeFileId
         let finalError: unknown = observedError
         if (fileIdToCancel !== null) {
           finalError = await resolveLargeFileErrorAfterCleanup(observedError, raw, accountInfo, {
@@ -434,4 +464,33 @@ function carveExact(chunks: Uint8Array[], size: number): Uint8Array {
     }
   }
   return out
+}
+
+function waitForAbort(signal: AbortSignal): {
+  readonly promise: Promise<unknown>
+  dispose(): void
+} {
+  if (signal.aborted) {
+    return {
+      promise: Promise.resolve(abortReason(signal)),
+      dispose() {},
+    }
+  }
+
+  let onAbort: (() => void) | undefined
+  const promise = new Promise<unknown>((resolve) => {
+    onAbort = () => resolve(abortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+
+  return {
+    promise,
+    dispose() {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+    },
+  }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException('Aborted', 'AbortError')
 }

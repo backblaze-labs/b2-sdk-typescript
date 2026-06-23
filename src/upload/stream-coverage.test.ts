@@ -499,6 +499,64 @@ describe('createWriteStream branch coverage', () => {
     expect(events).toEqual(['part-aborted', 'part-settled', 'cancel'])
   })
 
+  it('does not block close when aborted while startLargeFile is in flight', async () => {
+    const controller = new AbortController()
+    const startCalled = deferred<void>()
+    const releaseStart = deferred<void>()
+    const originalStartLargeFile = client.raw.startLargeFile.bind(client.raw)
+    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(async (...args) => {
+      startCalled.resolve(undefined)
+      await releaseStart.promise
+      return originalStartLargeFile(...args)
+    })
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const { writable, done } = bucket.file('close-abort-start-race.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const writer = writable.getWriter()
+    await writer.write(new Uint8Array(100_000))
+    await startCalled.promise
+
+    const close = writer.close()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    controller.abort(new Error('close abort while starting'))
+
+    const closeResult = await Promise.race([
+      close.then(
+        () => 'resolved' as const,
+        (err: unknown) => {
+          expect(err).toBeInstanceOf(Error)
+          expect((err as Error).message).toBe('close abort while starting')
+          return 'rejected' as const
+        },
+      ),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 50)),
+    ])
+    expect(closeResult).toBe('rejected')
+    await expect(done).rejects.toThrow('close abort while starting')
+
+    releaseStart.resolve(undefined)
+
+    let matched: Array<{ fileName: string }> = []
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const unfinished = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      matched = unfinished.files.filter((file) => file.fileName === 'close-abort-start-race.bin')
+      if (matched.length === 0 && cancelLargeFile.mock.calls.length > 0) break
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(uploadPart).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(matched).toEqual([])
+  })
+
   it('does not wait for cleanup when an in-flight start later fails', async () => {
     const startCalled = deferred<void>()
     const releaseStart = deferred<void>()
