@@ -38,18 +38,18 @@ describe('sync filters', () => {
   it('bounds accepted regex filter inputs before matching', () => {
     expect(pathPassesSyncFilters(`x${'a'.repeat(1023)}`, { include: [/^x.*y$/] })).toBe(false)
     expect(pathPassesSyncFilters('a'.repeat(1025), { include: [/^a+$/] })).toBe(false)
-    expect(pathPassesSyncFilters('a'.repeat(1025), { exclude: [/\.bak$/] })).toBe(true)
+    expect(pathPassesSyncFilters('a'.repeat(1025), { exclude: [/\.bak$/] })).toBe(false)
     expect(
       pathPassesSyncFilters(`docs/${'a'.repeat(1025)}`, {
         include: ['docs/**'],
         exclude: [/\.bak$/],
       }),
-    ).toBe(true)
+    ).toBe(false)
     expect(
       pathPassesSyncFilters(`docs/${'a'.repeat(1025)}`, {
         include: ['docs/**', /\.keep$/],
       }),
-    ).toBe(true)
+    ).toBe(false)
   })
 
   it('does not retain state when matching regular expression filters', () => {
@@ -151,6 +151,27 @@ describe('sync filters', () => {
     }
 
     expect(kept).toEqual(['keep.txt'])
+  })
+
+  it('lets custom scanners forward regexp input-limit diagnostics', async () => {
+    const longPath = `secrets/${'x'.repeat(1025)}`
+    const skips: string[] = []
+    async function* paths() {
+      yield { relativePath: longPath, modTimeMillis: 1, size: 1 }
+    }
+
+    const kept: string[] = []
+    for await (const path of filterSyncPaths(paths(), {
+      exclude: [/^secrets\//],
+      onSkip(event) {
+        skips.push(`${event.reason}:${event.path}`)
+      },
+    })) {
+      kept.push(path.relativePath)
+    }
+
+    expect(kept).toEqual([])
+    expect(skips).toEqual([`path-too-long-for-regexp:${longPath}`])
   })
 
   it('computes safe literal B2 prefixes for include filters', () => {

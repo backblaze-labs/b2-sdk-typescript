@@ -60,8 +60,18 @@ const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS = 60_000
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
   fatalFilesystemErrorMessage?: string
+  sourceInventoryIncompleteMessage?: string
   dropped: number
 }
+
+/**
+ * Test hooks for bounded planning behavior.
+ *
+ * @internal
+ */
+export const synchronizerTestHooks: {
+  afterNonSha1PlanBatch?: (batchSize: number) => void
+} = {}
 
 /** Base configuration for a sync operation. */
 export interface SynchronizerConfig {
@@ -85,6 +95,8 @@ export interface LocalSyncFolder extends SyncFolder {
 export interface B2SyncFolder extends SyncFolder {
   /** Discriminant identifying a B2 folder. */
   readonly type: 'b2'
+  /** Raw B2 key prefix represented by this folder when known. */
+  readonly rawPrefix?: string
 }
 
 /** Configuration for a local-to-B2 sync (upload direction). */
@@ -163,7 +175,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
     ...(direction === 'b2-to-local' ? { requireLocalSafePaths: true } : {}),
     onSkip(event) {
-      bufferScanEvent(scanEvents, event)
+      bufferScanEvent(scanEvents, event, direction)
     },
     onError: (event) => {
       scanHadError = true
@@ -172,7 +184,17 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const downloadTempFileSweeper = createSyncDownloadTempFileSweeper()
+  const downloadTempFileSweeper = createSyncDownloadTempFileSweeper(undefined, {
+    onEvent(event) {
+      queueEvent({
+        type: 'skip',
+        path: event.name,
+        size: 0,
+        reason: 'stale-download-partial',
+        message: event.message,
+      })
+    },
+  })
   const factory = createActionFactory(config, downloadTempFileSweeper)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
@@ -226,8 +248,13 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         if (yield* emitSha1Batch(pairs.slice(index, index + compareBatchSize))) return
       }
     } else {
-      const items = pairs.map((pair) => planPreparedPair(pair, readyComparePair(pair)))
-      if (yield* emitPreparedItems(items)) return
+      for (let index = 0; index < pairs.length; index += concurrency) {
+        const items = pairs
+          .slice(index, index + concurrency)
+          .map((pair) => planPreparedPair(pair, readyComparePair(pair)))
+        synchronizerTestHooks.afterNonSha1PlanBatch?.(items.length)
+        if (yield* emitPreparedItems(items)) return
+      }
     }
 
     await drainActions()
@@ -351,6 +378,22 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         event,
         actions: [
           new SkipAction(prepared.pair[1].relativePath, 'not removed because scan errors occurred'),
+        ],
+      }
+    }
+    if (
+      sourceInventoryIncomplete(scanEvents) &&
+      prepared.pair[0] === null &&
+      prepared.pair[1] !== null
+    ) {
+      return {
+        event,
+        actions: [
+          new SkipAction(
+            prepared.pair[1].relativePath,
+            scanEvents.sourceInventoryIncompleteMessage ??
+              'not removed because the source scan skipped unsafe B2 names',
+          ),
         ],
       }
     }
@@ -600,7 +643,7 @@ function createActionFactory(
 ): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
-  const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? '')
+  const uploadPrefix = asRawB2KeyPrefix(upConfig.prefix ?? b2FolderRawPrefix(config.dest) ?? '')
 
   const destBucket = upConfig.bucket ?? downConfig.bucket
   // Defensive optional chain on `info`: synchronizer tests use Bucket
@@ -650,6 +693,10 @@ function createActionFactory(
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
         safeRelativePathSegments(relPath)
+        const idleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
+          config.options.downloadIdleTimeoutMillis,
+        )
+        await ensureLocalSyncRootDirectory(root, relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
@@ -659,31 +706,34 @@ function createActionFactory(
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             ...(signal !== undefined ? { signal } : {}),
           })
-        await ensureLocalSyncRootDirectory(root, relPath)
-        await writeLocalStreamInsideRoot(root, relPath, result.body, {
-          expectedBytes: source.selectedVersion.contentLength,
-          idleTimeoutMillis: normalizeDownloadIdleTimeoutMillis(
-            config.options.downloadIdleTimeoutMillis,
-          ),
-          downloadTempFileSweeper,
-          ...(signal !== undefined ? { signal } : {}),
-        })
+        try {
+          await writeLocalStreamInsideRoot(root, relPath, result.body, {
+            expectedBytes: source.selectedVersion.contentLength,
+            idleTimeoutMillis,
+            downloadTempFileSweeper,
+            ...(signal !== undefined ? { signal } : {}),
+          })
+        } catch (err) {
+          await cancelReadableStreamBody(result.body, err)
+          throw err
+        }
       })
     },
 
     copy(source: B2SyncPath, destPath: string): SyncAction {
       const bucket = upConfig.bucket
       assertBucket(bucket, 'copy')
+      const targetPath = destPath === source.relativePath ? `${uploadPrefix}${destPath}` : destPath
 
       return new CopyAction(source.relativePath, source.size, async (_relPath, signal) => {
         const destinationServerSideEncryption =
-          config.options.encryptionProvider?.getSettingForUpload(destPath, source.size)
+          config.options.encryptionProvider?.getSettingForUpload(targetPath, source.size)
         const sourceServerSideEncryption = toSseCEncryptionSetting(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
         )
         await bucket.copyFile({
           sourceFileId: source.selectedVersion.fileId,
-          fileName: destPath,
+          fileName: targetPath,
           ...(destinationServerSideEncryption !== undefined
             ? { destinationServerSideEncryption }
             : {}),
@@ -778,6 +828,12 @@ function localSyncRoot(folder: LocalSyncFolder | undefined): string {
   return folder?.type === 'local' ? folder.root : ''
 }
 
+function b2FolderRawPrefix(folder: SyncFolder | undefined): string | undefined {
+  if (folder?.type !== 'b2') return undefined
+  const rawPrefix = (folder as B2SyncFolder).rawPrefix
+  return typeof rawPrefix === 'string' ? rawPrefix : undefined
+}
+
 function validateB2SyncPathInPrefix(prefix: string, path: B2SyncPath): string {
   const fileName = path.selectedVersion.fileName
   if (!fileName.startsWith(prefix)) {
@@ -795,6 +851,18 @@ function validateB2SyncPathInPrefix(prefix: string, path: B2SyncPath): string {
 function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+}
+
+async function cancelReadableStreamBody(
+  body: ReadableStream<Uint8Array>,
+  reason: unknown,
+): Promise<void> {
+  if (body.locked) return
+  try {
+    await body.cancel(reason)
+  } catch {
+    // Best-effort response cleanup must not mask the setup or write failure.
   }
 }
 
@@ -852,9 +920,17 @@ async function ensureLocalSyncRootDirectory(root: string, relativePath: string):
   await assertLocalRootHasNoSymlink(safeRoot, relativePath)
 }
 
-function bufferScanEvent(buffer: ScanEventBuffer, event: SyncEvent): void {
+function bufferScanEvent(
+  buffer: ScanEventBuffer,
+  event: SyncEvent,
+  direction: SyncDirection,
+): void {
   if (event.type === 'skip' && event.reason === 'filesystem-error') {
     buffer.fatalFilesystemErrorMessage ??= event.message
+  }
+  if (sourceSkipMakesInventoryIncomplete(event, direction)) {
+    buffer.sourceInventoryIncompleteMessage ??=
+      'not removed because the source scan skipped unsafe B2 names'
   }
   if (buffer.events.length < MAX_BUFFERED_SCAN_EVENTS) {
     buffer.events.push(event)
@@ -885,10 +961,27 @@ function scanHadFilesystemError(scanEvents: ScanEventBuffer): boolean {
   return scanEvents.fatalFilesystemErrorMessage !== undefined
 }
 
+function sourceInventoryIncomplete(scanEvents: ScanEventBuffer): boolean {
+  return scanEvents.sourceInventoryIncompleteMessage !== undefined
+}
+
 function scanFilesystemError(scanEvents: ScanEventBuffer): Error | undefined {
   return scanEvents.fatalFilesystemErrorMessage === undefined
     ? undefined
     : new Error(scanEvents.fatalFilesystemErrorMessage)
+}
+
+function sourceSkipMakesInventoryIncomplete(event: SyncEvent, direction: SyncDirection): boolean {
+  if (direction !== 'b2-to-local' || event.type !== 'skip' || event.b2FileName === undefined) {
+    return false
+  }
+  return (
+    event.reason === 'unsafe-name' ||
+    event.reason === 'local-unsafe-name' ||
+    event.reason === 'relative-path-collision' ||
+    event.reason === 'local-path-collision' ||
+    event.reason === 'path-too-long-for-regexp'
+  )
 }
 
 async function resolveContainedLocalPath(

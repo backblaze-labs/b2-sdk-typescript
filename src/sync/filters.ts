@@ -4,7 +4,7 @@ import {
   validateSyncFilters,
 } from './regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from './scan-events.ts'
-import type { SyncFilterOptions, SyncFilterPattern, SyncPath } from './types.ts'
+import type { SyncFilterOptions, SyncFilterPattern, SyncPath, SyncScanOptions } from './types.ts'
 
 /**
  * Tests whether a relative sync path is included by the configured include/exclude filters.
@@ -22,17 +22,13 @@ export function pathPassesSyncFilters(
   validateSyncFilters(filters)
   const path = normalizePath(relativePath)
 
+  if (normalizedPathSkippedByRegExpInputLimit(path, filters)) return false
+
   const include = filters?.include ?? []
   const exclude = filters?.exclude ?? []
 
   if (include.length > 0) {
-    const matchedByStringInclude = include.some(
-      (pattern) => !patternIsRegExp(pattern) && matchesPattern(path, pattern),
-    )
-    if (!matchedByStringInclude) {
-      if (normalizedPathSkippedByRegExpInputLimit(path, filters)) return false
-      if (!include.some((pattern) => matchesPattern(path, pattern))) return false
-    }
+    if (!include.some((pattern) => matchesPattern(path, pattern))) return false
   }
 
   return !exclude.some((pattern) => matchesPattern(path, pattern))
@@ -102,7 +98,7 @@ export function literalPrefixForSyncFilters(filters: SyncFilterOptions | undefin
  */
 export async function* filterSyncPaths<T extends SyncPath>(
   paths: AsyncIterable<T>,
-  filters: SyncFilterOptions | undefined,
+  filters: SyncScanOptions | undefined,
 ): AsyncGenerator<T> {
   for await (const path of paths) {
     if (pathPassesSyncFilters(path.relativePath, filters)) {
@@ -114,8 +110,8 @@ export async function* filterSyncPaths<T extends SyncPath>(
 }
 
 /**
- * Tests whether a path is skipped solely because include RegExp filters are configured and the
- * normalized path exceeds the SDK RegExp input guard.
+ * Tests whether a path is skipped because RegExp filters are configured and the normalized path
+ * exceeds the SDK RegExp input guard.
  *
  * @param relativePath - Folder-relative path using forward slashes.
  * @param filters - Optional include and exclude filters.
@@ -134,14 +130,10 @@ function normalizedPathSkippedByRegExpInputLimit(
   normalizedPath: string,
   filters: SyncFilterOptions | undefined,
 ): boolean {
-  if (!pathExceedsSafeRegExpInput(normalizedPath) || !includeFiltersContainRegExp(filters)) {
+  if (!pathExceedsSafeRegExpInput(normalizedPath) || !filtersContainRegExp(filters)) {
     return false
   }
-  return (
-    filters?.include?.some((pattern) => {
-      return !patternIsRegExp(pattern) && matchesPattern(normalizedPath, pattern)
-    }) !== true
-  )
+  return true
 }
 
 function matchesPattern(relativePath: string, pattern: SyncFilterPattern): boolean {
@@ -174,8 +166,11 @@ function stringPatternExcludesAllDescendants(
   return globSegments.at(-1) === '**' && matchPathGlob(splitPath(relativePath), globSegments)
 }
 
-function includeFiltersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
-  return filters?.include?.some(patternIsRegExp) === true
+function filtersContainRegExp(filters: SyncFilterOptions | undefined): boolean {
+  return (
+    filters?.include?.some(patternIsRegExp) === true ||
+    filters?.exclude?.some(patternIsRegExp) === true
+  )
 }
 
 function patternMayMatchDescendant(relativePath: string, pattern: SyncFilterPattern): boolean {

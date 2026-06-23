@@ -166,7 +166,7 @@ function* actionsForBoth(
       yield factory.download(source as B2SyncPath)
       break
     case 'b2-to-b2':
-      yield factory.copy(source as B2SyncPath, dest.relativePath)
+      yield factory.copy(source as B2SyncPath, (dest as B2SyncPath).selectedVersion.fileName)
       break
   }
 }

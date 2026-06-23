@@ -38,9 +38,9 @@ export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
  * protection. Current guards reject overly long sources, backreferences, multiple unbounded
  * quantifiers, large or excessive bounded quantifiers, and quantified groups whose subtree
  * contains a quantifier or alternation.
- * When an include RegExp is configured, paths longer than the SDK's RegExp input guard are skipped
- * instead of being fed to the JavaScript RegExp engine. Exclude-only RegExp filters keep an
- * untestable long path because the SDK cannot prove it matches the deny-list.
+ * When any RegExp filter is configured, paths longer than the SDK's RegExp input guard are skipped
+ * instead of being fed to the JavaScript RegExp engine. This is fail-closed for deny-lists: an
+ * untestable long path is not allowed through an exclude RegExp filter.
  */
 export type SyncFilterPattern = string | RegExp
 
@@ -49,7 +49,7 @@ export type SyncFilterPattern = string | RegExp
  *
  * `SyncOptions.include` and `SyncOptions.exclude` are the canonical filters for
  * {@link synchronize}; they are passed down into folder scans and then enforced again during
- * pairing for custom folders that do not implement scan-time filtering. Calling
+ * pairing as the SDK policy boundary. Calling
  * {@link SyncFolder.scan} directly can pass the same filter object for standalone scans.
  */
 export interface SyncFilterOptions {
@@ -196,6 +196,7 @@ export type SyncSkipReason =
   | 'filesystem-error'
   | 'path-too-long-for-regexp'
   | 'scan-skip-overflow'
+  | 'stale-download-partial'
 
 /**
  * Per-action progress event (transfer or metadata change). All
@@ -334,8 +335,9 @@ export interface SyncFolder {
   /** Whether this folder is local or in B2. */
   readonly type: 'local' | 'b2'
   /**
-   * True when `scan(filters)` already enforces include/exclude filters itself.
-   * Custom folders that set this should use the exported filter helpers from
+   * True when `scan(filters)` already enforces include/exclude filters itself as an optimization.
+   * The synchronizer still reapplies filters after custom scanner output as the SDK policy
+   * boundary. Custom folders that set this should use the exported filter helpers from
    * `@backblaze-labs/b2-sdk/sync` to stay aligned with the SDK glob and RegExp dialect.
    */
   readonly appliesScanFilters?: true

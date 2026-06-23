@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,29 @@ describe('sync temp files', () => {
     await expect(access(partialPath)).rejects.toThrow()
     await expect(access(otherPartialPath)).resolves.toBeFalsy()
     await expect(access(keepPath)).resolves.toBeFalsy()
+  })
+
+  it('reclaims stale unowned partials while retaining active concurrent partials', async () => {
+    const now = Date.now()
+    const stalePartialPath = join(tmpDir, syncDownloadTempName('crashed', 'old'))
+    const activePartialPath = join(tmpDir, syncDownloadTempName('other', 'active'))
+    const events: string[] = []
+    await writeFile(stalePartialPath, 'stale')
+    await writeFile(activePartialPath, 'active')
+    const staleDate = new Date(now - 2_000)
+    await utimes(stalePartialPath, staleDate, staleDate)
+
+    await removeSyncDownloadTempFiles(tmpDir, 'run', {
+      staleMillis: 1_000,
+      nowMillis: () => now,
+      onEvent(event) {
+        events.push(`${event.action}:${event.name}`)
+      },
+    })
+
+    await expect(access(stalePartialPath)).rejects.toThrow()
+    await expect(access(activePartialPath)).resolves.toBeFalsy()
+    expect(events).toEqual([`removed-stale:${syncDownloadTempName('crashed', 'old')}`])
   })
 
   it('does not remove directories with SDK partial download names', async () => {
@@ -94,7 +117,8 @@ describe('sync temp files', () => {
       .fn()
       .mockResolvedValue([{ isFile: () => true, name: syncDownloadTempName('run', 'locked') }])
     const rm = vi.fn().mockRejectedValueOnce(new Error('locked')).mockResolvedValueOnce(undefined)
-    vi.doMock('node:fs/promises', () => ({ readdir, rm }))
+    const stat = vi.fn()
+    vi.doMock('node:fs/promises', () => ({ readdir, rm, stat }))
     try {
       const tempFiles = await import('./temp-files.ts')
       const removeSyncDownloadTempFilesOnce = tempFiles.createSyncDownloadTempFileSweeper('run')

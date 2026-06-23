@@ -27,6 +27,8 @@ import type {
   SyncSkipReason,
 } from '../types.ts'
 
+const MAX_EMPTY_B2_SCAN_PAGES = 100
+
 interface B2ScanEntry {
   relativePath: string
   versions: FileVersion[]
@@ -48,8 +50,9 @@ export class B2Folder implements SyncFolder {
   readonly type = 'b2' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
+  /** Raw B2 key prefix this folder scans, preserving caller-provided separators verbatim. */
+  readonly rawPrefix: string
   private readonly bucket: Bucket
-  private readonly prefix: string
 
   /**
    * Creates a new B2Folder for the given bucket and optional prefix.
@@ -59,7 +62,7 @@ export class B2Folder implements SyncFolder {
    */
   constructor(bucket: Bucket, prefix = '') {
     this.bucket = bucket
-    this.prefix = asRawB2KeyPrefix(prefix)
+    this.rawPrefix = asRawB2KeyPrefix(prefix)
   }
 
   /**
@@ -76,6 +79,7 @@ export class B2Folder implements SyncFolder {
     let listedVersions = 0
     let startFileName: string | undefined
     let startFileId: FileId | undefined
+    let emptyPageCount = 0
 
     while (true) {
       if (scanIsAborted(options)) return
@@ -94,6 +98,19 @@ export class B2Folder implements SyncFolder {
       }
       if (scanIsAborted(options)) return
 
+      if (listing.files.length === 0) {
+        emptyPageCount++
+        if (emptyPageCount > MAX_EMPTY_B2_SCAN_PAGES) {
+          throw emitScanError(
+            options,
+            'failed to scan B2 file versions',
+            new Error('B2 pagination returned too many empty pages'),
+          )
+        }
+      } else {
+        emptyPageCount = 0
+      }
+
       for (const fv of listing.files) {
         if (scanIsAborted(options)) return
         assertScanEntryLimit(listedVersions + 1, maxScanEntries)
@@ -101,14 +118,14 @@ export class B2Folder implements SyncFolder {
 
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
-        // stripping this.prefix so relativePath is never corrupted.
-        if (this.prefix !== '' && !fv.fileName.startsWith(this.prefix)) {
+        // stripping the raw prefix so relativePath is never corrupted.
+        if (this.rawPrefix !== '' && !fv.fileName.startsWith(this.rawPrefix)) {
           this.emitSkip(
             options,
             fv.fileName,
             fv.fileName,
             'outside-prefix',
-            `listed object is outside configured B2 prefix ${JSON.stringify(this.prefix)}`,
+            `listed object is outside configured B2 prefix ${JSON.stringify(this.rawPrefix)}`,
           )
           continue
         }
@@ -144,6 +161,16 @@ export class B2Folder implements SyncFolder {
       }
 
       if (!listing.nextFileName) break
+      if (
+        listing.nextFileName === startFileName &&
+        (listing.nextFileId ?? undefined) === startFileId
+      ) {
+        throw emitScanError(
+          options,
+          'failed to scan B2 file versions',
+          new Error('B2 pagination did not advance'),
+        )
+      }
       startFileName = listing.nextFileName
       startFileId = listing.nextFileId ?? undefined
     }
@@ -177,7 +204,7 @@ export class B2Folder implements SyncFolder {
 
   private tryToRelativePath(fileName: string): string | null {
     try {
-      return b2KeyToRelativePathUnderPrefix(this.prefix, fileName)
+      return b2KeyToRelativePathUnderPrefix(this.rawPrefix, fileName)
     } catch {
       return null
     }
@@ -185,9 +212,9 @@ export class B2Folder implements SyncFolder {
 
   private listPrefixFor(filters: SyncScanOptions | undefined): string {
     const filterPrefix = literalPrefixForSyncFilters(filters)
-    if (filterPrefix === '') return this.prefix
-    if (this.prefix !== '' && !this.prefix.endsWith('/')) return this.prefix
-    return `${this.prefix}${rawPrefixBeforeNormalizedSeparator(filterPrefix)}`
+    if (filterPrefix === '') return this.rawPrefix
+    if (this.rawPrefix !== '' && !this.rawPrefix.endsWith('/')) return this.rawPrefix
+    return `${this.rawPrefix}${rawPrefixBeforeNormalizedSeparator(filterPrefix)}`
   }
 
   private visibleCandidates(

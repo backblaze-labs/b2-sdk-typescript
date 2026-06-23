@@ -29,6 +29,7 @@ async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
 const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
+const isDarwin = processLike?.platform === 'darwin'
 
 /**
  * Advance the fake clock by 1 ms so the simulator assigns a distinct
@@ -214,6 +215,31 @@ describe('LocalFolder', () => {
 
     expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
   })
+
+  it.skipIf(isWindows || isDarwin)(
+    'skips over-limit local paths for exclude-only RegExp filters',
+    async () => {
+      const deepSegments = Array.from({ length: 210 }, () => 'deep')
+      const longRelativePath = ['secrets', ...deepSegments, 'file.txt'].join('/')
+      const longDirectory = join(tmpDir, 'secrets', ...deepSegments)
+      await mkdir(longDirectory, { recursive: true })
+      await writeFile(join(longDirectory, 'file.txt'), 'secret')
+
+      const skips: string[] = []
+      const folder = new LocalFolder(tmpDir)
+      const entries = await collect<LocalSyncPath>(
+        folder.scan({
+          exclude: [/^secrets\//],
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries.map((e) => e.relativePath)).toEqual([])
+      expect(skips).toEqual([`path-too-long-for-regexp:${longRelativePath}`])
+    },
+  )
 
   it('does not prune descendants for exact slash-containing excludes', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
@@ -991,7 +1017,7 @@ describe('B2Folder', () => {
     ])
   })
 
-  it('keeps long paths for exclude-only RegExp filters', async () => {
+  it('skips long B2 paths for exclude-only RegExp filters', async () => {
     const longRelativePath = `${'deep/'.repeat(205)}file.txt`
     const fileVersion: FileVersion = {
       accountId: 'acc' as unknown as AccountId,
@@ -1031,8 +1057,8 @@ describe('B2Folder', () => {
       }),
     )
 
-    expect(entries.map((entry) => entry.relativePath)).toEqual([longRelativePath])
-    expect(skips).toEqual([])
+    expect(entries.map((entry) => entry.relativePath)).toEqual([])
+    expect(skips).toEqual([`path-too-long-for-regexp:${longRelativePath}`])
   })
 
   it('continues scanning when onSkip throws', async () => {
@@ -1434,6 +1460,31 @@ describe('B2Folder', () => {
     expect(calls).toHaveLength(2)
     expect(calls[0]).toEqual({})
     expect(calls[1]).toEqual({ startFileName: 'c.txt', startFileId: 'fid_c.txt' })
+  })
+
+  it('fails when B2 pagination continuation tokens do not advance', async () => {
+    const errors: string[] = []
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [],
+          nextFileName: 'same.txt',
+          nextFileId: 'fid_same.txt',
+        }
+      },
+    }
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+
+    await expect(
+      collect<B2SyncPath>(
+        folder.scan({
+          onError(event) {
+            errors.push(event.message)
+          },
+        }),
+      ),
+    ).rejects.toThrow('B2 pagination did not advance')
+    expect(errors).toContain('failed to scan B2 file versions: B2 pagination did not advance')
   })
 
   // Edge: the second page returns nextFileName but nextFileId === null (rare

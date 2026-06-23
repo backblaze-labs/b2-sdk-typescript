@@ -1066,7 +1066,7 @@ describe('zipFolders', () => {
     expect(pairs).toEqual([['keep.txt', 'keep.txt']])
   })
 
-  it('trusts folders that already apply scan filters', async () => {
+  it('reapplies filters to folders that claim they already applied them', async () => {
     const source: SyncFolder = {
       type: 'local',
       appliesScanFilters: true,
@@ -1081,7 +1081,7 @@ describe('zipFolders', () => {
       pairs.push([s?.relativePath ?? null, d?.relativePath ?? null])
     }
 
-    expect(pairs).toEqual([['skip.tmp', null]])
+    expect(pairs).toEqual([])
   })
 
   it('sorts custom folders that apply filters but do not declare sorted output', async () => {
