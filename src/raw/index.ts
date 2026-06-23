@@ -473,7 +473,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyFileRequest,
-    options?: JsonPostOptions,
+    options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
       await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),

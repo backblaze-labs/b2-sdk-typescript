@@ -514,6 +514,7 @@ describe('upload fresh-URL retry', () => {
         fileName: 'rate-limited.txt',
         partNumber: null,
         retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
         checkout: () => entry,
         fetchFresh: async () => entry,
         returnEntry,
