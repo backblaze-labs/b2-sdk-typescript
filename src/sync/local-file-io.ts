@@ -145,6 +145,7 @@ export async function writeLocalStreamInsideRoot(
       statForDeviceCheck,
     )
   } catch (err) {
+    /* v8 ignore next -- best-effort close during setup failure */
     await parentHandle?.close().catch(() => {})
     throw err
   }
@@ -156,6 +157,7 @@ export async function writeLocalStreamInsideRoot(
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(constants),
       PRIVATE_DOWNLOAD_FILE_MODE,
     )
+    /* v8 ignore next -- best-effort chmod */
     await chmod(tmpPath, PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
     await localFileIoTestHooks.afterTempFileCreated?.(tmpPath, stagingDirectory)
     /* v8 ignore start -- defensive cleanup before the main write try/finally exists */
@@ -255,6 +257,7 @@ async function createDownloadStagingDirectory(
   const { chmod, mkdir, realpath, rm, writeFile } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
   await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE, recursive: true })
+  /* v8 ignore next -- best-effort chmod */
   await chmod(managedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   const realManagedDirectory = await realpath(managedDirectory)
   assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
@@ -271,6 +274,7 @@ async function createDownloadStagingDirectory(
     `${Date.now()}-${randomUUID()}${DOWNLOAD_STAGING_ENTRY_SUFFIX}`,
   )
   await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
+  /* v8 ignore next -- best-effort chmod */
   await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   try {
     const realStagingDirectory = await realpath(stagingDirectory)
@@ -286,6 +290,7 @@ async function createDownloadStagingDirectory(
     })
     return realStagingDirectory
   } catch (err) {
+    /* v8 ignore next -- best-effort cleanup */
     await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
     throw err
   }
@@ -373,6 +378,7 @@ async function reapStaleDownloadStagingDirectories(
   try {
     entries = await readdir(managedDirectory, { withFileTypes: true })
   } catch (err) {
+    /* v8 ignore next -- managed directory was just created */
     if (hasErrorCode(err, 'ENOENT')) return
     throw err
   }
@@ -390,6 +396,7 @@ async function reapStaleDownloadStagingDirectories(
         return
       }
       if (nowMillis - stats.mtimeMs < STALE_DOWNLOAD_STAGING_AGE_MS) return
+      /* v8 ignore next -- stale directory can disappear during cleanup */
       const realCandidate = await realpath(candidate).catch(() => undefined)
       if (realCandidate === undefined) return
       assertPathInsideRoot(managedDirectory, realCandidate, path)

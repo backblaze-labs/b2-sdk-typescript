@@ -45,6 +45,8 @@ export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
+  /** @internal */
+  readonly localFilesystemRoot = true
   /** Absolute path to the local root directory. */
   readonly root: string
 

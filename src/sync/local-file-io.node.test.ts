@@ -13,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   deleteLocalFileInsideRoot,
@@ -225,16 +225,40 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('rejects created staging entries on a different device', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-dev-staging-entry-'))
+    try {
+      const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+      localFileIoTestHooks.statForDeviceCheck = async (candidate) => ({
+        dev: candidate.startsWith(`${managedDirectory}${sep}`) ? 2 : 1,
+      })
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('cannot stage download across filesystems')
+      await expect(readdir(managedDirectory)).resolves.toEqual([])
+    } finally {
+      delete localFileIoTestHooks.statForDeviceCheck
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('reaps stale SDK-owned staging directories before creating a new one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stale-stage-'))
     try {
       const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
       const staleDirectory = join(managedDirectory, '2000-01-01-old.download')
+      const unmarkedDirectory = join(managedDirectory, '2000-01-01-unmarked.download')
       await mkdir(staleDirectory, { recursive: true, mode: 0o700 })
+      await mkdir(unmarkedDirectory, { recursive: true, mode: 0o700 })
       await writeFile(join(staleDirectory, '.b2sdk-staging-marker'), '')
       await writeFile(join(staleDirectory, 'partial.bin'), 'old')
+      await writeFile(join(unmarkedDirectory, 'partial.bin'), 'keep')
       const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
       await utimes(staleDirectory, old, old)
+      await utimes(unmarkedDirectory, old, old)
 
       await writeLocalStreamInsideRoot(
         root,
@@ -248,6 +272,7 @@ describe('writeLocalStreamInsideRoot', () => {
 
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
       await expect(readFile(join(staleDirectory, 'partial.bin'))).rejects.toThrow()
+      await expect(readFile(join(unmarkedDirectory, 'partial.bin'), 'utf8')).resolves.toBe('keep')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

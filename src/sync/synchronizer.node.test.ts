@@ -436,6 +436,7 @@ describe('synchronize download safety', () => {
         source: makeB2MemoryFolder([makeB2Path('file.txt', 2)]),
         dest: {
           type: 'local',
+          localFilesystemRoot: true,
           root: 'dest',
           async *scan() {
             process.chdir(otherRoot)

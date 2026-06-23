@@ -87,6 +87,11 @@ export interface LocalSyncFolder extends SyncFolder {
   readonly type: 'local'
   /** Absolute filesystem path to the local root directory. */
   readonly root: string
+  /**
+   * Marks SDK local folders that are backed by the filesystem.
+   * @internal
+   */
+  readonly localFilesystemRoot?: true
 }
 
 /** A sync folder constrained to a B2 bucket prefix. */
@@ -187,6 +192,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const { source, dest, options } = config
   assertSupportedCompareMode(options.compareMode)
   const direction = resolveDirection(source, dest)
+  validateLocalRootDeclarations(config, direction)
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
   const keepDays = options.keepDays ?? 0
@@ -647,6 +653,17 @@ function requireLocalRoot(
   return root
 }
 
+function validateLocalRootDeclarations(
+  config: SynchronizerConfig,
+  direction: SyncDirection,
+): void {
+  if (direction === 'local-to-b2') {
+    requireLocalRoot(config.source, 'source', 'upload')
+  } else if (direction === 'b2-to-local') {
+    requireLocalRoot(config.dest, 'destination', 'download')
+  }
+}
+
 async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<LocalRootContexts> {
   if (config.source.type !== 'local' && config.dest.type !== 'local') return {}
 
@@ -654,15 +671,20 @@ async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<Loc
   const sourceContext = config.dest.type === 'b2' ? 'upload' : 'sync'
   const destContext = config.source.type === 'b2' ? 'download' : 'sync'
   return {
-    ...(config.source.type === 'local'
+    ...(isLocalFilesystemFolder(config.source)
       ? { source: path.resolve(requireLocalRoot(config.source, 'source', sourceContext)) }
       : {}),
-    ...(config.dest.type === 'local'
+    ...(isLocalFilesystemFolder(config.dest)
       ? { dest: path.resolve(requireLocalRoot(config.dest, 'destination', destContext)) }
       : {}),
   }
 }
 
+function isLocalFilesystemFolder(folder: SyncFolder | undefined): folder is LocalSyncFolder {
+  return (
+    folder?.type === 'local' && (folder as Partial<LocalSyncFolder>).localFilesystemRoot === true
+  )
+}
 /**
  * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
  *
