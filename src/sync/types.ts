@@ -140,6 +140,11 @@ export interface LocalFileIdentity {
   readonly size: number
   /** Modification time observed during the scan, floored to milliseconds. */
   readonly modTimeMillis: number
+  /**
+   * Node `Stats.ctime` observed during the scan, floored to milliseconds when available.
+   * On POSIX this is status-change time; on Windows Node reports creation time.
+   */
+  readonly changeTimeMillis?: number
 }
 
 /** A file on the local filesystem discovered during a scan. */

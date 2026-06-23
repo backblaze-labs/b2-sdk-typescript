@@ -14,6 +14,7 @@ import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
+import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
@@ -52,13 +53,14 @@ function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
 }
 
 async function emptyBucket(bucket: Bucket): Promise<void> {
+  const deleted = new Set<string>()
   for await (const file of bucket.paginateFileNames()) {
-    await bucket.deleteFileVersion(file.fileName, file.fileId)
+    await deleteFileVersionOnce(bucket, file.fileName, file.fileId, deleted)
   }
 
   const versions = await bucket.listFileVersions()
   for (const fv of versions.files) {
-    await bucket.deleteFileVersion(fv.fileName, fv.fileId)
+    await deleteFileVersionOnce(bucket, fv.fileName, fv.fileId, deleted)
   }
 }
 

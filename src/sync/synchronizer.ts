@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { BufferSource } from '../streams/source.ts'
+import { assertFileSourceMatchesIdentity, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -21,11 +21,8 @@ import {
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
-import {
-  deleteLocalFileInsideRoot,
-  readScannedLocalFile,
-  writeLocalStreamInsideRoot,
-} from './local-file-io.ts'
+import { deleteLocalFileInsideRoot, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import { isLocalFilesystemRoot } from './local-filesystem-root.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
@@ -43,10 +40,6 @@ import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
   normalizeSha1TimeoutMillis,
 } from './sha1-options.ts'
-import {
-  createSyncDownloadTempFileSweeper,
-  type SyncDownloadTempFileSweeper,
-} from './temp-files.ts'
 import type {
   B2SyncPath,
   LocalSyncPath,
@@ -130,9 +123,49 @@ export interface SynchronizerDownConfig extends SynchronizerConfig {
   readonly bucket: Bucket
 }
 
+/** Configuration for a B2-to-B2 sync (copy direction). */
+export interface SynchronizerB2Config extends SynchronizerConfig {
+  /** B2 source folder. */
+  readonly source: B2SyncFolder
+  /** B2 destination folder. */
+  readonly dest: B2SyncFolder
+  /** The B2 bucket used for copy, hide, and delete operations. */
+  readonly bucket: Bucket
+  /**
+   * Key prefix for destination-side copy, hide, and delete mutations.
+   *
+   * When omitted, the synchronizer uses `dest.rawPrefix` when the destination
+   * folder exposes one. Set this explicitly for custom B2 folders that do not
+   * expose their raw prefix.
+   */
+  readonly prefix?: string
+}
+
+/** Concrete sync configurations supported by {@link synchronize}. */
+export type SupportedSynchronizerConfig =
+  | SynchronizerUpConfig
+  | SynchronizerDownConfig
+  | SynchronizerB2Config
+
 interface PreparedActionPlan {
   readonly event: SyncEvent
   readonly actions: readonly SyncAction[]
+}
+
+interface LocalRootIdentity {
+  readonly deviceId: number | bigint
+  readonly inode: number | bigint
+}
+
+interface LocalRootContext {
+  readonly root: string
+  readonly realPath: string
+  readonly identity?: LocalRootIdentity
+}
+
+interface LocalRootContexts {
+  readonly source?: LocalRootContext
+  readonly dest?: LocalRootContext
 }
 
 /**
@@ -157,7 +190,22 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * each comparison and action result.
  *
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
+ *
+ * @returns An async generator that yields comparison and action events.
  */
+export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
+/**
+ * Legacy overload for broad custom synchronizer configurations.
+ *
+ * @param config - The synchronizer configuration.
+ *
+ * @returns An async generator that yields comparison and action events.
+ *
+ * @deprecated Use {@link SupportedSynchronizerConfig}. This legacy overload
+ * accepts broad custom configurations for source compatibility, but the
+ * supported union is the public contract for built-in sync directions.
+ */
+export function synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent>
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
   assertSupportedCompareMode(options.compareMode)
@@ -167,6 +215,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
+  const localRootContexts = await resolveLocalRootContexts(config)
   const queuedEvents: SyncEvent[] = []
   const failedPaths: string[] = []
   const failedPathSet = new Set<string>()
@@ -188,18 +237,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const downloadTempFileSweeper = createSyncDownloadTempFileSweeper(undefined, {
-    onEvent(event) {
-      queueEvent({
-        type: 'skip',
-        path: event.name,
-        size: 0,
-        reason: 'stale-download-partial',
-        message: event.message,
-      })
-    },
-  })
-  const factory = createActionFactory(config, downloadTempFileSweeper)
+  const factory = createActionFactory(config, localRootContexts)
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
   const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
@@ -521,6 +559,13 @@ function normalizeDownloadIdleTimeoutMillis(value: number | undefined): number {
   return Math.floor(value)
 }
 
+function assertValidB2ContentLength(contentLength: number): number {
+  if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+    throw new Error('B2 contentLength must be a non-negative safe integer')
+  }
+  return contentLength
+}
+
 function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefined {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
@@ -534,7 +579,7 @@ function createB2Sha1Reader(config: SynchronizerConfig): B2Sha1Reader | undefine
   )
 
   return async (path, signal) => {
-    const expectedBytes = Math.max(0, Math.floor(path.selectedVersion.contentLength))
+    const expectedBytes = assertValidB2ContentLength(path.selectedVersion.contentLength)
     const maxBytes = normalizeSha1VerificationMaxBytes(
       expectedBytes,
       config.options.sha1VerificationMaxBytes,
@@ -610,6 +655,81 @@ function assertBucket(bucket: Bucket | undefined, context: string): asserts buck
 }
 
 /**
+ * Returns the root for a local sync folder required by an action.
+ *
+ * @param folder - The configured folder to validate.
+ * @param role - Whether the local folder is the source or destination.
+ * @param context - Short verb describing the action being constructed.
+ *
+ * @returns The local filesystem root.
+ *
+ * @throws `Error` when the folder is not local or has no root.
+ */
+function requireLocalRoot(
+  folder: SyncFolder | undefined,
+  role: 'source' | 'destination',
+  context: string,
+): string {
+  const root = folder?.type === 'local' ? (folder as Partial<LocalSyncFolder>).root : undefined
+  if (typeof root !== 'string' || root === '') {
+    throw new Error(`Local ${role} root required for ${context} actions`)
+  }
+  return root
+}
+
+async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<LocalRootContexts> {
+  const sourceIsLocalFilesystem = isLocalFilesystemFolder(config.source)
+  const destIsLocalFilesystem = isLocalFilesystemFolder(config.dest)
+  if (!sourceIsLocalFilesystem && !destIsLocalFilesystem) return {}
+
+  const sourceContext = config.dest.type === 'b2' ? 'upload' : 'sync'
+  const destContext = config.source.type === 'b2' ? 'download' : 'sync'
+  return {
+    ...(sourceIsLocalFilesystem
+      ? {
+          source: await resolveLocalRootContext(
+            requireLocalRoot(config.source, 'source', sourceContext),
+          ),
+        }
+      : {}),
+    ...(destIsLocalFilesystem
+      ? {
+          dest: await resolveLocalRootContext(
+            requireLocalRoot(config.dest, 'destination', destContext),
+          ),
+        }
+      : {}),
+  }
+}
+
+async function resolveLocalRootContext(root: string): Promise<LocalRootContext> {
+  const { realpath, stat } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
+  const safeRoot = resolve(root)
+  const realPath = await realpath(safeRoot).catch((err: unknown) => {
+    if (isNotFoundError(err)) return safeRoot
+    throw err
+  })
+  const stats = await stat(realPath).catch((err: unknown) => {
+    if (isNotFoundError(err)) return undefined
+    throw err
+  })
+  if (stats !== undefined && !stats.isDirectory()) {
+    throw new Error('Local sync root is not a directory')
+  }
+  return {
+    root: safeRoot,
+    realPath,
+    ...(stats === undefined
+      ? {}
+      : { identity: { deviceId: stats.dev, inode: stats.ino } satisfies LocalRootIdentity }),
+  }
+}
+
+function isLocalFilesystemFolder(folder: SyncFolder | undefined): folder is LocalSyncFolder {
+  return folder?.type === 'local' && isLocalFilesystemRoot(folder)
+}
+/**
  * Narrows a setting to SSE-C; non-SSE-C source settings need no key on read.
  *
  * @param setting - Provider-supplied encryption setting, or undefined.
@@ -646,14 +766,14 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  * who flipped lock state mid-sync (rare) should refresh before
  * synchronize().
  *
- * @param config - The synchronizer configuration containing source, destination, and options.
- * @param downloadTempFileSweeper - Per-run sweeper for owned download temp files.
+ * @param config - Synchronizer configuration containing source, destination, and options.
+ * @param localRootContexts - Resolved filesystem roots captured before action creation.
  *
  * @returns An action factory bound to the provided configuration.
  */
 function createActionFactory(
   config: SynchronizerConfig,
-  downloadTempFileSweeper: SyncDownloadTempFileSweeper,
+  localRootContexts: LocalRootContexts,
 ): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
@@ -669,7 +789,6 @@ function createActionFactory(
   const factory: ActionFactory = {
     upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction {
       const bucket = upConfig.bucket
-      const root = localSyncRoot(upConfig.source)
       assertBucket(bucket, 'upload')
 
       return new UploadAction(
@@ -677,11 +796,16 @@ function createActionFactory(
         source.absolutePath,
         source.size,
         async (absPath, relPath, signal) => {
+          const rootContext = localRootContexts.source
+          const root = rootContext ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
               : `${uploadPrefix}${relPath}`
-          const data = await readContainedScannedLocalFile(
+          if (rootContext !== undefined) {
+            await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: true })
+          }
+          const fileSource = await createContainedScannedFileSource(
             root,
             { ...source, absolutePath: absPath },
             signal,
@@ -689,11 +813,11 @@ function createActionFactory(
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
-            data.byteLength,
+            fileSource.size,
           )
           await bucket.upload({
             fileName,
-            source: new BufferSource(data),
+            source: fileSource,
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             ...(signal !== undefined ? { signal } : {}),
           })
@@ -701,12 +825,13 @@ function createActionFactory(
       )
     },
 
-    download(source: B2SyncPath): SyncAction {
+    download(source: B2SyncPath, scannedDest?: LocalSyncPath | null): SyncAction {
       const bucket = downConfig.bucket
-      const root = localSyncRoot(downConfig.dest)
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
+        const rootContext = localRootContexts.dest
+        const root = rootContext?.root ?? (downConfig.dest as Partial<LocalSyncFolder>).root ?? ''
         safeRelativePathSegments(relPath)
         const b2FileName =
           sourceB2Prefix === undefined
@@ -715,6 +840,10 @@ function createActionFactory(
         const idleTimeoutMillis = normalizeDownloadIdleTimeoutMillis(
           config.options.downloadIdleTimeoutMillis,
         )
+        const expectedBytes = assertValidB2ContentLength(source.selectedVersion.contentLength)
+        if (rootContext !== undefined) {
+          await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: false })
+        }
         await ensureLocalSyncRootDirectory(root, relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
@@ -725,9 +854,9 @@ function createActionFactory(
         })
         try {
           await writeLocalStreamInsideRoot(root, relPath, result.body, {
-            expectedBytes: source.selectedVersion.contentLength,
+            expectedBytes,
+            ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
-            downloadTempFileSweeper,
             ...(signal !== undefined ? { signal } : {}),
           })
         } catch (err) {
@@ -794,7 +923,8 @@ function createActionFactory(
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
-      const root = localSyncRoot(downConfig.dest)
+      const rootContext = localRootContexts.dest
+      const root = rootContext?.root ?? localSyncRoot(downConfig.dest)
       return new DeleteLocalAction(
         path.relativePath,
         path.absolutePath,
@@ -805,6 +935,11 @@ function createActionFactory(
           }
           signal?.throwIfAborted()
           try {
+            if (rootContext !== undefined) {
+              await assertLocalRootContextCurrent(rootContext, path.relativePath, {
+                allowSymlinkRoot: false,
+              })
+            }
             await deleteLocalFileInsideRoot(root, path)
           } catch (err) {
             if (isLocalDeleteSafetyError(err)) throw err
@@ -942,16 +1077,91 @@ async function cancelReadableStreamBody(
   }
 }
 
-async function readContainedScannedLocalFile(
-  root: string,
+async function createContainedScannedFileSource(
+  root: string | LocalRootContext,
   path: LocalSyncPath,
   signal: AbortSignal | undefined,
-): Promise<Uint8Array> {
-  const targetPath = await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
+): Promise<FileSource> {
+  const targetPath =
+    typeof root === 'string'
+      ? await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
+      : await resolveContainedLocalPath(root.realPath, path.relativePath)
   throwIfAborted(signal)
-  const data = await readScannedLocalFile({ ...path, absolutePath: targetPath })
+  await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)
-  return data
+  const fileSource = await FileSource.fromPath(targetPath)
+  if (path.fileIdentity !== undefined) {
+    assertFileSourceMatchesIdentity(fileSource, path.fileIdentity)
+  }
+  if (typeof root === 'string') {
+    await resolveContainedLocalPath(root, path.relativePath, targetPath)
+  } else {
+    await resolveContainedLocalPath(root.realPath, path.relativePath, targetPath)
+  }
+  await assertScannedLocalFileStillCurrent(targetPath, path)
+  throwIfAborted(signal)
+  return fileSource
+}
+
+async function assertScannedLocalFileStillCurrent(
+  targetPath: string,
+  path: LocalSyncPath,
+): Promise<void> {
+  const { lstat } = await import('node:fs/promises')
+  const stats = await lstat(targetPath)
+  if (!stats.isFile()) throw new Error('local file changed before upload: not a regular file')
+  if (stats.size !== path.size) throw new Error('local file changed before upload: size changed')
+
+  const identity = path.fileIdentity
+  if (identity === undefined) return
+  if (
+    stats.dev !== identity.deviceId ||
+    stats.ino !== identity.inode ||
+    stats.size !== identity.size ||
+    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
+  ) {
+    throw new Error('local file changed before upload')
+  }
+}
+
+async function assertLocalRootContextCurrent(
+  context: LocalRootContext,
+  relativePath: string,
+  options: { readonly allowSymlinkRoot: boolean },
+): Promise<void> {
+  if (context.identity === undefined) return
+
+  const { lstat, realpath, stat } = await import('node:fs/promises')
+  let currentRealPath: string
+  try {
+    const rootLinkStats = await lstat(context.root)
+    if (!options.allowSymlinkRoot && rootLinkStats.isSymbolicLink()) {
+      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
+    }
+    currentRealPath = await realpath(context.root)
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Refusing to access sync root')) throw err
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (currentRealPath !== context.realPath) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  let currentStats: Awaited<ReturnType<typeof stat>>
+  try {
+    currentStats = await stat(context.realPath)
+  } catch {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (
+    !currentStats.isDirectory() ||
+    currentStats.dev !== context.identity.deviceId ||
+    currentStats.ino !== context.identity.inode
+  ) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
 }
 
 async function ensureLocalSyncRootDirectory(root: string, relativePath: string): Promise<void> {
@@ -1069,6 +1279,7 @@ function isLocalDeleteSafetyError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   return (
     err.message === 'Local sync root required for filesystem mutation' ||
+    err.message.startsWith('Local sync root changed before filesystem action: ') ||
     err.message.startsWith('Refusing to ') ||
     err.message.startsWith('Local sync root is not a directory: ') ||
     err.message.startsWith('unsafe local delete path: ')

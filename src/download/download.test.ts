@@ -252,6 +252,75 @@ describe('downloadById', () => {
   })
 })
 
+describe('head downloads', () => {
+  const accountInfo = {
+    getDownloadUrl: () => 'http://mock:0',
+    getAuthToken: () => 'mock_token',
+  } as unknown as AccountInfo
+
+  function headResponse(fileName: string, onCancel: () => void): HttpResponse {
+    return {
+      status: 200,
+      headers: new Headers({
+        'Content-Length': '0',
+        'X-Bz-File-Id': 'head_file_id',
+        'X-Bz-File-Name': fileName,
+        'X-Bz-Content-Sha1': 'none',
+        'X-Bz-Upload-Timestamp': '1',
+      }),
+      body: new ReadableStream<Uint8Array>({
+        cancel() {
+          onCancel()
+        },
+      }),
+      json: () => Promise.reject(new Error('Not JSON')),
+      text: () => Promise.resolve(''),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    }
+  }
+
+  it('cancels synthetic HEAD bodies by ID and by name', async () => {
+    let idBodyCancelled = false
+    let nameBodyCancelled = false
+    const raw = {
+      async downloadFileById(
+        _downloadUrl: string,
+        _authToken: string,
+        _fileId: FileId,
+        options: { readonly method?: string },
+      ): Promise<HttpResponse> {
+        expect(options.method).toBe('HEAD')
+        return headResponse('by-id.txt', () => {
+          idBodyCancelled = true
+        })
+      },
+      async downloadFileByName(
+        _downloadUrl: string,
+        _authToken: string,
+        _bucketName: string,
+        _fileName: string,
+        options: { readonly method?: string },
+      ): Promise<HttpResponse> {
+        expect(options.method).toBe('HEAD')
+        return headResponse('by-name.txt', () => {
+          nameBodyCancelled = true
+        })
+      },
+    } as unknown as RawClient
+
+    const byId = await headById(raw, accountInfo, { fileId: 'head_id' as FileId })
+    const byName = await headByName(raw, accountInfo, {
+      bucketName: 'bucket',
+      fileName: 'by-name.txt',
+    })
+
+    expect(byId.headers.fileName).toBe('by-id.txt')
+    expect(byName.headers.fileName).toBe('by-name.txt')
+    expect(idBodyCancelled).toBe(true)
+    expect(nameBodyCancelled).toBe(true)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // single.ts - extractDownloadHeaders (tested indirectly)
 // ---------------------------------------------------------------------------

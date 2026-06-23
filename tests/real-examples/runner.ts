@@ -19,9 +19,11 @@ import { spawn } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { BadBucketIdError } from '../../src/errors/index.ts'
 import type { Bucket } from '../../src/index.ts'
 import { B2Client } from '../../src/index.ts'
+import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const NODE_MAJOR = (process.versions.node ?? '').split('.')[0] ?? 'unknown'
 const currentBucketPrefix = 'sdk-rex-'
@@ -72,7 +74,23 @@ function isUnparseableRealExampleBucket(name: string): boolean {
  *
  * @returns A promise that resolves when the child exits cleanly.
  */
-function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await runOnce(argv, env)
+      return
+    } catch (err) {
+      if (attempt === maxAttempts) throw err
+      console.warn(
+        `${argv.join(' ')} failed on attempt ${attempt}/${maxAttempts}: ${String(err)}; retrying in ${attempt}s`,
+      )
+      await sleep(attempt * 1_000)
+    }
+  }
+}
+
+function runOnce(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const [cmd, ...args] = argv
     if (!cmd) {
@@ -89,13 +107,14 @@ function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
 }
 
 async function emptyAndDeleteBucket(b: Bucket): Promise<void> {
+  const deleted = new Set<string>()
   for await (const file of b.paginateFileNames()) {
-    await b.deleteFileVersion(file.fileName, file.fileId)
+    await deleteFileVersionOnce(b, file.fileName, file.fileId, deleted)
   }
   // Listing all files returns only the latest version; clean up the rest too.
   const versions = await b.listFileVersions()
   for (const fv of versions.files) {
-    await b.deleteFileVersion(fv.fileName, fv.fileId)
+    await deleteFileVersionOnce(b, fv.fileName, fv.fileId, deleted)
   }
   await b.delete()
 }
@@ -107,6 +126,16 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
     if (err instanceof BadBucketIdError) return
     throw err
   }
+}
+
+async function waitForBucketVisible(client: B2Client, bucketName: string): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const bucket = await client.getBucket(bucketName)
+    if (bucket !== null) return
+    await sleep(1_000)
+  }
+  throw new Error(`Bucket "${bucketName}" was not visible after creation`)
 }
 
 async function main(): Promise<void> {
@@ -138,12 +167,14 @@ async function main(): Promise<void> {
   }
 
   const bucket = await client.createBucket({ bucketName, bucketType: 'allPrivate' })
-  const workDir = await mkdtemp(join(tmpdir(), 'sdk-examples-'))
-
-  console.log(`\nUsing bucket: ${bucketName}`)
-  console.log(`Working dir:  ${workDir}\n`)
+  let workDir: string | undefined
 
   try {
+    await waitForBucketVisible(client, bucket.name)
+    workDir = await mkdtemp(join(tmpdir(), 'sdk-examples-'))
+    console.log(`\nUsing bucket: ${bucket.name}`)
+    console.log(`Working dir:  ${workDir}\n`)
+
     // Fixtures.
     const samplePath = join(workDir, 'sample.txt')
     const sampleBody = `hello from real-examples CI on Node ${process.versions.node}\n`
@@ -167,12 +198,12 @@ async function main(): Promise<void> {
     await run(['npx', 'tsx', 'examples/node-list-buckets.ts'], env)
 
     // 2. Upload a single file.
-    await run(['npx', 'tsx', 'examples/node-upload.ts', bucketName, samplePath], env)
+    await run(['npx', 'tsx', 'examples/node-upload.ts', bucket.name, samplePath], env)
 
     // 3. Download it back and verify the round-trip.
     const downloadPath = join(workDir, 'downloaded.txt')
     await run(
-      ['npx', 'tsx', 'examples/node-download.ts', bucketName, 'sample.txt', downloadPath],
+      ['npx', 'tsx', 'examples/node-download.ts', bucket.name, 'sample.txt', downloadPath],
       env,
     )
     const downloaded = await readFile(downloadPath, 'utf8')
@@ -185,7 +216,7 @@ async function main(): Promise<void> {
     // 4. Upload with a progress bar (proves the SDK's onProgress wiring works
     //    against real B2; the bar will spin to 100% near-instantly for a tiny
     //    file but the assertion is "the script exits 0", not the bar shape).
-    await run(['npx', 'tsx', 'examples/node-with-progress.ts', bucketName, samplePath], env)
+    await run(['npx', 'tsx', 'examples/node-with-progress.ts', bucket.name, samplePath], env)
 
     // 5. Encrypted backup snapshot.
     await run(
@@ -195,7 +226,7 @@ async function main(): Promise<void> {
         'examples/node-backup-cli/backup.ts',
         'snapshot',
         backupSrc,
-        `b2://${bucketName}/backups`,
+        `b2://${bucket.name}/backups`,
       ],
       env,
     )
@@ -211,7 +242,7 @@ async function main(): Promise<void> {
         'tsx',
         'examples/node-backup-cli/backup.ts',
         'restore',
-        `b2://${bucketName}/backups`,
+        `b2://${bucket.name}/backups`,
         restoreDir,
       ],
       env,
@@ -231,16 +262,18 @@ async function main(): Promise<void> {
 
     console.log('\n✓ All 6 examples completed against real B2; round-trips verified.\n')
   } finally {
-    console.log(`\nTearing down bucket ${bucketName}...`)
+    console.log(`\nTearing down bucket ${bucket.name}...`)
     try {
       await deleteBucketIfPresent(bucket)
     } catch (err) {
       console.error(`teardown failed: ${String(err)}`)
     }
-    try {
-      await rm(workDir, { recursive: true, force: true })
-    } catch (err) {
-      console.warn(`could not clean up ${workDir}: ${String(err)}`)
+    if (workDir !== undefined) {
+      try {
+        await rm(workDir, { recursive: true, force: true })
+      } catch (err) {
+        console.warn(`could not clean up ${workDir}: ${String(err)}`)
+      }
     }
   }
 }

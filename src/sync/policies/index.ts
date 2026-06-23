@@ -15,8 +15,15 @@ import { assertSupportedCompareMode, filesAreDifferent } from './compare.ts'
 export interface ActionFactory {
   /** Creates an action to upload a local file to B2. */
   upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction
-  /** Creates an action to download a B2 file to the local filesystem. */
-  download(source: B2SyncPath): SyncAction
+  /**
+   * Creates an action to download a B2 file to the local filesystem.
+   *
+   * `generateActions` passes `null` when the B2 source has no scanned local
+   * destination, a `LocalSyncPath` when the download replaces an existing
+   * scanned destination file, and leaves the value `undefined` only for
+   * callers that invoke a factory without destination scan context.
+   */
+  download(source: B2SyncPath, scannedDest?: LocalSyncPath | null): SyncAction
   /**
    * Creates an action to server-side copy a B2 file to a sync-relative destination path.
    * Kept for compatibility with custom factories that accept a sync-relative string.
@@ -104,7 +111,7 @@ function* actionsForSourceOnly(
       yield factory.upload(source as LocalSyncPath)
       break
     case 'b2-to-local':
-      yield factory.download(source as B2SyncPath)
+      yield factory.download(source as B2SyncPath, null)
       break
     case 'b2-to-b2':
       yield factory.copy(source as B2SyncPath, source.relativePath)
@@ -172,7 +179,7 @@ function* actionsForBoth(
       yield factory.upload(source as LocalSyncPath, dest as B2SyncPath)
       break
     case 'b2-to-local':
-      yield factory.download(source as B2SyncPath)
+      yield factory.download(source as B2SyncPath, dest as LocalSyncPath)
       break
     case 'b2-to-b2': {
       const action =

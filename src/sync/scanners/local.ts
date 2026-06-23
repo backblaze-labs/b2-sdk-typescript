@@ -1,14 +1,19 @@
+import {
+  isDownloadStagingDirectorySegment,
+  isManagedDownloadStagingRoot,
+} from '../download-staging.ts'
 import { localFilesystemErrorReason } from '../filesystem-errors.ts'
 import {
   directoryMayContainSyncPaths,
   pathPassesSyncFilters,
   pathSkippedByRegExpInputLimit,
 } from '../filters.ts'
+import { localFileIdentityFromStats } from '../local-file-identity.ts'
+import { registerLocalFilesystemRoot } from '../local-filesystem-root.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
-import { isSyncDownloadTempName } from '../temp-files.ts'
 import type { LocalSyncPath, SyncErrorEvent, SyncFolder, SyncScanOptions } from '../types.ts'
 
 type LocalDirent = {
@@ -20,6 +25,7 @@ type LocalDirent = {
 type LocalStats = {
   readonly dev: number
   readonly ino: number
+  readonly ctimeMs: number
   readonly mtimeMs: number
   readonly size: number
   isFile(): boolean
@@ -30,6 +36,7 @@ type LocalNodeDeps = {
   lstat(path: string): Promise<LocalStats>
   join(...paths: string[]): string
   relative(from: string, to: string): string
+  resolve(...paths: string[]): string
   sep: string
 }
 
@@ -44,15 +51,16 @@ export class LocalFolder implements SyncFolder {
   readonly type = 'local' as const
   readonly appliesScanFilters = true as const
   readonly appliesScanSorting = true as const
-  /** Absolute path to the local root directory. */
+  /** Resolved absolute path to the local root directory. */
   readonly root: string
 
   /**
    * Creates a new LocalFolder for the given root directory.
-   * @param root - Absolute path to the local directory to scan.
+   * @param root - Absolute or relative path to the local directory to scan.
    */
   constructor(root: string) {
-    this.root = root
+    this.root = resolvePathAtConstruction(root)
+    registerLocalFilesystemRoot(this)
   }
 
   /**
@@ -62,8 +70,9 @@ export class LocalFolder implements SyncFolder {
   async *scan(options: SyncScanOptions = {}): AsyncGenerator<LocalSyncPath> {
     validateSyncFilters(options)
     const nodeDeps = await loadLocalNodeDeps()
+    const root = nodeDeps.resolve(this.root)
     const collected: LocalSyncPath[] = []
-    await this.walk(this.root, collected, options, scanEntryLimit(options), nodeDeps)
+    await this.walk(root, root, collected, options, scanEntryLimit(options), nodeDeps)
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
       throwIfScanAborted(options)
@@ -73,6 +82,7 @@ export class LocalFolder implements SyncFolder {
 
   /**
    * Recursively collects files from {@link dir} into {@link out}.
+   * @param root - Resolved scan root used for relative path calculation.
    * @param dir - Absolute path of the directory to scan.
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
@@ -80,6 +90,7 @@ export class LocalFolder implements SyncFolder {
    * @param nodeDeps - Lazy-loaded Node filesystem and path helpers.
    */
   private async walk(
+    root: string,
     dir: string,
     out: LocalSyncPath[],
     options: SyncScanOptions,
@@ -93,18 +104,26 @@ export class LocalFolder implements SyncFolder {
     } catch (err) {
       const error = this.emitScanError(
         options,
-        relativePathFromRoot(this.root, dir, nodeDeps),
+        relativePathFromRoot(root, dir, nodeDeps),
         'directory',
         err,
       )
-      if (dir === this.root) throw error
+      if (dir === root) throw error
       return
     }
 
     for (const entry of entries) {
       throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
-      const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
+      const rel = relativePathFromRoot(root, fullPath, nodeDeps)
+      if (
+        isDownloadStagingDirectorySegment(rel) &&
+        entry.isDirectory() &&
+        isDownloadStagingDirectorySegment(entry.name) &&
+        (await isManagedDownloadStagingRoot(fullPath))
+      ) {
+        continue
+      }
       if (rel.includes('\\')) {
         emitScannerSkip(options, {
           type: 'skip',
@@ -119,19 +138,9 @@ export class LocalFolder implements SyncFolder {
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
         if (directoryMayContainSyncPaths(rel, options)) {
-          await this.walk(fullPath, out, options, maxScanEntries, nodeDeps)
+          await this.walk(root, fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
-        if (isSyncDownloadTempName(entry.name)) {
-          emitScannerSkip(options, {
-            type: 'skip',
-            path: rel,
-            size: 0,
-            reason: 'stale-download-partial',
-            message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
-          })
-          continue
-        }
         if (!pathPassesSyncFilters(rel, options)) {
           if (pathSkippedByRegExpInputLimit(rel, options)) {
             emitScannerSkip(options, regexpInputTooLongSkip(rel))
@@ -149,12 +158,7 @@ export class LocalFolder implements SyncFolder {
           /* v8 ignore stop */
         } catch (err) {
           /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
-          this.emitScanError(
-            options,
-            relativePathFromRoot(this.root, fullPath, nodeDeps),
-            'file',
-            err,
-          )
+          this.emitScanError(options, relativePathFromRoot(root, fullPath, nodeDeps), 'file', err)
           continue
         }
         assertScanEntryLimit(out.length + 1, maxScanEntries)
@@ -163,12 +167,7 @@ export class LocalFolder implements SyncFolder {
           absolutePath: fullPath,
           modTimeMillis: Math.floor(s.mtimeMs),
           size: s.size,
-          fileIdentity: {
-            deviceId: s.dev,
-            inode: s.ino,
-            size: s.size,
-            modTimeMillis: Math.floor(s.mtimeMs),
-          },
+          fileIdentity: localFileIdentityFromStats(s),
         })
       }
     }
@@ -198,8 +197,90 @@ async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
     lstat: fsPromises.lstat as LocalNodeDeps['lstat'],
     join: path.join,
     relative: path.relative,
+    resolve: path.resolve,
     sep: path.sep,
   }
+}
+
+function resolvePathAtConstruction(root: string): string {
+  const processLike = (
+    globalThis as {
+      process?: { cwd?: () => string; platform?: string }
+    }
+  ).process
+  if (typeof processLike?.cwd !== 'function') return root
+
+  const cwd = processLike.cwd()
+  if (processLike.platform === 'win32') return resolveWindowsPath(cwd, root)
+  return resolvePosixPath(cwd, root)
+}
+
+function resolvePosixPath(cwd: string, root: string): string {
+  const joined = root.startsWith('/') ? root : `${cwd}/${root}`
+  const resolved = normalizePathSegments(joined.split('/'), '/')
+  return resolved === '' ? '/' : `/${resolved}`
+}
+
+function resolveWindowsPath(cwd: string, root: string): string {
+  const normalizedRoot = root.replaceAll('/', '\\')
+  const normalizedCwd = cwd.replaceAll('/', '\\')
+  const drive = /^[A-Za-z]:/.exec(normalizedCwd)?.[0] ?? ''
+  const cwdUnc = splitUncPath(normalizedCwd)
+  if (/^\\\\/.test(normalizedRoot)) return normalizeUncPath(normalizedRoot)
+  if (/^[A-Za-z]:\\/.test(normalizedRoot)) {
+    const prefix = normalizedRoot.slice(0, 2)
+    const rest = normalizedRoot.slice(3).split('\\')
+    return joinWindowsRoot(prefix, normalizePathSegments(rest, '\\'))
+  }
+  if (/^[A-Za-z]:/.test(normalizedRoot)) {
+    throw new Error('LocalFolder root must not be a drive-relative Windows path')
+  }
+  if (normalizedRoot.startsWith('\\')) {
+    const rest = normalizePathSegments(normalizedRoot.slice(1).split('\\'), '\\')
+    return joinWindowsRoot(cwdUnc?.prefix ?? drive, rest)
+  }
+  if (cwdUnc !== undefined) {
+    const resolved = normalizePathSegments([...cwdUnc.rest, ...normalizedRoot.split('\\')], '\\')
+    return joinWindowsRoot(cwdUnc.prefix, resolved)
+  }
+  const base = /^[A-Za-z]:\\/.test(normalizedCwd) ? normalizedCwd : `${drive}\\`
+  const prefix = /^[A-Za-z]:/.exec(base)?.[0] ?? drive
+  const baseRest = base.slice(prefix.length).replace(/^\\/, '').split('\\')
+  const resolved = normalizePathSegments([...baseRest, ...normalizedRoot.split('\\')], '\\')
+  return joinWindowsRoot(prefix, resolved)
+}
+
+function normalizeUncPath(path: string): string {
+  const unc = splitUncPath(path)
+  if (unc === undefined) return path
+  return joinWindowsRoot(unc.prefix, normalizePathSegments(unc.rest, '\\'))
+}
+
+function splitUncPath(
+  path: string,
+): { readonly prefix: string; readonly rest: string[] } | undefined {
+  if (!path.startsWith('\\\\')) return undefined
+  const parts = path.split('\\').filter((part) => part !== '')
+  const [server, share, ...rest] = parts
+  if (server === undefined || share === undefined) return undefined
+  return { prefix: `\\\\${server}\\${share}`, rest }
+}
+
+function joinWindowsRoot(prefix: string, rest: string): string {
+  return rest === '' ? `${prefix}\\` : `${prefix}\\${rest}`
+}
+
+function normalizePathSegments(segments: readonly string[], separator: '/' | '\\'): string {
+  const out: string[] = []
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      out.pop()
+      continue
+    }
+    out.push(segment)
+  }
+  return out.join(separator)
 }
 
 function relativePathFromRoot(root: string, path: string, nodeDeps: LocalNodeDeps): string {

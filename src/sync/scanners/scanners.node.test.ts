@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,6 +10,10 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  DOWNLOAD_STAGING_MARKER_NAME,
+} from '../download-staging.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -84,12 +88,14 @@ describe('LocalFolder', () => {
     await writeFile(join(tmpDir, 'alpha.txt'), 'a')
     await writeFile(join(tmpDir, 'Zed.txt'), 'z')
     await writeFile(join(tmpDir, 'bravo.txt'), 'b')
+    await writeFile(join(tmpDir, 'Zulu.txt'), 'z')
 
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual([
       'Zed.txt',
+      'Zulu.txt',
       'alpha.txt',
       'bravo.txt',
       'charlie.txt',
@@ -144,6 +150,43 @@ describe('LocalFolder', () => {
     expect(entries).toEqual([])
   })
 
+  it('ignores the managed download staging directory at the scan root', async () => {
+    await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, DOWNLOAD_STAGING_MARKER_NAME), '')
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'partial.bin'), 'partial')
+    await writeFile(join(tmpDir, 'real.txt'), 'real')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
+  })
+
+  it('ignores case variants of the managed download staging directory at the scan root', async () => {
+    const stagingName = DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()
+    await mkdir(join(tmpDir, stagingName), { recursive: true })
+    await writeFile(join(tmpDir, stagingName, DOWNLOAD_STAGING_MARKER_NAME), '')
+    await writeFile(join(tmpDir, stagingName, 'partial.bin'), 'partial')
+    await writeFile(join(tmpDir, 'real.txt'), 'real')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['real.txt'])
+  })
+
+  it('scans an unmarked root entry with the staging directory name', async () => {
+    await mkdir(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME), { recursive: true })
+    await writeFile(join(tmpDir, DOWNLOAD_STAGING_DIRECTORY_NAME, 'user.txt'), 'user')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual([
+      `${DOWNLOAD_STAGING_DIRECTORY_NAME}/user.txt`,
+    ])
+  })
+
   it('surfaces non-existent root scan errors', async () => {
     const folder = new LocalFolder(join(tmpDir, 'does-not-exist'))
     const errors: unknown[] = []
@@ -172,6 +215,96 @@ describe('LocalFolder', () => {
     await expect(
       collect<LocalSyncPath>(folder.scan({ signal: controller.signal })),
     ).rejects.toThrow('stop local scan')
+  })
+
+  it('scans a symlinked root directory', async () => {
+    const realRoot = join(tmpDir, 'real-root')
+    const linkRoot = join(tmpDir, 'link-root')
+    await mkdir(realRoot)
+    await writeFile(join(realRoot, 'file.txt'), 'content')
+    await symlink(realRoot, linkRoot, 'dir')
+
+    const folder = new LocalFolder(linkRoot)
+    const entries = await collect<LocalSyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
+  })
+
+  it('binds relative roots at construction time', async () => {
+    const originalCwd = process.cwd()
+    const firstCwd = join(tmpDir, 'first')
+    const secondCwd = join(tmpDir, 'second')
+    await mkdir(join(firstCwd, 'dest'), { recursive: true })
+    await mkdir(join(secondCwd, 'dest'), { recursive: true })
+    await writeFile(join(firstCwd, 'dest', 'keep.txt'), 'keep')
+    await writeFile(join(secondCwd, 'dest', 'wrong.txt'), 'wrong')
+
+    try {
+      process.chdir(firstCwd)
+      const folder = new LocalFolder('dest')
+      const expectedPath = join(folder.root, 'keep.txt')
+      process.chdir(secondCwd)
+
+      const entries = await collect<LocalSyncPath>(folder.scan())
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['keep.txt'])
+      expect(entries[0]?.absolutePath).toBe(expectedPath)
+    } finally {
+      process.chdir(originalCwd)
+    }
+  })
+
+  it('preserves UNC roots when binding relative Windows paths', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('\\\\server\\share\\dir')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(new LocalFolder('dest').root).toBe('\\\\server\\share\\dir\\dest')
+      expect(new LocalFolder('\\dest').root).toBe('\\\\server\\share\\dest')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
+  it('rejects drive-relative Windows roots', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('C:\\base')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(() => new LocalFolder('C:dest')).toThrow('drive-relative Windows path')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
+  it('normalizes Windows roots at construction time', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('C:\\base\\dir')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(new LocalFolder('C:\\base\\..\\dest').root).toBe('C:\\dest')
+      expect(new LocalFolder('\\dest\\.\\child').root).toBe('C:\\dest\\child')
+      expect(new LocalFolder('relative\\..\\dest').root).toBe('C:\\base\\dir\\dest')
+      expect(new LocalFolder('\\\\server\\share\\dir\\..').root).toBe('\\\\server\\share\\')
+      expect(new LocalFolder('\\\\server').root).toBe('\\\\server')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
   })
 
   it('uses forward slashes in relative paths even on the current platform', async () => {
@@ -280,16 +413,23 @@ describe('LocalFolder', () => {
     ])
   })
 
-  it('skips SDK partial download files while scanning', async () => {
+  it('scans partial-looking files as ordinary local files', async () => {
     const tempPath = join(tmpDir, '.b2sdk-abandoned.partial')
+    const previousTempPath = join(tmpDir, '.b2sdk-abandoned.partial.previous')
     await writeFile(tempPath, 'partial')
+    await writeFile(previousTempPath, 'backup')
     await writeFile(join(tmpDir, 'keep.txt'), 'keep')
 
     const folder = new LocalFolder(tmpDir)
     const entries = await collect<LocalSyncPath>(folder.scan())
 
-    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    expect(entries.map((e) => e.relativePath)).toEqual([
+      '.b2sdk-abandoned.partial',
+      '.b2sdk-abandoned.partial.previous',
+      'keep.txt',
+    ])
     await expect(access(tempPath)).resolves.toBeFalsy()
+    await expect(access(previousTempPath)).resolves.toBeFalsy()
   })
 
   it.skipIf(process.platform === 'win32')(
@@ -433,12 +573,15 @@ describe('B2Folder', () => {
     await bucket.upload({ fileName: 'apple.txt', source: new BufferSource(enc.encode('a')) })
     tick()
     await bucket.upload({ fileName: 'mango.txt', source: new BufferSource(enc.encode('m')) })
+    tick()
+    await bucket.upload({ fileName: 'Zoo.txt', source: new BufferSource(enc.encode('Z')) })
 
     const folder = new B2Folder(bucket)
     const entries = await collect<B2SyncPath>(folder.scan())
 
     expect(entries.map((e) => e.relativePath)).toEqual([
       'Zebra.txt',
+      'Zoo.txt',
       'apple.txt',
       'mango.txt',
       'zebra.txt',
@@ -996,12 +1139,20 @@ describe('B2Folder', () => {
             makeFileVersion('AUX.txt', 3),
             makeFileVersion('CONIN$', 4),
             makeFileVersion('COM0.txt', 5),
-            makeFileVersion('nul.tar.gz', 6),
-            makeFileVersion('dir/C:/x', 7),
-            makeFileVersion('trailing.', 8),
-            makeFileVersion('trailing ', 9),
-            makeFileVersion('Readme.txt', 10),
-            makeFileVersion('README.txt', 11),
+            makeFileVersion('COM¹.txt', 6),
+            makeFileVersion('COM².txt', 7),
+            makeFileVersion('COM³.txt', 8),
+            makeFileVersion('LPT¹/report.txt', 9),
+            makeFileVersion('LPT²/report.txt', 10),
+            makeFileVersion('LPT³/report.txt', 11),
+            makeFileVersion('nul.tar.gz', 12),
+            makeFileVersion('dir/C:/x', 13),
+            makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`, 14),
+            makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`, 15),
+            makeFileVersion('trailing.', 16),
+            makeFileVersion('trailing ', 17),
+            makeFileVersion('Readme.txt', 18),
+            makeFileVersion('README.txt', 19),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -1026,8 +1177,16 @@ describe('B2Folder', () => {
       'local-unsafe-name:AUX.txt',
       'local-unsafe-name:CONIN$',
       'local-unsafe-name:COM0.txt',
+      'local-unsafe-name:COM¹.txt',
+      'local-unsafe-name:COM².txt',
+      'local-unsafe-name:COM³.txt',
+      'local-unsafe-name:LPT¹/report.txt',
+      'local-unsafe-name:LPT²/report.txt',
+      'local-unsafe-name:LPT³/report.txt',
       'local-unsafe-name:nul.tar.gz',
       'local-unsafe-name:dir/C:/x',
+      `local-unsafe-name:${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
+      `local-unsafe-name:${DOWNLOAD_STAGING_DIRECTORY_NAME.toUpperCase()}/payload.bin`,
       'local-unsafe-name:trailing.',
       'local-unsafe-name:trailing ',
       'local-path-collision:Readme.txt',
@@ -1423,6 +1582,109 @@ describe('B2Folder', () => {
     expect(calls).toEqual([{ prefix: 'root\\' }])
     expect(entries.map((e) => e.relativePath)).toEqual(['active', 'active/keep.txt'])
     expect(skips).toEqual(['outside-prefix:root/active/wrong-prefix.txt'])
+  })
+
+  it('preserves raw slashless B2 prefix scope', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [
+            makeFileVersion('photos/cat.jpg', 1),
+            makeFileVersion('photos-archive/secret.jpg', 2),
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'photos')
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['-archive/secret.jpg', 'cat.jpg'])
+    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual([
+      'photos-archive/secret.jpg',
+      'photos/cat.jpg',
+    ])
+  })
+
+  it('skips folder marker keys that equal the normalized prefix', async () => {
+    function makeFileVersion(fileName: string, uploadTimestamp: number): FileVersion {
+      return {
+        accountId: 'acc' as unknown as AccountId,
+        action: FileAction.Upload,
+        bucketId: 'b' as unknown as BucketId,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: `fid_${uploadTimestamp}` as unknown as FileId,
+        fileInfo: {},
+        fileName,
+        fileRetention: { isClientAuthorizedToRead: true, value: null },
+        legalHold: { isClientAuthorizedToRead: true, value: null },
+        replicationStatus: null,
+        serverSideEncryption: { mode: EncryptionMode.None },
+        uploadTimestamp,
+      }
+    }
+
+    const mockBucket = {
+      async listFileVersions() {
+        return {
+          files: [makeFileVersion('photos/', 1), makeFileVersion('photos/cat.jpg', 2)],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket, 'photos')
+    const entries = await collect<B2SyncPath>(folder.scan())
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['cat.jpg'])
+    expect(entries.map((entry) => entry.selectedVersion.fileName)).toEqual(['photos/cat.jpg'])
+  })
+
+  it('passes scan abort signal to B2 page requests', async () => {
+    const controller = new AbortController()
+    const signals: Array<AbortSignal | undefined> = []
+    const mockBucket = {
+      async listFileVersions(opts?: { signal?: AbortSignal }) {
+        signals.push(opts?.signal)
+        return {
+          files: [],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+
+    const folder = new B2Folder(mockBucket as unknown as Bucket)
+    const entries = await collect<B2SyncPath>(folder.scan({ signal: controller.signal }))
+
+    expect(entries).toEqual([])
+    expect(signals).toEqual([controller.signal])
   })
 
   // Pagination: when listFileVersions returns nextFileName, B2Folder must

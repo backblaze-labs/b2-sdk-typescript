@@ -1,12 +1,89 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EncryptionKey } from '../types/encryption.ts'
+import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
-import { BlobSource, BufferSource, StreamSource, toContentSource } from './source.ts'
+import {
+  assertFileSourceMatchesIdentity,
+  BlobSource,
+  BufferSource,
+  type FileSource,
+  StreamSource,
+  toContentSource,
+} from './source.ts'
 
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
 const SHA1_HELLO = 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d'
+
+// ---------------------------------------------------------------------------
+// collect.ts
+// ---------------------------------------------------------------------------
+
+describe('readStreamChunkWithSignal', () => {
+  it('reads a chunk when the signal stays active', async () => {
+    const controller = new AbortController()
+    const reader = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(new Uint8Array([1, 2, 3]))
+        streamController.close()
+      },
+    }).getReader()
+
+    try {
+      const result = await readStreamChunkWithSignal(reader, controller.signal)
+      expect(result.done).toBe(false)
+      expect(result.value).toEqual(new Uint8Array([1, 2, 3]))
+    } finally {
+      reader.releaseLock()
+    }
+  })
+
+  it('cancels a pending read when the signal aborts', async () => {
+    const controller = new AbortController()
+    const reason = new Error('stop reading')
+    let cancelReason: unknown
+    const reader = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+      },
+    }).getReader()
+
+    const read = readStreamChunkWithSignal(reader, controller.signal)
+    controller.abort(reason)
+
+    await expect(read).rejects.toBe(reason)
+    await Promise.resolve()
+    expect(cancelReason).toBe(reason)
+  })
+
+  it('uses a default AbortError for signals without an abort reason', async () => {
+    let onAbort: (() => void) | undefined
+    let removed = false
+    const signal = {
+      reason: undefined,
+      throwIfAborted() {},
+      addEventListener(_type: string, listener: EventListenerOrEventListenerObject) {
+        onAbort =
+          typeof listener === 'function'
+            ? () => listener(new Event('abort'))
+            : () => listener.handleEvent(new Event('abort'))
+      },
+      removeEventListener() {
+        removed = true
+      },
+    } as unknown as AbortSignal
+    const reader = new ReadableStream<Uint8Array>().getReader()
+
+    const read = readStreamChunkWithSignal(reader, signal)
+    onAbort?.()
+    const err = await read.catch((caught: unknown) => caught)
+
+    expect(err).toBeInstanceOf(DOMException)
+    expect((err as DOMException).name).toBe('AbortError')
+    expect(removed).toBe(true)
+  })
+})
 
 // ---------------------------------------------------------------------------
 // hash.ts
@@ -221,6 +298,25 @@ describe('BlobSource', () => {
     const ab = await src.toArrayBuffer()
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(content)
+  })
+
+  it('toArrayBuffer reads through the abort-aware collection path', async () => {
+    const src = new BlobSource(blob)
+    const ab = await src.toArrayBuffer({ signal: new AbortController().signal })
+    expect(new Uint8Array(ab)).toEqual(content)
+  })
+})
+
+describe('FileSource identity helper', () => {
+  it('rejects non-FileSource values', () => {
+    expect(() =>
+      assertFileSourceMatchesIdentity({ filePath: 'missing.txt' } as FileSource, {
+        deviceId: 1,
+        inode: 1,
+        size: 1,
+        modTimeMillis: 1,
+      }),
+    ).toThrow('FileSource file changed after validation: missing.txt')
   })
 })
 

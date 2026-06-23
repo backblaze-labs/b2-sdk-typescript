@@ -1,8 +1,12 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 
+const MAX_CONSECUTIVE_EMPTY_READ_CHUNKS = 1024
+
 /**
- * Reads one stream chunk with an idle timeout and optional abort signal.
+ * Reads one non-empty stream chunk with an idle timeout and optional abort signal.
+ * Empty chunks are not progress; too many consecutive empty chunks fail with the
+ * same stalled-read diagnostic used for pending reads.
  *
  * @param reader - Locked reader to read from.
  * @param timeoutMillis - Idle timeout in milliseconds for this read.
@@ -14,6 +18,28 @@ import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
  * @internal
  */
 export async function readStreamChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMillis: number,
+  stalledMessage: string,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let emptyChunks = 0
+  while (true) {
+    const result = await readRawStreamChunkWithTimeout(
+      reader,
+      timeoutMillis,
+      stalledMessage,
+      signal,
+    )
+    if (result.done || result.value.byteLength > 0) return result
+    emptyChunks += 1
+    if (emptyChunks > MAX_CONSECUTIVE_EMPTY_READ_CHUNKS) {
+      throw new Error(stalledMessage)
+    }
+  }
+}
+
+async function readRawStreamChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutMillis: number,
   stalledMessage: string,

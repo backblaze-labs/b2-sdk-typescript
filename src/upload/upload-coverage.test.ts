@@ -13,7 +13,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, StreamSource } from '../streams/source.ts'
+import { BufferSource, type ContentSource, StreamSource } from '../streams/source.ts'
 import {
   daysFromNow,
   deterministicBytes,
@@ -145,6 +145,185 @@ function freshUrlRetryHarness(
 async function countFileVersions(bucket: Bucket, fileName: string): Promise<number> {
   const versions = await bucket.listFileVersions({ prefix: fileName })
   return versions.files.filter((file) => file.fileName === fileName).length
+}
+
+class FailingFirstSliceSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  readonly sliceStarts: number[] = []
+
+  constructor(partSize: number) {
+    this.size = partSize * 3
+  }
+
+  slice(start: number, end: number): ContentSource {
+    this.sliceStarts.push(start)
+    const length = end - start
+    const shouldFail = start === 0
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(length))
+            controller.close()
+          },
+        }),
+      toArrayBuffer: async () => {
+        if (shouldFail) throw new Error('simulated source mutation')
+        return new ArrayBuffer(length)
+      },
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
+}
+
+class FailingSecondSliceAfterFirstUploadSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  private readonly partSize: number
+  private readonly firstUploadStarted: Promise<void>
+
+  constructor(partSize: number, firstUploadStarted: Promise<void>) {
+    this.partSize = partSize
+    this.size = partSize * 2
+    this.firstUploadStarted = firstUploadStarted
+  }
+
+  slice(start: number, end: number): ContentSource {
+    const length = end - start
+    const firstUploadStarted = this.firstUploadStarted
+    const shouldFail = start === this.partSize
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(length))
+            controller.close()
+          },
+        }),
+      toArrayBuffer: async () => {
+        if (shouldFail) {
+          await firstUploadStarted
+          throw new Error('simulated second part source failure')
+        }
+        return new ArrayBuffer(length)
+      },
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
+}
+
+class AbortAwareParallelReadSource implements ContentSource {
+  readonly canSlice = true
+  readonly size: number
+  siblingBytesRead = 0
+  siblingCancelled = false
+  private readonly siblingStarted: Promise<void>
+  private resolveSiblingStarted!: () => void
+
+  constructor(partSize: number) {
+    this.size = partSize * 2
+    this.siblingStarted = new Promise((resolve) => {
+      this.resolveSiblingStarted = resolve
+    })
+  }
+
+  slice(start: number, end: number): ContentSource {
+    const length = end - start
+    if (start === 0) {
+      return {
+        canSlice: true,
+        size: length,
+        slice: () => {
+          throw new Error('nested slice should not be used')
+        },
+        stream: () => {
+          throw new Error('failing slice stream should not be used')
+        },
+        toArrayBuffer: async () => {
+          await this.siblingStarted
+          throw new Error('simulated source mutation')
+        },
+      }
+    }
+
+    return {
+      canSlice: true,
+      size: length,
+      slice: () => {
+        throw new Error('nested slice should not be used')
+      },
+      stream: () => {
+        throw new Error('sibling slice stream should not be used')
+      },
+      toArrayBuffer: (options: { readonly signal?: AbortSignal } = {}) =>
+        this.readSiblingSlice(length, options.signal),
+    }
+  }
+
+  stream(): ReadableStream<Uint8Array> {
+    throw new Error('parallel source stream should not be used')
+  }
+
+  toArrayBuffer(): Promise<ArrayBuffer> {
+    throw new Error('parallel source toArrayBuffer should not be used')
+  }
+
+  private readSiblingSlice(length: number, signal: AbortSignal | undefined): Promise<ArrayBuffer> {
+    this.resolveSiblingStarted()
+    return new Promise((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const cleanup = () => {
+        if (timeout !== undefined) clearTimeout(timeout)
+        signal?.removeEventListener('abort', onAbort)
+      }
+      const onAbort = () => {
+        this.siblingCancelled = true
+        cleanup()
+        reject(signal?.reason ?? new Error('sibling read aborted'))
+      }
+      const readNext = () => {
+        if (signal?.aborted === true) {
+          onAbort()
+          return
+        }
+        if (this.siblingBytesRead >= length) {
+          cleanup()
+          resolve(new ArrayBuffer(length))
+          return
+        }
+        this.siblingBytesRead += Math.min(1024, length - this.siblingBytesRead)
+        timeout = setTimeout(readNext, 0)
+      }
+
+      signal?.addEventListener('abort', onAbort, { once: true })
+      readNext()
+    })
+  }
 }
 
 describe('uploadLargeFile cleanup paths', () => {
@@ -623,6 +802,161 @@ describe('uploadLargeFile cleanup paths', () => {
 
     expect(part2Settled).toBe(true)
     expect(cancelSawPart2Settled).toBe(true)
+  })
+
+  it('aborts queued multipart sibling tasks after a source read fails', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-sibling-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const source = new FailingFirstSliceSource(partSize)
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'changed.bin',
+        source,
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('simulated source mutation')
+
+    expect(source.sliceStarts).toEqual([0])
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'changed.bin')).toBeUndefined()
+  })
+
+  it('aborts in-flight parallel source reads after a sibling read fails', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-read-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const source = new AbortAwareParallelReadSource(partSize)
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'changed-during-read.bin',
+        source,
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow('simulated source mutation')
+
+    expect(source.siblingCancelled).toBe(true)
+    expect(source.siblingBytesRead).toBeLessThan(partSize)
+  })
+
+  it('accepts an untriggered abort signal for multipart uploads', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-live-signal',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const controller = new AbortController()
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'live-signal.bin',
+      source: new BufferSource(payload),
+      partSize,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+
+    expect(result.fileName).toBe('live-signal.bin')
+  })
+
+  it('rejects a stream source that emits extra bytes after planned parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-after-plan',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'stream-extra.bin',
+        source: new StreamSource(readable, partSize),
+        partSize,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('source stream emitted more than advertised')
+  })
+
+  it('preserves the initiating multipart failure over sibling aborts', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let markFirstUploadStarted!: () => void
+    const firstUploadStarted = new Promise<void>((resolve) => {
+      markFirstUploadStarted = resolve
+    })
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?') && req.headers?.['X-Bz-Part-Number'] === '1') {
+          markFirstUploadStarted()
+          if (req.signal?.aborted) throw new DOMException('sibling aborted', 'AbortError')
+          const signal = req.signal
+          if (signal === undefined) throw new Error('missing part upload abort signal')
+          await new Promise<never>((_, reject) => {
+            signal.addEventListener(
+              'abort',
+              () => reject(new DOMException('sibling aborted', 'AbortError')),
+              { once: true },
+            )
+          })
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'multipart-root-cause',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'root-cause.bin',
+        source: new FailingSecondSliceAfterFirstUploadSource(partSize, firstUploadStarted),
+        partSize,
+        concurrency: 2,
+      }),
+    ).rejects.toThrow('simulated second part source failure')
   })
 
   it('swallows a failing cancelLargeFile during the outer cleanup catch', async () => {
@@ -3099,7 +3433,7 @@ describe('uploadSmallFile cleanup path', () => {
     await dl.body.cancel()
   })
 
-  it('uploads a StreamSource through bucket.upload via the sequential multipart path', async () => {
+  it('uploads a StreamSource with empty chunks through the sequential multipart path', async () => {
     // Regression for the canSlice = false path: bucket.upload should
     // accept a StreamSource and stream multipart parts sequentially
     // (one partSize buffer in flight at a time), without requiring the
@@ -3117,18 +3451,32 @@ describe('uploadSmallFile cleanup path', () => {
     const payload = deterministicBytes(totalSize)
 
     // Hand-roll a ReadableStream that emits the payload in small chunks
-    // so the part-buffer assembly loop has to coalesce across reads.
+    // so the part-buffer assembly loop has to coalesce across reads and
+    // ignore valid zero-length chunks, including after the advertised size.
     const chunkSize = 7919 // prime, doesn't divide partSize evenly
     let cursor = 0
+    let emitEmpty = true
+    let trailingEmptyEmitted = false
     const readable = new ReadableStream<Uint8Array>({
       pull(controller) {
+        if (emitEmpty) {
+          emitEmpty = false
+          controller.enqueue(new Uint8Array(0))
+          return
+        }
         if (cursor >= payload.byteLength) {
+          if (!trailingEmptyEmitted) {
+            trailingEmptyEmitted = true
+            controller.enqueue(new Uint8Array(0))
+            return
+          }
           controller.close()
           return
         }
         const end = Math.min(cursor + chunkSize, payload.byteLength)
         controller.enqueue(payload.subarray(cursor, end))
         cursor = end
+        emitEmpty = true
       },
     })
 
@@ -3143,6 +3491,172 @@ describe('uploadSmallFile cleanup path', () => {
     // collapses 'none' to null (see the P2 normalization regression
     // above).
     expect(result.contentSha1).toBeNull()
+  })
+
+  it('rejects too many consecutive empty chunks in a streaming multipart source', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-spin',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const readable = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'empty-spin.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+      }),
+    ).rejects.toThrow('source stream emitted more than 1024 consecutive empty chunks')
+    expect(await bucket.getFileInfoByName('empty-spin.bin')).toBeNull()
+  })
+
+  it('rejects a streaming multipart source that ends before its advertised size', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-short',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize + 7)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'short.bin',
+        source: new StreamSource(readable, payload.byteLength + 1),
+        partSize,
+      }),
+    ).rejects.toThrow(
+      `uploadLargeFile: source stream ended after ${payload.byteLength} bytes, expected ${payload.byteLength + 1}.`,
+    )
+    expect(await bucket.getFileInfoByName('short.bin')).toBeNull()
+  })
+
+  it('rejects a streaming multipart source that emits more than its advertised size', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-long',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const advertisedSize = partSize + 7
+    const payload = deterministicBytes(advertisedSize + 1)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'long.bin',
+        source: new StreamSource(readable, advertisedSize),
+        partSize,
+      }),
+    ).rejects.toThrow(
+      `uploadLargeFile: source stream emitted more than advertised ${advertisedSize} bytes.`,
+    )
+    expect(await bucket.getFileInfoByName('long.bin')).toBeNull()
+  })
+
+  it('cancels a streaming multipart source when the upload aborts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-abort-cancel',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const controller = new AbortController()
+    const reason = new Error('stop streaming upload')
+    controller.abort(reason)
+    let cancelReason: unknown
+    const readable = new ReadableStream<Uint8Array>({
+      pull(streamController) {
+        streamController.enqueue(deterministicBytes(100_000))
+      },
+      cancel(value) {
+        cancelReason = value
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'abort-stream.bin',
+        source: new StreamSource(readable, 100_000),
+        partSize: 100_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
+    expect(await bucket.getFileInfoByName('abort-stream.bin')).toBeNull()
+  })
+
+  it('cancels a pending streaming multipart read when the upload aborts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const controller = new AbortController()
+    const reason = new Error('stop pending streaming upload')
+    let resolvePullStarted!: () => void
+    const pullStarted = new Promise<void>((resolve) => {
+      resolvePullStarted = resolve
+    })
+    let resolvePull!: () => void
+    const pendingPull = new Promise<void>((resolve) => {
+      resolvePull = resolve
+    })
+    let cancelReason: unknown
+    const readable = new ReadableStream<Uint8Array>({
+      pull() {
+        resolvePullStarted()
+        return pendingPull
+      },
+      cancel(value) {
+        cancelReason = value
+        resolvePull()
+      },
+    })
+
+    const uploadPromise = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'pending-abort-stream.bin',
+      source: new StreamSource(readable, 100_000),
+      partSize: 100_000,
+      signal: controller.signal,
+    })
+
+    await pullStarted
+    controller.abort(reason)
+
+    await expect(uploadPromise).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
+    expect(await bucket.getFileInfoByName('pending-abort-stream.bin')).toBeNull()
   })
 
   it('rejects resumeFileId on streaming sources before listing parts', async () => {

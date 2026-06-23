@@ -85,7 +85,7 @@ await bucket.delete()
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.
 
 ```ts
-import { BufferSource, BlobSource } from '@backblaze-labs/b2-sdk'
+import { BufferSource, BlobSource, FileSource } from '@backblaze-labs/b2-sdk'
 
 // From a Uint8Array
 await bucket.upload({
@@ -98,6 +98,12 @@ await bucket.upload({
   fileName: 'photo.jpg',
   source: new BlobSource(fileInput.files[0]),
   contentType: 'image/jpeg',
+})
+
+// From a local filesystem path (Node.js)
+await bucket.upload({
+  fileName: 'backups/db.tar.gz',
+  source: await FileSource.fromPath('/var/backups/db.tar.gz'),
 })
 
 // Large file with progress tracking
@@ -113,13 +119,22 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response body was lost, retrying can create a duplicate file version.
 
-Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
+Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
 Single-request uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies and upload POST network errors by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
 
 Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+
+`FileSource` is the Node.js-only content adapter. It is safe to import from the
+main package in browser builds, but `FileSource.fromPath()` and its read methods
+need local filesystem APIs at runtime. The source records the validated file
+identity and fails with `FileSource file changed after validation` if the path is
+replaced, truncated, content-modified, or has ctime-changing metadata updates
+while a multipart upload is reading it. On platforms without `O_NOFOLLOW`,
+leaf-symlink swaps are rejected by the post-open identity check rather than by
+the open flag. Retry after active writers stop changing the file.
 
 #### Resume a failed multipart upload
 
@@ -196,6 +211,8 @@ Full-body downloads are automatically verified when B2 returns a real `X-Bz-Cont
 ### Sync SHA-1 comparisons
 
 `compareMode: 'sha1'` hashes matching-size local files and compares them with verifiable B2 SHA-1 metadata. B2 multipart objects do not have an authoritative `contentSha1`; when only `fileInfo.large_file_sha1` or another untrusted hint is available, a real sync downloads that selected B2 version and hashes the full object before skipping a transfer. The SDK does not persist that verification result, so an unchanged 100 GB multipart object can cost 100 GB of B2 download reads on every SHA-1 sync run. `compare.bytesVerified` reports those B2 verification bytes for the run. Use `sha1VerificationMaxBytes` to skip objects above your per-file verification budget, raise `sha1VerificationTimeoutMillis` for large objects on slow links, or use `size`/`modtime` mode when recurring verification egress is not acceptable.
+
+B2-to-local sync streams downloads through a private managed staging directory under the destination root before renaming into place. The scanner ignores that managed directory and stale SDK-owned staging entries are reaped on later download setup. New files are published as 0600 by default, replacements keep the previous file mode, and download body stalls use `downloadIdleTimeoutMillis` (60 seconds by default) rather than `sha1ReadTimeoutMillis`. `B2Folder` prefixes are raw B2 key prefixes: use `photos/` for a slash-delimited folder, or `photos` to match every key beginning with those bytes.
 
 ### File operations
 
@@ -505,7 +522,7 @@ Glob strings use the SDK dialect: `*` and `?` stay within one path segment, a wh
 
 Built-in scanner skip diagnostics use `SyncSkipReason` values such as `outside-prefix`, `unsafe-name`, `local-unsafe-name`, `relative-path-collision`, `local-path-collision`, `filesystem-error`, and `path-too-long-for-regexp`. The `onSkip` callback receives every diagnostic; the `SyncEvent` stream buffers the first 100 scanner diagnostics and then reports overflow with `scan-skip-overflow`.
 
-B2-to-local sync skips object names that are unsafe on local filesystems, including NTFS alternate data stream names, DOS device basenames, trailing dot/space names, and case/Unicode-canonical collisions. Downloads stream into an owned `.b2sdk-*.partial` temp file in the destination directory and rename it into place; local scans are read-only and exclude SDK-managed partial download files so abandoned partials are not uploaded as source files. Download body reads have a 60 second idle timeout by default; set `downloadIdleTimeoutMillis` to tune it or `Infinity` to disable the watchdog. Downloads and local deletes reject symlinked local roots and symlinked path components under the root, then revalidate immediately before the final filesystem operation. Uploads reopen scanned files with no-follow semantics and verify the opened file remains inside the local source root before reading. Per-action failures are emitted as `error` events; the terminal aggregate error includes `failureCount`, up to 100 `failedPaths`, and `failedPathOmittedCount` when more paths were omitted.
+B2-to-local sync skips object names that are unsafe on local filesystems, including NTFS alternate data stream names, DOS device basenames, trailing dot/space names, the reserved `.b2sdk-download-staging` namespace, and case/Unicode-canonical collisions. Downloads stream into private per-download entries under the destination root's managed `.b2sdk-download-staging` directory and publish completed files into place; SDK-owned staging roots and entries carry `.b2sdk-staging-marker.partial` files. Local scans are read-only and exclude the managed staging directory when those markers are present so abandoned staging state is not uploaded as source content. Later download setup reaps stale SDK-owned staging entries only when marker and partial-file activity is old and unchanged immediately before removal. Download body reads have a 60 second idle timeout by default; set `downloadIdleTimeoutMillis` to tune it or `Infinity` to disable the watchdog. Downloads and local deletes reject symlinked local roots and symlinked path components under the root, then revalidate root, parent, and leaf identity immediately before filesystem operations. Uploads support symlinked source roots by binding the resolved root identity before scanning, then reopening scanned files with no-follow semantics and verifying the opened file remains inside that bound source root before reading. Per-action failures are emitted as `error` events; the terminal aggregate error includes `failureCount`, up to 100 `failedPaths`, and `failedPathOmittedCount` when more paths were omitted.
 
 ## Custom transport
 

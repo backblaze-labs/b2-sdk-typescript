@@ -1,6 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
+import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
@@ -44,6 +45,8 @@ export interface ResumePartReusedEvent {
 /** Callback invoked when explicit resume accepts a pre-existing server part. */
 export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
+const MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS = 1024
+
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions {
   /** Target bucket for the upload. */
@@ -52,7 +55,7 @@ export interface UploadLargeFileOptions {
   readonly fileName: string
   /**
    * Content to upload. Sliceable sources ({@link BufferSource},
-   * {@link BlobSource}) use the parallel-parts path. Non-sliceable
+   * {@link BlobSource}, {@link FileSource}) use the parallel-parts path. Non-sliceable
    * sources ({@link StreamSource}) fall back to a sequential read path
    * — one part at a time, concurrency forced to 1 — so callers can
    * stream a multi-GB file without buffering the whole payload in
@@ -378,7 +381,7 @@ export async function uploadLargeFile(
         abortScope.signal.throwIfAborted()
 
         const partSource = options.source.slice(part.offset, part.offset + part.length)
-        const data = new Uint8Array(await partSource.toArrayBuffer())
+        const data = new Uint8Array(await partSource.toArrayBuffer({ signal: abortScope.signal }))
         abortScope.signal.throwIfAborted()
 
         const partSha1 = new IncrementalSha1()
@@ -437,10 +440,8 @@ export async function uploadLargeFile(
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     )
     if (rejected !== undefined) {
-      if (abortScope.signal.aborted && abortScope.signal.reason !== undefined) {
-        throw abortScope.signal.reason
-      }
-      /* v8 ignore next -- Defensive fallback for unexpected task rejections outside the abort scope. */
+      if (abortScope.signal.aborted) abortScope.signal.throwIfAborted()
+      /* v8 ignore next -- task failures abort the scope; this is defensive for unexpected rejections. */
       throw rejected.reason
     }
 
@@ -504,7 +505,7 @@ async function uploadPartsSequentially(
   tracker: ProgressTracker,
 ): Promise<void> {
   const reader = options.source.stream().getReader()
-  let partNumber = 1
+  let bytesRead = 0
   // Carry-over bytes from a previous read when the read returned more
   // than we needed to fill one part. Kept as an array to avoid an
   // allocation per loop iteration on a typical multi-part upload.
@@ -525,8 +526,13 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await reader.read()
-        if (done) break
+        const { done, value } = await readNextNonEmptyChunk(reader, signal)
+        if (done) {
+          throw new Error(
+            `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
+          )
+        }
+        bytesRead += value.byteLength
         const take = Math.min(value.byteLength, buf.byteLength - filled)
         buf.set(value.subarray(0, take), filled)
         filled += take
@@ -536,20 +542,7 @@ async function uploadPartsSequentially(
       }
 
       signal.throwIfAborted()
-      // For the LAST part the stream may run dry mid-buffer, leaving a
-      // shorter chunk. B2 accepts a final part smaller than `partSize`.
-      const data = filled === buf.byteLength ? buf : buf.subarray(0, filled)
-      /* v8 ignore start -- defensive: only fires when the source's advertised
-         size over-reports the actual emitted byte count, which a well-behaved
-         ContentSource implementation cannot do. Kept so callers feeding the
-         engine a buggy custom stream get an actionable error rather than a
-         B2 wire-level failure. */
-      if (data.byteLength === 0) {
-        throw new Error(
-          `uploadLargeFile: source stream ended before part ${partNumber}; advertised size does not match emitted bytes.`,
-        )
-      }
-      /* v8 ignore stop */
+      const data = buf
 
       const partSha1 = new IncrementalSha1()
       await partSha1.update(data)
@@ -577,13 +570,45 @@ async function uploadPartsSequentially(
       partSha1s[planned.partNumber - 1] = result.contentSha1
       tracker.addBytes(data.byteLength)
       tracker.completePart()
-
-      partNumber++
     }
+
+    if (carry !== null && carry.byteLength > 0) {
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
+      )
+    }
+
+    const extra = await readNextNonEmptyChunk(reader, signal)
+    if (!extra.done) {
+      bytesRead += extra.value.byteLength
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than advertised ${options.source.size} bytes.`,
+      )
+    }
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
   } finally {
     // Releasing the lock lets the underlying stream propagate close /
     // error events to any upstream producer (e.g. a Node `Readable`).
     reader.releaseLock()
+  }
+}
+
+async function readNextNonEmptyChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let emptyChunks = 0
+  while (true) {
+    const result = await readStreamChunkWithSignal(reader, signal)
+    if (result.done || result.value.byteLength > 0) return result
+    emptyChunks += 1
+    if (emptyChunks > MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS) {
+      throw new Error(
+        `uploadLargeFile: source stream emitted more than ${MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS} consecutive empty chunks.`,
+      )
+    }
   }
 }
 
