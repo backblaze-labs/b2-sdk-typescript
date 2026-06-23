@@ -12,6 +12,8 @@ const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
 const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_STAGING_CLEANUP_CONCURRENCY = 8
 const MAX_CLEANUP_WARNING_ENTRIES = 3
+/** @internal */
+export const DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT = 1024
 const reapedManagedDirectories = new Map<string, Promise<void>>()
 
 type StagingActivitySnapshot = {
@@ -288,6 +290,8 @@ async function readManagedStagingEntryActivity(
     if (!directoryStats.isDirectory() || !markerStats.isFile()) return undefined
 
     const entries = await readdir(candidate, { withFileTypes: true })
+    if (entries.length > DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT) return undefined
+
     const statsParts = [
       `.:${stagingStatsSignature(directoryStats)}`,
       `${DOWNLOAD_STAGING_MARKER_NAME}:${stagingStatsSignature(markerStats)}`,

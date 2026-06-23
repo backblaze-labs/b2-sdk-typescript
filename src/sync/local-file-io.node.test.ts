@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
 } from './download-staging.ts'
@@ -677,6 +678,46 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(
         readFile(join(managedDirectory, 'sdk-0.download', 'payload.bin')),
       ).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats oversized managed staging entries as active during cleanup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-oversized-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const directory = join(managedDirectory, 'oversized.download')
+      const marker = join(directory, DOWNLOAD_STAGING_MARKER_NAME)
+      await mkdir(directory, { recursive: true })
+      await writeFile(marker, '')
+
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      for (let index = 0; index < DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT; index++) {
+        const payload = join(directory, `payload-${index}.bin`)
+        await writeFile(payload, 'stale')
+        await utimes(payload, old, old)
+      }
+      await utimes(marker, old, old)
+      await utimes(directory, old, old)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(
+        readFile(
+          join(directory, `payload-${DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT - 1}.bin`),
+          'utf8',
+        ),
+      ).resolves.toBe('stale')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
