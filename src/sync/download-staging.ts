@@ -1,4 +1,4 @@
-import { assertPathInsideRoot, hasErrorCode } from './path-safety.ts'
+import { assertPathInsideRoot, hasErrorCode, noFollowFlag } from './path-safety.ts'
 
 type DeviceStat = { readonly dev: number | bigint }
 type DeviceStatFn = (path: string) => Promise<DeviceStat>
@@ -19,6 +19,7 @@ const reapedManagedDirectories = new Map<string, Promise<void>>()
  * @param path - Node path module used for platform-specific path operations.
  * @param randomUUID - UUID provider used to create unique staging entries.
  * @param statForDeviceCheck - Stat function used to verify filesystem devices.
+ * @param beforeStagingMarkerWrite - Test hook called before marker creation.
  *
  * @returns The resolved staging directory path.
  *
@@ -29,6 +30,7 @@ export async function createDownloadStagingDirectory(
   path: typeof import('node:path'),
   randomUUID: () => string,
   statForDeviceCheck: DeviceStatFn,
+  beforeStagingMarkerWrite?: (directory: string) => Promise<void> | void,
 ): Promise<string> {
   const { chmod, mkdir, readdir, realpath, rm } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
@@ -52,6 +54,7 @@ export async function createDownloadStagingDirectory(
       )
     }
   }
+  await beforeStagingMarkerWrite?.(realManagedDirectory)
   await writeStagingMarker(realManagedDirectory, path)
   await reapStaleDownloadStagingDirectoriesOnce(realManagedDirectory, path, Date.now())
 
@@ -71,6 +74,7 @@ export async function createDownloadStagingDirectory(
       statForDeviceCheck,
       'unsafe local destination path: cannot stage download across filesystems',
     )
+    await beforeStagingMarkerWrite?.(realStagingDirectory)
     await writeStagingMarker(realStagingDirectory, path)
     return realStagingDirectory
   } catch (err) {
@@ -127,11 +131,29 @@ async function writeStagingMarker(
   directory: string,
   path: typeof import('node:path'),
 ): Promise<void> {
-  const { chmod, writeFile } = await import('node:fs/promises')
+  const { constants } = await import('node:fs')
+  const { lstat, open } = await import('node:fs/promises')
   const markerPath = path.join(directory, DOWNLOAD_STAGING_MARKER_NAME)
-  await writeFile(markerPath, '', { flag: 'a', mode: PRIVATE_DOWNLOAD_FILE_MODE })
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(markerPath, PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
+  let handle: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    handle = await open(
+      markerPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(constants),
+      PRIVATE_DOWNLOAD_FILE_MODE,
+    )
+    /* v8 ignore next -- best-effort chmod */
+    await handle.chmod(PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
+  } catch (err) {
+    if (hasErrorCode(err, 'EEXIST') || hasErrorCode(err, 'ELOOP')) {
+      const markerStats = await lstat(markerPath).catch(() => undefined)
+      if (markerStats?.isFile() === true) return
+      throw new Error('unsafe local destination path: staging marker is not a regular file')
+    }
+    throw err
+  } finally {
+    /* v8 ignore next -- best-effort close */
+    await handle?.close().catch(() => {})
+  }
 }
 
 /**

@@ -413,6 +413,37 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it.skipIf(isWindows)('rejects a staging marker symlink created before marker write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-marker-root-'))
+    const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-marker-out-'))
+    try {
+      const outsideMarker = join(outside, 'marker-target.txt')
+      const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await writeFile(outsideMarker, 'outside')
+      let markerSwapped = false
+      localFileIoTestHooks.beforeStagingMarkerWrite = async (directory) => {
+        if (directory !== managedDirectory || markerSwapped) return
+        markerSwapped = true
+        await symlink(outsideMarker, join(directory, DOWNLOAD_STAGING_MARKER_NAME))
+      }
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('staging marker is not a regular file')
+
+      expect(markerSwapped).toBe(true)
+      await expect(readFile(outsideMarker, 'utf8')).resolves.toBe('outside')
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      delete localFileIoTestHooks.beforeStagingMarkerWrite
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
   it('bounds cleanup over a large attacker-controlled staging tree', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-many-'))
     try {
