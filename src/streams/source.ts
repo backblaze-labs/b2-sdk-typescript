@@ -377,7 +377,7 @@ export class StreamSource implements ContentSource {
 
 function assertSafeByteCount(value: number, label: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`FileSource ${label} must be a non-negative safe integer.`)
+    throw new Error(`FileSource ${label} must be a non-negative safe integer`)
   }
 }
 
