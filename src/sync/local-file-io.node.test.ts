@@ -13,7 +13,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, sep } from 'node:path'
+import { dirname, join, relative, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
@@ -58,6 +58,21 @@ async function makeScannedPath(
     size: stats.size,
     fileIdentity: localFileIdentityFromStats(stats),
   }
+}
+
+async function oldScannerVisibleFiles(root: string, dir = root): Promise<string[]> {
+  const visible: string[] = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const fullPath = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      visible.push(...(await oldScannerVisibleFiles(root, fullPath)))
+      continue
+    }
+    if (entry.isFile() && !/^\.b2sdk-.*\.partial$/.test(entry.name)) {
+      visible.push(relative(root, fullPath).split(sep).join('/'))
+    }
+  }
+  return visible.sort()
 }
 
 describe('writeLocalFileInsideRoot', () => {
@@ -115,6 +130,41 @@ describe('writeLocalStreamInsideRoot', () => {
       }
     },
   )
+
+  it('keeps in-progress staging files hidden from the previous local scanner', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-old-scanner-'))
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    let stagingReady!: () => void
+    const staged = new Promise<void>((resolve) => {
+      stagingReady = resolve
+    })
+    try {
+      localFileIoTestHooks.afterTempFileCreated = () => {
+        stagingReady()
+      }
+      const writePromise = writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        new ReadableStream<Uint8Array>({
+          start(streamController) {
+            controller = streamController
+          },
+        }),
+        {
+          expectedBytes: 0,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await staged
+      expect(await oldScannerVisibleFiles(root)).toEqual([])
+      controller.close()
+      await writePromise
+    } finally {
+      delete localFileIoTestHooks.afterTempFileCreated
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 
   it.skipIf(isWindows)('preserves mode when replacing existing files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-mode-'))
@@ -178,6 +228,72 @@ describe('writeLocalStreamInsideRoot', () => {
       ).rejects.toThrow('download read ended after 3 bytes, expected 4')
       await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to write into the managed staging namespace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-reserved-'))
+    try {
+      await expect(
+        writeLocalStreamInsideRoot(
+          root,
+          `${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
+          streamFromBytes(textEncoder.encode('abc')),
+          {
+            expectedBytes: 3,
+            idleTimeoutMillis: 1000,
+          },
+        ),
+      ).rejects.toThrow(`${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved`)
+      await expect(readdir(root)).resolves.toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not overwrite a file created after destination validation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-new-race-'))
+    try {
+      localFileIoTestHooks.beforeDownloadPublish = async (publishPath) => {
+        await writeFile(publishPath, 'concurrent')
+      }
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('new')), {
+          expectedBytes: 3,
+          expectedDestination: null,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('local destination changed before download: file was created')
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('concurrent')
+    } finally {
+      delete localFileIoTestHooks.beforeDownloadPublish
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not overwrite a replacement file after destination validation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-replace-race-'))
+    try {
+      const scanned = await makeScannedPath(root, 'file.txt', 'old')
+      localFileIoTestHooks.beforeDownloadPublish = async (publishPath) => {
+        await rm(publishPath, { force: true })
+        await writeFile(publishPath, 'concurrent')
+      }
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('new')), {
+          expectedBytes: 3,
+          expectedDestination: scanned,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow('local file changed before download')
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('concurrent')
+    } finally {
+      delete localFileIoTestHooks.beforeDownloadPublish
       await rm(root, { recursive: true, force: true })
     }
   })

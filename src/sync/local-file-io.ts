@@ -23,6 +23,7 @@ export { DOWNLOAD_STAGING_DIRECTORY_NAME }
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
   afterTempFileCreated?: (path: string, stagingDirectory: string) => Promise<void> | void
+  beforeDownloadPublish?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
@@ -83,11 +84,16 @@ export async function writeLocalStreamInsideRoot(
   },
 ): Promise<void> {
   const { constants } = await import('node:fs')
-  const { lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
+  const { link, lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
   const path = await import('node:path')
   const { randomUUID } = await import('node:crypto')
   assertValidExpectedBytes(options.expectedBytes)
   const segments = safeRelativePathSegments(relPath)
+  if (segments[0] === DOWNLOAD_STAGING_DIRECTORY_NAME) {
+    throw new Error(
+      `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved for SDK download staging`,
+    )
+  }
   const rootRealPath = await realpath(root)
 
   let current = rootRealPath
@@ -166,7 +172,7 @@ export async function writeLocalStreamInsideRoot(
     await parentHandle?.close().catch(() => {})
     throw err
   }
-  const tmpPath = path.join(stagingDirectory, `${randomUUID()}.partial`)
+  const tmpPath = path.join(stagingDirectory, `.b2sdk-${randomUUID()}.partial`)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(
@@ -251,8 +257,17 @@ export async function writeLocalStreamInsideRoot(
       publishPath = path.join(parentRealPathAfterHook, path.basename(destPath))
       assertPathInsideRoot(rootRealPath, publishPath, path)
     }
-    await assertExpectedDownloadDestination(lstat, publishPath, options.expectedDestination)
-    await rename(tmpPath, publishPath)
+    await publishDownload(
+      lstat,
+      link,
+      path,
+      randomUUID,
+      rename,
+      rm,
+      tmpPath,
+      publishPath,
+      options.expectedDestination,
+    )
     completed = true
   } catch (err) {
     /* v8 ignore next -- best-effort cleanup */
@@ -301,6 +316,109 @@ async function assertExpectedDownloadDestination(
       if (expectedDestination === null) return
       throw new Error('local file changed before download: file missing')
     }
+    throw err
+  }
+}
+
+async function publishDownload(
+  lstat: typeof import('node:fs/promises')['lstat'],
+  link: typeof import('node:fs/promises')['link'],
+  path: typeof import('node:path'),
+  randomUUID: () => string,
+  rename: typeof import('node:fs/promises')['rename'],
+  rm: typeof import('node:fs/promises')['rm'],
+  tmpPath: string,
+  publishPath: string,
+  expectedDestination: LocalSyncPath | null | undefined,
+): Promise<void> {
+  await assertExpectedDownloadDestination(lstat, publishPath, expectedDestination)
+  await localFileIoTestHooks.beforeDownloadPublish?.(publishPath)
+
+  if (expectedDestination === undefined) {
+    await rename(tmpPath, publishPath)
+    return
+  }
+
+  if (expectedDestination === null) {
+    await linkDownloadNoOverwrite(
+      link,
+      tmpPath,
+      publishPath,
+      'local destination changed before download: file was created',
+    )
+    /* v8 ignore next -- staging cleanup is best-effort after a guarded publish succeeds. */
+    await rm(tmpPath, { force: true }).catch(() => {})
+    return
+  }
+
+  const backupPath = path.join(path.dirname(publishPath), `.b2sdk-${randomUUID()}.partial`)
+  let backupExists = false
+  let removeBackup = false
+
+  try {
+    try {
+      await rename(publishPath, backupPath)
+      backupExists = true
+    } catch (err) {
+      if (hasErrorCode(err, 'ENOENT')) {
+        throw new Error('local file changed before download: file missing')
+      }
+      throw err
+    }
+
+    const backupStats = await lstat(backupPath)
+    assertSameScannedRegularFile(
+      backupStats,
+      { ...expectedDestination, absolutePath: backupPath },
+      'download',
+    )
+    await linkDownloadNoOverwrite(
+      link,
+      tmpPath,
+      publishPath,
+      'local destination changed before download: file was created',
+    )
+    removeBackup = true
+    /* v8 ignore next -- staging cleanup is best-effort after a guarded publish succeeds. */
+    await rm(tmpPath, { force: true }).catch(() => {})
+  } catch (err) {
+    if (backupExists && !removeBackup) {
+      await restoreBackupWithoutOverwrite(link, rm, backupPath, publishPath).catch(() => {})
+    }
+    throw err
+  } finally {
+    if (removeBackup) {
+      /* v8 ignore next -- old destination cleanup is best-effort after publish succeeds. */
+      await rm(backupPath, { force: true }).catch(() => {})
+    }
+  }
+}
+
+async function linkDownloadNoOverwrite(
+  link: typeof import('node:fs/promises')['link'],
+  sourcePath: string,
+  destPath: string,
+  message: string,
+): Promise<void> {
+  try {
+    await link(sourcePath, destPath)
+  } catch (err) {
+    if (hasErrorCode(err, 'EEXIST')) throw new Error(message)
+    throw err
+  }
+}
+
+async function restoreBackupWithoutOverwrite(
+  link: typeof import('node:fs/promises')['link'],
+  rm: typeof import('node:fs/promises')['rm'],
+  backupPath: string,
+  publishPath: string,
+): Promise<void> {
+  try {
+    await link(backupPath, publishPath)
+    await rm(backupPath, { force: true })
+  } catch (err) {
+    if (hasErrorCode(err, 'EEXIST')) return
     throw err
   }
 }

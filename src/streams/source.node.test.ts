@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import {
+  mkdir,
   mkdtemp,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
@@ -38,6 +40,30 @@ describe('FileSource', () => {
       const bytes = await sliced.toArrayBuffer()
       expect(new TextDecoder().decode(bytes)).toBe('world')
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('binds relative paths at validation time', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-relative-'))
+    const originalCwd = process.cwd()
+    try {
+      const first = join(root, 'first')
+      const second = join(root, 'second')
+      await mkdir(first)
+      await mkdir(second)
+      await writeFile(join(first, 'data.bin'), new TextEncoder().encode('first'))
+      await writeFile(join(second, 'data.bin'), new TextEncoder().encode('second'))
+
+      process.chdir(first)
+      const source = await FileSource.fromPath('data.bin')
+      process.chdir(second)
+
+      const bytes = await source.toArrayBuffer()
+      expect(new TextDecoder().decode(bytes)).toBe('first')
+      await expect(realpath(source.filePath)).resolves.toBe(await realpath(join(first, 'data.bin')))
+    } finally {
+      process.chdir(originalCwd)
       await rm(root, { recursive: true, force: true })
     }
   })

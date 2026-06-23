@@ -185,7 +185,7 @@ export class BufferSource implements ContentSource {
  * descriptor count.
  */
 export class FileSource implements ContentSource {
-  /** Absolute or relative path to the underlying local file. */
+  /** Absolute path to the underlying local file. */
   readonly filePath: string
   /** {@inheritDoc} */
   readonly size: number
@@ -220,11 +220,13 @@ export class FileSource implements ContentSource {
    * @throws If the path does not resolve to a regular file.
    */
   static async fromPath(filePath: string): Promise<FileSource> {
-    const handle = await openNoFollow(filePath)
+    const { resolve } = await import('node:path')
+    const resolvedFilePath = resolve(filePath)
+    const handle = await openNoFollow(resolvedFilePath)
     try {
       const stats = await handle.stat()
-      assertRegularFile(filePath, stats)
-      return new FileSource(filePath, stats.size, identityFromStats(stats))
+      assertRegularFile(resolvedFilePath, stats)
+      return new FileSource(resolvedFilePath, stats.size, identityFromStats(stats))
     } finally {
       await handle.close()
     }

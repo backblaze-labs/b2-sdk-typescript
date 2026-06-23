@@ -5,7 +5,11 @@ import { daysFromNow } from '../test-utils/index.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
-import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  localFileIoTestHooks,
+  writeLocalStreamInsideRoot,
+} from './local-file-io.ts'
 import { compareSyncRelativePaths } from './path-order.ts'
 import { B2Folder } from './scanners/b2.ts'
 import type {
@@ -2210,11 +2214,18 @@ describe('synchronize', () => {
             makeFileVersion('CON', 3),
             makeFileVersion('CONOUT$', 4),
             makeFileVersion('COM0.txt', 5),
-            makeFileVersion('nul.tar.gz', 6),
-            makeFileVersion('dir/C:/x', 7),
-            makeFileVersion('trailing.', 8),
-            makeFileVersion('Readme.txt', 9),
-            makeFileVersion('README.txt', 10),
+            makeFileVersion('COM¹.txt', 6),
+            makeFileVersion('COM².txt', 7),
+            makeFileVersion('COM³.txt', 8),
+            makeFileVersion('LPT¹/report.txt', 9),
+            makeFileVersion('LPT²/report.txt', 10),
+            makeFileVersion('LPT³/report.txt', 11),
+            makeFileVersion('nul.tar.gz', 12),
+            makeFileVersion('dir/C:/x', 13),
+            makeFileVersion(`${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`, 14),
+            makeFileVersion('trailing.', 15),
+            makeFileVersion('Readme.txt', 16),
+            makeFileVersion('README.txt', 17),
           ],
           nextFileName: null,
           nextFileId: null,
@@ -2242,6 +2253,19 @@ describe('synchronize', () => {
       expect(events).toContainEqual(
         expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'COM0.txt' }),
       )
+      for (const path of [
+        'COM¹.txt',
+        'COM².txt',
+        'COM³.txt',
+        'LPT¹/report.txt',
+        'LPT²/report.txt',
+        'LPT³/report.txt',
+        `${DOWNLOAD_STAGING_DIRECTORY_NAME}/payload.bin`,
+      ]) {
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path }),
+        )
+      }
       expect(events).toContainEqual(
         expect.objectContaining({ type: 'skip', reason: 'local-unsafe-name', path: 'nul.tar.gz' }),
       )

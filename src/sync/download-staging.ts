@@ -6,7 +6,7 @@ type DeviceStatFn = (path: string) => Promise<DeviceStat>
 /** @internal */
 export const DOWNLOAD_STAGING_DIRECTORY_NAME = '.b2sdk-download-staging'
 /** @internal */
-export const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker'
+export const DOWNLOAD_STAGING_MARKER_NAME = '.b2sdk-staging-marker.partial'
 
 const DOWNLOAD_STAGING_ENTRY_SUFFIX = '.download'
 const STALE_DOWNLOAD_STAGING_AGE_MS = 24 * 60 * 60 * 1000

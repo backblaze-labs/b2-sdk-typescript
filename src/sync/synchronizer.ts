@@ -152,9 +152,20 @@ interface PreparedActionPlan {
   readonly actions: readonly SyncAction[]
 }
 
+interface LocalRootIdentity {
+  readonly deviceId: number | bigint
+  readonly inode: number | bigint
+}
+
+interface LocalRootContext {
+  readonly root: string
+  readonly realPath: string
+  readonly identity?: LocalRootIdentity
+}
+
 interface LocalRootContexts {
-  readonly source?: string
-  readonly dest?: string
+  readonly source?: LocalRootContext
+  readonly dest?: LocalRootContext
 }
 
 /**
@@ -183,6 +194,17 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * @returns An async generator that yields comparison and action events.
  */
 export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
+/**
+ * Legacy overload for broad custom synchronizer configurations.
+ *
+ * @param config - The synchronizer configuration.
+ *
+ * @returns An async generator that yields comparison and action events.
+ *
+ * @deprecated Use {@link SupportedSynchronizerConfig}. This legacy overload
+ * accepts broad custom configurations for source compatibility, but the
+ * supported union is the public contract for built-in sync directions.
+ */
 export function synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent>
 export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<SyncEvent> {
   const { source, dest, options } = config
@@ -660,16 +682,47 @@ async function resolveLocalRootContexts(config: SynchronizerConfig): Promise<Loc
   const destIsLocalFilesystem = isLocalFilesystemFolder(config.dest)
   if (!sourceIsLocalFilesystem && !destIsLocalFilesystem) return {}
 
-  const path = await import('node:path')
   const sourceContext = config.dest.type === 'b2' ? 'upload' : 'sync'
   const destContext = config.source.type === 'b2' ? 'download' : 'sync'
   return {
     ...(sourceIsLocalFilesystem
-      ? { source: path.resolve(requireLocalRoot(config.source, 'source', sourceContext)) }
+      ? {
+          source: await resolveLocalRootContext(
+            requireLocalRoot(config.source, 'source', sourceContext),
+          ),
+        }
       : {}),
     ...(destIsLocalFilesystem
-      ? { dest: path.resolve(requireLocalRoot(config.dest, 'destination', destContext)) }
+      ? {
+          dest: await resolveLocalRootContext(
+            requireLocalRoot(config.dest, 'destination', destContext),
+          ),
+        }
       : {}),
+  }
+}
+
+async function resolveLocalRootContext(root: string): Promise<LocalRootContext> {
+  const { realpath, stat } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
+  const safeRoot = resolve(root)
+  const realPath = await realpath(safeRoot).catch((err: unknown) => {
+    if (isNotFoundError(err)) return safeRoot
+    throw err
+  })
+  const stats = await stat(realPath).catch((err: unknown) => {
+    if (isNotFoundError(err)) return undefined
+    throw err
+  })
+  if (stats !== undefined && !stats.isDirectory()) {
+    throw new Error('Local sync root is not a directory')
+  }
+  return {
+    root: safeRoot,
+    realPath,
+    ...(stats === undefined
+      ? {}
+      : { identity: { deviceId: stats.dev, inode: stats.ino } satisfies LocalRootIdentity }),
   }
 }
 
@@ -743,12 +796,15 @@ function createActionFactory(
         source.absolutePath,
         source.size,
         async (absPath, relPath, signal) => {
-          const root =
-            localRootContexts.source ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
+          const rootContext = localRootContexts.source
+          const root = rootContext ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
               : `${uploadPrefix}${relPath}`
+          if (rootContext !== undefined) {
+            await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: true })
+          }
           const fileSource = await createContainedScannedFileSource(
             root,
             { ...source, absolutePath: absPath },
@@ -774,8 +830,8 @@ function createActionFactory(
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
-        const root =
-          localRootContexts.dest ?? (downConfig.dest as Partial<LocalSyncFolder>).root ?? ''
+        const rootContext = localRootContexts.dest
+        const root = rootContext?.root ?? (downConfig.dest as Partial<LocalSyncFolder>).root ?? ''
         safeRelativePathSegments(relPath)
         const b2FileName =
           sourceB2Prefix === undefined
@@ -785,6 +841,9 @@ function createActionFactory(
           config.options.downloadIdleTimeoutMillis,
         )
         const expectedBytes = assertValidB2ContentLength(source.selectedVersion.contentLength)
+        if (rootContext !== undefined) {
+          await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: false })
+        }
         await ensureLocalSyncRootDirectory(root, relPath)
         const serverSideEncryption = toSseCDownloadKey(
           config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
@@ -864,7 +923,8 @@ function createActionFactory(
     },
 
     deleteLocal(path: LocalSyncPath): SyncAction {
-      const root = localRootContexts.dest ?? localSyncRoot(downConfig.dest)
+      const rootContext = localRootContexts.dest
+      const root = rootContext?.root ?? localSyncRoot(downConfig.dest)
       return new DeleteLocalAction(
         path.relativePath,
         path.absolutePath,
@@ -875,6 +935,11 @@ function createActionFactory(
           }
           signal?.throwIfAborted()
           try {
+            if (rootContext !== undefined) {
+              await assertLocalRootContextCurrent(rootContext, path.relativePath, {
+                allowSymlinkRoot: false,
+              })
+            }
             await deleteLocalFileInsideRoot(root, path)
           } catch (err) {
             if (isLocalDeleteSafetyError(err)) throw err
@@ -1013,11 +1078,14 @@ async function cancelReadableStreamBody(
 }
 
 async function createContainedScannedFileSource(
-  root: string,
+  root: string | LocalRootContext,
   path: LocalSyncPath,
   signal: AbortSignal | undefined,
 ): Promise<FileSource> {
-  const targetPath = await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
+  const targetPath =
+    typeof root === 'string'
+      ? await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
+      : await resolveContainedLocalPath(root.realPath, path.relativePath)
   throwIfAborted(signal)
   await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)
@@ -1025,7 +1093,11 @@ async function createContainedScannedFileSource(
   if (path.fileIdentity !== undefined) {
     assertFileSourceMatchesIdentity(fileSource, path.fileIdentity)
   }
-  await resolveContainedLocalPath(root, path.relativePath, targetPath)
+  if (typeof root === 'string') {
+    await resolveContainedLocalPath(root, path.relativePath, targetPath)
+  } else {
+    await resolveContainedLocalPath(root.realPath, path.relativePath, targetPath)
+  }
   await assertScannedLocalFileStillCurrent(targetPath, path)
   throwIfAborted(signal)
   return fileSource
@@ -1049,6 +1121,46 @@ async function assertScannedLocalFileStillCurrent(
     Math.floor(stats.mtimeMs) !== identity.modTimeMillis
   ) {
     throw new Error('local file changed before upload')
+  }
+}
+
+async function assertLocalRootContextCurrent(
+  context: LocalRootContext,
+  relativePath: string,
+  options: { readonly allowSymlinkRoot: boolean },
+): Promise<void> {
+  if (context.identity === undefined) return
+
+  const { lstat, realpath, stat } = await import('node:fs/promises')
+  let currentRealPath: string
+  try {
+    const rootLinkStats = await lstat(context.root)
+    if (!options.allowSymlinkRoot && rootLinkStats.isSymbolicLink()) {
+      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
+    }
+    currentRealPath = await realpath(context.root)
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Refusing to access sync root')) throw err
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (currentRealPath !== context.realPath) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  let currentStats: Awaited<ReturnType<typeof stat>>
+  try {
+    currentStats = await stat(context.realPath)
+  } catch {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (
+    !currentStats.isDirectory() ||
+    currentStats.dev !== context.identity.deviceId ||
+    currentStats.ino !== context.identity.inode
+  ) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
   }
 }
 
@@ -1167,6 +1279,7 @@ function isLocalDeleteSafetyError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   return (
     err.message === 'Local sync root required for filesystem mutation' ||
+    err.message.startsWith('Local sync root changed before filesystem action: ') ||
     err.message.startsWith('Refusing to ') ||
     err.message.startsWith('Local sync root is not a directory: ') ||
     err.message.startsWith('unsafe local delete path: ')
