@@ -284,7 +284,7 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly keepMode: KeepMode
   /** Number of days to retain orphaned destination files when keepMode is 'keep-days'. */
   readonly keepDays?: number
-  /** Maximum number of concurrent transfer actions. Defaults to 4. */
+  /** Maximum number of concurrent transfer actions. Must be a positive integer. Defaults to 4. */
   readonly concurrency?: number
   /** When true, actions are generated but not executed. */
   readonly dryRun?: boolean

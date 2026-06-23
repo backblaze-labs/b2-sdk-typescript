@@ -17,8 +17,17 @@ export interface ActionFactory {
   upload(source: LocalSyncPath, dest?: B2SyncPath): SyncAction
   /** Creates an action to download a B2 file to the local filesystem. */
   download(source: B2SyncPath): SyncAction
-  /** Creates an action to server-side copy a B2 file to a new destination path. */
-  copy(source: B2SyncPath, destPath: string): SyncAction
+  /**
+   * Creates an action to server-side copy a B2 file to a sync-relative destination path.
+   * Kept for compatibility with custom factories that accept a sync-relative string.
+   */
+  copy(source: B2SyncPath, destRelativePath: string): SyncAction
+  /**
+   * Creates an action to server-side copy a B2 file using full destination path metadata.
+   * Implementations can use `dest.selectedVersion.fileName` when a raw B2 prefix or normalized
+   * sync path differs from the stored object key.
+   */
+  copyB2Path?(source: B2SyncPath, dest: B2SyncPath): SyncAction
   /**
    * Creates an action to hide a file in B2 (soft delete).
    * Kept for compatibility with custom factories that accept a sync-relative string.
@@ -165,8 +174,12 @@ function* actionsForBoth(
     case 'b2-to-local':
       yield factory.download(source as B2SyncPath)
       break
-    case 'b2-to-b2':
-      yield factory.copy(source as B2SyncPath, (dest as B2SyncPath).selectedVersion.fileName)
+    case 'b2-to-b2': {
+      const action =
+        factory.copyB2Path?.(source as B2SyncPath, dest as B2SyncPath) ??
+        factory.copy(source as B2SyncPath, dest.relativePath)
+      yield action
       break
+    }
   }
 }

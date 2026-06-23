@@ -720,27 +720,12 @@ function createActionFactory(
       })
     },
 
-    copy(source: B2SyncPath, destPath: string): SyncAction {
-      const bucket = upConfig.bucket
-      assertBucket(bucket, 'copy')
-      const targetPath = destPath === source.relativePath ? `${uploadPrefix}${destPath}` : destPath
+    copy(source: B2SyncPath, destRelativePath: string): SyncAction {
+      return copyToB2Key(source, `${uploadPrefix}${destRelativePath}`)
+    },
 
-      return new CopyAction(source.relativePath, source.size, async (_relPath, signal) => {
-        const destinationServerSideEncryption =
-          config.options.encryptionProvider?.getSettingForUpload(targetPath, source.size)
-        const sourceServerSideEncryption = toSseCEncryptionSetting(
-          config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
-        )
-        await bucket.copyFile({
-          sourceFileId: source.selectedVersion.fileId,
-          fileName: targetPath,
-          ...(destinationServerSideEncryption !== undefined
-            ? { destinationServerSideEncryption }
-            : {}),
-          ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
-          ...(signal !== undefined ? { signal } : {}),
-        })
-      })
+    copyB2Path(source: B2SyncPath, dest: B2SyncPath): SyncAction {
+      return copyToB2Key(source, validateB2SyncPathInPrefix(uploadPrefix, dest))
     },
 
     hide(path: string): SyncAction {
@@ -819,6 +804,28 @@ function createActionFactory(
         ? (factory.hideB2Path?.(dest) ?? factory.hide(dest.relativePath))
         : factory.deleteRemote(dest)
     },
+  }
+
+  function copyToB2Key(source: B2SyncPath, targetPath: string): SyncAction {
+    const bucket = upConfig.bucket
+    assertBucket(bucket, 'copy')
+
+    return new CopyAction(source.relativePath, source.size, async (_relPath, signal) => {
+      const destinationServerSideEncryption =
+        config.options.encryptionProvider?.getSettingForUpload(targetPath, source.size)
+      const sourceServerSideEncryption = toSseCEncryptionSetting(
+        config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
+      )
+      await bucket.copyFile({
+        sourceFileId: source.selectedVersion.fileId,
+        fileName: targetPath,
+        ...(destinationServerSideEncryption !== undefined
+          ? { destinationServerSideEncryption }
+          : {}),
+        ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
+        ...(signal !== undefined ? { signal } : {}),
+      })
+    })
   }
 
   return factory

@@ -79,6 +79,11 @@ function makeB2SyncPath(
   }
 }
 
+function withSelectedB2FileName(path: B2SyncPath, fileName: string): B2SyncPath {
+  const selectedVersion = { ...path.selectedVersion, fileName }
+  return { ...path, selectedVersion, allVersions: [selectedVersion] }
+}
+
 function withoutPathContentSha1(path: B2SyncPath): B2SyncPath {
   return {
     relativePath: path.relativePath,
@@ -1301,6 +1306,61 @@ describe('generateActions', () => {
     ]
     expect(actions).toHaveLength(1)
     expect(actions[0]?.type).toBe('upload')
+  })
+
+  it('passes sync-relative copy paths to custom factories', () => {
+    const source = makeB2SyncPath('a.txt', 5000, 100)
+    const dest = withSelectedB2FileName(makeB2SyncPath('a.txt', 1000, 100), 'dst/a.txt')
+    const copyDestPaths: string[] = []
+    const localFactory: ActionFactory = {
+      ...makeNoopFactory(),
+      copy: (s: B2SyncPath, destRelativePath: string) => {
+        copyDestPaths.push(destRelativePath)
+        return new SkipAction(s.relativePath, 'noop-copy')
+      },
+    }
+
+    const actions = [
+      ...generateActions(
+        [source, dest],
+        'b2-to-b2',
+        'modtime',
+        'no-delete',
+        0,
+        now,
+        localFactory,
+        0,
+      ),
+    ]
+
+    expect(actions).toHaveLength(1)
+    expect(copyDestPaths).toEqual(['a.txt'])
+  })
+
+  it('uses the B2 path-aware copy hook when available', () => {
+    const source = makeB2SyncPath('a.txt', 5000, 100)
+    const dest = withSelectedB2FileName(makeB2SyncPath('a.txt', 1000, 100), 'dst/a.txt')
+    const copyDestPaths: string[] = []
+    const copyB2DestPaths: string[] = []
+    const b2Factory: ActionFactory = {
+      ...makeNoopFactory(),
+      copy: (s: B2SyncPath, destRelativePath: string) => {
+        copyDestPaths.push(destRelativePath)
+        return new SkipAction(s.relativePath, 'noop-copy')
+      },
+      copyB2Path: (s: B2SyncPath, d: B2SyncPath) => {
+        copyB2DestPaths.push(d.selectedVersion.fileName)
+        return new SkipAction(s.relativePath, 'noop-copy-b2-path')
+      },
+    }
+
+    const actions = [
+      ...generateActions([source, dest], 'b2-to-b2', 'modtime', 'no-delete', 0, now, b2Factory, 0),
+    ]
+
+    expect(actions).toHaveLength(1)
+    expect(copyDestPaths).toEqual([])
+    expect(copyB2DestPaths).toEqual(['dst/a.txt'])
   })
 
   it('respects keep-days for recent files', () => {
