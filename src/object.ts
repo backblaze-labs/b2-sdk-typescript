@@ -27,12 +27,24 @@ import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
 
-function readableObjectBucketDefaultRetention(
-  info: Bucket['info'],
-): BucketRetentionPolicy | undefined {
+interface BucketDefaultRetentionSnapshot {
+  readonly retention?: BucketRetentionPolicy
+  readonly unreadable: boolean
+}
+
+function bucketDefaultRetentionSnapshot(info: Bucket['info']): BucketDefaultRetentionSnapshot {
   const fileLock = info.fileLockConfiguration
-  if (!fileLock.isClientAuthorizedToRead || fileLock.value === null) return undefined
-  return fileLock.value.defaultRetention
+  if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
+  if (fileLock.value === null) return { unreadable: false }
+  return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function resumeNeedsFreshBucketDefaults(options: B2ObjectUploadOptions): boolean {
+  const resumeRequested = options.resume === true || options.resumeFileId !== undefined
+  return (
+    resumeRequested &&
+    (options.serverSideEncryption === undefined || options.fileRetention === undefined)
+  )
 }
 
 /** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
@@ -133,14 +145,20 @@ export class B2Object {
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
-      const bucketDefaultRetention = readableObjectBucketDefaultRetention(this.bucket.info)
+      const bucketInfo = resumeNeedsFreshBucketDefaults(options)
+        ? await this.fetchFreshBucketInfo()
+        : this.bucket.info
+      const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
         retry: this.uploadRetryOptions,
-        bucketDefaultServerSideEncryption: this.bucket.info.defaultServerSideEncryption,
-        ...(bucketDefaultRetention !== undefined ? { bucketDefaultRetention } : {}),
+        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultRetention.retention !== undefined
+          ? { bucketDefaultRetention: bucketDefaultRetention.retention }
+          : {}),
+        ...(bucketDefaultRetention.unreadable ? { bucketDefaultRetentionUnreadable: true } : {}),
       })
     }
     rejectSmallResumeFileId(options, 'B2Object.upload')
@@ -151,6 +169,13 @@ export class B2Object {
       fileName: this.fileName,
       retry: this.uploadRetryOptions,
     })
+  }
+
+  private async fetchFreshBucketInfo(): Promise<Bucket['info']> {
+    const fresh = await this.client.listBuckets({ bucketId: this.bucket.id })
+    const found = fresh[0]
+    if (!found) throw new Error(`Bucket ${this.bucket.id} not found`)
+    return found.info
   }
 
   /**

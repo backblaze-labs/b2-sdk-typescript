@@ -44,7 +44,7 @@ export interface UploadOptions {
   readonly signal?: AbortSignal
   /** Enable bounded same-name multipart resume discovery. Ignored on the small-file path. */
   readonly resume?: boolean
-  /** Aggregate SDK-enforced timeout for resume discovery when no signal is supplied. */
+  /** Optional aggregate SDK-enforced timeout for resume discovery. */
   readonly resumeDiscoveryTimeoutMs?: number
   /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. */
   readonly resumeMaxListPages?: number

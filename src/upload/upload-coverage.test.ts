@@ -1936,7 +1936,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       hiddenField: 'legalHold' as const,
       startOptions: { legalHold: LegalHoldValue.On },
     },
-  ])('resumes a candidate with omitted unreadable $name', async (scenario) => {
+  ])('starts fresh when omitted $name is unreadable', async (scenario) => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     const transport: HttpTransport = {
@@ -2018,14 +2018,140 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     })
 
     expect(result.fileName).toBe(scenario.fileName)
-    expect(rejected).toEqual([])
+    expect(rejected).toEqual([
+      scenario.hiddenField === 'fileRetention' ? 'retention-mismatch' : 'legal-hold-mismatch',
+    ])
     expect(reused).toEqual([])
     const unfinished = await hiddenClient.raw.listUnfinishedLargeFiles(
       hiddenClient.accountInfo.getApiUrl(),
       hiddenClient.accountInfo.getAuthToken(),
       { bucketId: hiddenBucket.id },
     )
-    expect(unfinished.files.map((file) => file.fileId)).not.toContain(start.fileId)
+    expect(unfinished.files.map((file) => file.fileId)).toContain(start.fileId)
+  })
+
+  it('fails closed when high-level resume cannot read bucket default retention', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        const response = await inner.send(req)
+        if (!req.url.includes('b2_list_buckets')) return response
+        const body = await response.json<{
+          buckets: Array<Record<string, unknown>>
+        }>()
+        return jsonResponse({
+          ...body,
+          buckets: body.buckets.map((bucket) => ({
+            ...bucket,
+            fileLockConfiguration: {
+              isClientAuthorizedToRead: false,
+              value: null,
+            },
+          })),
+        })
+      },
+    }
+    const hiddenDefaultClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await hiddenDefaultClient.authorize()
+    const hiddenDefaultBucket = await hiddenDefaultClient.createBucket({
+      bucketName: 'resume-unreadable-default',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const auto = await hiddenDefaultClient.raw.startLargeFile(
+      hiddenDefaultClient.accountInfo.getApiUrl(),
+      hiddenDefaultClient.accountInfo.getAuthToken(),
+      {
+        bucketId: hiddenDefaultBucket.id,
+        fileName: 'unreadable-default-auto.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const explicit = await hiddenDefaultClient.raw.startLargeFile(
+      hiddenDefaultClient.accountInfo.getApiUrl(),
+      hiddenDefaultClient.accountInfo.getAuthToken(),
+      {
+        bucketId: hiddenDefaultBucket.id,
+        fileName: 'unreadable-default-explicit.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+
+    const rejected: string[] = []
+    const result = await hiddenDefaultBucket.upload({
+      fileName: 'unreadable-default-auto.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resume: true,
+      onResumeCandidateRejected: (event) => rejected.push(event.reason),
+    })
+
+    expect(result.fileName).toBe('unreadable-default-auto.bin')
+    expect(rejected).toEqual(['retention-mismatch'])
+    await expect(
+      hiddenDefaultBucket.file('unreadable-default-explicit.bin').upload({
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        concurrency: 1,
+        resumeFileId: explicit.fileId,
+      }),
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+    const unfinished = await hiddenDefaultClient.raw.listUnfinishedLargeFiles(
+      hiddenDefaultClient.accountInfo.getApiUrl(),
+      hiddenDefaultClient.accountInfo.getAuthToken(),
+      { bucketId: hiddenDefaultBucket.id },
+    )
+    expect(unfinished.files.map((file) => file.fileId)).toEqual(
+      expect.arrayContaining([auto.fileId, explicit.fileId]),
+    )
+  })
+
+  it('fails high-level resume when fresh bucket defaults cannot be fetched', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const deletedBucket = await client.createBucket({
+      bucketName: 'deleted-bucket-resume',
+      bucketType: BucketType.AllPrivate,
+    })
+    const deletedObjectBucket = await client.createBucket({
+      bucketName: 'deleted-object-resume',
+      bucketType: BucketType.AllPrivate,
+    })
+    const deletedObject = deletedObjectBucket.file('deleted-object.bin')
+
+    await deletedBucket.delete()
+    await deletedObjectBucket.delete()
+
+    await expect(
+      deletedBucket.upload({
+        fileName: 'deleted-bucket.bin',
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        resume: true,
+      }),
+    ).rejects.toThrow(`Bucket ${deletedBucket.id} not found`)
+    await expect(
+      deletedObject.upload({
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        resume: true,
+      }),
+    ).rejects.toThrow(`Bucket ${deletedObjectBucket.id} not found`)
   })
 
   it('resumes unfinished files that inherited the bucket default SSE-B2 setting', async () => {
@@ -2165,11 +2291,8 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         period: { duration: 1, unit: 'days' },
       },
     })
-    const freshBucket = await client.getBucket('resume-current-defaults')
-    if (freshBucket === null) throw new Error('updated bucket not found')
-
     const rejected: string[] = []
-    const result = await freshBucket.upload({
+    const result = await originalBucket.upload({
       fileName: 'default-auto.bin',
       source: new BufferSource(data),
       contentType: 'application/octet-stream',
@@ -2186,7 +2309,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileRetention.value?.mode).toBe(RetentionMode.Governance)
     expect(rejected).toEqual(expect.arrayContaining(['retention-mismatch', 'encryption-mismatch']))
     await expect(
-      freshBucket.file('default-explicit.bin').upload({
+      originalBucket.file('default-explicit.bin').upload({
         source: new BufferSource(data),
         contentType: 'application/octet-stream',
         partSize,

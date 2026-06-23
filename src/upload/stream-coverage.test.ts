@@ -417,6 +417,73 @@ describe('createWriteStream branch coverage', () => {
     expect(observedSignal?.aborted).toBe(true)
     await expect(done).rejects.toThrow('stop in-flight part')
   })
+
+  it('waits for in-flight write-stream parts before cancelling on abort', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadSeen!: () => void
+    const uploadSeenPromise = new Promise<void>((resolve) => {
+      uploadSeen = resolve
+    })
+    let releasePart!: () => void
+    const releasePartPromise = new Promise<void>((resolve) => {
+      releasePart = resolve
+    })
+    const events: string[] = []
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part?')) {
+          uploadSeen()
+          await new Promise<void>((resolve) => {
+            const onAbort = () => {
+              events.push('part-aborted')
+              resolve()
+            }
+            if (req.signal?.aborted === true) {
+              onAbort()
+            } else {
+              req.signal?.addEventListener('abort', onAbort, { once: true })
+            }
+          })
+          await releasePartPromise
+          events.push('part-settled')
+          throw req.signal?.reason ?? new Error('part aborted')
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          events.push('cancel')
+        }
+        return inner.send(req)
+      },
+    }
+    const abortClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await abortClient.authorize()
+    const abortBucket = await abortClient.createBucket({
+      bucketName: 'abort-drain',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = abortBucket.file('abort-drain.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await uploadSeenPromise
+
+    const abortPromise = writer.abort(new Error('drain before cancel'))
+    await delay(20)
+    expect(events).toEqual(['part-aborted'])
+    releasePart()
+    await abortPromise
+
+    await expect(done).rejects.toThrow('drain before cancel')
+    expect(events).toEqual(['part-aborted', 'part-settled', 'cancel'])
+  })
 })
 
 function delay(ms: number): Promise<void> {

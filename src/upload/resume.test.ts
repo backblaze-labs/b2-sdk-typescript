@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { BucketRetentionMode } from '../types/bucket.ts'
@@ -671,7 +671,7 @@ describe('findResumeCandidate', () => {
     expect(result?.fileId).toBe('compatible' as LargeFileId)
   })
 
-  it('accepts unreadable omitted retention and legal hold during automatic discovery', async () => {
+  it('rejects unreadable omitted retention and legal hold during automatic discovery', async () => {
     const fileInfo = { owner: 'unit' }
     const rejected: Array<{ fileId: LargeFileId | undefined; reason: string }> = []
     const raw = {
@@ -713,11 +713,7 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        expect(req.fileId).toBe('restricted-legal-hold')
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'restricted-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+        throw new Error(`listParts should not be called for unreadable candidate ${req.fileId}`)
       },
     } as unknown as RawClient
 
@@ -740,8 +736,13 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result?.fileId).toBe('restricted-legal-hold' as LargeFileId)
-    expect(rejected).toEqual([])
+    expect(result).toBeNull()
+    expect(rejected).toEqual(
+      expect.arrayContaining([
+        { fileId: 'restricted-retention' as LargeFileId, reason: 'retention-mismatch' },
+        { fileId: 'restricted-legal-hold' as LargeFileId, reason: 'legal-hold-mismatch' },
+      ]),
+    )
   })
 
   it('rejects unreadable retention and legal hold when the caller requested them', async () => {
@@ -883,6 +884,24 @@ describe('findResumeCandidate', () => {
                 },
               },
             },
+            {
+              fileId: 'long-retention',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+              uploadTimestamp: uploadTimestamp + 3,
+              serverSideEncryption: {
+                mode: EncryptionMode.SseB2,
+                algorithm: EncryptionAlgorithm.Aes256,
+              },
+              fileRetention: {
+                isClientAuthorizedToRead: true,
+                value: {
+                  mode: RetentionMode.Governance,
+                  retainUntilTimestamp: uploadTimestamp + 365 * 24 * 60 * 60 * 1000,
+                },
+              },
+            },
           ],
           nextFileId: null,
         }
@@ -918,6 +937,7 @@ describe('findResumeCandidate', () => {
       expect.arrayContaining([
         { fileId: 'no-retention' as LargeFileId, reason: 'retention-mismatch' },
         { fileId: 'no-encryption' as LargeFileId, reason: 'encryption-mismatch' },
+        { fileId: 'long-retention' as LargeFileId, reason: 'retention-mismatch' },
       ]),
     )
   })
@@ -1784,11 +1804,7 @@ describe('findResumeCandidate', () => {
   })
 
   it('accepts candidates that match a readable no-retention bucket default', async () => {
-    const scenarios = [
-      {},
-      { fileRetention: { isClientAuthorizedToRead: false, value: null } },
-      { fileRetention: { isClientAuthorizedToRead: true, value: null } },
-    ]
+    const scenarios = [{}, { fileRetention: { isClientAuthorizedToRead: true, value: null } }]
 
     for (const [index, scenario] of scenarios.entries()) {
       const raw = {
@@ -1942,7 +1958,7 @@ describe('findResumeCandidate', () => {
     })
   })
 
-  it('accepts an explicit resumeFileId with unreadable omitted retention state', async () => {
+  it('rejects an explicit resumeFileId with unreadable omitted retention state', async () => {
     const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -1968,11 +1984,7 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        expect(req.fileId).toBe('target-id')
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+        throw new Error(`listParts should not be called for unreadable candidate ${req.fileId}`)
       },
     } as unknown as RawClient
 
@@ -1995,11 +2007,11 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result?.fileId).toBe('target-id' as LargeFileId)
-    expect(rejected).toEqual([])
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['retention-mismatch'])
   })
 
-  it('accepts an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
+  it('rejects an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
     const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -2025,11 +2037,7 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        expect(req.fileId).toBe('target-id')
-        return {
-          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
-          nextPartNumber: null,
-        }
+        throw new Error(`listParts should not be called for unreadable candidate ${req.fileId}`)
       },
     } as unknown as RawClient
 
@@ -2052,8 +2060,8 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result?.fileId).toBe('target-id' as LargeFileId)
-    expect(rejected).toEqual([])
+    expect(result).toBeNull()
+    expect(rejected).toEqual(['legal-hold-mismatch'])
   })
 
   it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {
@@ -2155,6 +2163,52 @@ describe('findResumeCandidate', () => {
         discoveryTimeoutMs: 1,
       }),
     ).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it('does not install a resume discovery timeout when the caller omits it', async () => {
+    vi.useFakeTimers()
+    try {
+      let settled = false
+      let listOptions: { signal?: AbortSignal } | undefined
+      const raw = {
+        async listUnfinishedLargeFiles(
+          _apiUrl: string,
+          _authToken: string,
+          _req: unknown,
+          options?: { signal?: AbortSignal },
+        ) {
+          listOptions = options
+          return new Promise<{ files: []; nextFileId: null }>((resolve) => {
+            setTimeout(() => resolve({ files: [], nextFileId: null }), 45_000)
+          })
+        },
+      } as unknown as RawClient
+
+      const result = findResumeCandidate(
+        raw,
+        makeAccountInfo(),
+        bucketId('bucket1'),
+        'target.bin',
+        defaultResumeCriteria(),
+      )
+      void result.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+
+      await vi.advanceTimersByTimeAsync(30_001)
+      expect(settled).toBe(false)
+      expect(listOptions).toBeUndefined()
+
+      await vi.advanceTimersByTimeAsync(14_999)
+      await expect(result).resolves.toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('allows callers to disable the SDK resume discovery timeout', async () => {

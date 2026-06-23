@@ -86,6 +86,11 @@ export interface RawRequestOptions {
   readonly retry?: Partial<RetryOptions>
 }
 
+/**
+ * @deprecated Use {@link RawRequestOptions}.
+ */
+export type JsonPostOptions = RawRequestOptions
+
 function normalizeRawRequestOptions(
   optionsOrSignal?: RawRequestOptions | AbortSignal,
   retry?: Partial<RetryOptions>,

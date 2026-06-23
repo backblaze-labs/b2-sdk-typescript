@@ -72,6 +72,8 @@ export interface UploadLargeFileOptions {
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention used when fileRetention is omitted. */
   readonly bucketDefaultRetention?: BucketRetentionPolicy
+  /** Bucket default retention exists but cannot be read, so resume must fail closed. */
+  readonly bucketDefaultRetentionUnreadable?: boolean
   /** Legal hold status applied at upload time. */
   readonly legalHold?: LegalHoldValue
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
@@ -101,15 +103,15 @@ export interface UploadLargeFileOptions {
    *
    * Discovery runs before the first upload byte and can make up to the
    * list-page budget plus the candidate budget times the part-page budget in
-   * sequential B2 list calls. When no `signal` is supplied, the SDK applies
-   * `resumeDiscoveryTimeoutMs`. SSE-C uploads are never auto-resumed because
-   * B2 does not expose the customer key identity needed to verify a
-   * compatible unfinished file. Candidates with unreadable Object Lock fields
-   * are compatible only when neither the caller nor readable bucket defaults
-   * require those settings.
+   * sequential B2 list calls. Pass `resumeDiscoveryTimeoutMs` or an
+   * `AbortSignal` to enforce a hard discovery deadline. SSE-C uploads are
+   * never auto-resumed because B2 does not expose the customer key identity
+   * needed to verify a compatible unfinished file. Candidates with unreadable
+   * Object Lock fields are rejected unless the caller provides explicit
+   * settings that can be verified.
    */
   readonly resume?: boolean
-  /** Aggregate SDK-enforced timeout for resume discovery when no signal is supplied. */
+  /** Optional aggregate SDK-enforced timeout for resume discovery. */
   readonly resumeDiscoveryTimeoutMs?: number
   /**
    * Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10.
@@ -136,9 +138,8 @@ export interface UploadLargeFileOptions {
    * verification also rejects SSE-C uploads because B2 does not expose
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
-   * {@link ResumeFileIdMismatchError}.
-   * Unreadable Object Lock fields are compatible only when neither the caller
-   * nor readable bucket defaults require those settings.
+   * {@link ResumeFileIdMismatchError}. Unreadable Object Lock fields reject
+   * the candidate.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -178,7 +179,9 @@ function createResumeCandidateCriteria(
       ? { fileRetention: request.fileRetention }
       : options.bucketDefaultRetention !== undefined
         ? { defaultFileRetention: options.bucketDefaultRetention }
-        : {}),
+        : options.bucketDefaultRetentionUnreadable === true
+          ? { defaultFileRetentionUnreadable: true }
+          : {}),
     ...(request.legalHold !== undefined ? { legalHold: request.legalHold } : {}),
     ...(options.resumeDiscoveryTimeoutMs !== undefined
       ? { discoveryTimeoutMs: options.resumeDiscoveryTimeoutMs }

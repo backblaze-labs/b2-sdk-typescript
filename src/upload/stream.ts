@@ -10,7 +10,11 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort, cleanupRequestOptions } from './cancel.ts'
+import {
+  cancelLargeFileBestEffort,
+  cleanupRequestOptions,
+  DEFAULT_CLEANUP_TIMEOUT_MS,
+} from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   resolveRetryResponseBodyFailures,
@@ -237,6 +241,23 @@ export function createWriteStream(
     }
   }
 
+  async function waitForInflightPartsToSettle(
+    timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
+  ): Promise<void> {
+    if (inflight.length === 0) return
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        Promise.allSettled(inflight).then(() => undefined),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, timeoutMs)
+        }),
+      ])
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+    }
+  }
+
   async function dispatchPart(): Promise<void> {
     if (pending.length === 0) return
     await acquirePartSlot()
@@ -358,6 +379,7 @@ export function createWriteStream(
         scheduleCancelLargeFileAfterStart(startPromise)
       }
       if (fileIdToCancel !== null) {
+        await waitForInflightPartsToSettle()
         await cancelLargeFileBestEffort(
           raw,
           accountInfo,

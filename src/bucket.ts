@@ -103,10 +103,24 @@ export interface DeleteAllSkipEvent {
 /** Event yielded by {@link Bucket.deleteAll} as it streams through file versions. */
 export type DeleteAllEvent = DeleteAllDeleteEvent | DeleteAllErrorEvent | DeleteAllSkipEvent
 
-function readableBucketDefaultRetention(info: BucketInfo): BucketRetentionPolicy | undefined {
+interface BucketDefaultRetentionSnapshot {
+  readonly retention?: BucketRetentionPolicy
+  readonly unreadable: boolean
+}
+
+function bucketDefaultRetentionSnapshot(info: BucketInfo): BucketDefaultRetentionSnapshot {
   const fileLock = info.fileLockConfiguration
-  if (!fileLock.isClientAuthorizedToRead || fileLock.value === null) return undefined
-  return fileLock.value.defaultRetention
+  if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
+  if (fileLock.value === null) return { unreadable: false }
+  return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function resumeNeedsFreshBucketDefaults(options: BucketUploadOptions): boolean {
+  const resumeRequested = options.resume === true || options.resumeFileId !== undefined
+  return (
+    resumeRequested &&
+    (options.serverSideEncryption === undefined || options.fileRetention === undefined)
+  )
 }
 
 /**
@@ -171,13 +185,17 @@ export class Bucket {
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
-      const bucketDefaultRetention = readableBucketDefaultRetention(this.info)
+      const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
+      const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
         retry: this.uploadRetryOptions,
-        bucketDefaultServerSideEncryption: this.info.defaultServerSideEncryption,
-        ...(bucketDefaultRetention !== undefined ? { bucketDefaultRetention } : {}),
+        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultRetention.retention !== undefined
+          ? { bucketDefaultRetention: bucketDefaultRetention.retention }
+          : {}),
+        ...(bucketDefaultRetention.unreadable ? { bucketDefaultRetentionUnreadable: true } : {}),
       })
     }
     rejectSmallResumeFileId(options, 'Bucket.upload')

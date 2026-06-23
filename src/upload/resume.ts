@@ -28,9 +28,6 @@ const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
 const DEFAULT_MAX_RESUME_PART_PAGES = 10
 
-/** Default aggregate timeout for resume discovery when callers do not pass an abort signal. */
-export const DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS = 30_000
-
 /** One planned part from the local upload source. */
 export interface ResumePartPlan {
   /** 1-based B2 part number. */
@@ -87,6 +84,8 @@ export interface ResumeCandidateCriteria {
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention when the caller omits fileRetention. */
   readonly defaultFileRetention?: BucketRetentionPolicy
+  /** Whether bucket default retention exists but cannot be read by the caller. */
+  readonly defaultFileRetentionUnreadable?: boolean
   /** Explicit legal hold option, if configured by the caller. */
   readonly legalHold?: LegalHoldValue
   /** Explicit unfinished large-file ID to verify before reuse. */
@@ -101,7 +100,7 @@ export interface ResumeCandidateCriteria {
   readonly maxPartCandidates?: number
   /** Maximum `b2_list_parts` pages to inspect for each metadata-compatible candidate. */
   readonly maxPartPages?: number
-  /** Aggregate resume discovery timeout used when no caller signal is supplied. */
+  /** Caller-supplied aggregate resume discovery timeout. */
   readonly discoveryTimeoutMs?: number
 }
 
@@ -359,6 +358,7 @@ function candidateMetadataRejectReason(
       candidate.fileRetention,
       criteria.fileRetention,
       criteria.defaultFileRetention,
+      criteria.defaultFileRetentionUnreadable === true,
       candidate.uploadTimestamp,
     )
   ) {
@@ -457,12 +457,14 @@ function fileRetentionMatches(
   candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
   defaultExpected: BucketRetentionPolicy | undefined,
+  defaultUnreadable: boolean,
   uploadTimestamp: number | undefined,
 ): boolean {
+  if (expected === undefined && defaultUnreadable) return false
   if (expected === undefined && defaultExpected !== undefined) {
     if (defaultExpected.mode === BucketRetentionMode.None) {
       if (candidate === undefined) return true
-      if (!candidate.isClientAuthorizedToRead) return true
+      if (!candidate.isClientAuthorizedToRead) return false
       return fileRetentionValueEquals(candidate.value, null)
     }
     if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -470,7 +472,7 @@ function fileRetentionMatches(
   }
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return false
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -484,8 +486,8 @@ function fileRetentionValueMatchesBucketDefault(
 ): boolean {
   if (expected.period === null) return false
   if (candidate?.mode !== expected.mode || candidate.retainUntilTimestamp === null) return false
-  if (uploadTimestamp === undefined) return true
-  return candidate.retainUntilTimestamp >= uploadTimestamp + retentionPeriodMillis(expected.period)
+  if (uploadTimestamp === undefined) return false
+  return candidate.retainUntilTimestamp === uploadTimestamp + retentionPeriodMillis(expected.period)
 }
 
 function retentionPeriodMillis(period: BucketRetentionPolicy['period']): number {
@@ -510,7 +512,7 @@ function legalHoldMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return true
+    if (!candidate.isClientAuthorizedToRead) return false
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
@@ -530,7 +532,13 @@ function createResumeDiscoverySignal(criteria: ResumeCandidateCriteria): ResumeD
     }
   }
 
-  const timeoutMs = criteria.discoveryTimeoutMs ?? DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS
+  if (criteria.discoveryTimeoutMs === undefined) {
+    return {
+      dispose() {},
+    }
+  }
+
+  const timeoutMs = criteria.discoveryTimeoutMs
   if (timeoutMs === Number.POSITIVE_INFINITY) {
     return {
       dispose() {},
