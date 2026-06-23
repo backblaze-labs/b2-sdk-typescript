@@ -10,7 +10,14 @@ export function compareSyncRelativePaths(left: string, right: string): number {
   return compareCodeUnits(left, right)
 }
 
-/** Backwards-compatible alias for the SDK scan ordering. */
+/**
+ * Backwards-compatible alias for the SDK scan ordering.
+ *
+ * @param a - First sync-relative path.
+ * @param b - Second sync-relative path.
+ *
+ * @returns Negative, zero, or positive using JavaScript code-unit order.
+ */
 export function compareSyncPathNames(a: string, b: string): number {
   return compareSyncRelativePaths(a, b)
 }
