@@ -2260,7 +2260,12 @@ describe('uploadLargeFile control-plane aborts', () => {
       },
       cancelLargeFile(...args: Parameters<RawClient['cancelLargeFile']>) {
         cancelSignal = args[3]?.signal
-        return rejectOnAbort(args[3]?.signal, 'cancel aborted')
+        return Promise.resolve({
+          fileId: largeFileId('finish-large'),
+          accountId: 'account',
+          bucketId: bucketId('bucket'),
+          fileName: 'finish-abort.bin',
+        })
       },
     } as unknown as RawClient
 
@@ -2277,10 +2282,10 @@ describe('uploadLargeFile control-plane aborts', () => {
 
     await expect(upload).rejects.toThrow('finish aborted')
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal?.aborted).toBe(true)
+    expect(cancelSignal).toBeUndefined()
   })
 
-  it('uses the aborted multipart scope to bound cleanup cancel requests', async () => {
+  it('omits already-aborted multipart scope from cleanup cancel requests', async () => {
     let cancelSignal: AbortSignal | undefined
     const raw = {
       startLargeFile: async () => ({ fileId: largeFileId('cleanup-large') }),
@@ -2289,7 +2294,12 @@ describe('uploadLargeFile control-plane aborts', () => {
       },
       cancelLargeFile(...args: Parameters<RawClient['cancelLargeFile']>) {
         cancelSignal = args[3]?.signal
-        return rejectOnAbort(args[3]?.signal, 'cancel aborted')
+        return Promise.resolve({
+          fileId: largeFileId('cleanup-large'),
+          accountId: 'account',
+          bucketId: bucketId('bucket'),
+          fileName: 'cleanup-abort.bin',
+        })
       },
     } as unknown as RawClient
 
@@ -2303,7 +2313,7 @@ describe('uploadLargeFile control-plane aborts', () => {
       }),
     ).rejects.toThrow('part failed')
 
-    expect(cancelSignal?.aborted).toBe(true)
+    expect(cancelSignal).toBeUndefined()
   })
 })
 

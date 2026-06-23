@@ -12,7 +12,7 @@ import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort } from './cancel.ts'
+import { cancelLargeFileBestEffort, cleanupRequestOptions } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   findResumeCandidate,
@@ -319,9 +319,12 @@ export async function uploadLargeFile(
     } catch (err) {
       abortScope.abort(err)
       if (createdLargeFile) {
-        await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, {
-          signal: abortScope.signal,
-        })
+        await cancelLargeFileBestEffort(
+          raw,
+          accountInfo,
+          largeFileId,
+          cleanupRequestOptions(options.signal),
+        )
       }
       throw err
     } finally {
@@ -419,9 +422,12 @@ export async function uploadLargeFile(
   } catch (err) {
     abortScope.abort(err)
     if (createdLargeFile) {
-      await cancelLargeFileBestEffort(raw, accountInfo, largeFileId, {
-        signal: abortScope.signal,
-      })
+      await cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        largeFileId,
+        cleanupRequestOptions(options.signal),
+      )
     }
     throw err
   } finally {

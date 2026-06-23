@@ -32,3 +32,17 @@ export async function cancelLargeFileBestEffort(
     raw.cancelLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), { fileId }, options),
   )
 }
+
+/**
+ * Returns cleanup request controls only when the caller signal can still send a request.
+ *
+ * @param signal - Caller-provided abort signal, if any.
+ *
+ * @returns Request controls with a live signal, or undefined when the signal is absent or already aborted.
+ */
+export function cleanupRequestOptions(
+  signal: AbortSignal | undefined,
+): { readonly signal: AbortSignal } | undefined {
+  if (signal === undefined || signal.aborted) return undefined
+  return { signal }
+}

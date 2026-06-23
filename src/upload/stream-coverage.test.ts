@@ -252,7 +252,7 @@ describe('createWriteStream branch coverage', () => {
     await expect(done).rejects.toThrow('stream start aborted')
   })
 
-  it('passes abort signals to stalled finish and cleanup requests', async () => {
+  it('passes abort signal to stalled finish and omits aborted cleanup signal', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     const controller = new AbortController()
@@ -271,7 +271,7 @@ describe('createWriteStream branch coverage', () => {
         }
         if (req.url.includes('b2_cancel_large_file')) {
           cancelSignal = req.signal
-          return rejectOnAbort(req.signal, 'stream cancel aborted')
+          return inner.send(req)
         }
         return inner.send(req)
       },
@@ -303,7 +303,7 @@ describe('createWriteStream branch coverage', () => {
     await expect(closePromise).rejects.toThrow('stream finish aborted')
     await expect(done).rejects.toThrow('stream finish aborted')
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal?.aborted).toBe(true)
+    expect(cancelSignal).toBeUndefined()
   })
 
   it('aborts an in-flight write-stream part request when the writer aborts', async () => {

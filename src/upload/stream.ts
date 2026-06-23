@@ -10,7 +10,7 @@ import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
 import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort } from './cancel.ts'
+import { cancelLargeFileBestEffort, cleanupRequestOptions } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import {
   resolveRetryResponseBodyFailures,
@@ -200,7 +200,7 @@ export function createWriteStream(
     cancelAfterStartScheduled = true
     void started
       .then((fileId) =>
-        cancelLargeFileBestEffort(raw, accountInfo, fileId, { signal: abortScope.signal }),
+        cancelLargeFileBestEffort(raw, accountInfo, fileId, cleanupRequestOptions(options.signal)),
       )
       .catch(() => {
         // If start failed, no file ID is available to cancel.
@@ -319,9 +319,12 @@ export function createWriteStream(
         // because the variable is mutable across the lambda boundary.
         const fileIdToCancel = largeFileId
         if (fileIdToCancel !== null) {
-          await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel, {
-            signal: abortScope.signal,
-          })
+          await cancelLargeFileBestEffort(
+            raw,
+            accountInfo,
+            fileIdToCancel,
+            cleanupRequestOptions(options.signal),
+          )
         }
         rejectDone(observedError)
         abortScope.dispose()
@@ -341,9 +344,12 @@ export function createWriteStream(
         scheduleCancelLargeFileAfterStart(startPromise)
       }
       if (fileIdToCancel !== null) {
-        await cancelLargeFileBestEffort(raw, accountInfo, fileIdToCancel, {
-          signal: abortScope.signal,
-        })
+        await cancelLargeFileBestEffort(
+          raw,
+          accountInfo,
+          fileIdToCancel,
+          cleanupRequestOptions(options.signal),
+        )
       }
       rejectDone(abortError)
       abortScope.dispose()
