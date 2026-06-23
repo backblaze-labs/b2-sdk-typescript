@@ -1,6 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
+import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
@@ -523,7 +524,7 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await readNextNonEmptyChunk(reader)
+        const { done, value } = await readNextNonEmptyChunk(reader, options.signal)
         if (done) {
           throw new Error(
             `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
@@ -575,7 +576,7 @@ async function uploadPartsSequentially(
       )
     }
 
-    const extra = await readNextNonEmptyChunk(reader)
+    const extra = await readNextNonEmptyChunk(reader, options.signal)
     if (!extra.done) {
       bytesRead += extra.value.byteLength
       throw new Error(
@@ -594,9 +595,10 @@ async function uploadPartsSequentially(
 
 async function readNextNonEmptyChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   while (true) {
-    const result = await reader.read()
+    const result = await readStreamChunkWithSignal(reader, signal)
     if (result.done || result.value.byteLength > 0) return result
   }
 }

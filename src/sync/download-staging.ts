@@ -167,7 +167,13 @@ async function reapStaleDownloadStagingDirectoriesOnce(
     return
   }
 
-  const next = reapStaleDownloadStagingDirectories(managedDirectory, path, nowMillis)
+  const next = reapStaleDownloadStagingDirectories(managedDirectory, path, nowMillis).finally(
+    () => {
+      if (reapedManagedDirectories.get(managedDirectory) === next) {
+        reapedManagedDirectories.delete(managedDirectory)
+      }
+    },
+  )
   reapedManagedDirectories.set(managedDirectory, next)
   await next
 }

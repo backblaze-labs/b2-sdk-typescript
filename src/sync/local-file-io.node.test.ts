@@ -283,6 +283,44 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('reaps stale SDK-owned staging directories on later downloads to the same root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-repeat-stage-'))
+    try {
+      await writeLocalStreamInsideRoot(
+        root,
+        'first.txt',
+        streamFromBytes(textEncoder.encode('one')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const staleDirectory = join(managedDirectory, '2000-01-01-second.download')
+      await mkdir(staleDirectory, { recursive: true, mode: 0o700 })
+      await writeFile(join(staleDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+      await writeFile(join(staleDirectory, 'partial.bin'), 'old')
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(staleDirectory, old, old)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'second.txt',
+        streamFromBytes(textEncoder.encode('two')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'second.txt'), 'utf8')).resolves.toBe('two')
+      await expect(readFile(join(staleDirectory, 'partial.bin'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(!isLinux)('does not follow a parent symlink swap during final rename', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-root-'))
     const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-rename-out-'))

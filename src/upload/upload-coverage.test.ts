@@ -3474,6 +3474,52 @@ describe('uploadSmallFile cleanup path', () => {
     expect(await bucket.getFileInfoByName('abort-stream.bin')).toBeNull()
   })
 
+  it('cancels a pending streaming multipart read when the upload aborts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const controller = new AbortController()
+    const reason = new Error('stop pending streaming upload')
+    let resolvePullStarted!: () => void
+    const pullStarted = new Promise<void>((resolve) => {
+      resolvePullStarted = resolve
+    })
+    let resolvePull!: () => void
+    const pendingPull = new Promise<void>((resolve) => {
+      resolvePull = resolve
+    })
+    let cancelReason: unknown
+    const readable = new ReadableStream<Uint8Array>({
+      pull() {
+        resolvePullStarted()
+        return pendingPull
+      },
+      cancel(value) {
+        cancelReason = value
+        resolvePull()
+      },
+    })
+
+    const uploadPromise = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'pending-abort-stream.bin',
+      source: new StreamSource(readable, 100_000),
+      partSize: 100_000,
+      signal: controller.signal,
+    })
+
+    await pullStarted
+    controller.abort(reason)
+
+    await expect(uploadPromise).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
+    expect(await bucket.getFileInfoByName('pending-abort-stream.bin')).toBeNull()
+  })
+
   it('rejects resumeFileId on streaming sources before listing parts', async () => {
     const { client } = makeSmallPartClient()
     await client.authorize()
