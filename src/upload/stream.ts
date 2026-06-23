@@ -48,8 +48,8 @@ export interface CreateWriteStreamOptions {
   readonly onUploadRetry?: UploadRetryListener
   /**
    * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Defaults to true because re-posting the same part number is
-   * idempotent; set false to avoid re-sending the part.
+   * the part. Upload POST network errors still retry when this is false because
+   * re-posting the same part number is idempotent. Defaults to true.
    */
   readonly retryResponseBodyFailures?: boolean
 }

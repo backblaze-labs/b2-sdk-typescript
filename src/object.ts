@@ -265,7 +265,8 @@ export class B2Object {
     onUploadRetry?: UploadRetryListener
     /**
      * Retry when an upload response body cannot be read after B2 may have stored
-     * the part. Defaults to true; set false to avoid re-sending the part.
+     * the part. Upload POST network errors still retry when this is false because
+     * re-posting the same part number is idempotent. Defaults to true.
      */
     retryResponseBodyFailures?: boolean
     /** Abort signal that cancels the upload and the unfinished large file. */

@@ -32,11 +32,12 @@ export interface UploadOptions {
   /** Callback invoked before retrying with a fresh upload URL. */
   onUploadRetry?: UploadRetryListener
   /**
-   * Retry ambiguous upload failures after B2 may have stored the payload.
-   * Single-request uploads default to false for response-body failures and
-   * upload POST network failures because retrying can create duplicate file
-   * versions. Multipart part uploads default to true because re-posting the
-   * same part number is idempotent.
+   * Configure retries after B2 may have stored bytes. Single-request uploads
+   * use this for unreadable response bodies and ambiguous upload POST network
+   * failures; it defaults to false because retrying can create duplicate file
+   * versions. Multipart uploads use this only for unreadable response bodies;
+   * upload POST network failures still retry because re-posting the same part
+   * number is idempotent.
    */
   retryResponseBodyFailures?: boolean
   /** Abort signal for cancelling the upload. */

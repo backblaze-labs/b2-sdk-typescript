@@ -60,10 +60,12 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
- * Resolves the public per-upload-mode default for ambiguous upload response
- * body failures. Single-request uploads default off because a repeated POST can
- * create a duplicate file version; multipart uploads default on because B2 keeps
- * the latest write for a part number before finishLargeFile.
+ * Resolves the public per-upload-mode default for `retryResponseBodyFailures`.
+ * For single-request uploads, this value gates unreadable response bodies and
+ * ambiguous upload POST network errors after the payload may have been sent.
+ * For multipart uploads, this value gates unreadable response bodies; upload
+ * POST network errors are retried regardless because B2 keeps the latest write
+ * for a part number before finishLargeFile.
  *
  * @param value - Caller-provided override, if any.
  * @param mode - Upload path whose default should be applied.
