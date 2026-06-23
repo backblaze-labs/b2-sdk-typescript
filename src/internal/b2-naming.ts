@@ -11,6 +11,7 @@ export const BUCKET_NAME_RESERVED_PREFIX = 'b2-'
 export const FILE_NAME_MAX_BYTES = 1024
 
 const BUCKET_NAME_REGEX = /^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/
+const IPV4_ADDRESS_SHAPE = /^\d{1,3}(?:\.\d{1,3}){3}$/
 
 /**
  * B2 bucket names may contain letters, digits, hyphens, and periods, but
@@ -21,7 +22,19 @@ const BUCKET_NAME_REGEX = /^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/
  * @returns Whether the name satisfies the shared B2 bucket-name shape rules.
  */
 export function hasValidB2BucketNameShape(name: string): boolean {
-  return BUCKET_NAME_REGEX.test(name) && !name.includes('..')
+  return BUCKET_NAME_REGEX.test(name) && !name.includes('..') && !isB2BucketNameIpv4Address(name)
+}
+
+/**
+ * Checks whether a candidate bucket name is formatted as an IPv4 address.
+ *
+ * @param name - Candidate bucket name.
+ *
+ * @returns Whether the name is an IPv4-address-form string.
+ */
+export function isB2BucketNameIpv4Address(name: string): boolean {
+  if (!IPV4_ADDRESS_SHAPE.test(name)) return false
+  return name.split('.').every((part) => Number(part) <= 255)
 }
 
 /**

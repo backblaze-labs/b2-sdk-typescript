@@ -84,6 +84,35 @@ for (const ref of tarballRefs) {
   }
 }
 
+// --- Release artifact-producing job must stay isolated from third-party analysis tools.
+const releaseWorkflow = await read('.github/workflows/release.yml')
+const buildJobStart = releaseWorkflow.indexOf('\n  build:')
+const publishJobStart = releaseWorkflow.indexOf('\n  publish:', buildJobStart)
+const buildJobHeader = '\n  build:'
+const buildJobTail =
+  buildJobStart === -1 ? '' : releaseWorkflow.slice(buildJobStart + buildJobHeader.length)
+const nextJobOffset = buildJobTail.search(/\n {2}[A-Za-z0-9_-]+:/)
+const buildJob =
+  buildJobStart === -1 || publishJobStart === -1
+    ? ''
+    : nextJobOffset === -1
+      ? buildJobTail
+      : buildJobTail.slice(0, nextJobOffset)
+if (buildJob === '') {
+  errors.push('release.yml should contain build and publish jobs in that order')
+} else {
+  const packStep = buildJob.indexOf('- name: Pack verified release artifact')
+  const uploadStep = buildJob.indexOf('- name: Upload release artifact')
+  if (packStep === -1 || uploadStep === -1 || packStep > uploadStep) {
+    errors.push('release.yml build job must pack the verified artifact before uploading it')
+  }
+  if (/\battw\b/.test(buildJob)) {
+    errors.push(
+      'release.yml build job must not run attw before packing; ignored publish files such as dist/ could be changed after verification and then packed',
+    )
+  }
+}
+
 // --- src/version.ts must NOT hardcode the version; must import package.json
 const versionTs = await read('src/version.ts')
 if (

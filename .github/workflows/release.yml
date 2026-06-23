@@ -26,6 +26,11 @@ on:
       tag:
         description: 'Existing tag to (re)publish, e.g. v0.1.1'
         required: true
+      allow_registry_artifact_mismatch:
+        description: 'Bootstrap-only: allow an existing npm artifact to differ from this verified tarball'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read # default read-only access; release publishing escalates below
@@ -79,10 +84,6 @@ jobs:
       - run: pnpm run verify:metadata
       - run: pnpm run verify:exports
 
-      - name: Verify package types resolve cleanly (attw)
-        continue-on-error: true
-        run: pnpm exec attw --pack . --profile node16
-
       - name: Verify tracked files are unchanged before packing
         run: |
           if ! git diff --exit-code; then
@@ -108,6 +109,31 @@ jobs:
           path: .release/*
           if-no-files-found: error
           retention-days: 7
+
+  package-type-analysis:
+    name: Analyze package types
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      REF: ${{ github.event_name == 'workflow_dispatch' && (startsWith(inputs.tag, 'refs/tags/') && inputs.tag || format('refs/tags/{0}', inputs.tag)) || github.ref }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+          ref: ${{ env.REF }}
+
+      - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Verify package types resolve cleanly (attw)
+        run: npx --yes -p @arethetypeswrong/cli attw --pack . --profile node16
 
   publish:
     name: Publish to npm
@@ -148,15 +174,42 @@ jobs:
             echo "::error::Release artifact did not contain a package tarball."
             exit 1
           fi
+          LOCAL_INTEGRITY="$(node -e "const { readFileSync } = require('node:fs'); const { createHash } = require('node:crypto'); const data = readFileSync(process.argv[1]); console.log('sha512-' + createHash('sha512').update(data).digest('base64'));" "$TARBALL")"
+          LOCAL_SHASUM="$(node -e "const { readFileSync } = require('node:fs'); const { createHash } = require('node:crypto'); const data = readFileSync(process.argv[1]); console.log(createHash('sha1').update(data).digest('hex'));" "$TARBALL")"
+          DIST_JSON="$(mktemp)"
+          DIST_ERR="$(mktemp)"
           set +e
-          VIEW_OUTPUT="$(npm view "$NAME@$VERSION" version 2>&1)"
+          npm view "$NAME@$VERSION" dist --json > "$DIST_JSON" 2> "$DIST_ERR"
           VIEW_STATUS=$?
           set -e
           if [ "$VIEW_STATUS" -eq 0 ]; then
-            echo "::notice::$NAME@$VERSION is already published; skipping publish."
-          elif ! printf '%s\n' "$VIEW_OUTPUT" | grep -Eq 'E404|404 Not Found|is not in this registry'; then
+            PUBLISHED_INTEGRITY="$(node -e "const { readFileSync } = require('node:fs'); const dist = JSON.parse(readFileSync(process.argv[1], 'utf8')); console.log(dist.integrity || '');" "$DIST_JSON")"
+            PUBLISHED_SHASUM="$(node -e "const { readFileSync } = require('node:fs'); const dist = JSON.parse(readFileSync(process.argv[1], 'utf8')); console.log(dist.shasum || '');" "$DIST_JSON")"
+            if [ -n "$PUBLISHED_INTEGRITY" ]; then
+              EXPECTED="$LOCAL_INTEGRITY"
+              OBSERVED="$PUBLISHED_INTEGRITY"
+            else
+              EXPECTED="sha1-$LOCAL_SHASUM"
+              OBSERVED="sha1-$PUBLISHED_SHASUM"
+            fi
+            if [ "$EXPECTED" != "$OBSERVED" ]; then
+              if [ "${{ github.event_name == 'workflow_dispatch' && inputs.allow_registry_artifact_mismatch || false }}" = "true" ]; then
+                echo "::warning::$NAME@$VERSION is already published with different bytes; bootstrap override allowed this mismatch."
+                echo "::warning::Expected verified artifact integrity: $EXPECTED"
+                echo "::warning::Observed registry integrity: $OBSERVED"
+                echo "::notice::$NAME@$VERSION is already published; bootstrap mismatch override enabled; skipping publish."
+              else
+                echo "::error::$NAME@$VERSION is already published with different bytes."
+                echo "::error::Expected verified artifact integrity: $EXPECTED"
+                echo "::error::Observed registry integrity: $OBSERVED"
+                exit 1
+              fi
+            else
+              echo "::notice::$NAME@$VERSION is already published with matching integrity; skipping publish."
+            fi
+          elif ! grep -Eq 'E404|404 Not Found|is not in this registry' "$DIST_ERR"; then
             echo "::error::Unable to verify whether $NAME@$VERSION is already published."
-            printf '%s\n' "$VIEW_OUTPUT"
+            cat "$DIST_ERR"
             exit "$VIEW_STATUS"
           elif [[ "$VERSION" == *-* ]]; then
             npm publish "$TARBALL" --ignore-scripts --access public --provenance --tag next

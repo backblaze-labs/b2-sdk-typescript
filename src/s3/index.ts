@@ -10,6 +10,7 @@
  */
 
 import type { AccountInfo } from '../auth/account-info.ts'
+import { hostMatchesAllowedSuffix } from '../http/url-guard.ts'
 import { redactUrlForError } from '../internal/url-redaction.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
@@ -19,15 +20,17 @@ import {
   type SignedHeader,
   type SigV4PresignRequestOptions,
 } from './sigv4.ts'
-import {
-  assertLegacyNativeDownloadFileName,
-  assertNativeDownloadFileName,
-  assertSafeBucketName,
-} from './validation.ts'
+import { assertNativeDownloadFileName, assertSafeBucketName } from './validation.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const HTTP_MEDIA_TYPE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN = 3600
+const TRUSTED_NATIVE_DOWNLOAD_HOST_SUFFIXES = [
+  'backblazeb2.com',
+  'backblaze.com',
+  'backblaze.net',
+  'b2-staging.io',
+] as const
 const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'text/html',
   'application/xhtml+xml',
@@ -43,6 +46,29 @@ const BROWSER_EXECUTABLE_CONTENT_TYPES = new Set([
   'text/xml',
   'application/xml',
 ])
+
+/**
+ * Trusted server-side token for intentionally allowing active-content S3 presign options.
+ *
+ * Plain objects and JSON payloads cannot satisfy the runtime identity check
+ * for this token. Pass this exported value only from trusted application code
+ * after applying your own content and response-header policy.
+ */
+export interface TrustedUnsafeS3PresignOptIn {
+  readonly __trustedUnsafeS3PresignOptIn: 'trustedUnsafeS3PresignOptIn'
+}
+
+/**
+ * Server-side opt-in token for unsafe S3 presign options.
+ *
+ * Use this token as the value for `allowBrowserExecutableContentType`,
+ * `allowBrowserExecutableResponseContentType`, or
+ * `allowInlineResponseContentDisposition` only when active content or inline
+ * rendering from the storage origin is intentional and trusted.
+ */
+export const trustedUnsafeS3PresignOptIn = Object.freeze({
+  __trustedUnsafeS3PresignOptIn: 'trustedUnsafeS3PresignOptIn',
+} as const) satisfies TrustedUnsafeS3PresignOptIn
 
 /**
  * Configuration for deriving S3-compatible client settings from B2 auth state.
@@ -124,9 +150,10 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Permit an `inline` response Content-Disposition override. Set only when
    * the object bytes and response headers are trusted to render from the
-   * storage origin.
+   * storage origin. Pass {@link trustedUnsafeS3PresignOptIn}; plain booleans
+   * from request JSON are intentionally ignored by the runtime guard.
    */
-  readonly allowInlineResponseContentDisposition?: boolean
+  readonly allowInlineResponseContentDisposition?: TrustedUnsafeS3PresignOptIn
   /**
    * Override the response Content-Encoding header. Do not populate this from
    * untrusted input without an allow-list.
@@ -149,9 +176,10 @@ export interface PresignS3GetObjectUrlOptions extends S3PresignObjectUrlOptions 
    * Permit browser-executable `responseContentType` overrides such as
    * `text/html`, JavaScript, SVG, or XML media types. Leave this unset unless
    * the served object is intentionally meant to render active content from the
-   * storage origin.
+   * storage origin. Pass {@link trustedUnsafeS3PresignOptIn}; plain booleans
+   * from request JSON are intentionally ignored by the runtime guard.
    */
-  readonly allowBrowserExecutableResponseContentType?: boolean
+  readonly allowBrowserExecutableResponseContentType?: TrustedUnsafeS3PresignOptIn
   /**
    * Override the response Expires header. Do not populate this from
    * untrusted input without an allow-list.
@@ -172,9 +200,11 @@ export interface PresignS3PutObjectUrlOptions extends S3PresignObjectUrlOptions 
   /**
    * Permit browser-executable `contentType` values such as `text/html`,
    * JavaScript, SVG, or XML media types. Leave this unset unless the uploaded
-   * object is intentionally meant to render active content from the storage origin.
+   * object is intentionally meant to render active content from the storage
+   * origin. Pass {@link trustedUnsafeS3PresignOptIn}; plain booleans from
+   * request JSON are intentionally ignored by the runtime guard.
    */
-  readonly allowBrowserExecutableContentType?: boolean
+  readonly allowBrowserExecutableContentType?: TrustedUnsafeS3PresignOptIn
   /**
    * Optional content length. Must be a non-negative safe integer. When
    * supplied, the generated URL signs the Content-Length header, so upload
@@ -226,6 +256,8 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
   assertNonEmptyStringOption('applicationKeyId', config.applicationKeyId)
   assertNonEmptyStringOption('applicationKey', config.applicationKey)
   assertNonEmptyStringOption('region', region)
+  assertSigV4CredentialScopeComponent('applicationKeyId', config.applicationKeyId)
+  assertSigV4CredentialScopeComponent('region', region)
 
   return {
     endpoint: s3Url,
@@ -292,7 +324,7 @@ export async function presignS3GetObjectUrl(
   if (options.responseContentDisposition !== undefined) {
     assertSafeResponseContentDisposition(
       options.responseContentDisposition,
-      options.allowInlineResponseContentDisposition === true,
+      isTrustedUnsafeS3PresignOptIn(options.allowInlineResponseContentDisposition),
     )
     query.push(['response-content-disposition', options.responseContentDisposition])
   }
@@ -305,7 +337,7 @@ export async function presignS3GetObjectUrl(
     query.push(['response-content-language', options.responseContentLanguage])
   }
   if (options.responseContentType !== undefined) {
-    if (options.allowBrowserExecutableResponseContentType === true) {
+    if (isTrustedUnsafeS3PresignOptIn(options.allowBrowserExecutableResponseContentType)) {
       assertSafeContentTypeValue(
         'responseContentType',
         options.responseContentType,
@@ -328,9 +360,9 @@ export async function presignS3GetObjectUrl(
  *
  * This deprecated helper preserves the legacy positional output contract where
  * the whole file name is encoded as one URL component, including `/` as `%2F`.
- * It accepts legacy slash-boundary and dot-segment file names that this
- * percent-encoded URL shape can represent, while still rejecting unsafe bucket
- * names, unsafe download URL bases, and invalid compatibility durations.
+ * It keeps the legacy string-building contract for callers that relied on
+ * custom/local download URLs or permissive inputs. Use
+ * {@link createNativeDownloadAuthorizationUrl} for strict validation.
  *
  * @param downloadUrl - The B2 download URL from authorization.
  * @param bucketName - The bucket containing the file.
@@ -351,15 +383,10 @@ export function presignGetObjectUrl(
   authorizationToken: string,
   validDurationInSeconds?: number,
 ): string {
-  return buildNativeDownloadAuthorizationUrl(
-    downloadUrl,
-    bucketName,
-    fileName,
-    authorizationToken,
-    validDurationInSeconds ?? DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN,
-    encodeURIComponent,
-    assertLegacyNativeDownloadFileName,
-  )
+  const expires =
+    Math.floor(Date.now() / 1000) +
+    (validDurationInSeconds ?? DEFAULT_NATIVE_DOWNLOAD_URL_EXPIRES_IN)
+  return `${downloadUrl}/file/${encodeURIComponent(bucketName)}/${encodeURIComponent(fileName)}?Authorization=${encodeURIComponent(authorizationToken)}&expires=${expires}`
 }
 
 /**
@@ -386,7 +413,7 @@ export async function presignS3PutObjectUrl(
 ): Promise<string> {
   const headers: SignedHeader[] = []
   if (options.contentType !== undefined) {
-    if (options.allowBrowserExecutableContentType === true) {
+    if (isTrustedUnsafeS3PresignOptIn(options.allowBrowserExecutableContentType)) {
       assertSafeContentTypeValue('contentType', options.contentType, 'stored object Content-Type')
     } else {
       assertSafePutContentType(options.contentType)
@@ -510,6 +537,18 @@ function assertNonEmptyStringOption(name: string, value: unknown): asserts value
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new TypeError(`${name} must be a non-empty string.`)
   }
+}
+
+function assertSigV4CredentialScopeComponent(name: string, value: string): void {
+  if (/[\s/]/u.test(value) || hasHttpHeaderControlCharacter(value)) {
+    throw new TypeError(
+      `${name} must not contain whitespace, control characters, or "/" because it is embedded in the SigV4 credential scope.`,
+    )
+  }
+}
+
+function isTrustedUnsafeS3PresignOptIn(value: unknown): value is TrustedUnsafeS3PresignOptIn {
+  return value === trustedUnsafeS3PresignOptIn
 }
 
 function buildNativeDownloadAuthorizationUrl(
@@ -688,8 +727,7 @@ function isBrowserExecutableContentType(mediaType: string): boolean {
 }
 
 function isTrustedNativeDownloadHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase()
-  return ['backblazeb2.com', 'backblaze.com', 'backblaze.net', 'b2-staging.io'].some(
-    (suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`),
+  return TRUSTED_NATIVE_DOWNLOAD_HOST_SUFFIXES.some((suffix) =>
+    hostMatchesAllowedSuffix(hostname, suffix),
   )
 }

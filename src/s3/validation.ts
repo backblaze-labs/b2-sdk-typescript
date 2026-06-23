@@ -6,6 +6,7 @@ import {
   getB2FileNameByteLength,
   hasB2FileNameControlCharacter,
   hasValidB2BucketNameShape,
+  isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
 
 export { FILE_NAME_MAX_BYTES }
@@ -31,6 +32,9 @@ export function assertSafeBucketName(bucketName: string): void {
   }
   if (bucketName.length < BUCKET_NAME_MIN || bucketName.length > BUCKET_NAME_MAX) {
     throw new TypeError(`bucketName must be ${BUCKET_NAME_MIN}-${BUCKET_NAME_MAX} characters.`)
+  }
+  if (isB2BucketNameIpv4Address(bucketName)) {
+    throw new TypeError('bucketName must not be formatted as an IPv4 address.')
   }
   if (!hasValidB2BucketNameShape(bucketName)) {
     throw new TypeError(
