@@ -83,7 +83,7 @@ export async function writeLocalStreamInsideRoot(
   },
 ): Promise<void> {
   const { constants } = await import('node:fs')
-  const { chmod, lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
+  const { lstat, mkdir, open, realpath, rename, rm, stat } = await import('node:fs/promises')
   const path = await import('node:path')
   const { randomUUID } = await import('node:crypto')
   assertValidExpectedBytes(options.expectedBytes)
@@ -175,7 +175,7 @@ export async function writeLocalStreamInsideRoot(
       PRIVATE_DOWNLOAD_FILE_MODE,
     )
     /* v8 ignore next -- best-effort chmod */
-    await chmod(tmpPath, PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
+    await handle.chmod(PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
     await localFileIoTestHooks.afterTempFileCreated?.(tmpPath, stagingDirectory)
     /* v8 ignore start -- defensive cleanup before the main write try/finally exists */
   } catch (err) {
@@ -222,12 +222,12 @@ export async function writeLocalStreamInsideRoot(
         `download read ended after ${bytesWritten} bytes, expected ${options.expectedBytes}`,
       )
     }
-    await writeHandle.close()
-    handle = undefined
     if (publishMode !== PRIVATE_DOWNLOAD_FILE_MODE) {
       /* v8 ignore next -- best-effort mode preservation */
-      await chmod(tmpPath, publishMode).catch(() => {})
+      await writeHandle.chmod(publishMode).catch(() => {})
     }
+    await writeHandle.close()
+    handle = undefined
 
     const [parentRealPathBeforeRename, parentStatsBeforeRename] = await Promise.all([
       realpath(path.dirname(destPath)),
