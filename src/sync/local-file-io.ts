@@ -224,11 +224,6 @@ export async function writeLocalStreamInsideRoot(
     const finalPathBeforeRename = path.join(parentRealPathBeforeRename, path.basename(destPath))
     assertPathInsideRoot(rootRealPath, finalPathBeforeRename, path)
     await localFileIoTestHooks.beforeFinalRename?.(parentRealPathBeforeRename)
-    if (anchoredParentPath === undefined && parentRealPathBeforeRename !== rootRealPath) {
-      throw new Error(
-        'unsafe local destination path: stable parent handle unavailable for final publish',
-      )
-    }
     let publishPath = finalWritePath
     if (anchoredParentPath === undefined) {
       const [parentRealPathAfterHook, parentStatsAfterHook] = await Promise.all([

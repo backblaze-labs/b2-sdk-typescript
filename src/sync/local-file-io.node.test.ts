@@ -265,6 +265,52 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it.skipIf(isWindows)('rejects a managed staging root symlink before chmod', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-symlink-root-'))
+    const outside = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-symlink-out-'))
+    try {
+      await chmod(outside, 0o755)
+      const originalMode = (await stat(outside)).mode & 0o777
+      await symlink(outside, join(root, DOWNLOAD_STAGING_DIRECTORY_NAME), 'dir')
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow(`${DOWNLOAD_STAGING_DIRECTORY_NAME} is not a directory`)
+
+      expect((await stat(outside)).mode & 0o777).toBe(originalMode)
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('does not chmod a non-SDK staging name before rejecting it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-user-root-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await mkdir(managedDirectory)
+      await writeFile(join(managedDirectory, 'user.txt'), 'user')
+      await chmod(managedDirectory, 0o755)
+      const originalMode = (await stat(managedDirectory)).mode & 0o777
+
+      await expect(
+        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(textEncoder.encode('abc')), {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        }),
+      ).rejects.toThrow(`${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved`)
+
+      expect((await stat(managedDirectory)).mode & 0o777).toBe(originalMode)
+      await expect(readFile(join(root, 'file.txt'))).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('reaps stale SDK-owned staging directories before creating a new one', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stale-stage-'))
     try {
@@ -360,7 +406,7 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
-  it.skipIf(isWindows)('publishes with parent recheck when fd anchoring is disabled', async () => {
+  it.skipIf(isWindows)('publishes nested destinations when fd anchoring is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-no-anchor-'))
     try {
       await mkdir(join(root, 'safe'))

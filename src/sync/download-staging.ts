@@ -47,8 +47,6 @@ export async function createDownloadStagingDirectory(
   }
   const realManagedDirectory = await realpath(managedDirectory)
   assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   await assertDownloadPathSameDevice(
     rootRealPath,
     realManagedDirectory,
@@ -66,6 +64,8 @@ export async function createDownloadStagingDirectory(
   }
   await beforeStagingMarkerWrite?.(realManagedDirectory)
   await writeStagingMarker(realManagedDirectory, path)
+  /* v8 ignore next -- best-effort chmod */
+  await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
   await reapStaleDownloadStagingDirectoriesOnce(realManagedDirectory, path, Date.now())
 
   const stagingDirectory = path.join(

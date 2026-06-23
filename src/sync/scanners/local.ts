@@ -113,7 +113,7 @@ export class LocalFolder implements SyncFolder {
       const fullPath = nodeDeps.join(dir, entry.name)
       const rel = relativePathFromRoot(this.root, fullPath, nodeDeps)
       if (
-        dir === this.root &&
+        rel === DOWNLOAD_STAGING_DIRECTORY_NAME &&
         entry.isDirectory() &&
         entry.name === DOWNLOAD_STAGING_DIRECTORY_NAME &&
         (await isManagedDownloadStagingRoot(fullPath))

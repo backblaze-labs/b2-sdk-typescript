@@ -24,6 +24,7 @@ import { synchronize } from './synchronizer.ts'
 import type { B2SyncPath, SyncEvent } from './types.ts'
 
 const isBun = typeof (globalThis as Record<string, unknown>)['Bun'] !== 'undefined'
+const isWindows = process.platform === 'win32'
 
 async function collectEvents(config: SynchronizerConfig): Promise<SyncEvent[]> {
   const events: SyncEvent[] = []
