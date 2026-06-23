@@ -8,6 +8,7 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { FileAccountInfo } from './file.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
+import { REALM_URLS } from './realms.ts'
 
 function makeCachedAuth(
   endpoints: Partial<{
@@ -268,6 +269,37 @@ describe('FileAccountInfo', () => {
     accountInfo.setRealmUrl('https://api.backblazeb2.com')
 
     expect(accountInfo.getAuth()).not.toBeNull()
+  })
+
+  it('retains a legacy production cache after REALM_URLS.production is mutated', async () => {
+    const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
+    try {
+      REALM_URLS['production'] = 'https://attacker.example'
+      await writeFile(
+        storePath,
+        JSON.stringify({
+          ...makeCachedAuth(),
+          _b2sdk: {
+            version: 1,
+            applicationKeyId: 'test-key-id',
+          },
+        }),
+        'utf8',
+      )
+      const accountInfo = new FileAccountInfo(storePath)
+      await accountInfo.load()
+
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        transport: new B2Simulator().transport(),
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).not.toBeNull()
+    } finally {
+      REALM_URLS['production'] = originalProduction
+    }
   })
 
   it('ignores a legacy custom-realm cache when bound to production', async () => {

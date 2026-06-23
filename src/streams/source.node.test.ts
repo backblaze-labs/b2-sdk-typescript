@@ -206,19 +206,16 @@ describe('FileSource', () => {
     }
   })
 
-  it('ignores validation-bypassing constructor arguments', async () => {
+  it('preserves fromPath validation through public slices', async () => {
     const path = join(tmpDir, 'constructor.txt')
     await writeFile(path, 'safe payload')
-    const UnsafeCtor = FileSource as unknown as new (
-      path: string,
-      identity: Record<string, unknown>,
-    ) => FileSource
 
-    const source = new UnsafeCtor(path, { dev: 1, ino: 1, size: 1, mtimeMs: 1 })
+    const source = await FileSource.fromPath(path)
+    const slice = source.slice(0, 4)
 
     expect(source.size).toBe(12)
     await writeFile(path, 'changed payload')
-    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+    await expect(slice.toArrayBuffer()).rejects.toThrow(path)
   })
 
   it.skipIf(process.platform === 'win32')(

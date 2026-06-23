@@ -5,10 +5,11 @@ import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, AuthContextAwareAccountInfo, UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
-import { REALM_URLS } from './realms.ts'
+import { getRealmUrl } from './realms.ts'
 
 const PRIVATE_FILE_MODE = 0o600
 const PERSISTED_AUTH_VERSION = 1
+const BUILT_IN_PRODUCTION_REALM_URL = getRealmUrl('production')
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const STAGING_HOST_SUFFIX = 'backblaze.net'
 
@@ -278,7 +279,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
       this.realmUrl === undefined ||
       this.loadedAuthRealmUrl === this.realmUrl ||
       (this.loadedAuthRealmUrl === null &&
-        this.realmUrl === REALM_URLS['production'] &&
+        this.realmUrl === BUILT_IN_PRODUCTION_REALM_URL &&
         isProductionAuthResponse(auth))
     const applicationKeyMatches =
       this.applicationKeyId === undefined ||
