@@ -116,7 +116,7 @@ export async function* filterSyncPaths<T extends SyncPath>(
  * @param relativePath - Folder-relative path using forward slashes.
  * @param filters - Optional include and exclude filters.
  *
- * @returns True when include RegExp filters are present and the path is too long to evaluate.
+ * @returns True when any RegExp filter is present and the path is too long to evaluate.
  */
 export function pathSkippedByRegExpInputLimit(
   relativePath: string,
