@@ -258,6 +258,22 @@ describe('LocalFolder', () => {
     }
   })
 
+  it('rejects drive-relative Windows roots', () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('C:\\base')
+
+    try {
+      Object.defineProperty(process, 'platform', { value: 'win32' })
+
+      expect(() => new LocalFolder('C:dest')).toThrow('drive-relative Windows path')
+    } finally {
+      cwdSpy.mockRestore()
+      if (platformDescriptor !== undefined) {
+        Object.defineProperty(process, 'platform', platformDescriptor)
+      }
+    }
+  })
+
   it('uses forward slashes in relative paths even on the current platform', async () => {
     await mkdir(join(tmpDir, 'a', 'b'), { recursive: true })
     await writeFile(join(tmpDir, 'a', 'b', 'file.txt'), 'content')

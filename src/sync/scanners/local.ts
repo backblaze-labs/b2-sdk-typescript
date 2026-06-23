@@ -232,6 +232,9 @@ function resolveWindowsPath(cwd: string, root: string): string {
     const rest = normalizedRoot.slice(3).split('\\')
     return joinWindowsRoot(prefix, normalizePathSegments(rest, '\\'))
   }
+  if (/^[A-Za-z]:/.test(normalizedRoot)) {
+    throw new Error('LocalFolder root must not be a drive-relative Windows path')
+  }
   if (normalizedRoot.startsWith('\\')) {
     const rest = normalizePathSegments(normalizedRoot.slice(1).split('\\'), '\\')
     return joinWindowsRoot(cwdUnc?.prefix ?? drive, rest)
