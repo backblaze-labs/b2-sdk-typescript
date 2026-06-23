@@ -526,7 +526,7 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await readNextNonEmptyChunk(reader, options.signal)
+        const { done, value } = await readNextNonEmptyChunk(reader, signal)
         if (done) {
           throw new Error(
             `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
@@ -578,7 +578,7 @@ async function uploadPartsSequentially(
       )
     }
 
-    const extra = await readNextNonEmptyChunk(reader, options.signal)
+    const extra = await readNextNonEmptyChunk(reader, signal)
     if (!extra.done) {
       bytesRead += extra.value.byteLength
       throw new Error(
