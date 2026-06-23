@@ -109,10 +109,7 @@ export type SmallUploadOptions<T extends HighLevelUploadOptions> = Omit<
  *
  * @throws Error when an explicit resume target is supplied for a small upload.
  */
-export function rejectSmallResumeFileId(
-  options: HighLevelUploadOptions,
-  caller: string,
-): void {
+export function rejectSmallResumeFileId(options: HighLevelUploadOptions, caller: string): void {
   if (options.resumeFileId !== undefined) {
     throw new Error(`${caller}: resumeFileId is only supported for multipart uploads.`)
   }

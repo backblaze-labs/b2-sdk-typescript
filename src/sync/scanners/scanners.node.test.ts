@@ -10,6 +10,10 @@ import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import { FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  DOWNLOAD_STAGING_MARKER_NAME,
+} from '../download-staging.ts'
 import { makeReservedSyncTempFileName } from '../path-safety.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'

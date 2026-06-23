@@ -26,6 +26,7 @@ import {
   validateScannedLocalFile,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { isLocalFilesystemRoot } from './local-filesystem-root.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
 import { safeRelativePathSegments } from './path-safety.ts'
@@ -800,12 +801,18 @@ function createActionFactory(
         source.size,
         async (absPath, relPath, signal) => {
           const rootContext = localRootContexts.source
-          const root = rootContext ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
+          const root = rootContext?.root ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
               : `${uploadPrefix}${relPath}`
-          const targetPath = await resolveContainedLocalPath(root, source.relativePath, absPath)
+          if (rootContext !== undefined) {
+            await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: true })
+          }
+          const targetPath =
+            rootContext === undefined
+              ? await resolveContainedLocalPath(root, source.relativePath, absPath)
+              : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
           throwIfAborted(signal)
           // FileSource avoids whole-file buffering and rejects path swaps on a
           // best-effort basis. On Windows, callers that need tamper-resistant
@@ -833,6 +840,8 @@ function createActionFactory(
       assertBucket(bucket, 'download')
 
       return new DownloadAction(source.relativePath, source.size, async (relPath, signal) => {
+        const rootContext = localRootContexts.dest
+        const root = rootContext?.root ?? (downConfig.dest as Partial<LocalSyncFolder>).root ?? ''
         safeRelativePathSegments(relPath)
         const b2FileName =
           sourceB2Prefix === undefined
@@ -1102,6 +1111,46 @@ async function cancelReadableStreamBody(
     await body.cancel(reason)
   } catch {
     // Best-effort response cleanup must not mask the setup or write failure.
+  }
+}
+
+async function assertLocalRootContextCurrent(
+  context: LocalRootContext,
+  relativePath: string,
+  options: { readonly allowSymlinkRoot: boolean },
+): Promise<void> {
+  if (context.identity === undefined) return
+
+  const { lstat, realpath, stat } = await import('node:fs/promises')
+  let currentRealPath: string
+  try {
+    const rootLinkStats = await lstat(context.root)
+    if (!options.allowSymlinkRoot && rootLinkStats.isSymbolicLink()) {
+      throw new Error(`Refusing to access sync root through symlink: ${relativePath}`)
+    }
+    currentRealPath = await realpath(context.root)
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Refusing to access sync root')) throw err
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (currentRealPath !== context.realPath) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  let currentStats: Awaited<ReturnType<typeof stat>>
+  try {
+    currentStats = await stat(context.realPath)
+  } catch {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
+  }
+
+  if (
+    !currentStats.isDirectory() ||
+    currentStats.dev !== context.identity.deviceId ||
+    currentStats.ino !== context.identity.inode
+  ) {
+    throw new Error(`Local sync root changed before filesystem action: ${relativePath}`)
   }
 }
 

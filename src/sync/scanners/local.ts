@@ -11,6 +11,7 @@ import {
 import { localFileIdentityFromStats } from '../local-file-identity.ts'
 import { registerLocalFilesystemRoot } from '../local-filesystem-root.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
+import { isReservedSyncTempFileName } from '../path-safety.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
@@ -25,7 +26,6 @@ type LocalDirent = {
 type LocalStats = {
   readonly dev: number
   readonly ino: number
-  readonly ctimeMs: number
   readonly mtimeMs: number
   readonly ctimeMs: number
   readonly size: number
@@ -144,6 +144,16 @@ export class LocalFolder implements SyncFolder {
           await this.walk(root, fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
+        if (isReservedSyncTempFileName(entry.name)) {
+          emitScannerSkip(options, {
+            type: 'skip',
+            path: rel,
+            size: 0,
+            reason: 'stale-download-partial',
+            message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
+          })
+          continue
+        }
         if (!pathPassesSyncFilters(rel, options)) {
           if (pathSkippedByRegExpInputLimit(rel, options)) {
             emitScannerSkip(options, regexpInputTooLongSkip(rel))
@@ -170,13 +180,7 @@ export class LocalFolder implements SyncFolder {
           absolutePath: fullPath,
           modTimeMillis: Math.floor(s.mtimeMs),
           size: s.size,
-          fileIdentity: {
-            deviceId: s.dev,
-            inode: s.ino,
-            size: s.size,
-            modTimeMillis: Math.floor(s.mtimeMs),
-            changeTimeMillis: Math.floor(s.ctimeMs),
-          },
+          fileIdentity: localFileIdentityFromStats(s),
         })
       }
     }

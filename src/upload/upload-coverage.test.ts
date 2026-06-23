@@ -14,7 +14,12 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, type ContentSource, StreamSource, toContentSource } from '../streams/source.ts'
+import {
+  BufferSource,
+  type ContentSource,
+  StreamSource,
+  toContentSource,
+} from '../streams/source.ts'
 import {
   daysFromNow,
   deferred,

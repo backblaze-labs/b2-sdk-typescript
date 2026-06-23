@@ -1,6 +1,11 @@
 const RESERVED_SYNC_TEMP_FILE_RE = /^\.b2sdk-[0-9a-f]{24}-[^/\\]+-[0-9a-f]{32}\.partial$/i
 const UUID_HEX_RE = /^[0-9a-f]{32}$/i
 
+/** @internal */
+export function isReservedSyncTempFileName(name: string): boolean {
+  return RESERVED_SYNC_TEMP_FILE_RE.test(name)
+}
+
 /**
  * Rejects sync paths whose basename is reserved for SDK-owned temporary files.
  * @param relativePath - Sync-relative path using slash separators.
@@ -11,7 +16,7 @@ const UUID_HEX_RE = /^[0-9a-f]{32}$/i
  */
 export function assertSyncPathAllowed(relativePath: string): void {
   const parts = relativePath.split(/[\\/]+/).filter(Boolean)
-  if (parts.some((part) => RESERVED_SYNC_TEMP_FILE_RE.test(part))) {
+  if (parts.some((part) => isReservedSyncTempFileName(part))) {
     throw new Error(`Sync path uses reserved SDK temporary-file name: ${relativePath}`)
   }
 }

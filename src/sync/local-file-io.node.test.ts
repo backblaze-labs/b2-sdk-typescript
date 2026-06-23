@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import {
   chmod,
   mkdir,
@@ -13,7 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
@@ -26,16 +27,16 @@ import { assertSameScannedRegularFile, localFileIdentityFromStats } from './loca
 import {
   deleteLocalFileInsideRoot,
   localFileIoTestHooks,
+  readScannedLocalFile,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
-import { assertSyncPathAllowed } from './path-safety.ts'
-import { createSyncDownloadTempFileSweeper, syncDownloadTempName } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
 const isWindows = process.platform === 'win32'
 const isLinux = process.platform === 'linux'
+const execFileAsync = promisify(execFile)
 
 function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -64,19 +65,7 @@ async function makeScannedPath(
   }
 }
 
-async function oldScannerVisibleFiles(root: string, dir = root): Promise<string[]> {
-  const visible: string[] = []
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const fullPath = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      visible.push(...(await oldScannerVisibleFiles(root, fullPath)))
-      continue
-    }
-    if (entry.isFile() && !/^\.b2sdk-.*\.partial$/.test(entry.name)) {
-      visible.push(relative(root, fullPath).split(sep).join('/'))
-    }
-  })
-
+describe('readScannedLocalFile', () => {
   it('ignores Windows dev and inode drift when size and mtime still match', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-win-identity-'))
     try {
@@ -149,31 +138,47 @@ describe('writeLocalFileInsideRoot', () => {
 })
 
 describe('writeLocalStreamInsideRoot', () => {
-  it('uses SDK-reserved staging names for downloads', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-temp-name-'))
-    try {
-      let tempName = ''
-      localFileIoTestHooks.afterTempFileCreated = (path) => {
-        tempName = basename(path)
+  it.skipIf(isWindows)(
+    'creates private managed staging files under the destination root',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-private-'))
+      let observedTempPath = ''
+      let observedStagingDirectory = ''
+      try {
+        localFileIoTestHooks.afterTempFileCreated = async (tempPath, stagingDirectory) => {
+          observedTempPath = tempPath
+          observedStagingDirectory = stagingDirectory
+          const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+          expect(tempPath.startsWith(managedDirectory)).toBe(true)
+          expect(stagingDirectory.startsWith(managedDirectory)).toBe(true)
+          expect((await stat(tempPath)).mode & 0o777).toBe(0o600)
+          expect((await stat(stagingDirectory)).mode & 0o777).toBe(0o700)
+          expect(await readdir(root)).toEqual([DOWNLOAD_STAGING_DIRECTORY_NAME])
+        }
+
+        await writeLocalStreamInsideRoot(
+          root,
+          'file.txt',
+          streamFromBytes(textEncoder.encode('abc')),
+          {
+            expectedBytes: 3,
+            idleTimeoutMillis: 1000,
+          },
+        )
+
+        expect(observedTempPath).not.toBe('')
+        expect(observedStagingDirectory).not.toBe('')
+        expect((await stat(join(root, 'file.txt'))).mode & 0o777).toBe(0o600)
+        await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).resolves.toEqual([
+          DOWNLOAD_STAGING_MARKER_NAME,
+        ])
+      } finally {
+        delete localFileIoTestHooks.afterTempFileCreated
+        await rm(root, { recursive: true, force: true })
       }
-
-      await writeLocalStreamInsideRoot(
-        root,
-        'nested/file.txt',
-        streamFromBytes(textEncoder.encode('abc')),
-        {
-          expectedBytes: 3,
-          idleTimeoutMillis: 1000,
-        },
-      )
-
-      expect(tempName).toMatch(/^\.b2sdk-[0-9a-f]{24}-file\.txt-[0-9a-f]{32}\.partial$/)
-      expect(() => assertSyncPathAllowed(tempName)).toThrow('reserved SDK temporary-file name')
-    } finally {
-      delete localFileIoTestHooks.afterTempFileCreated
-      await rm(root, { recursive: true, force: true })
-    }
-  })
+    },
+  )
 
   it('rejects download bodies that exceed the expected byte count', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-overlong-'))

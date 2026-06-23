@@ -1,4 +1,5 @@
 import { arrayBufferFor } from '../util/bytes.ts'
+import { collectStream } from './collect.ts'
 
 export { FileSource, type FileSourcePath } from './file-source.ts'
 
@@ -357,17 +358,27 @@ async function readStreamChunk(
   }
 
   let removeAbortListener: (() => void) | undefined
+  let abortCancel: Promise<void> | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
-      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
-      void reader.cancel(signal.reason).catch(() => {})
+      const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+      abortCancel = reader.cancel(reason).catch(() => {})
+      reject(reason)
     }
     signal.addEventListener('abort', onAbort, { once: true })
     removeAbortListener = () => signal.removeEventListener('abort', onAbort)
   })
 
   try {
-    return await Promise.race([reader.read(), abort])
+    const result = await Promise.race([reader.read(), abort])
+    if (signal.aborted) {
+      await abortCancel
+      throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+    }
+    return result
+  } catch (err) {
+    await abortCancel
+    throw err
   } finally {
     removeAbortListener?.()
   }

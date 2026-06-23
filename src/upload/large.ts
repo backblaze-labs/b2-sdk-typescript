@@ -1,6 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
-import { readStreamChunkWithSignal } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
@@ -14,9 +13,9 @@ import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defa
 import { planRanges, type RangePlan } from '../util/plan-ranges.ts'
 import { createAbortScope, raceWithAbort, throwRejectedOrAbortReason } from './abort-scope.ts'
 import {
+  type CleanupFailureOptions,
   cancelLargeFileBestEffort,
   cleanupAfterLargeFileError,
-  type CleanupFailureOptions,
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
@@ -49,12 +48,7 @@ export interface ResumePartReusedEvent {
 /** Callback invoked when explicit resume accepts a pre-existing server part. */
 export type ResumePartReusedListener = (event: ResumePartReusedEvent) => void
 
-const STREAM_EMITTED_TOO_MANY_BYTES_ERROR =
-  'uploadLargeFile: source stream emitted more bytes than advertised size.'
-const STREAM_TRAILING_EMPTY_CHUNKS_ERROR =
-  'uploadLargeFile: source stream emitted too many empty chunks after advertised size.'
-const STREAM_EMPTY_CHUNKS_ERROR =
-  'uploadLargeFile: source stream emitted too many empty chunks without data.'
+const MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS = 1024
 
 /** Options for uploading a large file via the multipart protocol. */
 export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailureOptions {
@@ -272,6 +266,9 @@ export async function uploadLargeFile(
   let createdLargeFile = false
   const abortScope = createAbortScope(options.signal)
   const startFreshLargeFile = async (): Promise<void> => {
+    if (abortScope.signal.aborted && !options.source.canSlice) {
+      await cancelForwardOnlySource(options.source, abortScope.signal.reason)
+    }
     abortScope.signal.throwIfAborted()
     const startPromise = raw.startLargeFile(
       accountInfo.getApiUrl(),
@@ -287,6 +284,9 @@ export async function uploadLargeFile(
       largeFileId = startResp.fileId
     } catch (err) {
       if (abortScope.signal.aborted) {
+        if (!options.source.canSlice) {
+          await cancelForwardOnlySource(options.source, abortScope.signal.reason).catch(() => {})
+        }
         cancelLargeFileAfterStart(startPromise, raw, accountInfo, options.onCleanupFailure)
       }
       throw err
@@ -296,6 +296,9 @@ export async function uploadLargeFile(
   }
 
   try {
+    if (abortScope.signal.aborted && !options.source.canSlice) {
+      await cancelForwardOnlySource(options.source, abortScope.signal.reason)
+    }
     abortScope.signal.throwIfAborted()
     if (options.resumeFileId !== undefined) {
       const candidate = await findResumeCandidate(
@@ -529,8 +532,7 @@ async function uploadPartsSequentially(
   signal: AbortSignal,
 ): Promise<void> {
   const reader = options.source.stream().getReader()
-  let partNumber = 1
-  let completed = false
+  let bytesRead = 0
   // Carry-over bytes from a previous read when the read returned more
   // than we needed to fill one part. Kept as an array to avoid an
   // allocation per loop iteration on a typical multi-part upload.
@@ -551,12 +553,13 @@ async function uploadPartsSequentially(
       }
 
       while (filled < buf.byteLength) {
-        const { done, value } = await readNextNonEmptyStreamChunk(
-          reader,
-          STREAM_EMPTY_CHUNKS_ERROR,
-          signal,
-        )
-        if (done) break
+        const { done, value } = await readNextNonEmptyStreamChunk(reader, emptyChunkError(), signal)
+        if (done) {
+          throw new Error(
+            `uploadLargeFile: source stream ended after ${bytesRead} bytes, expected ${options.source.size}.`,
+          )
+        }
+        bytesRead += value.byteLength
         const take = Math.min(value.byteLength, buf.byteLength - filled)
         buf.set(value.subarray(0, take), filled)
         filled += take
@@ -595,43 +598,38 @@ async function uploadPartsSequentially(
       tracker.addBytes(data.byteLength)
       tracker.completePart()
     }
-    if (carry !== null) {
-      throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
+    if (carry !== null && carry.byteLength > 0) {
+      throw new Error(tooManyBytesError(options.source.size))
     }
-    const extra = await readNextNonEmptyStreamChunk(
-      reader,
-      STREAM_TRAILING_EMPTY_CHUNKS_ERROR,
-      signal,
-    )
+    const extra = await readNextNonEmptyStreamChunk(reader, emptyChunkError(), signal)
     if (!extra.done) {
-      throw new Error(STREAM_EMITTED_TOO_MANY_BYTES_ERROR)
+      bytesRead += extra.value.byteLength
+      throw new Error(tooManyBytesError(options.source.size))
     }
-    completed = true
+  } catch (err) {
+    await reader.cancel(err).catch(() => {})
+    throw err
   } finally {
-    if (!completed) {
-      /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
-      await reader.cancel().catch(() => {})
-    }
     // Releasing the lock lets the underlying stream propagate close / error
     // events to any upstream producer (e.g. a Node `Readable`).
     reader.releaseLock()
   }
 }
 
-async function readNextNonEmptyChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal | undefined,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  let emptyChunks = 0
-  while (true) {
-    const result = await readStreamChunkWithSignal(reader, signal)
-    if (result.done || result.value.byteLength > 0) return result
-    emptyChunks += 1
-    if (emptyChunks > MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS) {
-      throw new Error(
-        `uploadLargeFile: source stream emitted more than ${MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS} consecutive empty chunks.`,
-      )
-    }
+function emptyChunkError(): string {
+  return `uploadLargeFile: source stream emitted more than ${MAX_CONSECUTIVE_EMPTY_STREAM_CHUNKS} consecutive empty chunks. too many empty chunks.`
+}
+
+function tooManyBytesError(advertisedSize: number): string {
+  return `uploadLargeFile: source stream emitted more than advertised ${advertisedSize} bytes. source stream emitted more bytes than advertised size.`
+}
+
+async function cancelForwardOnlySource(source: ContentSource, reason: unknown): Promise<void> {
+  const reader = source.stream().getReader()
+  try {
+    await reader.cancel(reason)
+  } finally {
+    reader.releaseLock()
   }
 }
 

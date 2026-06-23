@@ -1,3 +1,4 @@
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { readStreamChunkWithTimeout } from './b2-sha1-reader.ts'
 import {
   assertDownloadPathSameDevice,
@@ -5,16 +6,13 @@ import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   isDownloadStagingDirectorySegment,
 } from './download-staging.ts'
-import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import {
   assertPathInsideRoot,
   hasErrorCode,
-  makeReservedSyncTempFileName,
   noFollowFlag,
   safeRelativePathSegments,
 } from './path-safety.ts'
 import { DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS } from './sha1-options.ts'
-import type { SyncDownloadTempFileSweeper } from './temp-files.ts'
 import type { LocalSyncPath } from './types.ts'
 
 type DeviceStat = { readonly dev: number | bigint }
@@ -25,11 +23,15 @@ export { DOWNLOAD_STAGING_DIRECTORY_NAME }
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
-  afterTempFileCreated?: (path: string) => Promise<void> | void
+  afterTempFileCreated?: (path: string, stagingDirectory: string) => Promise<void> | void
+  beforeDownloadPublish?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
+  beforeStagingMarkerWrite?: (path: string) => Promise<void> | void
+  disableProcFdAnchoring?: boolean
   platform?: string
+  statForDeviceCheck?: DeviceStatFn
 } = {}
 
 interface ScannedLocalFileHandle {
@@ -200,7 +202,13 @@ export async function writeLocalStreamInsideRoot(
   } catch (err) {
     if (!hasErrorCode(err, 'ENOENT')) throw err
   }
-  await options.downloadTempFileSweeper?.(parentRealPath)
+  const statForDeviceCheck = localFileIoTestHooks.statForDeviceCheck ?? stat
+  await assertDownloadPathSameDevice(
+    rootRealPath,
+    parentRealPath,
+    statForDeviceCheck,
+    'unsafe local destination path: cannot publish download across filesystems',
+  )
 
   let parentHandle: Awaited<ReturnType<typeof open>> | undefined
   let anchoredParentPath: string | undefined
@@ -226,8 +234,6 @@ export async function writeLocalStreamInsideRoot(
   }
   /* v8 ignore stop */
   const finalName = path.basename(destPath)
-  const tmpName = makeReservedSyncTempFileName(finalName, randomUUID())
-  const tmpPath = path.join(anchoredParentPath ?? parentRealPath, tmpName)
   const finalWritePath = path.join(anchoredParentPath ?? parentRealPath, finalName)
   let publishMode: number
   try {
@@ -269,9 +275,21 @@ export async function writeLocalStreamInsideRoot(
     throw err
   }
   /* v8 ignore stop */
-  const tmpRealPath = await realpath(tmpPath)
-  assertPathInsideRoot(rootRealPath, tmpRealPath, path)
-  await localFileIoTestHooks.afterTempFileCreated?.(tmpRealPath)
+  try {
+    const tmpRealPath = await realpath(tmpPath)
+    assertPathInsideRoot(stagingDirectory, tmpRealPath, path)
+  } catch (err) {
+    /* v8 ignore next -- best-effort cleanup */
+    await handle?.close().catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await rm(tmpPath, { force: true }).catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+    /* v8 ignore next -- best-effort cleanup */
+    await parentHandle?.close().catch(() => {})
+    throw err
+  }
+  const writeHandle = handle
   const reader = body.getReader()
   let completed = false
   try {
@@ -651,7 +669,7 @@ function assertSameScannedRegularFile(
     readonly size: number
   },
   path: LocalSyncPath,
-  operation: 'upload' | 'delete' = 'upload',
+  operation: 'upload' | 'download' | 'delete' = 'upload',
 ): void {
   const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {

@@ -130,15 +130,6 @@ export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 export { EventType } from './types/notifications.ts'
 export type {
-  ResumePartReusedEvent,
-  ResumePartReusedListener,
-} from './upload/large.ts'
-export type {
-  ResumeCandidateRejectedEvent,
-  ResumeCandidateRejectedListener,
-  ResumeCandidateRejectedReason,
-} from './upload/resume.ts'
-export type {
   AmbiguousFinishCleanupFailureEvent,
   CancelLargeFileCleanupFailureEvent,
   CleanupFailureEvent,
@@ -146,12 +137,21 @@ export type {
   CleanupFailureOptions,
 } from './upload/cancel.ts'
 export type {
+  ResumePartReusedEvent,
+  ResumePartReusedListener,
+} from './upload/large.ts'
+export type {
   B2ObjectUploadOptions,
   B2ObjectWriteStreamOptions,
   BucketUploadOptions,
   HighLevelUploadOptions,
   UploadOptions,
 } from './upload/options.ts'
+export type {
+  ResumeCandidateRejectedEvent,
+  ResumeCandidateRejectedListener,
+  ResumeCandidateRejectedReason,
+} from './upload/resume.ts'
 export type { UploadRetryEvent, UploadRetryListener, UploadRetryOptions } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'

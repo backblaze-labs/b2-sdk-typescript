@@ -313,19 +313,6 @@ describe('BlobSource', () => {
   })
 })
 
-describe('FileSource identity helper', () => {
-  it('rejects non-FileSource values', () => {
-    expect(() =>
-      assertFileSourceMatchesIdentity({ filePath: 'missing.txt' } as FileSource, {
-        deviceId: 1,
-        inode: 1,
-        size: 1,
-        modTimeMillis: 1,
-      }),
-    ).toThrow('FileSource file changed after validation: missing.txt')
-  })
-})
-
 describe('StreamSource', () => {
   function makeStream(data: Uint8Array): ReadableStream<Uint8Array> {
     return new ReadableStream({
