@@ -12,6 +12,7 @@ import {
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
+import type { BucketRetentionPolicy } from './types/bucket.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
@@ -25,6 +26,14 @@ import {
 import type { UploadRetryListener } from './upload/retry.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
+
+function readableObjectBucketDefaultRetention(
+  info: Bucket['info'],
+): BucketRetentionPolicy | undefined {
+  const fileLock = info.fileLockConfiguration
+  if (!fileLock.isClientAuthorizedToRead || fileLock.value === null) return undefined
+  return fileLock.value.defaultRetention
+}
 
 /** Options accepted by {@link B2Object.download} and {@link B2Object.downloadById}. */
 export interface DownloadCallOptions {
@@ -124,11 +133,14 @@ export class B2Object {
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
+      const bucketDefaultRetention = readableObjectBucketDefaultRetention(this.bucket.info)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
         retry: this.uploadRetryOptions,
+        bucketDefaultServerSideEncryption: this.bucket.info.defaultServerSideEncryption,
+        ...(bucketDefaultRetention !== undefined ? { bucketDefaultRetention } : {}),
       })
     }
     rejectSmallResumeFileId(options, 'B2Object.upload')

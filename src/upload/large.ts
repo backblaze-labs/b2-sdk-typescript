@@ -5,6 +5,7 @@ import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
 import type { ContentSource } from '../streams/source.ts'
+import type { BucketRetentionPolicy } from '../types/bucket.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -65,8 +66,12 @@ export interface UploadLargeFileOptions {
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption settings applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
+  /** Effective bucket default encryption used when serverSideEncryption is omitted. */
+  readonly bucketDefaultServerSideEncryption?: EncryptionSetting
   /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
+  /** Effective readable bucket default retention used when fileRetention is omitted. */
+  readonly bucketDefaultRetention?: BucketRetentionPolicy
   /** Legal hold status applied at upload time. */
   readonly legalHold?: LegalHoldValue
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
@@ -96,13 +101,16 @@ export interface UploadLargeFileOptions {
    *
    * Discovery runs before the first upload byte and can make up to the
    * list-page budget plus the candidate budget times the part-page budget in
-   * sequential B2 list calls; pass `signal` to bound wall-clock time. SSE-C
-   * uploads are never auto-resumed because B2 does not expose the customer key
-   * identity needed to verify a compatible unfinished file. Candidates with
-   * unreadable Object Lock retention or legal-hold fields are rejected because
-   * automatic discovery cannot prove they are unlocked.
+   * sequential B2 list calls. When no `signal` is supplied, the SDK applies
+   * `resumeDiscoveryTimeoutMs`. SSE-C uploads are never auto-resumed because
+   * B2 does not expose the customer key identity needed to verify a
+   * compatible unfinished file. Candidates with unreadable Object Lock fields
+   * are compatible only when neither the caller nor readable bucket defaults
+   * require those settings.
    */
   readonly resume?: boolean
+  /** Aggregate SDK-enforced timeout for resume discovery when no signal is supplied. */
+  readonly resumeDiscoveryTimeoutMs?: number
   /**
    * Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. Defaults to 10.
    * If the scan truncates, resume falls back to a fresh upload and
@@ -129,14 +137,65 @@ export interface UploadLargeFileOptions {
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
    * {@link ResumeFileIdMismatchError}.
-   * Unreadable Object Lock retention or legal-hold fields are rejected because
-   * the SDK cannot verify the final lock state.
+   * Unreadable Object Lock fields are compatible only when neither the caller
+   * nor readable bucket defaults require those settings.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
   readonly onResumeCandidateRejected?: ResumeCandidateRejectedListener
   /** Diagnostic callback invoked when resume reuses an already-uploaded part. */
   readonly onResumePartReused?: ResumePartReusedListener
+}
+
+interface StartLargeFileResumeRequest {
+  readonly contentType: string
+  readonly fileInfo: Record<string, string>
+  readonly serverSideEncryption?: EncryptionSetting
+  readonly fileRetention?: FileRetentionValue
+  readonly legalHold?: LegalHoldValue
+}
+
+function createResumeCandidateCriteria(
+  options: UploadLargeFileOptions,
+  request: StartLargeFileResumeRequest,
+  totalSize: number,
+  partSize: number,
+  parts: readonly RangePlan[],
+): ResumeCandidateCriteria {
+  return {
+    contentType: request.contentType,
+    fileInfo: request.fileInfo,
+    sourceSize: totalSize,
+    partSize,
+    parts,
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(request.serverSideEncryption !== undefined
+      ? { serverSideEncryption: request.serverSideEncryption }
+      : options.bucketDefaultServerSideEncryption !== undefined
+        ? { serverSideEncryption: options.bucketDefaultServerSideEncryption }
+        : {}),
+    ...(request.fileRetention !== undefined
+      ? { fileRetention: request.fileRetention }
+      : options.bucketDefaultRetention !== undefined
+        ? { defaultFileRetention: options.bucketDefaultRetention }
+        : {}),
+    ...(request.legalHold !== undefined ? { legalHold: request.legalHold } : {}),
+    ...(options.resumeDiscoveryTimeoutMs !== undefined
+      ? { discoveryTimeoutMs: options.resumeDiscoveryTimeoutMs }
+      : {}),
+    ...(options.onResumeCandidateRejected !== undefined
+      ? { onCandidateRejected: options.onResumeCandidateRejected }
+      : {}),
+    ...(options.resumeMaxListPages !== undefined
+      ? { maxListPages: options.resumeMaxListPages }
+      : {}),
+    ...(options.resumeMaxPartCandidates !== undefined
+      ? { maxPartCandidates: options.resumeMaxPartCandidates }
+      : {}),
+    ...(options.resumeMaxPartPages !== undefined
+      ? { maxPartPages: options.resumeMaxPartPages }
+      : {}),
+  }
 }
 
 /**
@@ -190,35 +249,13 @@ export async function uploadLargeFile(
     ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
     ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
   }
-  const resumeCandidateCriteria: ResumeCandidateCriteria = {
-    contentType: startLargeFileRequest.contentType,
-    fileInfo: startLargeFileRequest.fileInfo,
-    sourceSize: totalSize,
+  const resumeCandidateCriteria = createResumeCandidateCriteria(
+    options,
+    startLargeFileRequest,
+    totalSize,
     partSize,
     parts,
-    ...(options.signal !== undefined ? { signal: options.signal } : {}),
-    ...(startLargeFileRequest.serverSideEncryption !== undefined
-      ? { serverSideEncryption: startLargeFileRequest.serverSideEncryption }
-      : {}),
-    ...(startLargeFileRequest.fileRetention !== undefined
-      ? { fileRetention: startLargeFileRequest.fileRetention }
-      : {}),
-    ...(startLargeFileRequest.legalHold !== undefined
-      ? { legalHold: startLargeFileRequest.legalHold }
-      : {}),
-    ...(options.onResumeCandidateRejected !== undefined
-      ? { onCandidateRejected: options.onResumeCandidateRejected }
-      : {}),
-    ...(options.resumeMaxListPages !== undefined
-      ? { maxListPages: options.resumeMaxListPages }
-      : {}),
-    ...(options.resumeMaxPartCandidates !== undefined
-      ? { maxPartCandidates: options.resumeMaxPartCandidates }
-      : {}),
-    ...(options.resumeMaxPartPages !== undefined
-      ? { maxPartPages: options.resumeMaxPartPages }
-      : {}),
-  }
+  )
 
   // --- Resume discovery (M11.1) ---
   if (!options.source.canSlice && options.resumeFileId !== undefined) {

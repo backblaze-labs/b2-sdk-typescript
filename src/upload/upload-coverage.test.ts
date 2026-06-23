@@ -22,11 +22,15 @@ import {
   makeClient,
   readStream,
 } from '../test-utils/index.ts'
-import { BucketType } from '../types/bucket.ts'
+import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
-import { cleanupRequestOptions, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
+import {
+  cancelLargeFileBestEffort,
+  cleanupRequestOptions,
+  DEFAULT_CLEANUP_TIMEOUT_MS,
+} from './cancel.ts'
 import { type ResumePartReusedEvent, uploadLargeFile } from './large.ts'
 import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
@@ -347,6 +351,60 @@ describe('uploadLargeFile cleanup paths', () => {
       expect(timeoutOptions.signal.aborted).toBe(true)
       expect((timeoutOptions.signal.reason as Error).name).toBe('TimeoutError')
     } finally {
+      Object.defineProperty(AbortSignal, 'timeout', {
+        configurable: true,
+        writable: true,
+        value: originalTimeout,
+      })
+      Object.defineProperty(AbortSignal, 'any', {
+        configurable: true,
+        writable: true,
+        value: originalAny,
+      })
+    }
+  })
+
+  it('clears fallback cleanup timers after successful cancellation', async () => {
+    const originalTimeout = AbortSignal.timeout
+    const originalAny = AbortSignal.any
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+    Object.defineProperty(AbortSignal, 'any', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    })
+
+    try {
+      const raw = {
+        cancelLargeFile: vi.fn(async () => ({
+          fileId: 'cleanup-id',
+          fileName: 'cleanup.bin',
+        })),
+      } as unknown as RawClient
+      const accountInfo = {
+        getApiUrl: () => 'https://api.example.test',
+        getAuthToken: () => 'auth-token',
+      } as unknown as AccountInfo
+
+      await cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        largeFileId('cleanup-id'),
+        cleanupRequestOptions(undefined, 10_000),
+      )
+
+      const fallbackTimer = setTimeoutSpy.mock.results[setTimeoutSpy.mock.results.length - 1]?.value
+      expect(fallbackTimer).toBeDefined()
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(fallbackTimer)
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
       Object.defineProperty(AbortSignal, 'timeout', {
         configurable: true,
         writable: true,
@@ -1773,16 +1831,14 @@ describe('uploadLargeFile fresh multipart metadata', () => {
           retainUntilTimestamp: daysFromNow(1),
         },
       },
-      expectedReason: 'retention-mismatch',
     },
     {
       name: 'hidden legal hold',
       fileName: 'hidden-legal-hold.bin',
       hiddenField: 'legalHold' as const,
       startOptions: { legalHold: LegalHoldValue.On },
-      expectedReason: 'legal-hold-mismatch',
     },
-  ])('starts a fresh upload instead of resuming a candidate with $name', async (scenario) => {
+  ])('resumes a candidate with omitted unreadable $name', async (scenario) => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     const transport: HttpTransport = {
@@ -1864,14 +1920,14 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     })
 
     expect(result.fileName).toBe(scenario.fileName)
-    expect(rejected).toContain(scenario.expectedReason)
+    expect(rejected).toEqual([])
     expect(reused).toEqual([])
     const unfinished = await hiddenClient.raw.listUnfinishedLargeFiles(
       hiddenClient.accountInfo.getApiUrl(),
       hiddenClient.accountInfo.getAuthToken(),
       { bucketId: hiddenBucket.id },
     )
-    expect(unfinished.files.map((file) => file.fileId)).toContain(start.fileId)
+    expect(unfinished.files.map((file) => file.fileId)).not.toContain(start.fileId)
   })
 
   it('resumes unfinished files that inherited the bucket default SSE-B2 setting', async () => {
@@ -1953,6 +2009,103 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     const unfinishedIds = unfinished.files.map((file) => file.fileId)
     expect(unfinishedIds).not.toContain(start.fileId)
     expect(unfinishedIds).not.toContain(explicit.fileId)
+  })
+
+  it('high-level resume rejects candidates weaker than current bucket defaults', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const originalBucket = await client.createBucket({
+      bucketName: 'resume-current-defaults',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const autoNoEncryption = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: originalBucket.id,
+        fileName: 'default-auto.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const autoNoRetention = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: originalBucket.id,
+        fileName: 'default-auto.bin',
+        contentType: 'application/octet-stream',
+        serverSideEncryption: {
+          mode: EncryptionMode.SseB2,
+          algorithm: EncryptionAlgorithm.Aes256,
+        },
+      },
+    )
+    const explicitNoRetention = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: originalBucket.id,
+        fileName: 'default-explicit.bin',
+        contentType: 'application/octet-stream',
+        serverSideEncryption: {
+          mode: EncryptionMode.SseB2,
+          algorithm: EncryptionAlgorithm.Aes256,
+        },
+      },
+    )
+
+    await originalBucket.update({
+      defaultServerSideEncryption: {
+        mode: EncryptionMode.SseB2,
+        algorithm: EncryptionAlgorithm.Aes256,
+      },
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+    const freshBucket = await client.getBucket('resume-current-defaults')
+    if (freshBucket === null) throw new Error('updated bucket not found')
+
+    const rejected: string[] = []
+    const result = await freshBucket.upload({
+      fileName: 'default-auto.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resume: true,
+      onResumeCandidateRejected: (event) => rejected.push(event.reason),
+    })
+
+    expect(result.serverSideEncryption).toEqual({
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    })
+    expect(result.fileRetention.value?.mode).toBe(RetentionMode.Governance)
+    expect(rejected).toEqual(expect.arrayContaining(['retention-mismatch', 'encryption-mismatch']))
+    await expect(
+      freshBucket.file('default-explicit.bin').upload({
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        concurrency: 1,
+        resumeFileId: explicitNoRetention.fileId,
+      }),
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: originalBucket.id },
+    )
+    const unfinishedIds = unfinished.files.map((file) => file.fileId)
+    expect(unfinishedIds).toEqual(
+      expect.arrayContaining([autoNoEncryption.fileId, autoNoRetention.fileId]),
+    )
   })
 
   it('leaves reused unfinished files available after local upload failures', async () => {

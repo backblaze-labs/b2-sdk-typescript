@@ -224,6 +224,18 @@ function uploadServerSideEncryption(
   return fallback
 }
 
+function defaultFileRetention(
+  policy: BucketInfo['defaultRetention'],
+  uploadTimestamp: number,
+): FileRetentionValue | null {
+  if (policy.mode === BucketRetentionMode.None || policy.period === null) return null
+  const days = policy.period.unit === 'days' ? policy.period.duration : policy.period.duration * 365
+  return {
+    mode: policy.mode as RetentionMode,
+    retainUntilTimestamp: uploadTimestamp + days * 24 * 60 * 60 * 1000,
+  }
+}
+
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
 export interface SimulatorJsonResponse {
   /** HTTP status code. */
@@ -1827,16 +1839,18 @@ export class B2Simulator {
     }
 
     const fid = this.genId('4_z')
+    const uploadTimestamp = this.monotonicTimestamp()
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
       fileName: req.fileName,
       contentType: req.contentType,
       fileInfo: req.fileInfo ?? {},
-      fileRetention: req.fileRetention ?? null,
+      fileRetention:
+        req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
       legalHold: req.legalHold ?? null,
       serverSideEncryption: req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
-      uploadTimestamp: this.monotonicTimestamp(),
+      uploadTimestamp,
       parts: new Map(),
     }
     this.largeFiles.set(fid, large)

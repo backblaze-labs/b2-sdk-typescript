@@ -1,6 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { ResumeFileIdMismatchError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
+import { BucketRetentionMode, type BucketRetentionPolicy } from '../types/bucket.ts'
 import {
   EncryptionMode,
   type EncryptionSetting,
@@ -26,6 +27,9 @@ export const RESUME_PART_SIZE_INFO_KEY = 'b2_sdk_resume_part_size'
 const DEFAULT_MAX_RESUME_LIST_PAGES = 10
 const DEFAULT_MAX_RESUME_PART_CANDIDATES = 25
 const DEFAULT_MAX_RESUME_PART_PAGES = 10
+
+/** Default aggregate timeout for resume discovery when callers do not pass an abort signal. */
+export const DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS = 30_000
 
 /** One planned part from the local upload source. */
 export interface ResumePartPlan {
@@ -81,6 +85,8 @@ export interface ResumeCandidateCriteria {
   readonly serverSideEncryption?: EncryptionSetting
   /** Explicit Object Lock retention option, if configured by the caller. */
   readonly fileRetention?: FileRetentionValue
+  /** Effective readable bucket default retention when the caller omits fileRetention. */
+  readonly defaultFileRetention?: BucketRetentionPolicy
   /** Explicit legal hold option, if configured by the caller. */
   readonly legalHold?: LegalHoldValue
   /** Explicit unfinished large-file ID to verify before reuse. */
@@ -95,6 +101,8 @@ export interface ResumeCandidateCriteria {
   readonly maxPartCandidates?: number
   /** Maximum `b2_list_parts` pages to inspect for each metadata-compatible candidate. */
   readonly maxPartPages?: number
+  /** Aggregate resume discovery timeout used when no caller signal is supplied. */
+  readonly discoveryTimeoutMs?: number
 }
 
 /** Uploaded part metadata used by the resume planner. */
@@ -136,6 +144,29 @@ export async function findResumeCandidate(
   fileName: string,
   criteria: ResumeCandidateCriteria,
 ): Promise<ResumeCandidate | null> {
+  const discoverySignal = createResumeDiscoverySignal(criteria)
+  try {
+    return await findResumeCandidateWithSignal(
+      raw,
+      accountInfo,
+      bucketId,
+      fileName,
+      criteria,
+      discoverySignal.signal,
+    )
+  } finally {
+    discoverySignal.dispose()
+  }
+}
+
+async function findResumeCandidateWithSignal(
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  bucketId: BucketId,
+  fileName: string,
+  criteria: ResumeCandidateCriteria,
+  signal: AbortSignal | undefined,
+): Promise<ResumeCandidate | null> {
   const matches: Array<{ file: UnfinishedLargeFile; sequence: number }> = []
   const maxListPages = criteria.maxListPages ?? DEFAULT_MAX_RESUME_LIST_PAGES
   const maxPartCandidates = criteria.maxPartCandidates ?? DEFAULT_MAX_RESUME_PART_CANDIDATES
@@ -146,17 +177,20 @@ export async function findResumeCandidate(
   let truncated = false
 
   while (pageCount < maxListPages) {
-    criteria.signal?.throwIfAborted()
-    const unfinished = await raw.listUnfinishedLargeFiles(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      {
-        bucketId,
-        maxFileCount: explicitResumeFileId !== undefined ? 1 : 100,
-        namePrefix: fileName,
-        ...(startFileId !== undefined ? { startFileId } : {}),
-      },
-      criteria.signal !== undefined ? { signal: criteria.signal } : undefined,
+    signal?.throwIfAborted()
+    const unfinished = await abortableRequest(
+      raw.listUnfinishedLargeFiles(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          bucketId,
+          maxFileCount: explicitResumeFileId !== undefined ? 1 : 100,
+          namePrefix: fileName,
+          ...(startFileId !== undefined ? { startFileId } : {}),
+        },
+        signal !== undefined ? { signal } : undefined,
+      ),
+      signal,
     )
     pageCount++
 
@@ -188,7 +222,7 @@ export async function findResumeCandidate(
 
   let partCandidatesInspected = 0
   for (const match of matches) {
-    criteria.signal?.throwIfAborted()
+    signal?.throwIfAborted()
     const rejection = candidateMetadataRejectReason(match.file, fileName, criteria)
     if (rejection !== null) {
       notifyCandidateRejected(criteria, match.file, fileName, rejection)
@@ -205,7 +239,7 @@ export async function findResumeCandidate(
     const uploadedPartsResult = await collectResumePartInfo(raw, accountInfo, fileId, {
       maxPages: criteria.maxPartPages ?? DEFAULT_MAX_RESUME_PART_PAGES,
       maxParts: criteria.parts.length,
-      ...(criteria.signal !== undefined ? { signal: criteria.signal } : {}),
+      ...(signal !== undefined ? { signal } : {}),
     })
     const uploadedParts = uploadedPartsResult.parts
     if (uploadedPartsResult.truncated || !uploadedPartsMatchPlan(uploadedParts, criteria.parts)) {
@@ -245,15 +279,18 @@ async function collectResumePartInfo(
       maxParts === Number.POSITIVE_INFINITY
         ? undefined
         : Math.max(1, Math.min(1000, maxParts - parts.size + 1))
-    const page = await raw.listParts(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      {
-        fileId,
-        ...(startPartNumber !== undefined ? { startPartNumber } : {}),
-        ...(remainingParts !== undefined ? { maxPartCount: remainingParts } : {}),
-      },
-      options.signal !== undefined ? { signal: options.signal } : undefined,
+    const page = await abortableRequest(
+      raw.listParts(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          fileId,
+          ...(startPartNumber !== undefined ? { startPartNumber } : {}),
+          ...(remainingParts !== undefined ? { maxPartCount: remainingParts } : {}),
+        },
+        options.signal !== undefined ? { signal: options.signal } : undefined,
+      ),
+      options.signal,
     )
     pageCount++
     for (const part of page.parts) {
@@ -317,7 +354,14 @@ function candidateMetadataRejectReason(
     criteria.serverSideEncryption,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
-  if (!fileRetentionMatches(candidate.fileRetention, criteria.fileRetention)) {
+  if (
+    !fileRetentionMatches(
+      candidate.fileRetention,
+      criteria.fileRetention,
+      criteria.defaultFileRetention,
+      candidate.uploadTimestamp,
+    )
+  ) {
     return 'retention-mismatch'
   }
   if (!legalHoldMatches(candidate.legalHold, criteria.legalHold)) {
@@ -412,14 +456,42 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
 function fileRetentionMatches(
   candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
+  defaultExpected: BucketRetentionPolicy | undefined,
+  uploadTimestamp: number | undefined,
 ): boolean {
+  if (expected === undefined && defaultExpected !== undefined) {
+    if (defaultExpected.mode === BucketRetentionMode.None) {
+      if (candidate === undefined) return true
+      if (!candidate.isClientAuthorizedToRead) return true
+      return fileRetentionValueEquals(candidate.value, null)
+    }
+    if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
+    return fileRetentionValueMatchesBucketDefault(candidate.value, defaultExpected, uploadTimestamp)
+  }
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return fileRetentionValueEquals(candidate.value, null)
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
   return fileRetentionValueEquals(candidate.value, expected)
+}
+
+function fileRetentionValueMatchesBucketDefault(
+  candidate: FileRetentionValue | null,
+  expected: BucketRetentionPolicy,
+  uploadTimestamp: number | undefined,
+): boolean {
+  if (expected.period === null) return false
+  if (candidate?.mode !== expected.mode || candidate.retainUntilTimestamp === null) return false
+  if (uploadTimestamp === undefined) return true
+  return candidate.retainUntilTimestamp >= uploadTimestamp + retentionPeriodMillis(expected.period)
+}
+
+function retentionPeriodMillis(period: BucketRetentionPolicy['period']): number {
+  if (period === null) return 0
+  const days = period.unit === 'days' ? period.duration : period.duration * 365
+  return days * 24 * 60 * 60 * 1000
 }
 
 function fileRetentionValueEquals(
@@ -438,11 +510,82 @@ function legalHoldMatches(
 ): boolean {
   if (expected === undefined) {
     if (candidate === undefined) return true
-    if (!candidate.isClientAuthorizedToRead) return false
+    if (!candidate.isClientAuthorizedToRead) return true
     return candidate.value === null || candidate.value === 'off'
   }
   if (candidate === undefined || !candidate.isClientAuthorizedToRead) return false
   return candidate.value === expected
+}
+
+interface ResumeDiscoverySignal {
+  readonly signal?: AbortSignal
+  dispose(): void
+}
+
+function createResumeDiscoverySignal(criteria: ResumeCandidateCriteria): ResumeDiscoverySignal {
+  if (criteria.signal !== undefined) {
+    return {
+      signal: criteria.signal,
+      dispose() {},
+    }
+  }
+
+  const timeoutMs = criteria.discoveryTimeoutMs ?? DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS
+  if (timeoutMs === Number.POSITIVE_INFINITY) {
+    return {
+      dispose() {},
+    }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(
+    () => {
+      controller.abort(resumeDiscoveryTimeoutReason(timeoutMs))
+    },
+    Math.max(0, timeoutMs),
+  )
+
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timeout)
+    },
+  }
+}
+
+async function abortableRequest<T>(
+  request: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return request
+  if (signal.aborted) throw resumeAbortReason(signal)
+
+  let removeAbortListener: (() => void) | undefined
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(resumeAbortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([request, aborted])
+  } finally {
+    removeAbortListener?.()
+    void request.catch(() => {})
+  }
+}
+
+function resumeAbortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? resumeDiscoveryTimeoutReason(DEFAULT_RESUME_DISCOVERY_TIMEOUT_MS)
+}
+
+function resumeDiscoveryTimeoutReason(timeoutMs: number): Error {
+  if (typeof DOMException === 'function') {
+    return new DOMException(`Resume discovery timed out after ${timeoutMs} ms`, 'TimeoutError')
+  }
+  const error = new Error(`Resume discovery timed out after ${timeoutMs} ms`)
+  error.name = 'TimeoutError'
+  return error
 }
 
 type ListedEncryption = PublicEncryptionSetting | undefined

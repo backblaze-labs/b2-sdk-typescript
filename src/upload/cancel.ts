@@ -6,6 +6,8 @@ import { bestEffort } from '../util/best-effort.ts'
 /** Default wall-clock bound for best-effort cleanup calls after upload failure. */
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000
 
+const fallbackCleanupDisposers = new WeakMap<AbortSignal, () => void>()
+
 /**
  * Cancels an unfinished large file on a best-effort basis. Used at every
  * error-handling boundary in the multipart upload, write-stream, and
@@ -87,7 +89,9 @@ function createFallbackCleanupSignal(
   const cleanup = () => {
     clearTimeout(timeout)
     signal?.removeEventListener('abort', onAbort)
+    fallbackCleanupDisposers.delete(controller.signal)
   }
+  fallbackCleanupDisposers.set(controller.signal, cleanup)
 
   if (signal === undefined || signal.aborted) {
     return controller.signal
@@ -128,6 +132,7 @@ async function waitForCleanup(
     await Promise.race([request, aborted])
   } finally {
     removeAbortListener?.()
+    fallbackCleanupDisposers.get(signal)?.()
     void request.catch(() => {})
   }
 }

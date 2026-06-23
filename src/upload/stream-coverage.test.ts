@@ -57,6 +57,68 @@ describe('createWriteStream branch coverage', () => {
     expect(result.contentLength).toBe(data.byteLength)
   })
 
+  it('applies backpressure instead of queueing stalled part buffers', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let uploadStarts = 0
+    const uploadStartWaiters: Array<() => void> = []
+    const uploadReleases: Array<() => void> = []
+    const waitForUploadStart = async (count: number): Promise<void> => {
+      if (uploadStarts >= count) return
+      await new Promise<void>((resolve) => {
+        uploadStartWaiters.push(() => {
+          if (uploadStarts >= count) resolve()
+        })
+      })
+    }
+    const stalledTransport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_upload_part')) {
+          uploadStarts++
+          for (const waiter of uploadStartWaiters.splice(0)) waiter()
+          await new Promise<void>((resolve) => uploadReleases.push(resolve))
+        }
+        return inner.send(req)
+      },
+    }
+    const stallClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: stalledTransport,
+      retry: { maxRetries: 0 },
+    })
+    await stallClient.authorize()
+    const stallBucket = await stallClient.createBucket({
+      bucketName: 'stream-backpressure',
+      bucketType: BucketType.AllPrivate,
+    })
+    const { writable, done } = stallBucket.file('backpressure.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+
+    await writer.write(deterministicBytes(100_000))
+    await waitForUploadStart(1)
+
+    let secondWriteSettled = false
+    const secondWrite = writer.write(deterministicBytes(100_000)).then(() => {
+      secondWriteSettled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(secondWriteSettled).toBe(false)
+
+    uploadReleases.shift()?.()
+    await secondWrite
+    await waitForUploadStart(2)
+    uploadReleases.shift()?.()
+    await writer.close()
+    const result = await done
+
+    expect(result.fileName).toBe('backpressure.bin')
+    expect(result.contentLength).toBe(200_000)
+  })
+
   it('wraps a non-Error throw from uploadPart so done rejects with an Error', async () => {
     // Custom transport rejects b2_upload_part with a plain string (not an
     // Error instance). The engine's `errored` latch must wrap it via

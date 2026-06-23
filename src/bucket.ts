@@ -103,6 +103,12 @@ export interface DeleteAllSkipEvent {
 /** Event yielded by {@link Bucket.deleteAll} as it streams through file versions. */
 export type DeleteAllEvent = DeleteAllDeleteEvent | DeleteAllErrorEvent | DeleteAllSkipEvent
 
+function readableBucketDefaultRetention(info: BucketInfo): BucketRetentionPolicy | undefined {
+  const fileLock = info.fileLockConfiguration
+  if (!fileLock.isClientAuthorizedToRead || fileLock.value === null) return undefined
+  return fileLock.value.defaultRetention
+}
+
 /**
  * Handle to a B2 bucket providing upload, download, listing, and management operations.
  *
@@ -165,10 +171,13 @@ export class Bucket {
     const isLarge = options.source.size > recommendedPartSize
 
     if (isLarge) {
+      const bucketDefaultRetention = readableBucketDefaultRetention(this.info)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
         retry: this.uploadRetryOptions,
+        bucketDefaultServerSideEncryption: this.info.defaultServerSideEncryption,
+        ...(bucketDefaultRetention !== undefined ? { bucketDefaultRetention } : {}),
       })
     }
     rejectSmallResumeFileId(options, 'Bucket.upload')

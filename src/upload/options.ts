@@ -44,6 +44,8 @@ export interface UploadOptions {
   signal?: AbortSignal
   /** Enable bounded same-name multipart resume discovery. Ignored on the small-file path. */
   resume?: boolean
+  /** Aggregate SDK-enforced timeout for resume discovery when no signal is supplied. */
+  resumeDiscoveryTimeoutMs?: number
   /** Maximum `b2_list_unfinished_large_files` pages inspected before upload starts. */
   resumeMaxListPages?: number
   /** Maximum metadata-compatible candidates whose parts may be listed before upload starts. */
@@ -76,6 +78,7 @@ type ResumeOnlyUploadOptions = Pick<
   | 'resumeFileId'
   | 'onResumeCandidateRejected'
   | 'onResumePartReused'
+  | 'resumeDiscoveryTimeoutMs'
   | 'resumeMaxListPages'
   | 'resumeMaxPartCandidates'
   | 'resumeMaxPartPages'
@@ -111,6 +114,7 @@ export function stripResumeOnlyOptions<T extends UploadOptions>(options: T): Sma
     resumeFileId: _resumeFileId,
     onResumeCandidateRejected: _onResumeCandidateRejected,
     onResumePartReused: _onResumePartReused,
+    resumeDiscoveryTimeoutMs: _resumeDiscoveryTimeoutMs,
     resumeMaxListPages: _resumeMaxListPages,
     resumeMaxPartCandidates: _resumeMaxPartCandidates,
     resumeMaxPartPages: _resumeMaxPartPages,

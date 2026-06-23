@@ -207,27 +207,8 @@ export function createWriteStream(
       })
   }
 
-  function dispatchPart(): void {
-    if (pending.length === 0) return
-    let data: Uint8Array
-    if (pending.length === 1) {
-      const head = pending[0]
-      if (!head) return
-      data = head
-    } else {
-      const total = pending.reduce((sum, chunk) => sum + chunk.byteLength, 0)
-      data = new Uint8Array(total)
-      let offset = 0
-      for (const chunk of pending) {
-        data.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-    }
-    pending.length = 0
-    pendingBytes = 0
-    const partNumber = nextPartNumber++
+  function startPartWithAcquiredSlot(data: Uint8Array, partNumber: number): void {
     const task = (async () => {
-      await sem.acquire()
       try {
         await shipPart(data, partNumber)
       } catch (err) {
@@ -242,6 +223,46 @@ export function createWriteStream(
     task.catch(() => {})
   }
 
+  async function acquirePartSlot(): Promise<void> {
+    await sem.acquire()
+    if (errored !== null) {
+      sem.release()
+      throw errored
+    }
+    try {
+      abortScope.signal.throwIfAborted()
+    } catch (err) {
+      sem.release()
+      throw err
+    }
+  }
+
+  async function dispatchPart(): Promise<void> {
+    if (pending.length === 0) return
+    await acquirePartSlot()
+    let data: Uint8Array
+    if (pending.length === 1) {
+      const head = pending[0]
+      if (!head) {
+        sem.release()
+        return
+      }
+      data = head
+    } else {
+      const total = pending.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+      data = new Uint8Array(total)
+      let offset = 0
+      for (const chunk of pending) {
+        data.set(chunk, offset)
+        offset += chunk.byteLength
+      }
+    }
+    pending.length = 0
+    pendingBytes = 0
+    const partNumber = nextPartNumber++
+    startPartWithAcquiredSlot(data, partNumber)
+  }
+
   const writable = new WritableStream<Uint8Array>({
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
@@ -250,23 +271,16 @@ export function createWriteStream(
       pending.push(chunk)
       pendingBytes += chunk.byteLength
       while (pendingBytes >= partSize) {
+        await acquirePartSlot()
+        if (errored) {
+          sem.release()
+          throw errored
+        }
         // Pull exactly partSize bytes off the front
         const carved = carveExact(pending, partSize)
         const partNumber = nextPartNumber++
         pendingBytes -= partSize
-        const task = (async () => {
-          await sem.acquire()
-          try {
-            await shipPart(carved, partNumber)
-          } catch (err) {
-            markErrored(err)
-            throw err
-          } finally {
-            sem.release()
-          }
-        })()
-        inflight.push(task)
-        task.catch(() => {})
+        startPartWithAcquiredSlot(carved, partNumber)
       }
     },
 
@@ -279,7 +293,7 @@ export function createWriteStream(
         // single buffered batch (no parts shipped yet), we have to use the
         // multipart path anyway since we already called startLargeFile lazily.
         if (pendingBytes > 0) {
-          dispatchPart()
+          await dispatchPart()
         }
 
         const settled = await Promise.allSettled(inflight)
