@@ -134,7 +134,10 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   )
 }
 
-function uploadResponseBodyError(err: unknown): UploadResponseBodyError {
+function uploadResponseBodyError(err: unknown, signal: AbortSignal | undefined): UploadResponseBodyError {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
   const message = err instanceof Error ? err.message : 'Upload response body could not be read'
   return new UploadResponseBodyError(message, { cause: err })
 }
@@ -413,7 +416,7 @@ export class RawClient {
     try {
       return normalizeFileVersionSha1(await response.json<FileVersion>())
     } catch (err) {
-      throw uploadResponseBodyError(err)
+      throw uploadResponseBodyError(err, options?.signal)
     }
   }
 
@@ -733,7 +736,7 @@ export class RawClient {
     try {
       return await response.json<UploadPartResponse>()
     } catch (err) {
-      throw uploadResponseBodyError(err)
+      throw uploadResponseBodyError(err, options?.signal)
     }
   }
 
