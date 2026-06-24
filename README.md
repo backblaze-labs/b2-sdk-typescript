@@ -125,7 +125,7 @@ await bucket.upload({
 })
 ```
 
-`FileSource` rejects non-regular leaf paths, later leaf path swaps, and same-size rewrites that restore mtime on supported platforms. Parent directory symlinks are followed unless your application validates the containing root first. `FileSource` construction rejects on Windows because Node's portable filesystem metadata cannot enforce stable path identity there.
+`FileSource` rejects non-regular leaf paths, later leaf path swaps, and same-size rewrites that restore mtime on POSIX platforms. Parent directory symlinks are followed unless your application validates the containing root first. On Windows, `FileSource` skips unreliable dev/inode and ctime comparisons and validates size and mtime instead.
 
 Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
 
@@ -750,14 +750,14 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs Node coverage on Linux, Windows, and macOS; `FileSource` local-file upload support is Linux/macOS only. |
+| Node.js | 22.3+ | Primary target. CI runs Node coverage on Linux, Windows, and macOS; `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
 | Cloudflare Workers | - | Supported. |
 | Vercel Edge | - | Supported. |
 
-Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()` and on Windows; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms.
+Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 
