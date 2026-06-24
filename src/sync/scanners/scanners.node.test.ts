@@ -488,6 +488,27 @@ describe('LocalFolder', () => {
     expect(skips).toEqual([`stale-download-partial:${reservedTempName}`])
     await expect(access(tempPath)).resolves.toBeFalsy()
   })
+
+  it('skips local directories in the reserved SDK temp namespace', async () => {
+    const tempPath = join(tmpDir, reservedTempName)
+    await mkdir(tempPath)
+    await writeFile(join(tempPath, 'nested.txt'), 'user data')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const skips: string[] = []
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    expect(skips).toEqual([`stale-download-partial:${reservedTempName}`])
+    await expect(access(tempPath)).resolves.toBeFalsy()
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -137,6 +137,16 @@ export class LocalFolder implements SyncFolder {
         })
         continue
       }
+      if (isReservedSyncTempFileName(entry.name)) {
+        emitScannerSkip(options, {
+          type: 'skip',
+          path: rel,
+          size: 0,
+          reason: 'stale-download-partial',
+          message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
+        })
+        continue
+      }
       // Symlinks, FIFOs, sockets, and device nodes are not syncable files.
       // Ignore them without poisoning delete-mode orphan handling for unrelated paths.
       if (entry.isDirectory()) {
@@ -144,16 +154,6 @@ export class LocalFolder implements SyncFolder {
           await this.walk(root, fullPath, out, options, maxScanEntries, nodeDeps)
         }
       } else if (entry.isFile()) {
-        if (isReservedSyncTempFileName(entry.name)) {
-          emitScannerSkip(options, {
-            type: 'skip',
-            path: rel,
-            size: 0,
-            reason: 'stale-download-partial',
-            message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
-          })
-          continue
-        }
         if (!pathPassesSyncFilters(rel, options)) {
           if (pathSkippedByRegExpInputLimit(rel, options)) {
             emitScannerSkip(options, regexpInputTooLongSkip(rel))
