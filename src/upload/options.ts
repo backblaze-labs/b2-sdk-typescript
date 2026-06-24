@@ -10,7 +10,10 @@ import type { UploadRetryOptions } from './retry.ts'
 
 /** Shared options for high-level file uploads. */
 export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailureOptions {
-  /** Data source to upload. Use {@link BufferSource}, {@link BlobSource}, or {@link StreamSource}. */
+  /**
+   * Data source to upload. Use {@link BufferSource}, {@link BlobSource}, {@link FileSource},
+   * {@link StreamSource}, or {@link toContentSource} for async iterables and Node Readables.
+   */
   readonly source: ContentSource
   /** MIME type. Defaults to `"b2/x-auto"` (auto-detected by B2). */
   readonly contentType?: string
