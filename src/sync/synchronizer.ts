@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { FileSource } from '../streams/source.ts'
+import { BufferSource, type ContentSource, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -23,6 +23,7 @@ import {
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import {
   deleteLocalFileInsideRoot,
+  readScannedLocalFile,
   validateScannedLocalFile,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
@@ -999,14 +1000,25 @@ function createActionFactory(
 async function createValidatedUploadFileSource(
   source: LocalSyncPath,
   absolutePath: string,
-): Promise<FileSource> {
+): Promise<ContentSource> {
   try {
     const fileSource = await FileSource.fromPath(absolutePath)
     await validateScannedLocalFile({ ...source, absolutePath })
     return fileSource
   } catch (err) {
+    if (isUnsupportedWindowsFileSourceError(err)) {
+      return new BufferSource(await readScannedLocalFile({ ...source, absolutePath }))
+    }
     throw normalizeLocalUploadSourceError(err)
   }
+}
+
+function isUnsupportedWindowsFileSourceError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    err.message.includes('FileSource:') &&
+    err.message.includes('not supported on Windows')
+  )
 }
 
 function normalizeLocalUploadSourceError(err: unknown): Error {
