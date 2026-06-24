@@ -443,7 +443,7 @@ export class FileSource implements ContentSource {
    *
    * @returns A promise resolving with the file bytes.
    */
-  toArrayBuffer(options: ToArrayBufferOptions = {}): Promise<ArrayBuffer> {
+  toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
     return fileRangeToArrayBuffer(this.path, this.identity, 0, this.size, options)
   }
 
