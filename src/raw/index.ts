@@ -134,7 +134,10 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   )
 }
 
-function uploadResponseBodyError(err: unknown, signal: AbortSignal | undefined): UploadResponseBodyError {
+function uploadResponseBodyError(
+  err: unknown,
+  signal: AbortSignal | undefined,
+): UploadResponseBodyError {
   if (signal?.aborted === true) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }

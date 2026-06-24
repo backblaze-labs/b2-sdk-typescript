@@ -1,6 +1,26 @@
-import { posix as posixPath, win32 as win32Path } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { assertSyncPathAllowed, resolveSafeLocalPath } from './paths.ts'
+
+const posixPath = {
+  sep: '/',
+  isAbsolute: (path: string): boolean => path.startsWith('/'),
+  resolve: (...paths: string[]): string => {
+    const normalized = paths.join('/').replace(/\/+/g, '/')
+    const absolute = normalized.startsWith('/') ? normalized : `/${normalized}`
+    return absolute.length > 1 && absolute.endsWith('/') ? absolute.slice(0, -1) : absolute
+  },
+}
+
+const win32Path = {
+  sep: '\\',
+  isAbsolute: (path: string): boolean => /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\\\'),
+  resolve: (...paths: string[]): string => {
+    const [root = '', ...rest] = paths
+    const normalizedRoot = root.replace(/\//g, '\\').replace(/\\+$/g, '')
+    const normalizedRest = rest.join('\\').replace(/[\\/]+/g, '\\')
+    return normalizedRest === '' ? normalizedRoot : `${normalizedRoot}\\${normalizedRest}`
+  },
+}
 
 describe('sync path safety', () => {
   it('resolves sync-relative local paths under the root', () => {

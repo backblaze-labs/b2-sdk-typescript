@@ -509,47 +509,47 @@ describe('FetchTransport', () => {
     }
   })
 
-  it.each(['uploadFile', 'uploadPart'] as const)(
-    'preserves caller aborts during %s response body reads',
-    async (method) => {
-      const controller = new AbortController()
-      const reason = new Error('caller stopped waiting')
-      fetchSpy.mockResolvedValue(stalledResponse())
-      const raw = new RawClient({ transport: new FetchTransport() })
+  it.each([
+    'uploadFile',
+    'uploadPart',
+  ] as const)('preserves caller aborts during %s response body reads', async (method) => {
+    const controller = new AbortController()
+    const reason = new Error('caller stopped waiting')
+    fetchSpy.mockResolvedValue(stalledResponse())
+    const raw = new RawClient({ transport: new FetchTransport() })
 
-      const call =
-        method === 'uploadFile'
-          ? raw.uploadFile(
-              'https://pod.backblaze.com/b2_upload_file',
-              {
-                authorization: 'upload-auth',
-                fileName: 'payload.bin',
-                contentType: 'application/octet-stream',
-                contentLength: 1,
-                contentSha1: 'none',
-                fileInfo: {},
-              },
-              new Uint8Array([1]) as BodyInit,
-              { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
-            )
-          : raw.uploadPart(
-              'https://pod.backblaze.com/b2_upload_part',
-              {
-                authorization: 'part-auth',
-                partNumber: 1,
-                contentLength: 1,
-                contentSha1: 'none',
-              },
-              new Uint8Array([1]) as BodyInit,
-              { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
-            )
+    const call =
+      method === 'uploadFile'
+        ? raw.uploadFile(
+            'https://pod.backblaze.com/b2_upload_file',
+            {
+              authorization: 'upload-auth',
+              fileName: 'payload.bin',
+              contentType: 'application/octet-stream',
+              contentLength: 1,
+              contentSha1: 'none',
+              fileInfo: {},
+            },
+            new Uint8Array([1]) as BodyInit,
+            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+          )
+        : raw.uploadPart(
+            'https://pod.backblaze.com/b2_upload_part',
+            {
+              authorization: 'part-auth',
+              partNumber: 1,
+              contentLength: 1,
+              contentSha1: 'none',
+            },
+            new Uint8Array([1]) as BodyInit,
+            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+          )
 
-      const observed = observeRejection(call as Promise<unknown>)
-      controller.abort(reason)
+    const observed = observeRejection(call as Promise<unknown>)
+    controller.abort(reason)
 
-      await expect(observed).rejects.toBe(reason)
-    },
-  )
+    await expect(observed).rejects.toBe(reason)
+  })
 
   it('applies finishLargeFile retry timeout overrides to response body reads', async () => {
     vi.useFakeTimers()
