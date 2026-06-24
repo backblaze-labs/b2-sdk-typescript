@@ -9,6 +9,7 @@ import {
   NetworkError,
   ResumeFileIdMismatchError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import type { RawClient } from '../raw/index.ts'
@@ -2164,7 +2165,7 @@ describe('upload fresh-URL retry', () => {
         source: new BufferSource(new Uint8Array([1, 2, 3])),
         retryResponseBodyFailures: false,
       }),
-    ).rejects.toThrow(/response body lost/)
+    ).rejects.toBeInstanceOf(UploadResponseBodyError)
 
     expect(uploadAttempts).toBe(1)
     expect(await countFileVersions(bucket, 'lost-body-disabled.txt')).toBe(1)

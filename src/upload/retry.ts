@@ -308,9 +308,10 @@ function isUploadRateLimitError(err: unknown): err is B2Error {
   return err instanceof B2Error && err.status === 429
 }
 
-function normalizeUploadRetryError(err: unknown, _options: UploadLayerRetryOptions): unknown {
+function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {
   if (err instanceof B2Error || err instanceof NetworkError) return err
   if (err instanceof UploadResponseBodyError) {
+    if (!options.retryResponseBodyFailures) return err
     return new NetworkError(err.message, err)
   }
   if (err instanceof DOMException && err.name === 'AbortError') return err
