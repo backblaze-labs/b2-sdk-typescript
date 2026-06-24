@@ -331,6 +331,7 @@ async function raceBodyReadWithAbort<T>(
   if (signal === undefined) return read
   const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
   if (signal.aborted) {
+    void read.catch(() => {})
     const reason = abortReason()
     await runAbortCleanup(abortCleanup, reason)
     throw reason

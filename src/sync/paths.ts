@@ -1,4 +1,4 @@
-import { assertSyncPathAllowed, safeRelativePathSegments } from './path-safety.ts'
+import { safeRelativePathSegments } from './path-safety.ts'
 
 export { assertSyncPathAllowed } from './path-safety.ts'
 
@@ -24,7 +24,6 @@ export function resolveSafeLocalPath(
   relativePath: string,
   path: PathOperations,
 ): string {
-  assertSyncPathAllowed(relativePath)
   if (path.isAbsolute(relativePath)) {
     throw new Error(`Sync path must be relative: ${relativePath}`)
   }
