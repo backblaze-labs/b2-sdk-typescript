@@ -63,6 +63,39 @@ function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
   return makeClient({ minimumPartSize: 100_000 })
 }
 
+function makeClientWithOneFreshUrlFailure(endpoint: string): {
+  client: B2Client
+  getFreshUrlCalls(): number
+} {
+  const sim = new B2Simulator({ minimumPartSize: 100, recommendedPartSize: 100 })
+  const inner = sim.transport()
+  let freshUrlCalls = 0
+  const transport: HttpTransport = {
+    async send(req: HttpRequest): Promise<HttpResponse> {
+      if (req.url.includes(endpoint)) {
+        freshUrlCalls += 1
+        if (freshUrlCalls === 1) {
+          return jsonErrorResponse(500, 'internal_error', 'fresh URL fetch failed')
+        }
+      }
+      return inner.send(req)
+    },
+  }
+  const client = new B2Client({
+    applicationKeyId: 'test-key-id',
+    applicationKey: 'test-key',
+    transport,
+    retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+  })
+  return { client, getFreshUrlCalls: () => freshUrlCalls }
+}
+
+const perCallRetry = {
+  initialRetryDelayMs: 0,
+  maxRetries: 1,
+  maxRetryDelayMs: 0,
+} as const
+
 async function waitForExpectation(assertion: () => void): Promise<void> {
   const maybeWaitFor = (
     vi as typeof vi & {
@@ -1813,6 +1846,102 @@ describe('upload fresh-URL retry', () => {
 
     expect(getUploadUrlCalls).toBe(maxRetries + 1)
     expect(uploadAttempts).toBe(1)
+  })
+
+  it('honors per-call retry overrides for Bucket.upload small files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-small-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'small.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('small.txt')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for Bucket.upload multipart files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-large-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      concurrency: 1,
+      fileName: 'large.bin',
+      partSize: 100,
+      source: new BufferSource(deterministicBytes(250)),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('large.bin')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.upload small files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'object-small-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.file('small.txt').upload({
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('small.txt')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.upload multipart files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'object-large-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.file('large.bin').upload({
+      concurrency: 1,
+      partSize: 100,
+      source: new BufferSource(deterministicBytes(250)),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('large.bin')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.createWriteStream', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+    const upload = bucket.file('stream.bin').createWriteStream({
+      concurrency: 1,
+      partSize: 100,
+      retry: perCallRetry,
+    })
+
+    const writer = upload.writable.getWriter()
+    await writer.write(deterministicBytes(150))
+    await writer.close()
+    const result = await upload.done
+
+    expect(result.fileName).toBe('stream.bin')
+    expect(getFreshUrlCalls()).toBe(2)
   })
 
   it('stops sending payloads immediately when aborted from the upload retry callback', async () => {

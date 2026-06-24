@@ -30,3 +30,21 @@ export function getClientUploadRetryOptions(client: object): RetryOptions {
   }
   return retryOptions
 }
+
+/**
+ * Merges client upload retry defaults with a per-call override.
+ * @param client - Client instance that owns the retry options.
+ * @param override - Per-call retry option overrides, if any.
+ *
+ * @returns Retry options for one high-level upload operation.
+ *
+ * @internal
+ */
+export function mergeClientUploadRetryOptions(
+  client: object,
+  override: Partial<RetryOptions> | undefined,
+): RetryOptions {
+  const defaults = getClientUploadRetryOptions(client)
+  if (override === undefined) return defaults
+  return { ...defaults, ...override }
+}

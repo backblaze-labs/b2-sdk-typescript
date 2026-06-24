@@ -6,7 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import { mergeClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
   BucketInfo,
@@ -177,7 +177,7 @@ export class Bucket {
   async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
-    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
+    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options.retry)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info

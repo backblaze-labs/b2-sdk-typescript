@@ -9,7 +9,7 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
-import { getClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import { mergeClientUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { BucketRetentionPolicy } from './types/bucket.ts'
@@ -134,7 +134,7 @@ export class B2Object {
   async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
-    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
+    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options.retry)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options)
@@ -278,7 +278,7 @@ export class B2Object {
    * @returns A handle with the writable sink and a completion promise.
    */
   createWriteStream(options?: B2ObjectWriteStreamOptions): UploadWriteHandle {
-    const uploadRetryOptions = getClientUploadRetryOptions(this.client)
+    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options?.retry)
     return createWriteStream(this.client.raw, this.client.accountInfo, {
       ...(options ?? {}),
       bucketId: this.bucket.id,
