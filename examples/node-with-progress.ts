@@ -10,10 +10,9 @@
  *     npx tsx examples/node-with-progress.ts <bucket-name> <local-file>
  */
 
-import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import type { ProgressListener } from '@backblaze-labs/b2-sdk/streams'
-import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
+import { FileSource } from '@backblaze-labs/b2-sdk/streams'
 import { setupClient } from './_smoke/cli.ts'
 
 /**
@@ -72,9 +71,9 @@ async function main() {
     process.exit(1)
   }
 
-  const data = await readFile(filePath)
   const fileName = basename(filePath)
-  const totalBytes = data.byteLength
+  const source = await FileSource.fromPath(filePath)
+  const totalBytes = source.size
   const startedAt = Date.now()
 
   const onProgress = throttle((e) => {
@@ -96,7 +95,7 @@ async function main() {
 
   const result = await bucket.upload({
     fileName,
-    source: new BufferSource(new Uint8Array(data)),
+    source,
     onProgress,
   })
 

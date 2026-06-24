@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { daysFromNow } from '../test-utils/index.ts'
+import { type ContentSource, FileSource } from '../streams/source.ts'
+import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
+import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
@@ -1215,6 +1217,50 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode)('uses FileSource uploads under the Windows identity policy', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-win-buffer-'))
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+      try {
+        const filePath = join(root, 'win.txt')
+        await writeFile(filePath, 'win-ok')
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'win.txt',
+          absolutePath: filePath,
+          modTimeMillis: 1000,
+          size: 6,
+        }
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: 'upload-done', path: 'win.txt' }),
+        )
+        const uploadOptions = mockBucket.upload.mock.calls[0]?.[0] as
+          | { readonly fileName: string; readonly source: ContentSource }
+          | undefined
+        expect(uploadOptions?.fileName).toBe('win.txt')
+        expect(uploadOptions?.source).toBeInstanceOf(FileSource)
+        expect(uploadOptions?.source.size).toBe(6)
+        await expect(uploadOptions?.source.toArrayBuffer()).resolves.toEqual(
+          new TextEncoder().encode('win-ok').buffer,
+        )
+      } finally {
+        platformSpy.mockRestore()
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
     it.skipIf(!isNode)('rejects upload when the scanned file size changes', async () => {
       const { tmpdir } = await import('node:os')
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
@@ -1247,47 +1293,144 @@ describe('synchronize', () => {
       }
     })
 
-    it.skipIf(!isNode)('rejects upload when same-size file identity changes', async () => {
-      const { tmpdir } = await import('node:os')
-      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
-      const { join } = await import('node:path')
-      const { LocalFolder } = await import('./scanners/local.ts')
-      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-identity-'))
-      try {
-        const filePath = join(root, 'report.txt')
-        await writeFile(filePath, 'safe')
-        const scanned: LocalSyncPath[] = []
-        for await (const path of new LocalFolder(root).scan()) scanned.push(path)
-        const [path] = scanned
-        if (path?.fileIdentity === undefined) throw new Error('expected scanned file identity')
-        const staleIdentity = {
-          ...path.fileIdentity,
-          inode: path.fileIdentity.inode + 1,
-        }
-        const stalePath: LocalSyncPath = { ...path, fileIdentity: staleIdentity }
+    it.skipIf(!isNode || isWindows)(
+      'rejects upload when same-size file identity changes',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-identity-'))
+        try {
+          const filePath = join(root, 'report.txt')
+          await writeFile(filePath, 'safe')
+          const scanned: LocalSyncPath[] = []
+          for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+          const [path] = scanned
+          if (path?.fileIdentity === undefined) throw new Error('expected scanned file identity')
+          const staleIdentity = {
+            ...path.fileIdentity,
+            inode: path.fileIdentity.inode + 1,
+          }
+          const stalePath: LocalSyncPath = { ...path, fileIdentity: staleIdentity }
 
-        const mockBucket = makeMockBucket()
-        const config: SynchronizerUpConfig = {
-          source: {
-            ...makeMemoryFolder([stalePath], 'local'),
-            type: 'local',
-            root,
-          },
-          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
-          options: { compareMode: 'modtime', keepMode: 'no-delete' },
-          bucket: mockBucket as unknown as Bucket,
-          prefix: '',
-        }
+          const mockBucket = makeMockBucket()
+          const config: SynchronizerUpConfig = {
+            source: {
+              ...makeMemoryFolder([stalePath], 'local'),
+              type: 'local',
+              root,
+            },
+            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
 
-        const events = await collectEvents(config)
-        expect(mockBucket.upload).not.toHaveBeenCalled()
-        expect(events.find((event) => event.type === 'error')?.message).toContain(
-          'local file changed before upload',
-        )
-      } finally {
-        await rm(root, { recursive: true, force: true })
-      }
-    })
+          const events = await collectEvents(config)
+          expect(mockBucket.upload).not.toHaveBeenCalled()
+          expect(events.find((event) => event.type === 'error')?.message).toContain(
+            'local file changed before upload',
+          )
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode || isWindows)(
+      'rejects same-size local rewrites with restored mtime before upload',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, utimes, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-ctime-'))
+        try {
+          const filePath = join(root, 'report.txt')
+          await writeFile(filePath, 'safe')
+          const scanned: LocalSyncPath[] = []
+          for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+          const [sourceFile] = scanned
+          if (sourceFile?.fileIdentity?.changeTimeMillis === undefined) {
+            throw new Error('expected scanned change time')
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          await writeFile(filePath, 'evil')
+          const restoredMtime = new Date(sourceFile.modTimeMillis)
+          await utimes(filePath, restoredMtime, restoredMtime)
+
+          const mockBucket = makeMockBucket()
+          const config: SynchronizerUpConfig = {
+            source: {
+              ...makeMemoryFolder([sourceFile], 'local'),
+              type: 'local',
+              root,
+            },
+            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+          expect(mockBucket.upload).not.toHaveBeenCalled()
+          expect(events.find((event) => event.type === 'error')?.message).toContain(
+            'local file changed before upload',
+          )
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode || isWindows)(
+      'rejects local path replacement before upload source capture',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rename, rm, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const { LocalFolder } = await import('./scanners/local.ts')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-swap-'))
+        const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-outside-'))
+        try {
+          const filePath = join(root, 'report.txt')
+          const replacementPath = join(outside, 'replacement.txt')
+          await writeFile(filePath, 'safe')
+          await writeFile(replacementPath, 'evil')
+          const scanned: LocalSyncPath[] = []
+          for await (const path of new LocalFolder(root).scan()) scanned.push(path)
+          const [sourceFile] = scanned
+          if (sourceFile === undefined) throw new Error('expected scanned source')
+
+          await rm(filePath)
+          await rename(replacementPath, filePath)
+
+          const mockBucket = makeMockBucket()
+          const config: SynchronizerUpConfig = {
+            source: {
+              ...makeMemoryFolder([sourceFile], 'local'),
+              type: 'local',
+              root,
+            },
+            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+          expect(mockBucket.upload).not.toHaveBeenCalled()
+          expect(events.find((event) => event.type === 'error')?.message).toContain(
+            'local file changed before upload',
+          )
+        } finally {
+          await rm(root, { recursive: true, force: true })
+          await rm(outside, { recursive: true, force: true })
+        }
+      },
+    )
 
     it.skipIf(!isNode)('yields action outcomes as each action settles', async () => {
       const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
@@ -2762,7 +2905,7 @@ describe('synchronize', () => {
 
     it.skipIf(!isNode || isWindows)('rejects symlinked local parents on download', async () => {
       const { tmpdir } = await import('node:os')
-      const { mkdir, mkdtemp, rm, symlink } = await import('node:fs/promises')
+      const { mkdir, mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
       const { join } = await import('node:path')
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-symlink-root-'))
       const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-symlink-out-'))
@@ -2781,7 +2924,7 @@ describe('synchronize', () => {
         const events = await collectEvents(config)
 
         expect(events.some((event) => event.type === 'error')).toBe(true)
-        await expect(rm(join(outside, 'payload.txt'), { force: false })).rejects.toThrow()
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
       } finally {
         await rm(root, { recursive: true, force: true })
         await rm(outside, { recursive: true, force: true })
@@ -3192,6 +3335,103 @@ describe('synchronize', () => {
         }
       },
     )
+
+    it.skipIf(!isNode || isWindows)('rejects symlinked local targets on download', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-link-target-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-link-target-out-'))
+      try {
+        await symlink(join(outside, 'payload.txt'), join(root, 'payload.txt'))
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode || isWindows)('rejects hardlinked local targets on download', async () => {
+      const { tmpdir } = await import('node:os')
+      const { link, mkdtemp, readFile, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-hardlink-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-hardlink-out-'))
+      const outsideFile = join(outside, 'payload.txt')
+      try {
+        await writeFile(outsideFile, 'outside original')
+        await link(outsideFile, join(root, 'payload.txt'))
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(outsideFile, 'utf8')).resolves.toBe('outside original')
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode || isWindows)('rejects a symlinked parent swapped before write', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdir, mkdtemp, readFile, rm, symlink } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-root-'))
+      const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-swap-out-'))
+      const linkParent = join(root, 'safe', 'link')
+      try {
+        await mkdir(linkParent, { recursive: true })
+        const mockBucket = makeMockBucket()
+        mockBucket.downloadById.mockImplementation(() => ({
+          body: new ReadableStream({
+            async start(controller) {
+              await rm(linkParent, { recursive: true, force: true })
+              await symlink(outside, linkParent, 'dir')
+              controller.enqueue(new Uint8Array([1, 2, 3]))
+              controller.close()
+            },
+          }),
+        }))
+        const sourceFile = makeB2SyncPath('safe/link/payload.txt', 2000, 3)
+
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        await expect(readFile(join(outside, 'payload.txt'))).rejects.toThrow()
+      } finally {
+        await rm(root, { recursive: true, force: true })
+        await rm(outside, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('encryptionProvider', () => {
@@ -6449,6 +6689,10 @@ describe('synchronize', () => {
           fileName: 'pfx\\nestedhello.txt',
           signal: controller.signal,
         })
+        const uploadSource = args?.['source'] as ContentSource | undefined
+        expect(uploadSource?.canSlice).toBe(true)
+        expect(uploadSource?.size).toBe(11)
+        expect(new TextDecoder().decode(await uploadSource?.toArrayBuffer())).toBe('hello world')
         expect(args).not.toHaveProperty('serverSideEncryption')
       } finally {
         await rm(root, { recursive: true, force: true })
@@ -6493,6 +6737,61 @@ describe('synchronize', () => {
       }
     })
 
+    it.skipIf(!isNode || isWindows)(
+      'does not publish success if a local file mutates mid-upload',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-mutated-up-'))
+        try {
+          const filePath = join(root, 'payload.bin')
+          const original = deterministicBytes(250)
+          await writeFile(filePath, original)
+
+          const { client } = makeClient({ minimumPartSize: 100, recommendedPartSize: 100 })
+          await client.authorize()
+          const realBucket = await client.createBucket({
+            bucketName: 'sync-mutated-upload',
+            bucketType: BucketType.AllPrivate,
+          })
+          const bucket = {
+            info: realBucket.info,
+            upload: vi.fn(async (options: Parameters<Bucket['upload']>[0]) => {
+              await writeFile(filePath, deterministicBytes(250).reverse())
+              return realBucket.upload(options)
+            }),
+          } as unknown as Bucket
+
+          const sourceFile: LocalSyncPath = {
+            relativePath: 'payload.bin',
+            absolutePath: filePath,
+            modTimeMillis: 2000,
+            size: original.byteLength,
+          }
+          const source = makeMemoryFolder([sourceFile], 'local')
+          const dest = makeMemoryFolder([], 'b2')
+
+          const config: SynchronizerUpConfig = {
+            source: { ...source, type: 'local', root },
+            dest: { ...dest, type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events.some((event) => event.type === 'upload-done')).toBe(false)
+          expect(events.some((event) => event.type === 'error')).toBe(true)
+          const listing = await realBucket.listFileNames()
+          expect(listing.files.find((file) => file.fileName === 'payload.bin')).toBeUndefined()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
     it.skipIf(!isNode)(
       'refuses custom B2 destination keys outside the configured prefix',
       async () => {
@@ -6536,6 +6835,56 @@ describe('synchronize', () => {
           expect(mockBucket.hideFile).not.toHaveBeenCalled()
           expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
           expect(mockBucket.copyFile).not.toHaveBeenCalled()
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode)(
+      'publishes success if a local file changes after upload bytes are read',
+      async () => {
+        const { tmpdir } = await import('node:os')
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-post-upload-change-'))
+        try {
+          const filePath = join(root, 'payload.bin')
+          const original = deterministicBytes(64)
+          await writeFile(filePath, original)
+
+          const mockBucket = makeMockBucket()
+          mockBucket.upload.mockImplementationOnce(
+            async (options: Parameters<Bucket['upload']>[0]) => {
+              await options.source.toArrayBuffer()
+              await writeFile(filePath, deterministicBytes(65))
+              return undefined as never
+            },
+          )
+
+          const sourceFile: LocalSyncPath = {
+            relativePath: 'payload.bin',
+            absolutePath: filePath,
+            modTimeMillis: 2000,
+            size: original.byteLength,
+          }
+          const source = makeMemoryFolder([sourceFile], 'local')
+          const dest = makeMemoryFolder([], 'b2')
+
+          const config: SynchronizerUpConfig = {
+            source: { ...source, type: 'local', root },
+            dest: { ...dest, type: 'b2' },
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: mockBucket as unknown as Bucket,
+            prefix: '',
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events.some((event) => event.type === 'upload-done')).toBe(true)
+          expect(
+            events.some((event) => event.type === 'error' && event.message.includes(filePath)),
+          ).toBe(false)
         } finally {
           await rm(root, { recursive: true, force: true })
         }

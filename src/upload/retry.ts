@@ -6,6 +6,7 @@ import {
   BadRequestError,
   BadUploadUrlError,
   NetworkError,
+  UploadResponseBodyError,
 } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
@@ -32,19 +33,26 @@ export interface UploadRetryEvent {
 /** Callback invoked before an upload retry fetches a fresh upload URL. */
 export type UploadRetryListener = (event: UploadRetryEvent) => void
 
-/** Internal options for upload-layer fresh-URL retries. */
-interface UploadLayerRetryOptions {
+/** Shared public options for upload-layer fresh-URL retries. */
+export interface UploadRetryOptions {
   /** Retry settings shared with the main transport retry configuration. */
   readonly retry?: Partial<RetryOptions> | undefined
-  /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
-  readonly signal?: AbortSignal | undefined
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
-   * Whether response-body read failures after an upload POST should be retried.
-   * The caller resolves its public default before entering this helper.
+   * Whether ambiguous failures after an upload POST should be retried,
+   * including response-body read failures and transport errors where B2 may
+   * have stored the payload before the success response was lost.
+   * Defaults to false. Set true only when duplicate versions or parts are
+   * acceptable.
    */
+  readonly retryResponseBodyFailures?: boolean | undefined
+}
+
+interface UploadLayerRetryOptions extends Omit<UploadRetryOptions, 'retryResponseBodyFailures'> {
   readonly retryResponseBodyFailures: boolean
+  /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
+  readonly signal?: AbortSignal | undefined
 }
 
 interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
@@ -60,24 +68,15 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
- * Resolves the public per-upload-mode default for `retryResponseBodyFailures`.
- * For single-request uploads, this value gates unreadable response bodies and
- * ambiguous upload POST network errors after the payload may have been sent.
- * For multipart uploads, this value gates unreadable response bodies; upload
- * POST network errors are retried regardless because B2 keeps the latest write
- * for a part number before finishLargeFile.
+ * Resolves the public default for `retryResponseBodyFailures`. Callers must
+ * opt into replaying ambiguous upload POST failures for every upload mode.
  *
  * @param value - Caller-provided override, if any.
- * @param mode - Upload path whose default should be applied.
  *
  * @returns The boolean value passed to the upload retry helper.
  */
-export function resolveRetryResponseBodyFailures(
-  value: boolean | undefined,
-  mode: 'single' | 'multipart',
-): boolean {
-  const defaultValue = mode === 'multipart'
-  return value ?? defaultValue
+export function resolveRetryResponseBodyFailures(value: boolean | undefined): boolean {
+  return value ?? false
 }
 
 /**
@@ -195,7 +194,10 @@ export function uploadPartWithFreshUrl(
             : {}),
         },
         options.data,
-        options.signal,
+        {
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        },
       ),
   })
 }
@@ -208,7 +210,8 @@ export function uploadPartWithFreshUrl(
  * response can create a duplicate file version. Multipart retries re-send the
  * same part number instead. Response-body retry defaults are caller-specific:
  * single-request uploads keep them off by default, while multipart callers can
- * enable them by default because re-sending the same part number is idempotent.
+ * opt in with `retryResponseBodyFailures: true` when replaying the same part
+ * number is acceptable.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
@@ -294,8 +297,7 @@ function isUploadRetryable(
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
     if (!options.uploadStarted) return true
-    if (options.partNumber === null && !options.retryResponseBodyFailures) return false
-    return true
+    return options.retryResponseBodyFailures === true
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
@@ -308,9 +310,12 @@ function isUploadRateLimitError(err: unknown): err is B2Error {
 
 function normalizeUploadRetryError(err: unknown, options: UploadLayerRetryOptions): unknown {
   if (err instanceof B2Error || err instanceof NetworkError) return err
+  if (err instanceof UploadResponseBodyError) {
+    if (!options.retryResponseBodyFailures) return err
+    return new NetworkError(err.message, err)
+  }
   if (err instanceof DOMException && err.name === 'AbortError') return err
   if (err instanceof TypeError || err instanceof SyntaxError || err instanceof DOMException) {
-    if (!options.retryResponseBodyFailures) return err
     const message = err instanceof Error ? err.message : 'Upload response read failed'
     return new NetworkError(message, err)
   }

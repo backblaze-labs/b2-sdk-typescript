@@ -1,5 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { B2Error, B2RedirectError, ExpiredAuthTokenError, NetworkError } from '../errors/index.ts'
+import {
+  B2Error,
+  B2RedirectError,
+  ExpiredAuthTokenError,
+  FinishLargeFileResponseBodyError,
+  NetworkError,
+  UploadResponseBodyError,
+} from '../errors/index.ts'
+import { RawClient } from '../raw/index.ts'
+import type { AccountId, LargeFileId } from '../types/ids.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
 import { FetchTransport, RetryTransport } from './transport.ts'
 
@@ -13,6 +22,23 @@ const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.r
 type RetryTransportOpts = ConstructorParameters<typeof RetryTransport>[0]
 function makeRetryTransport(opts: Omit<RetryTransportOpts, 'sleepImpl'>): RetryTransport {
   return new RetryTransport({ ...opts, sleepImpl: noSleep })
+}
+
+async function advanceTimersByTime(ms: number): Promise<void> {
+  const maybeAsyncAdvance = (
+    vi as typeof vi & { advanceTimersByTimeAsync?: (ms: number) => Promise<void> }
+  ).advanceTimersByTimeAsync
+  if (maybeAsyncAdvance !== undefined) {
+    await maybeAsyncAdvance(ms)
+    return
+  }
+  vi.advanceTimersByTime(ms)
+  await Promise.resolve()
+}
+
+function observeRejection<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => {})
+  return promise
 }
 
 // ---------------------------------------------------------------------------
@@ -39,6 +65,19 @@ const baseRequest: HttpRequest = {
   method: 'POST',
   headers: { Authorization: 'token-123' },
   body: JSON.stringify({ accountId: 'abc' }),
+}
+
+const textEncoder = new TextEncoder()
+
+function stalledResponse(prefix = '{"ok":'): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(textEncoder.encode(prefix))
+      },
+    }),
+    { status: 200 },
+  )
 }
 
 // ============================================================================
@@ -150,6 +189,395 @@ describe('FetchTransport', () => {
     expect(response.status).toBe(304)
   })
 
+  it('aborts a stalled fetch after the configured request timeout', async () => {
+    fetchSpy.mockImplementation(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    )
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 1 },
+      }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it('propagates ordinary fetch failures when the request did not time out', async () => {
+    const err = new TypeError('socket closed')
+    fetchSpy.mockRejectedValue(err)
+
+    const transport = new FetchTransport()
+    await expect(
+      transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 0 },
+      }),
+    ).rejects.toBe(err)
+  })
+
+  it('passes an already-aborted timeout signal through to fetch', async () => {
+    const controller = new AbortController()
+    const reason = new Error('already cancelled')
+    controller.abort(reason)
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const transport = new FetchTransport()
+    await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      signal: controller.signal,
+      retry: { requestTimeoutMs: 10_000 },
+    })
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const signal = init.signal as AbortSignal
+    expect(signal.aborted).toBe(true)
+    expect(signal.reason).toBe(reason)
+  })
+
+  it('releases request timeout timers when supported', async () => {
+    const realSetTimeout = globalThis.setTimeout
+    const unref = vi.fn()
+    type TimerWithOptionalUnref = ReturnType<typeof setTimeout> & { unref?: () => void }
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: Parameters<typeof setTimeout>[0],
+      timeout?: Parameters<typeof setTimeout>[1],
+    ) => {
+      const timer = realSetTimeout(handler, timeout)
+      if ((typeof timer === 'object' || typeof timer === 'function') && timer !== null) {
+        const timerWithUnref = timer as TimerWithOptionalUnref
+        timerWithUnref.unref = unref
+        return timerWithUnref
+      }
+      const timerId = timer as unknown as number
+      return {
+        unref,
+        valueOf: () => timerId,
+        [Symbol.toPrimitive]: () => timerId,
+      } as unknown as TimerWithOptionalUnref
+    }) as unknown as typeof setTimeout)
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 10_000 },
+      })
+
+      expect(unref).toHaveBeenCalledTimes(1)
+      await response.body?.cancel()
+    } finally {
+      setTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('cancels the underlying response body when canceled before reading', async () => {
+    const cancel = vi.fn()
+    fetchSpy.mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      retry: { requestTimeoutMs: 0 },
+    })
+    await response.body?.cancel('caller stopped reading')
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0]?.[0]).toBe('caller stopped reading')
+  })
+
+  it('cancels the underlying response reader when canceled after reading', async () => {
+    const cancel = vi.fn()
+    fetchSpy.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([1]))
+          },
+          cancel,
+        }),
+        { status: 200 },
+      ),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      retry: { requestTimeoutMs: 10_000 },
+    })
+    const reader = response.body?.getReader()
+
+    if (reader === undefined) throw new Error('expected response body')
+    expect((await reader.read()).done).toBe(false)
+    await reader.cancel('caller stopped after first chunk')
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0]?.[0]).toBe('caller stopped after first chunk')
+  })
+
+  it('cancels the response body when a helper read is aborted', async () => {
+    const controller = new AbortController()
+    const response = new Response(new ReadableStream<Uint8Array>(), { status: 200 })
+    const cancelSpy = vi.spyOn(response.body as ReadableStream<Uint8Array>, 'cancel')
+    fetchSpy.mockResolvedValue(response)
+
+    const transport = new FetchTransport()
+    const httpResponse = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      signal: controller.signal,
+      retry: { requestTimeoutMs: 10_000 },
+    })
+
+    const read = observeRejection(httpResponse.json())
+    controller.abort('caller cancelled')
+    await expect(read).rejects.toBe('caller cancelled')
+
+    expect(cancelSpy).toHaveBeenCalledWith('caller cancelled')
+  })
+
+  it('cancels the locked response reader when a stream read is aborted', async () => {
+    const controller = new AbortController()
+    const cancel = vi.fn()
+    fetchSpy.mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+    )
+
+    const transport = new FetchTransport()
+    const response = await transport.send({
+      url: 'https://example.com/file',
+      method: 'GET',
+      signal: controller.signal,
+      retry: { requestTimeoutMs: 10_000 },
+    })
+    const reader = response.body?.getReader()
+
+    if (reader === undefined) throw new Error('expected response body')
+    const read = observeRejection(reader.read())
+    controller.abort('caller cancelled')
+    await expect(read).rejects.toBe('caller cancelled')
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel.mock.calls[0]?.[0]).toBe('caller cancelled')
+  })
+
+  it.each([
+    'json',
+    'text',
+    'arrayBuffer',
+  ] as const)('aborts a stalled response body read through %s()', async (method) => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 1 },
+      })
+      const read = observeRejection(response[method]())
+      await advanceTimersByTime(1)
+
+      await expect(read).rejects.toMatchObject({ name: 'TimeoutError' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts a stalled response body stream read', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse('partial'))
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 1 },
+      })
+      const reader = response.body?.getReader()
+      expect((await reader?.read())?.done).toBe(false)
+      if (reader === undefined) throw new Error('expected response body')
+      const read = observeRejection(reader.read())
+      await advanceTimersByTime(1)
+
+      await expect(read).rejects.toMatchObject({ name: 'TimeoutError' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('resets response body stream timeout after each received chunk', async () => {
+    vi.useFakeTimers()
+    try {
+      let bodyController!: ReadableStreamDefaultController<Uint8Array>
+      fetchSpy.mockResolvedValue(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyController = controller
+              controller.enqueue(new Uint8Array([1]))
+            },
+          }),
+        ),
+      )
+
+      const transport = new FetchTransport()
+      const response = await transport.send({
+        url: 'https://example.com/file',
+        method: 'GET',
+        retry: { requestTimeoutMs: 10 },
+      })
+      const reader = response.body?.getReader()
+      expect((await reader?.read())?.done).toBe(false)
+
+      const secondRead = reader?.read()
+      await advanceTimersByTime(9)
+      bodyController.enqueue(new Uint8Array([2]))
+      expect((await secondRead)?.done).toBe(false)
+
+      const finalRead = reader?.read()
+      await advanceTimersByTime(9)
+      bodyController.close()
+      expect((await finalRead)?.done).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('times out stalled JSON bodies for normal raw API calls', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+
+      const call = observeRejection(
+        raw.listBuckets('https://api.example.com', 'auth', {
+          accountId: 'account' as AccountId,
+        }),
+      )
+      await advanceTimersByTime(15 * 60_000)
+
+      await expect(call).rejects.toMatchObject({ name: 'TimeoutError' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('wraps stalled upload response bodies as ambiguous upload failures', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+
+      const call = observeRejection(
+        raw.uploadFile(
+          'https://pod.backblaze.com/b2_upload_file',
+          {
+            authorization: 'upload-auth',
+            fileName: 'payload.bin',
+            contentType: 'application/octet-stream',
+            contentLength: 1,
+            contentSha1: 'none',
+            fileInfo: {},
+          },
+          new Uint8Array([1]) as BodyInit,
+          undefined,
+          { requestTimeoutMs: 1 },
+        ),
+      )
+      await advanceTimersByTime(1)
+
+      await expect(call).rejects.toBeInstanceOf(UploadResponseBodyError)
+      await expect(call).rejects.toMatchObject({ cause: { name: 'TimeoutError' } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    'uploadFile',
+    'uploadPart',
+  ] as const)('preserves caller aborts during %s response body reads', async (method) => {
+    const controller = new AbortController()
+    const reason = new Error('caller stopped waiting')
+    fetchSpy.mockResolvedValue(stalledResponse())
+    const raw = new RawClient({ transport: new FetchTransport() })
+
+    const call =
+      method === 'uploadFile'
+        ? raw.uploadFile(
+            'https://pod.backblaze.com/b2_upload_file',
+            {
+              authorization: 'upload-auth',
+              fileName: 'payload.bin',
+              contentType: 'application/octet-stream',
+              contentLength: 1,
+              contentSha1: 'none',
+              fileInfo: {},
+            },
+            new Uint8Array([1]) as BodyInit,
+            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+          )
+        : raw.uploadPart(
+            'https://pod.backblaze.com/b2_upload_part',
+            {
+              authorization: 'part-auth',
+              partNumber: 1,
+              contentLength: 1,
+              contentSha1: 'none',
+            },
+            new Uint8Array([1]) as BodyInit,
+            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+          )
+
+    const observed = observeRejection(call as Promise<unknown>)
+    controller.abort(reason)
+
+    await expect(observed).rejects.toBe(reason)
+  })
+
+  it('applies finishLargeFile retry timeout overrides to response body reads', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
+      const fileId = '4_z_unfinished' as LargeFileId
+
+      const call = observeRejection(
+        raw.finishLargeFile(
+          'https://api.example.com',
+          'auth',
+          {
+            fileId,
+            partSha1Array: [],
+          },
+          { retry: { requestTimeoutMs: 1 } },
+        ),
+      )
+      await advanceTimersByTime(1)
+
+      await expect(call).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+      await expect(call).rejects.toMatchObject({ fileId, cause: { name: 'TimeoutError' } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('follows guard-checked same-origin GET redirects by default', async () => {
     fetchSpy
       .mockResolvedValueOnce(
@@ -206,6 +634,25 @@ describe('FetchTransport', () => {
         url: 'https://f001.backblazeb2.com/file/bucket/old-object',
         method: 'GET',
         headers: { Authorization: 'token-123' },
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not follow redirects with malformed Location headers', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: 'http://[invalid' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
       }),
     ).rejects.toBeInstanceOf(B2RedirectError)
 
@@ -319,6 +766,7 @@ describe('FetchTransport', () => {
       url: 'https://example.com',
       method: 'GET',
       signal: controller.signal,
+      retry: { requestTimeoutMs: 0 },
     })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -329,7 +777,11 @@ describe('FetchTransport', () => {
     fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }))
 
     const transport = new FetchTransport()
-    await transport.send({ url: 'https://example.com', method: 'GET' })
+    await transport.send({
+      url: 'https://example.com',
+      method: 'GET',
+      retry: { requestTimeoutMs: 0 },
+    })
 
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(init.signal).toBeUndefined()
@@ -469,6 +921,26 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
+    it('does not retry b2_start_large_file transient responses in place', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(503, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { fileId: '4_z_duplicate' }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_start_large_file',
+        }),
+      ).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
     // Retryable upload pod failures are not retried in place. Upload endpoints
     // are URL-pinned, so pod failures bubble to the upload layer for fresh-URL
     // retry. HTTP 429 is covered separately because it is account-level
@@ -558,10 +1030,13 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it('does not treat a download of a file NAMED b2_upload_file as an upload endpoint (still retries 500)', async () => {
-      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name
-      // is user-controlled; a file literally named `b2_upload_file` must still
-      // get the generic 5xx retry, not be misread as the upload POST endpoint.
+    it.each([
+      'b2_upload_file',
+      'b2_start_large_file',
+      'b2_finish_large_file',
+    ] as const)('does not treat a download named %s as replay-unsafe', async (fileName) => {
+      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name is
+      // user-controlled, so B2 API endpoint names in file names must still retry.
       const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
       innerTransport.send
         .mockResolvedValueOnce(mockResponse(500, errorBody))
@@ -572,7 +1047,7 @@ describe('RetryTransport', () => {
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
       const result = await transport.send({
-        url: 'https://f000.backblazeb2.com/file/my-bucket/b2_upload_file',
+        url: `https://f000.backblazeb2.com/file/my-bucket/${fileName}`,
         method: 'GET',
         headers: { Authorization: 'token' },
       })
@@ -912,6 +1387,94 @@ describe('RetryTransport', () => {
       expect(result).toBe(okResponse)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
+
+    it('retries request timeout aborts as network failures', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+
+      innerTransport.send
+        .mockRejectedValueOnce(new DOMException('HTTP request timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('retries non-2xx response body timeouts as network failures', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+      const stalledErrorResponse: HttpResponse = {
+        status: 503,
+        headers: new Headers(),
+        body: null,
+        json: async () => {
+          throw new DOMException('HTTP request timed out after 1 ms', 'TimeoutError')
+        },
+        text: async () => 'unused',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+
+      innerTransport.send
+        .mockResolvedValueOnce(stalledErrorResponse)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not replay finishLargeFile request timeouts', async () => {
+      innerTransport.send.mockRejectedValue(
+        new DOMException('HTTP request timed out', 'TimeoutError'),
+      )
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_finish_large_file',
+        }),
+      ).rejects.toMatchObject({
+        name: 'NetworkError',
+        cause: { name: 'TimeoutError' },
+      })
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not replay startLargeFile request timeouts', async () => {
+      innerTransport.send.mockRejectedValue(
+        new DOMException('HTTP request timed out', 'TimeoutError'),
+      )
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_start_large_file',
+        }),
+      ).rejects.toMatchObject({
+        name: 'NetworkError',
+        cause: { name: 'TimeoutError' },
+      })
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
   })
 
   // --------------------------------------------------------------------------
@@ -948,6 +1511,53 @@ describe('RetryTransport', () => {
         expect(err).toBeInstanceOf(DOMException)
         expect((err as DOMException).name).toBe('AbortError')
       }
+    })
+
+    it('does not retry when an abort signal rejects with a custom reason', async () => {
+      const controller = new AbortController()
+      innerTransport.send.mockImplementation(async () => {
+        controller.abort('caller cancelled')
+        throw new Error('transport observed abort')
+      })
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send({ ...baseRequest, signal: controller.signal })).rejects.toBe(
+        'caller cancelled',
+      )
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('cancels the response body when aborted after inner send resolves', async () => {
+      const controller = new AbortController()
+      const cancel = vi.fn()
+      const response: HttpResponse = {
+        status: 200,
+        headers: new Headers(),
+        body: new ReadableStream<Uint8Array>({ cancel }),
+        json: async () => ({ ok: true }) as never,
+        text: async () => 'ok',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+      innerTransport.send.mockImplementation(async () => {
+        controller.abort('caller cancelled')
+        return response
+      })
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send({ ...baseRequest, signal: controller.signal })).rejects.toBe(
+        'caller cancelled',
+      )
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(cancel.mock.calls[0]?.[0]).toBe('caller cancelled')
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1093,6 +1703,18 @@ describe('RetryTransport', () => {
 
       await expect(transport.send(baseRequest)).rejects.toThrow('Unavailable')
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws a fallback NetworkError when the retry budget skips the loop', async () => {
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: -1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toMatchObject({
+        message: 'Max retries exceeded',
+      })
+      expect(innerTransport.send).not.toHaveBeenCalled()
     })
   })
 

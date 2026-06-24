@@ -24,7 +24,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
@@ -48,18 +48,18 @@ jobs:
       matrix:
         include:
           # Linux: full Node matrix (cheap runner minutes, baseline coverage).
-          - { os: ubuntu-latest, node-version: 22 }
+          - { os: ubuntu-latest, node-version: 22.18.0 }
           - { os: ubuntu-latest, node-version: 24 }
           # Windows: catches path-separator and NTFS-specific issues
           # (LocalFolder normalises `\` to `/`, file.node.test.ts uses tmpdir).
           # Tested on the same Node versions as Linux. Windows runner minutes
           # are billed at 2x on public repos.
-          - { os: windows-latest, node-version: 22 }
+          - { os: windows-latest, node-version: 22.18.0 }
           - { os: windows-latest, node-version: 24 }
           # macOS: catches APFS / Darwin fs quirks (case-insensitive lookups,
           # .DS_Store side effects, hfs+/apfs mtime precision). macOS runner
           # minutes are billed at 10x on public repos.
-          - { os: macos-latest, node-version: 22 }
+          - { os: macos-latest, node-version: 22.18.0 }
           - { os: macos-latest, node-version: 24 }
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -92,7 +92,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       # vitest.slow.config.ts pins maxForks: 1 (no CPU contention between
@@ -112,7 +112,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -133,7 +133,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Run tests with coverage
@@ -184,7 +184,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Cache Playwright browsers
@@ -212,7 +212,7 @@ jobs:
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version: 22.18.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
@@ -235,7 +235,7 @@ jobs:
       - run: pnpm run verify:exports
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
-  # which runs the Node 22 + 24 matrix sequentially + the real-examples
+  # which runs the Node 22.18 + 24 matrix sequentially + the real-examples
   # follow-up + a weekly schedule + workflow_dispatch. Having a duplicate
   # `pnpm test:integration` job here would race that workflow for the same
   # `sdk-test-*` buckets on every push to main, because GitHub Actions

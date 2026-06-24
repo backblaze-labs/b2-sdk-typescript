@@ -1,305 +1,421 @@
-import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import {
-  mkdir,
+  appendFile,
+  chmod,
   mkdtemp,
-  open,
-  readFile,
-  realpath,
+  open as openFile,
   rename,
   rm,
   symlink,
-  truncate,
   utimes,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
-import { FileSource } from './source.ts'
+import { Readable } from 'node:stream'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { deferred, readStream } from '../test-utils/index.ts'
+import { fileSourceTestHooks } from './file-source.ts'
+import { FileSource, toContentSource } from './source.ts'
 
-const execFileAsync = promisify(execFile)
-const isLinux = process.platform === 'linux'
+const decoder = new TextDecoder()
+const isWindows = process.platform === 'win32'
 
-describe('FileSource', () => {
-  it('rejects invalid internal byte counts', () => {
-    const UnsafeFileSource = FileSource as unknown as {
-      new (
-        filePath: string,
-        size: number,
-        identity: {
-          dev: number
-          ino: number
-          size: number
-          mtimeMs: number
-          ctimeMs: number
-        },
-      ): FileSource
-    }
+describe.skipIf(isWindows)('FileSource', () => {
+  let tmpDir: string
 
-    expect(
-      () =>
-        new UnsafeFileSource('data.bin', -1, {
-          dev: 1,
-          ino: 1,
-          size: 0,
-          mtimeMs: 0,
-          ctimeMs: 0,
-        }),
-    ).toThrow('FileSource size must be a non-negative safe integer')
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-filesource-'))
   })
 
-  it('streams and slices a local file by byte range', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-'))
+  afterEach(async () => {
+    delete fileSourceTestHooks.afterReadIteration
+    delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.openFile
+    delete fileSourceTestHooks.platform
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('stats a local file and exposes it as sliceable content', async () => {
+    const path = join(tmpDir, 'payload.txt')
+    await writeFile(path, 'hello from disk')
+
+    const source = new FileSource(path)
+
+    expect(source.size).toBe(15)
+    expect(source.canSlice).toBe(true)
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from disk')
+  })
+
+  it('can be created with asynchronous filesystem validation', async () => {
+    const path = join(tmpDir, 'async-payload.txt')
+    await writeFile(path, 'hello from async disk')
+
+    const source = await FileSource.fromPath(path)
+
+    expect(source.size).toBe(21)
+    expect(source.canSlice).toBe(true)
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('hello from async disk')
+  })
+
+  it('fromPath does not use synchronous filesystem construction', async () => {
+    const path = join(tmpDir, 'async-only-payload.txt')
+    await writeFile(path, 'hello without sync stat')
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockImplementation(() => {
+      throw new Error('sync filesystem path used')
+    })
+
     try {
-      const filePath = join(root, 'data.txt')
-      await writeFile(filePath, 'hello world')
+      const source = await FileSource.fromPath(path)
 
-      const source = await FileSource.fromPath(filePath)
-      expect(source.size).toBe(11)
-      expect(source.canSlice).toBe(true)
-
-      const streamed = await new Response(source.stream()).arrayBuffer()
-      expect(new TextDecoder().decode(streamed)).toBe('hello world')
-
-      const sliced = source.slice(6, 11)
-      const bytes = await sliced.toArrayBuffer()
-      expect(new TextDecoder().decode(bytes)).toBe('world')
+      expect(source.size).toBe(23)
+      expect(decoder.decode(await source.toArrayBuffer())).toBe('hello without sync stat')
     } finally {
-      await rm(root, { recursive: true, force: true })
+      getBuiltinModule.mockRestore()
     }
   })
 
-  it('binds relative paths at validation time', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-relative-'))
-    const originalCwd = process.cwd()
-    try {
-      const first = join(root, 'first')
-      const second = join(root, 'second')
-      await mkdir(first)
-      await mkdir(second)
-      await writeFile(join(first, 'data.bin'), new TextEncoder().encode('first'))
-      await writeFile(join(second, 'data.bin'), new TextEncoder().encode('second'))
+  it('returns ranged slices without reading unrelated bytes', async () => {
+    const path = join(tmpDir, 'range.txt')
+    await writeFile(path, '0123456789')
 
-      process.chdir(first)
-      const source = await FileSource.fromPath('data.bin')
-      process.chdir(second)
+    const source = new FileSource(path)
+    const slice = source.slice(2, 7)
 
-      const bytes = await source.toArrayBuffer()
-      expect(new TextDecoder().decode(bytes)).toBe('first')
-      await expect(realpath(source.filePath)).resolves.toBe(await realpath(join(first, 'data.bin')))
-    } finally {
-      process.chdir(originalCwd)
-      await rm(root, { recursive: true, force: true })
-    }
+    expect(slice.canSlice).toBe(true)
+    expect(slice.size).toBe(5)
+    expect(decoder.decode(await slice.toArrayBuffer())).toBe('23456')
   })
 
-  it('streams an empty local file', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-empty-'))
-    try {
-      const filePath = join(root, 'empty.bin')
-      await writeFile(filePath, new Uint8Array())
+  it('bounds slices to the captured file size', async () => {
+    const path = join(tmpDir, 'bounded.txt')
+    await writeFile(path, '0123456789')
 
-      const source = await FileSource.fromPath(filePath)
-      expect(source.size).toBe(0)
-      await expect(new Response(source.stream()).arrayBuffer()).resolves.toHaveProperty(
-        'byteLength',
-        0,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    const source = new FileSource(path)
+    const slice = source.slice(8, 99)
+
+    expect(slice.size).toBe(2)
+    expect(decoder.decode(await slice.toArrayBuffer())).toBe('89')
   })
 
-  it('rejects when a validated empty file grows before reading', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-empty-grown-'))
-    try {
-      const filePath = join(root, 'empty.bin')
-      await writeFile(filePath, new Uint8Array())
+  it('coerces fractional slice offsets to integers', async () => {
+    const path = join(tmpDir, 'fractional.txt')
+    await writeFile(path, '0123456789')
 
-      const source = await FileSource.fromPath(filePath)
-      await writeFile(filePath, new TextEncoder().encode('grown'))
+    const source = new FileSource(path)
+    const slice = source.slice(1.9, 4.9)
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file changed after validation: ${filePath}`,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    expect(slice.size).toBe(3)
+    expect(decoder.decode(await slice.toArrayBuffer())).toBe('123')
   })
 
-  it('closes the local file handle when a stream is canceled', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-cancel-'))
-    try {
-      const filePath = join(root, 'large.bin')
-      const renamedPath = join(root, 'renamed.bin')
-      await writeFile(filePath, new Uint8Array(64 * 1024 + 1))
+  it('rejects non-finite slice offsets', async () => {
+    const path = join(tmpDir, 'nan-slice.txt')
+    await writeFile(path, '0123456789')
 
-      const source = await FileSource.fromPath(filePath)
-      const reader = source.stream().getReader()
-      const firstChunk = await reader.read()
-      expect(firstChunk.done).toBe(false)
-      await reader.cancel()
+    const source = new FileSource(path)
 
-      await rename(filePath, renamedPath)
-      expect((await readFile(renamedPath)).byteLength).toBe(64 * 1024 + 1)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    expect(() => source.slice(Number.NaN, 4)).toThrow(/slice offsets must be finite/)
   })
 
-  it('clamps slice bounds like built-in slice sources', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-bounds-'))
-    try {
-      const filePath = join(root, 'data.txt')
-      await writeFile(filePath, 'abcd')
+  it('streams only the selected byte range', async () => {
+    const path = join(tmpDir, 'stream.txt')
+    await writeFile(path, 'prefix-body-suffix')
 
-      const source = await FileSource.fromPath(filePath)
+    const source = new FileSource(path).slice(7, 11)
+    const bytes = await readStream(source.stream())
 
-      await expect(new Response(source.slice(Number.NaN, 2).stream()).text()).resolves.toBe('ab')
-      await expect(
-        new Response(source.slice(1, Number.POSITIVE_INFINITY).stream()).text(),
-      ).resolves.toBe('bcd')
-      await expect(
-        new Response(source.slice(Number.NEGATIVE_INFINITY, 2).stream()).text(),
-      ).resolves.toBe('ab')
-      await expect(new Response(source.slice(-3, -1).stream()).text()).resolves.toBe('bc')
-      await expect(
-        new Response(source.slice(-2, Number.POSITIVE_INFINITY).stream()).text(),
-      ).resolves.toBe('cd')
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    expect(decoder.decode(bytes)).toBe('body')
   })
 
-  it('rejects non-regular local paths', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-dir-'))
-    try {
-      await expect(FileSource.fromPath(root)).rejects.toThrow()
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+  it('streams an empty file', async () => {
+    const path = join(tmpDir, 'empty.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+
+    expect(await readStream(source.stream())).toEqual(new Uint8Array())
   })
 
-  it.skipIf(!isLinux)('rejects fifo paths without waiting for a writer', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-fifo-'))
-    let unblockPromise: Promise<void> | undefined
-    try {
-      const fifoPath = join(root, 'pipe')
-      await execFileAsync('mkfifo', [fifoPath])
-      let neededWriterToUnblock = false
-      const unblockTimer = setTimeout(() => {
-        neededWriterToUnblock = true
-        unblockPromise = open(fifoPath, constants.O_WRONLY | constants.O_NONBLOCK)
-          .then((handle) => handle.close())
-          .catch(() => {})
-      }, 100)
+  it('returns an empty buffer for an unchanged empty file', async () => {
+    const path = join(tmpDir, 'empty-buffer.txt')
+    await writeFile(path, '')
 
-      try {
-        await expect(FileSource.fromPath(fifoPath)).rejects.toThrow()
-      } finally {
-        clearTimeout(unblockTimer)
-        await unblockPromise
+    const source = new FileSource(path)
+
+    expect(new Uint8Array(await source.toArrayBuffer())).toEqual(new Uint8Array())
+  })
+
+  it('rejects with the abort reason before opening a file range', async () => {
+    const path = join(tmpDir, 'aborted-before-open.txt')
+    await writeFile(path, 'payload')
+    const source = new FileSource(path)
+    const controller = new AbortController()
+    const reason = new Error('stop before read')
+    controller.abort(reason)
+
+    await expect(source.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
+
+  it('preserves abort reasons between ranged read iterations', async () => {
+    const path = join(tmpDir, 'aborted-between-reads.txt')
+    await writeFile(path, '0123456789')
+    const source = new FileSource(path)
+    const controller = new AbortController()
+    const reason = new Error('stop between reads')
+    fileSourceTestHooks.maxReadSize = 4
+    fileSourceTestHooks.afterReadIteration = (filled) => {
+      if (filled === 4) controller.abort(reason)
+    }
+
+    await expect(source.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
+
+  it('stops a pending stream range read when the stream is canceled', async () => {
+    const path = join(tmpDir, 'cancel-stream-read.txt')
+    await writeFile(path, '0123456789')
+    const source = new FileSource(path)
+    const firstIteration = deferred<void>()
+    const releaseRead = deferred<void>()
+    let iterations = 0
+    fileSourceTestHooks.maxReadSize = 4
+    fileSourceTestHooks.afterReadIteration = async () => {
+      iterations += 1
+      if (iterations === 1) {
+        firstIteration.resolve(undefined)
+        await releaseRead.promise
       }
-      expect(neededWriterToUnblock).toBe(false)
+    }
+
+    const reader = source.stream().getReader()
+    const read = reader.read().catch(() => undefined)
+    await firstIteration.promise
+
+    const cancel = reader.cancel(new Error('stop stream read'))
+    releaseRead.resolve(undefined)
+    await Promise.allSettled([read, cancel])
+
+    expect(iterations).toBe(1)
+  })
+
+  it('reads successfully while metadata still matches', async () => {
+    const path = join(tmpDir, 'verify-unchanged.txt')
+    await writeFile(path, 'stable payload')
+
+    const source = new FileSource(path)
+
+    await expect(source.toArrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer)
+  })
+
+  it('opens read handles in nonblocking mode when available', async () => {
+    const path = join(tmpDir, 'nonblocking-open.txt')
+    await writeFile(path, 'stable payload')
+    const source = new FileSource(path)
+    const openedFlags: number[] = []
+
+    fileSourceTestHooks.openFile = (filePath, flags) => {
+      openedFlags.push(flags)
+      return openFile(filePath, flags)
+    }
+
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('stable payload')
+    expect(openedFlags).toHaveLength(1)
+    expect((openedFlags[0] ?? 0) & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK)
+  })
+
+  it('rejects a replaced empty file before reading it as a buffer', async () => {
+    const path = join(tmpDir, 'empty-replaced-buffer.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+    await writeFile(path, 'replacement')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read|changed before read/)
+  })
+
+  it('rejects a replaced empty file before streaming it', async () => {
+    const path = join(tmpDir, 'empty-replaced-stream.txt')
+    await writeFile(path, '')
+
+    const source = new FileSource(path)
+    await writeFile(path, 'replacement')
+
+    await expect(readStream(source.stream())).rejects.toThrow(
+      /modified before read|changed before read/,
+    )
+  })
+
+  it('rejects non-regular files', () => {
+    expect(() => new FileSource(tmpDir)).toThrow(/not a regular file/)
+  })
+
+  it('rejects filesystems without stable file identity', () => {
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockReturnValue({
+      constants: { O_RDONLY: 0 },
+      lstatSync() {
+        return {
+          dev: 0,
+          ino: 0,
+          mode: 0,
+          size: 1,
+          mtimeMs: 1,
+          ctimeMs: 1,
+          isFile: () => true,
+        }
+      },
+    })
+
+    try {
+      expect(() => new FileSource('/unstable')).toThrow(/stable file identity/)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      getBuiltinModule.mockRestore()
     }
   })
 
-  it('rejects when the validated file is truncated before reading', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-truncate-'))
+  it('explains when synchronous filesystem construction is unavailable', () => {
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockReturnValue(undefined)
+
     try {
-      const filePath = join(root, 'data.bin')
-      await writeFile(filePath, new Uint8Array([1, 2, 3, 4]))
-
-      const source = await FileSource.fromPath(filePath)
-      await truncate(filePath, 2)
-
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file changed after validation: ${filePath}`,
-      )
+      expect(() => new FileSource('/missing-sync-fs')).toThrow(/Node\.js 22\.3\+/)
     } finally {
-      await rm(root, { recursive: true, force: true })
+      getBuiltinModule.mockRestore()
     }
   })
 
-  it('rejects when the validated file content changes before reading', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-mutated-'))
-    try {
-      const filePath = join(root, 'data.bin')
-      await writeFile(filePath, new TextEncoder().encode('safe'))
+  it('preserves fromPath validation through public slices', async () => {
+    const path = join(tmpDir, 'constructor.txt')
+    await writeFile(path, 'safe payload')
 
-      const source = await FileSource.fromPath(filePath)
-      await writeFile(filePath, new TextEncoder().encode('evil'))
-      const changedTime = new Date(Date.now() + 10_000)
-      await utimes(filePath, changedTime, changedTime)
+    const source = await FileSource.fromPath(path)
+    const slice = source.slice(0, 4)
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file changed after validation: ${filePath}`,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    expect(source.size).toBe(12)
+    await writeFile(path, 'changed payload')
+    await expect(slice.toArrayBuffer()).rejects.toThrow(path)
   })
 
-  it('rejects same-size rewrites when mtime is restored before reading', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-ctime-'))
-    try {
-      const filePath = join(root, 'data.bin')
-      await writeFile(filePath, new TextEncoder().encode('safe'))
-      const originalTime = new Date('2024-01-01T00:00:00.000Z')
-      await utimes(filePath, originalTime, originalTime)
+  it('rejects metadata-only ctime changes after construction', async () => {
+    const path = join(tmpDir, 'chmod.txt')
+    await writeFile(path, 'metadata-only')
 
-      const source = await FileSource.fromPath(filePath)
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      await writeFile(filePath, new TextEncoder().encode('evil'))
-      await utimes(filePath, originalTime, originalTime)
+    const source = new FileSource(path)
+    await chmod(path, 0o400)
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file changed after validation: ${filePath}`,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
   })
 
-  it('rejects when the validated file is replaced before reading', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-replaced-'))
-    try {
-      const filePath = join(root, 'data.bin')
-      const replacementPath = join(root, 'replacement.bin')
-      await writeFile(filePath, new TextEncoder().encode('safe'))
-      await writeFile(replacementPath, new TextEncoder().encode('evil'))
+  it('rejects if the file is truncated after construction', async () => {
+    const path = join(tmpDir, 'truncate.txt')
+    await writeFile(path, 'original payload')
 
-      const source = await FileSource.fromPath(filePath)
-      await rename(replacementPath, filePath)
+    const source = new FileSource(path)
+    await writeFile(path, 'short')
 
-      await expect(source.toArrayBuffer()).rejects.toThrow(
-        `FileSource file changed after validation: ${filePath}`,
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
   })
 
-  it('does not follow a symlink swapped in after validation', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-file-source-symlink-'))
-    try {
-      const filePath = join(root, 'data.bin')
-      const secretPath = join(root, 'secret.bin')
-      await writeFile(filePath, new TextEncoder().encode('safe'))
-      await writeFile(secretPath, new TextEncoder().encode('secret'))
+  it('rejects if the file grows after construction', async () => {
+    const path = join(tmpDir, 'grown.txt')
+    await writeFile(path, 'original payload')
 
-      const source = await FileSource.fromPath(filePath)
-      await rm(filePath)
-      await symlink(secretPath, filePath)
+    const source = new FileSource(path)
+    await appendFile(path, ' with appended bytes')
 
-      await expect(source.toArrayBuffer()).rejects.toThrow()
-      expect(new TextDecoder().decode(await readFile(secretPath))).toBe('secret')
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
+
+  it('detects same-size rewrites with restored mtime', async () => {
+    const path = join(tmpDir, 'restored-mtime.txt')
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+    await writeFile(path, 'original data')
+    await utimes(path, fixedTime, fixedTime)
+
+    const source = new FileSource(path)
+    await writeFile(path, 'tampered data')
+    await utimes(path, fixedTime, fixedTime)
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
+  })
+
+  it('rejects a path replaced by a symlink', async () => {
+    const path = join(tmpDir, 'payload.txt')
+    const secretPath = join(tmpDir, 'secret.txt')
+    await writeFile(path, 'safe payload')
+    await writeFile(secretPath, 'secret payload')
+
+    const source = new FileSource(path)
+    await rm(path)
+    await symlink(secretPath, path)
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(path)
+  })
+
+  it('rejects a path replaced by another file', async () => {
+    const path = join(tmpDir, 'replaced.txt')
+    const replacementPath = join(tmpDir, 'replacement.txt')
+    const originalTime = new Date('2026-01-01T00:00:00.000Z')
+    const replacementTime = new Date('2026-01-02T00:00:00.000Z')
+    await writeFile(path, 'safe payload')
+    await utimes(path, originalTime, originalTime)
+    await writeFile(replacementPath, 'evil payload')
+    await utimes(replacementPath, replacementTime, replacementTime)
+
+    const source = new FileSource(path)
+    await rm(path)
+    await rename(replacementPath, path)
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/(?:changed|was modified) before read/)
+  })
+})
+
+describe('FileSource Windows identity policy', () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    fileSourceTestHooks.platform = 'win32'
+    tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-filesource-win-'))
+  })
+
+  afterEach(async () => {
+    delete fileSourceTestHooks.afterReadIteration
+    delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.openFile
+    delete fileSourceTestHooks.platform
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('constructs and reads regular files', async () => {
+    const path = join(tmpDir, 'payload.txt')
+    await writeFile(path, 'windows payload')
+
+    const source = new FileSource(path)
+    const asyncSource = await FileSource.fromPath(path)
+
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('windows payload')
+    expect(decoder.decode(await asyncSource.toArrayBuffer())).toBe('windows payload')
+  })
+
+  it('rejects same-size rewrites when mtime changes', async () => {
+    const path = join(tmpDir, 'restored-mtime.txt')
+    const fixedTime = new Date('2026-01-01T00:00:00.000Z')
+    await writeFile(path, 'original data')
+    await utimes(path, fixedTime, fixedTime)
+
+    const source = new FileSource(path)
+    await writeFile(path, 'tampered data')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
+  })
+})
+
+describe('Node Readable content sources', () => {
+  it('wraps a Node Readable through the async-iterable path', async () => {
+    const readable = Readable.from([new Uint8Array([1, 2]), new Uint8Array([3])])
+
+    const source = toContentSource(readable, 3)
+
+    expect(source.canSlice).toBe(false)
+    expect(source.size).toBe(3)
+    expect(await readStream(source.stream())).toEqual(new Uint8Array([1, 2, 3]))
   })
 })

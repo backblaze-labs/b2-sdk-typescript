@@ -2,9 +2,19 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
-import { type BucketId, type FileId, fileId as fileIdOf } from '../types/ids.ts'
-import { cancelLargeFileBestEffort } from '../upload/cancel.ts'
+import { type BucketId, type FileId, fileId as fileIdOf, type LargeFileId } from '../types/ids.ts'
+import {
+  createAbortScope,
+  raceWithAbort,
+  throwRejectedOrAbortReason,
+} from '../upload/abort-scope.ts'
+import {
+  type CleanupFailureListener,
+  cancelLargeFileBestEffort,
+  cleanupAfterLargeFileError,
+} from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
+import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 
@@ -31,6 +41,11 @@ export interface CopyLargeFileOptions {
   readonly destinationServerSideEncryption?: EncryptionSetting
   /** SSE-C settings used to read the source if it was uploaded with SSE-C. */
   readonly sourceServerSideEncryption?: EncryptionSetting
+  /**
+   * Callback invoked if best-effort cancellation fails, or if cancellation is
+   * skipped because `b2_finish_large_file` may already have committed.
+   */
+  readonly onCleanupFailure?: CleanupFailureListener
   /**
    * Optional abort signal. Checked before dispatching each part and
    * between parts; an aborted signal cancels remaining parts and rolls
@@ -60,6 +75,7 @@ export async function copyLargeFile(
   accountInfo: AccountInfo,
   options: CopyLargeFileOptions,
 ): Promise<FileVersion> {
+  options.signal?.throwIfAborted()
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
@@ -73,68 +89,92 @@ export async function copyLargeFile(
 
   // Below the part threshold, take the single-call fast path.
   if (totalSize <= partSize) {
+    options.signal?.throwIfAborted()
     // `b2_copy_file` only accepts replacement contentType/fileInfo under
     // `metadataDirective: REPLACE`; supplying them in the default COPY mode is
     // rejected by B2. When the caller sets either, switch to REPLACE with a
     // required contentType (the override, else the source's, else b2/x-auto),
     // matching the multipart path's metadata semantics below.
     const replaceMetadata = options.contentType !== undefined || options.fileInfo !== undefined
-    return raw.copyFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      sourceFileId: options.sourceFileId,
-      fileName: options.fileName,
-      ...(options.destinationBucketId !== undefined
-        ? { destinationBucketId: options.destinationBucketId }
-        : {}),
-      ...(replaceMetadata
-        ? {
-            metadataDirective: MetadataDirective.Replace,
-            contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-            fileInfo: options.fileInfo ?? {},
-          }
-        : {}),
-      ...(options.destinationServerSideEncryption !== undefined
-        ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
-        : {}),
-      ...(options.sourceServerSideEncryption !== undefined
-        ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
-        : {}),
-    })
+    return raw.copyFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        sourceFileId: options.sourceFileId,
+        fileName: options.fileName,
+        ...(options.destinationBucketId !== undefined
+          ? { destinationBucketId: options.destinationBucketId }
+          : {}),
+        ...(replaceMetadata
+          ? {
+              metadataDirective: MetadataDirective.Replace,
+              contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
+              fileInfo: options.fileInfo ?? {},
+            }
+          : {}),
+        ...(options.destinationServerSideEncryption !== undefined
+          ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
+          : {}),
+        ...(options.sourceServerSideEncryption !== undefined
+          ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
+          : {}),
+      },
+      options.signal !== undefined ? { signal: options.signal } : undefined,
+    )
   }
 
   // Resolve destination bucket (defaults to source's bucket). Both operands
   // are already typed `BucketId`, so no cast is needed.
   const destBucketId = options.destinationBucketId ?? sourceInfo.bucketId
 
-  // Start the multipart file.
-  const startResp = await raw.startLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-    bucketId: destBucketId,
-    fileName: options.fileName,
-    contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-    fileInfo: options.fileInfo ?? {},
-    ...(options.destinationServerSideEncryption !== undefined
-      ? { serverSideEncryption: options.destinationServerSideEncryption }
-      : {}),
-  })
-  const largeFileId = startResp.fileId
-
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
+  const abortScope = createAbortScope(options.signal)
+  let largeFileId: LargeFileId | undefined
 
   try {
-    options.signal?.throwIfAborted()
-    await Promise.all(
-      ranges.map(async (range) => {
-        await sem.acquire()
-        try {
-          // Re-check the abort flag after every queue handoff so the
-          // first cancelled task short-circuits the remaining parts.
-          options.signal?.throwIfAborted()
-          const resp = await raw.copyPart(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
+    abortScope.signal.throwIfAborted()
+    const startPromise = raw.startLargeFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        bucketId: destBucketId,
+        fileName: options.fileName,
+        contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
+        fileInfo: options.fileInfo ?? {},
+        ...(options.destinationServerSideEncryption !== undefined
+          ? { serverSideEncryption: options.destinationServerSideEncryption }
+          : {}),
+      },
+      { signal: abortScope.signal },
+    )
+    try {
+      const startResp = await raceWithAbort(startPromise, abortScope.signal)
+      largeFileId = startResp.fileId
+    } catch (err) {
+      if (abortScope.signal.aborted) {
+        cancelLargeFileAfterStart(startPromise, raw, accountInfo, options.onCleanupFailure)
+      }
+      throw err
+    }
+    const startedLargeFileId = largeFileId
+    if (startedLargeFileId === undefined) {
+      throw new Error('copyLargeFile: start did not return a large file ID.')
+    }
+
+    const tasks = ranges.map(async (range) => {
+      await sem.acquire()
+      try {
+        abortScope.signal.throwIfAborted()
+        const copyPromise = raw.copyPart(
+          accountInfo.getApiUrl(),
+          accountInfo.getAuthToken(),
+          {
             sourceFileId: options.sourceFileId,
             // `startLargeFile` returns `LargeFileId`; `copyPart` takes the
             // same value typed as `FileId`. Re-brand via the factory.
-            largeFileId: fileIdOf(largeFileId),
+            largeFileId: fileIdOf(startedLargeFileId),
             partNumber: range.partNumber,
             range: byteRangeHeader(range.start, range.end),
             ...(options.sourceServerSideEncryption !== undefined
@@ -143,26 +183,59 @@ export async function copyLargeFile(
             ...(options.destinationServerSideEncryption !== undefined
               ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
               : {}),
-          })
-          partSha1s[range.partNumber - 1] = resp.contentSha1
-        } finally {
-          sem.release()
-        }
-      }),
-    )
+          },
+          { signal: abortScope.signal },
+        )
+        const resp = await raceWithAbort(copyPromise, abortScope.signal)
+        partSha1s[range.partNumber - 1] = resp.contentSha1
+      } catch (err) {
+        abortScope.abort(err)
+        throw err
+      } finally {
+        sem.release()
+      }
+    })
 
-    options.signal?.throwIfAborted()
-    return await raw.finishLargeFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      fileId: largeFileId,
-      partSha1Array: partSha1s,
+    throwRejectedOrAbortReason(await Promise.allSettled(tasks), abortScope)
+
+    return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+      fileId: startedLargeFileId,
+      bucketId: destBucketId,
+      fileName: options.fileName,
+      partSha1s,
+      signal: abortScope.signal,
     })
   } catch (err) {
-    await cancelLargeFileBestEffort(
-      raw,
-      accountInfo,
-      largeFileId,
-      options.signal === undefined ? undefined : { signal: options.signal },
-    )
-    throw err
+    abortScope.abort(err)
+    if (largeFileId === undefined) throw err
+    return await cleanupAfterLargeFileError(err, raw, accountInfo, {
+      fileId: largeFileId,
+      bucketId: destBucketId,
+      fileName: options.fileName,
+      signal: options.signal,
+      onCleanupFailure: options.onCleanupFailure,
+    })
+  } finally {
+    abortScope.dispose()
   }
+}
+
+function cancelLargeFileAfterStart(
+  started: Promise<{ readonly fileId: LargeFileId }>,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  onCleanupFailure: CleanupFailureListener | undefined,
+): void {
+  void started
+    .then((resp) =>
+      cancelLargeFileBestEffort(
+        raw,
+        accountInfo,
+        resp.fileId,
+        onCleanupFailure === undefined ? undefined : { onCleanupFailure },
+      ),
+    )
+    .catch(() => {
+      // If start failed, no file ID is available to cancel.
+    })
 }

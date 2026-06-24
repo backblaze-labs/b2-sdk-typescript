@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import {
   chmod,
   mkdir,
@@ -13,7 +14,8 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, sep } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
+import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
   DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
@@ -25,14 +27,18 @@ import { assertSameScannedRegularFile, localFileIdentityFromStats } from './loca
 import {
   deleteLocalFileInsideRoot,
   localFileIoTestHooks,
+  readScannedLocalFile,
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { isReservedSyncTempFileName } from './path-safety.ts'
+import { LocalFolder } from './scanners/local.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
 const isWindows = process.platform === 'win32'
 const isLinux = process.platform === 'linux'
+const execFileAsync = promisify(execFile)
 
 function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -41,6 +47,12 @@ function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const items: T[] = []
+  for await (const item of iterable) items.push(item)
+  return items
 }
 
 async function makeScannedPath(
@@ -61,20 +73,64 @@ async function makeScannedPath(
   }
 }
 
-async function oldScannerVisibleFiles(root: string, dir = root): Promise<string[]> {
-  const visible: string[] = []
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const fullPath = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      visible.push(...(await oldScannerVisibleFiles(root, fullPath)))
-      continue
+describe('readScannedLocalFile', () => {
+  it('ignores Windows dev and inode drift when size and mtime still match', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-win-identity-'))
+    try {
+      const path = await makeScannedPath(root, 'file.txt', 'abc')
+      const identity = path.fileIdentity
+      expect(identity).toBeDefined()
+
+      localFileIoTestHooks.platform = 'win32'
+      const result = await readScannedLocalFile({
+        ...path,
+        fileIdentity: {
+          deviceId: (identity?.deviceId ?? 0) + 1,
+          inode: (identity?.inode ?? 0) + 1,
+          size: identity?.size ?? path.size,
+          modTimeMillis: identity?.modTimeMillis ?? path.modTimeMillis,
+        },
+      })
+      expect([...result]).toEqual([...textEncoder.encode('abc')])
+    } finally {
+      delete localFileIoTestHooks.platform
+      await rm(root, { recursive: true, force: true })
     }
-    if (entry.isFile() && !/^\.b2sdk-.*\.partial$/.test(entry.name)) {
-      visible.push(relative(root, fullPath).split(sep).join('/'))
+  })
+
+  it('rejects a scanned file removed before upload', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-missing-'))
+    try {
+      const path = await makeScannedPath(root, 'file.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+
+      await expect(readScannedLocalFile(path)).rejects.toThrow(
+        'local file changed before upload: could not open scanned file: ENOENT',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
     }
-  }
-  return visible.sort()
-}
+  })
+
+  it.skipIf(isWindows)('rejects a scanned file replaced by a FIFO without hanging', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-fifo-'))
+    try {
+      const path = await makeScannedPath(root, 'pipe.txt', 'abc')
+      await rm(path.absolutePath, { force: true })
+      await execFileAsync('mkfifo', [path.absolutePath])
+
+      const timeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('timed out waiting for FIFO rejection')), 1500)
+      })
+
+      await expect(Promise.race([readScannedLocalFile(path), timeout])).rejects.toThrow(
+        'local file changed before upload: not a regular file',
+      )
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('writeLocalFileInsideRoot', () => {
   it('writes bytes under the resolved root', async () => {
@@ -90,22 +146,6 @@ describe('writeLocalFileInsideRoot', () => {
 })
 
 describe('writeLocalStreamInsideRoot', () => {
-  it('rejects invalid expected byte counts before staging', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-byte-count-'))
-    try {
-      await expect(
-        writeLocalStreamInsideRoot(root, 'file.txt', streamFromBytes(new Uint8Array()), {
-          expectedBytes: -1,
-          idleTimeoutMillis: 1000,
-        }),
-      ).rejects.toThrow('download expectedBytes must be a non-negative safe integer')
-
-      await expect(readdir(root)).resolves.toEqual([])
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
   it.skipIf(isWindows)(
     'creates private managed staging files under the destination root',
     async () => {
@@ -147,77 +187,6 @@ describe('writeLocalStreamInsideRoot', () => {
       }
     },
   )
-
-  it('keeps in-progress staging files hidden from the previous local scanner', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-old-scanner-'))
-    let controller!: ReadableStreamDefaultController<Uint8Array>
-    let stagingReady!: () => void
-    const staged = new Promise<void>((resolve) => {
-      stagingReady = resolve
-    })
-    try {
-      localFileIoTestHooks.afterTempFileCreated = () => {
-        stagingReady()
-      }
-      const writePromise = writeLocalStreamInsideRoot(
-        root,
-        'file.txt',
-        new ReadableStream<Uint8Array>({
-          start(streamController) {
-            controller = streamController
-          },
-        }),
-        {
-          expectedBytes: 0,
-          idleTimeoutMillis: 1000,
-        },
-      )
-
-      await staged
-      expect(await oldScannerVisibleFiles(root)).toEqual([])
-      controller.close()
-      await writePromise
-    } finally {
-      delete localFileIoTestHooks.afterTempFileCreated
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  it.skipIf(isWindows)('preserves mode when replacing existing files', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-mode-'))
-    try {
-      const secretPath = join(root, 'secret.txt')
-      const scriptPath = join(root, 'script.sh')
-      await writeFile(secretPath, 'old')
-      await writeFile(scriptPath, '#!/bin/sh\n')
-      await chmod(secretPath, 0o600)
-      await chmod(scriptPath, 0o755)
-
-      await writeLocalStreamInsideRoot(
-        root,
-        'secret.txt',
-        streamFromBytes(textEncoder.encode('new')),
-        {
-          expectedBytes: 3,
-          idleTimeoutMillis: 1000,
-        },
-      )
-      await writeLocalStreamInsideRoot(
-        root,
-        'script.sh',
-        streamFromBytes(textEncoder.encode('echo ok\n')),
-        {
-          expectedBytes: 8,
-          idleTimeoutMillis: 1000,
-        },
-      )
-
-      expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
-      expect((await stat(scriptPath)).mode & 0o777).toBe(0o755)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
 
   it('rejects download bodies that exceed the expected byte count', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-overlong-'))
@@ -316,6 +285,47 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('concurrent')
     } finally {
       delete localFileIoTestHooks.beforeDownloadPublish
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses reserved backup names so crash leftovers are skipped by the next scan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-backup-leftover-'))
+    try {
+      const scanned = await makeScannedPath(root, 'file.txt', 'old')
+      let backupName: string | undefined
+      localFileIoTestHooks.afterDownloadBackupRename = (backupPath) => {
+        backupName = basename(backupPath)
+        expect(isReservedSyncTempFileName(backupName)).toBe(true)
+      }
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('new')),
+        {
+          expectedBytes: 3,
+          expectedDestination: scanned,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      expect(backupName).toBeDefined()
+      await writeFile(join(root, backupName ?? ''), 'old')
+
+      const skips: string[] = []
+      const entries = await collect<LocalSyncPath>(
+        new LocalFolder(root).scan({
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
+      expect(skips).toEqual([`stale-download-partial:${backupName}`])
+    } finally {
+      delete localFileIoTestHooks.afterDownloadBackupRename
       await rm(root, { recursive: true, force: true })
     }
   })

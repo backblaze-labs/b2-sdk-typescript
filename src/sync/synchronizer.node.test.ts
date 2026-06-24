@@ -1314,7 +1314,7 @@ describe('synchronize upload safety', () => {
     }
   })
 
-  it('does not upload a file replaced after scan', async () => {
+  it.skipIf(isWindows)('does not upload a file replaced after scan', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-replaced-'))
     try {
       const sourceRoot = join(root, 'source')
@@ -1353,44 +1353,47 @@ describe('synchronize upload safety', () => {
     }
   })
 
-  it('does not upload bytes from a symlink swapped in after FileSource validation', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-symlink-'))
-    try {
-      const sourceRoot = join(root, 'source')
-      await mkdir(sourceRoot)
-      const filePath = join(sourceRoot, 'leak.bin')
-      const secretPath = join(root, 'secret.bin')
-      await writeFile(filePath, new TextEncoder().encode('safe'))
-      await writeFile(secretPath, new TextEncoder().encode('secret'))
+  it.skipIf(isWindows)(
+    'does not upload bytes from a symlink swapped in after FileSource validation',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-symlink-'))
+      try {
+        const sourceRoot = join(root, 'source')
+        await mkdir(sourceRoot)
+        const filePath = join(sourceRoot, 'leak.bin')
+        const secretPath = join(root, 'secret.bin')
+        await writeFile(filePath, new TextEncoder().encode('safe'))
+        await writeFile(secretPath, new TextEncoder().encode('secret'))
 
-      let uploaded: Uint8Array | null = null
-      const bucket = {
-        upload: vi
-          .fn()
-          .mockImplementation(
-            async (options: { source: { toArrayBuffer(): Promise<ArrayBuffer> } }) => {
-              await rm(filePath)
-              await symlink(secretPath, filePath)
-              uploaded = new Uint8Array(await options.source.toArrayBuffer())
-            },
-          ),
-      } as unknown as Bucket
+        let uploaded: Uint8Array | null = null
+        const bucket = {
+          upload: vi
+            .fn()
+            .mockImplementation(
+              async (options: { source: { toArrayBuffer(): Promise<ArrayBuffer> } }) => {
+                await rm(filePath)
+                await symlink(secretPath, filePath)
+                uploaded = new Uint8Array(await options.source.toArrayBuffer())
+              },
+            ),
+        } as unknown as Bucket
 
-      const config: SynchronizerUpConfig = {
-        source: new LocalFolder(sourceRoot),
-        dest: makeB2MemoryFolder([]),
-        options: { compareMode: 'size', keepMode: 'no-delete' },
-        bucket,
-        prefix: '',
+        const config: SynchronizerUpConfig = {
+          source: new LocalFolder(sourceRoot),
+          dest: makeB2MemoryFolder([]),
+          options: { compareMode: 'size', keepMode: 'no-delete' },
+          bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+        expect(events.some((event) => event.type === 'error')).toBe(true)
+        expect(uploaded).toBeNull()
+      } finally {
+        await rm(root, { recursive: true, force: true })
       }
-
-      const events = await collectEvents(config)
-      expect(events.some((event) => event.type === 'error')).toBe(true)
-      expect(uploaded).toBeNull()
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
+    },
+  )
 
   it.skipIf(isBun)(
     'does not upload bytes from a parent directory swapped outside the source root',

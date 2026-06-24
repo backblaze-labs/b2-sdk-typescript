@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
@@ -330,11 +331,13 @@ describe('copyLargeFile (slow)', () => {
     expect(data).toEqual(content)
   })
 
-  it('cancels the unfinished large file when b2_finish_large_file fails', async () => {
+  it('reports ambiguous multipart-copy transport errors without cancelling', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
+    let cancelCalls = 0
     const transport = {
       async send(req: Parameters<typeof inner.send>[0]) {
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
         if (req.url.includes('b2_finish_large_file')) {
           throw new Error('forced finish failure')
         }
@@ -359,6 +362,7 @@ describe('copyLargeFile (slow)', () => {
       partSize: 5_000_000,
       concurrency: 1,
     })
+    const cleanupEvents: string[] = []
 
     await expect(
       copyLargeFile(c.raw, c.accountInfo, {
@@ -366,15 +370,83 @@ describe('copyLargeFile (slow)', () => {
         fileName: 'finish-fail.bin',
         partSize: 5_000_000,
         concurrency: 1,
+        onCleanupFailure: (event) => {
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.error).toBeInstanceOf(FinishLargeFileResponseBodyError)
+          cleanupEvents.push(event.fileId)
+        },
       }),
-    ).rejects.toThrow(/finish failure/)
+    ).rejects.toMatchObject({
+      bucketId: bucket.id,
+      fileName: 'finish-fail.bin',
+    })
 
     const unfinished = await c.raw.listUnfinishedLargeFiles(
       c.accountInfo.getApiUrl(),
       c.accountInfo.getAuthToken(),
       { bucketId: bucket.id },
     )
-    expect(unfinished.files.find((f) => f.fileName === 'finish-fail.bin')).toBeUndefined()
+    expect(unfinished.files.find((f) => f.fileName === 'finish-fail.bin')).toBeDefined()
+    expect(cancelCalls).toBe(0)
+    expect(cleanupEvents).toHaveLength(1)
+  })
+
+  it('reports ambiguous multipart-copy finish without cancelling it', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    const inner = sim.transport()
+    let cancelCalls = 0
+    const transport = {
+      async send(req: Parameters<typeof inner.send>[0]) {
+        const response = await inner.send(req)
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+        if (req.url.includes('b2_finish_large_file')) {
+          return {
+            ...response,
+            json: () => Promise.reject(new SyntaxError('malformed copy finish response')),
+          }
+        }
+        return response
+      },
+    }
+    const c = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-finish-ambiguous',
+      bucketType: BucketType.AllPrivate,
+    })
+    const content = deterministicBytes(200_000)
+    const uploaded = await bucket.upload({
+      fileName: 'ambiguous-src.bin',
+      source: new BufferSource(content),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const cleanupEvents: string[] = []
+
+    await expect(
+      copyLargeFile(c.raw, c.accountInfo, {
+        sourceFileId: uploaded.fileId,
+        fileName: 'ambiguous-copy.bin',
+        partSize: 100_000,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.error).toBeInstanceOf(FinishLargeFileResponseBodyError)
+          cleanupEvents.push(event.fileId)
+        },
+      }),
+    ).rejects.toMatchObject({
+      bucketId: bucket.id,
+      fileName: 'ambiguous-copy.bin',
+    })
+
+    expect(cancelCalls).toBe(0)
+    expect(cleanupEvents).toHaveLength(1)
   })
 
   it('swallows errors from b2_cancel_large_file during cleanup', async () => {

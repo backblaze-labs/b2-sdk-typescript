@@ -4,10 +4,11 @@ import { readStreamChunkWithSignal } from './collect.ts'
 import { IncrementalSha1, sha1Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
 import {
-  assertFileSourceMatchesIdentity,
   BlobSource,
   BufferSource,
-  type FileSource,
+  collectStreamExactly,
+  FileSource,
+  readNextNonEmptyStreamChunk,
   StreamSource,
   toContentSource,
 } from './source.ts'
@@ -259,6 +260,21 @@ describe('BufferSource', () => {
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(data)
   })
+
+  it('toArrayBuffer rejects with an abort reason', async () => {
+    const src = new BufferSource(data)
+    const controller = new AbortController()
+    const reason = new Error('buffer aborted')
+    controller.abort(reason)
+
+    await expect(src.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
+})
+
+describe('FileSource export', () => {
+  it('is importable from the shared streams module without touching the filesystem', () => {
+    expect(FileSource).toBeTypeOf('function')
+  })
 })
 
 describe('BlobSource', () => {
@@ -307,19 +323,6 @@ describe('BlobSource', () => {
   })
 })
 
-describe('FileSource identity helper', () => {
-  it('rejects non-FileSource values', () => {
-    expect(() =>
-      assertFileSourceMatchesIdentity({ filePath: 'missing.txt' } as FileSource, {
-        deviceId: 1,
-        inode: 1,
-        size: 1,
-        modTimeMillis: 1,
-      }),
-    ).toThrow('FileSource file changed after validation: missing.txt')
-  })
-})
-
 describe('StreamSource', () => {
   function makeStream(data: Uint8Array): ReadableStream<Uint8Array> {
     return new ReadableStream({
@@ -333,6 +336,18 @@ describe('StreamSource', () => {
   it('constructor sets size from the provided value', () => {
     const src = new StreamSource(makeStream(new Uint8Array(10)), 10)
     expect(src.size).toBe(10)
+  })
+
+  it('rejects invalid size values', () => {
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), -1)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), Number.POSITIVE_INFINITY)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
+    expect(() => new StreamSource(makeStream(new Uint8Array(0)), 1.5)).toThrow(
+      'StreamSource size must be a non-negative finite integer.',
+    )
   })
 
   it('stream returns the underlying ReadableStream', async () => {
@@ -374,6 +389,85 @@ describe('StreamSource', () => {
     expect(new Uint8Array(ab)).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]))
   })
 
+  it('toArrayBuffer cancels with the abort reason', async () => {
+    const reason = new Error('stream aborted')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        // Leave the read pending until the abort signal cancels it.
+      },
+      cancel(receivedReason) {
+        cancelReason = receivedReason
+      },
+    })
+    const src = new StreamSource(stream, 1)
+    const controller = new AbortController()
+    const promise = src.toArrayBuffer({ signal: controller.signal })
+    controller.abort(reason)
+
+    await expect(promise).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
+  })
+
+  it('toArrayBuffer rejects when the stream emits too many bytes', async () => {
+    const src = new StreamSource(makeStream(new Uint8Array([1, 2])), 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'StreamSource emitted more bytes than the advertised byte count.',
+    )
+  })
+
+  it('toArrayBuffer rejects when the stream emits too few bytes', async () => {
+    const src = new StreamSource(makeStream(new Uint8Array([1])), 2)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'StreamSource ended before the advertised byte count.',
+    )
+  })
+
+  it('toArrayBuffer allows trailing empty chunks after the advertised bytes', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+        controller.enqueue(new Uint8Array(0))
+        controller.close()
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1]))
+  })
+
+  it('toArrayBuffer rejects and cancels unbounded trailing empty chunks', async () => {
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(/too many empty chunks/)
+    expect(cancelled).toBe(true)
+  })
+
+  it('toArrayBuffer rejects unbounded empty chunks before data', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+    })
+    const src = new StreamSource(stream, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(/too many empty chunks/)
+  })
+
   it('toArrayBuffer throws on second call (stream consumed)', async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -384,6 +478,109 @@ describe('StreamSource', () => {
     const src = new StreamSource(stream, 1)
     await src.toArrayBuffer()
     await expect(src.toArrayBuffer()).rejects.toThrow('StreamSource can only be consumed once.')
+  })
+
+  it('readNextNonEmptyStreamChunk cancels immediately when already aborted', async () => {
+    const abortReason = new Error('already aborted')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    controller.abort(abortReason)
+
+    await expect(
+      readNextNonEmptyStreamChunk(reader, 'empty chunks are not allowed', controller.signal),
+    ).rejects.toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('readNextNonEmptyStreamChunk cancels a pending read when aborted', async () => {
+    const abortReason = new Error('abort pending read')
+    let resolveReadStarted!: () => void
+    const readStarted = new Promise<void>((resolve) => {
+      resolveReadStarted = resolve
+    })
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        resolveReadStarted()
+      },
+      cancel(reason) {
+        cancelReason = reason
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    const nextChunk = readNextNonEmptyStreamChunk(
+      reader,
+      'empty chunks are not allowed',
+      controller.signal,
+    )
+
+    await readStarted
+    controller.abort(abortReason)
+
+    await expect(nextChunk).rejects.toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('readNextNonEmptyStreamChunk does not wait for a stuck cancel after abort', async () => {
+    const abortReason = new Error('abort without waiting for cancel')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+        return new Promise<void>(() => {})
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    const nextChunk = readNextNonEmptyStreamChunk(
+      reader,
+      'empty chunks are not allowed',
+      controller.signal,
+    )
+
+    controller.abort(abortReason)
+
+    const result = await Promise.race([
+      nextChunk.then(
+        () => 'resolved' as const,
+        (err) => err,
+      ),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 20)),
+    ])
+    expect(result).toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('collectStreamExactly does not wait for a stuck cancel after abort', async () => {
+    const abortReason = new Error('abort collect without waiting for cancel')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+        return new Promise<void>(() => {})
+      },
+    })
+    const controller = new AbortController()
+    const collect = collectStreamExactly(stream, 1, controller.signal)
+
+    controller.abort(abortReason)
+
+    const result = await Promise.race([
+      collect.then(
+        () => 'resolved' as const,
+        (err) => err,
+      ),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 20)),
+    ])
+    expect(result).toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
   })
 })
 
@@ -414,6 +611,149 @@ describe('toContentSource', () => {
     expect(src.size).toBe(1)
   })
 
+  it('converts ReadableStream-like inputs across realms', async () => {
+    const rs = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([7]))
+        c.close()
+      },
+    })
+    const crossRealmLike = { getReader: rs.getReader.bind(rs) } as ReadableStream<Uint8Array>
+
+    expect(crossRealmLike instanceof ReadableStream).toBe(false)
+
+    const src = toContentSource(crossRealmLike, 1)
+
+    expect(src).toBeInstanceOf(StreamSource)
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([7]))
+  })
+
+  it('converts an async iterable to a StreamSource', async () => {
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array([1, 2])
+      yield new Uint8Array([3])
+    }
+
+    const src = toContentSource(chunks(), 3)
+
+    expect(src).toBeInstanceOf(StreamSource)
+    expect(src.size).toBe(3)
+    expect(new Uint8Array(await src.toArrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
+  })
+
+  it('treats async iterator return failures during cancel as best effort', async () => {
+    const cancelReason = new Error('stop reading')
+    let returnedReason: unknown
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            return new Promise(() => {})
+          },
+          async return(reason?: unknown): Promise<IteratorResult<Uint8Array>> {
+            returnedReason = reason
+            throw new Error('return failed')
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.stream().cancel(cancelReason)).resolves.toBeUndefined()
+    expect(returnedReason).toBe(cancelReason)
+  })
+
+  it('returns async iterators when pull throws', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          async return(): Promise<IteratorResult<Uint8Array>> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
+  it('preserves pull errors when iterator return is synchronous', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          return(): IteratorResult<Uint8Array> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } as unknown as AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
+  it('preserves pull errors when iterator return throws', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            throw new Error('boom')
+          },
+          return(): IteratorResult<Uint8Array> {
+            returned = true
+            throw new Error('return failed')
+          },
+        }
+      },
+    } as unknown as AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow('boom')
+    expect(returned).toBe(true)
+  })
+
+  it('returns async iterators when they yield invalid chunks', async () => {
+    let returned = false
+    const iterable = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<Uint8Array>> {
+            return { done: false, value: 'bad' as unknown as Uint8Array }
+          },
+          async return(): Promise<IteratorResult<Uint8Array>> {
+            returned = true
+            return { done: true, value: undefined as unknown as Uint8Array }
+          },
+        }
+      },
+    } satisfies AsyncIterable<Uint8Array>
+
+    const src = toContentSource(iterable, 1)
+
+    await expect(src.toArrayBuffer()).rejects.toThrow(
+      'Async iterable content sources must yield Uint8Array chunks.',
+    )
+    expect(returned).toBe(true)
+  })
+
   it('throws when a ReadableStream is provided without a size', () => {
     const rs = new ReadableStream<Uint8Array>({
       start(c) {
@@ -423,6 +763,20 @@ describe('toContentSource', () => {
     expect(() => toContentSource(rs)).toThrow(
       'size is required when using a ReadableStream as input.',
     )
+  })
+
+  it('throws when an async iterable is provided without a size', () => {
+    async function* chunks(): AsyncGenerator<Uint8Array> {
+      yield new Uint8Array([1])
+    }
+
+    expect(() => toContentSource(chunks())).toThrow(
+      'size is required when using a forward-only content source as input.',
+    )
+  })
+
+  it('throws unsupported input before requiring a size', () => {
+    expect(() => toContentSource({} as Uint8Array)).toThrow('Unsupported content source input.')
   })
 })
 

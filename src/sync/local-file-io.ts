@@ -1,3 +1,4 @@
+import { sanitizeErrorReason } from '../util/error-reason.ts'
 import { readStreamChunkWithTimeout } from './b2-sha1-reader.ts'
 import {
   assertDownloadPathSameDevice,
@@ -9,6 +10,7 @@ import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import {
   assertPathInsideRoot,
   hasErrorCode,
+  makeReservedSyncTempFileName,
   noFollowFlag,
   safeRelativePathSegments,
 } from './path-safety.ts'
@@ -23,6 +25,7 @@ export { DOWNLOAD_STAGING_DIRECTORY_NAME }
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
+  afterDownloadBackupRename?: (path: string) => Promise<void> | void
   afterTempFileCreated?: (path: string, stagingDirectory: string) => Promise<void> | void
   beforeDownloadPublish?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
@@ -30,8 +33,83 @@ export const localFileIoTestHooks: {
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
   beforeStagingMarkerWrite?: (path: string) => Promise<void> | void
   disableProcFdAnchoring?: boolean
+  platform?: string
   statForDeviceCheck?: DeviceStatFn
 } = {}
+
+interface ScannedLocalFileHandle {
+  stat(): Promise<{
+    isFile(): boolean
+    readonly dev: number
+    readonly ino: number
+    readonly mtimeMs: number
+    readonly ctimeMs: number
+    readonly size: number
+  }>
+  readFile(): Promise<Uint8Array>
+  close(): Promise<void>
+}
+
+/**
+ * Verifies that a previously scanned local file still points at the same regular file.
+ *
+ * @param path - Scanned local path and file identity.
+ *
+ * @internal
+ */
+export async function validateScannedLocalFile(path: LocalSyncPath): Promise<void> {
+  const handle = await openValidatedScannedLocalFile(path)
+  await handle.close()
+}
+
+/**
+ * Reads a previously scanned local file while rejecting symlink swaps and metadata drift.
+ *
+ * @param path - Scanned local path and file identity.
+ *
+ * @returns The file bytes.
+ *
+ * @internal
+ */
+export async function readScannedLocalFile(path: LocalSyncPath): Promise<Uint8Array> {
+  const handle = await openValidatedScannedLocalFile(path)
+  try {
+    const data = await handle.readFile()
+    if (data.byteLength !== path.size) {
+      throw new Error('local file changed before upload: size changed while reading')
+    }
+    return data
+  } finally {
+    await handle.close()
+  }
+}
+
+async function openValidatedScannedLocalFile(path: LocalSyncPath): Promise<ScannedLocalFileHandle> {
+  const { constants } = await import('node:fs')
+  const { open } = await import('node:fs/promises')
+  const flags =
+    constants.O_RDONLY |
+    noFollowFlag(constants) |
+    ((constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0)
+  const handle = await open(path.absolutePath, flags).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ELOOP')) {
+      throw new Error('local file changed before upload: not a regular file')
+    }
+    throw new Error(
+      `local file changed before upload: could not open scanned file: ${sanitizeErrorReason(err)}`,
+    )
+  })
+  try {
+    const stats = await handle.stat()
+    assertSameScannedRegularFile(stats, path, 'upload', {
+      platform: localFileIoTestHooks.platform,
+    })
+    return handle
+  } catch (err) {
+    await handle.close().catch(() => {})
+    throw err
+  }
+}
 
 /**
  * Writes bytes under a local sync root after path containment checks.
@@ -118,6 +196,17 @@ export async function writeLocalStreamInsideRoot(
   const parentRealPath = await realpath(path.dirname(destPath))
   const finalPath = path.join(parentRealPath, path.basename(destPath))
   assertPathInsideRoot(rootRealPath, finalPath, path)
+  try {
+    const targetStats = await lstat(finalPath)
+    if (targetStats.isSymbolicLink()) {
+      throw new Error('unsafe local destination path: target is a symbolic link')
+    }
+    if (targetStats.isFile() && targetStats.nlink > 1) {
+      throw new Error('unsafe local destination path: target has multiple hard links')
+    }
+  } catch (err) {
+    if (!hasErrorCode(err, 'ENOENT')) throw err
+  }
   const statForDeviceCheck = localFileIoTestHooks.statForDeviceCheck ?? stat
   await assertDownloadPathSameDevice(
     rootRealPath,
@@ -311,6 +400,7 @@ async function assertExpectedDownloadDestination(
       stats,
       { ...expectedDestination, absolutePath: finalPath },
       'download',
+      { platform: localFileIoTestHooks.platform },
     )
   } catch (err) {
     if (hasErrorCode(err, 'ENOENT')) {
@@ -352,7 +442,10 @@ async function publishDownload(
     return
   }
 
-  const backupPath = path.join(path.dirname(publishPath), `.b2sdk-${randomUUID()}.partial`)
+  const backupPath = path.join(
+    path.dirname(publishPath),
+    makeReservedSyncTempFileName(path.basename(publishPath), randomUUID()),
+  )
   let backupExists = false
   let removeBackup = false
 
@@ -360,6 +453,7 @@ async function publishDownload(
     try {
       await rename(publishPath, backupPath)
       backupExists = true
+      await localFileIoTestHooks.afterDownloadBackupRename?.(backupPath)
     } catch (err) {
       if (hasErrorCode(err, 'ENOENT')) {
         throw new Error('local file changed before download: file missing')
@@ -372,6 +466,7 @@ async function publishDownload(
       backupStats,
       { ...expectedDestination, absolutePath: backupPath },
       'download',
+      { compareChangeTime: false, platform: localFileIoTestHooks.platform },
     )
     await linkDownloadNoOverwrite(
       link,
@@ -511,7 +606,9 @@ export async function deleteLocalFileInsideRoot(
         ? finalPath
         : path.join(anchoredParentPath, path.basename(expectedPath))
     const stats = await lstat(unlinkPath)
-    assertSameScannedRegularFile(stats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
+    assertSameScannedRegularFile(stats, { ...scannedPath, absolutePath: unlinkPath }, 'delete', {
+      platform: localFileIoTestHooks.platform,
+    })
     await localFileIoTestHooks.beforeLocalDeleteUnlink?.(parentRealPath)
     if (
       anchoredParentPath === undefined &&
@@ -534,7 +631,12 @@ export async function deleteLocalFileInsideRoot(
       }
     }
     const finalStats = await lstat(unlinkPath)
-    assertSameScannedRegularFile(finalStats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
+    assertSameScannedRegularFile(
+      finalStats,
+      { ...scannedPath, absolutePath: unlinkPath },
+      'delete',
+      { platform: localFileIoTestHooks.platform },
+    )
     await unlink(unlinkPath)
   } finally {
     /* v8 ignore next -- best-effort cleanup */

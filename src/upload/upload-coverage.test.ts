@@ -5,17 +5,25 @@ import { B2Client } from '../client.ts'
 import {
   B2Error,
   B2SsrfError,
+  FinishLargeFileResponseBodyError,
   NetworkError,
   ResumeFileIdMismatchError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { BufferSource, type ContentSource, StreamSource } from '../streams/source.ts'
+import {
+  BufferSource,
+  type ContentSource,
+  StreamSource,
+  toContentSource,
+} from '../streams/source.ts'
 import {
   daysFromNow,
+  deferred,
   deterministicBytes,
   jsonErrorResponse,
   jsonResponse,
@@ -54,6 +62,65 @@ import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
   return makeClient({ minimumPartSize: 100_000 })
+}
+
+function makeClientWithOneFreshUrlFailure(endpoint: string): {
+  client: B2Client
+  getFreshUrlCalls(): number
+} {
+  const sim = new B2Simulator({ minimumPartSize: 100, recommendedPartSize: 100 })
+  const inner = sim.transport()
+  let freshUrlCalls = 0
+  const transport: HttpTransport = {
+    async send(req: HttpRequest): Promise<HttpResponse> {
+      if (req.url.includes(endpoint)) {
+        freshUrlCalls += 1
+        if (freshUrlCalls === 1) {
+          return jsonErrorResponse(500, 'internal_error', 'fresh URL fetch failed')
+        }
+      }
+      return inner.send(req)
+    },
+  }
+  const client = new B2Client({
+    applicationKeyId: 'test-key-id',
+    applicationKey: 'test-key',
+    transport,
+    retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+  })
+  return { client, getFreshUrlCalls: () => freshUrlCalls }
+}
+
+const perCallRetry = {
+  initialRetryDelayMs: 0,
+  maxRetries: 1,
+  maxRetryDelayMs: 0,
+} as const
+
+async function waitForExpectation(assertion: () => void): Promise<void> {
+  const maybeWaitFor = (
+    vi as typeof vi & {
+      waitFor?: (assertion: () => void, options?: { timeout?: number }) => Promise<void>
+    }
+  ).waitFor
+  if (maybeWaitFor !== undefined) {
+    await maybeWaitFor(assertion)
+    return
+  }
+
+  const deadline = Date.now() + 1_000
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      assertion()
+      return
+    } catch (err) {
+      lastError = err
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+  if (lastError !== undefined) throw lastError
+  assertion()
 }
 
 interface FreshUrlRetryHarness {
@@ -993,6 +1060,7 @@ describe('uploadLargeFile cleanup paths', () => {
 
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
+    const cleanupFailures: Array<{ fileId: string; error: unknown }> = []
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
         bucketId: bucket.id,
@@ -1000,8 +1068,441 @@ describe('uploadLargeFile cleanup paths', () => {
         source: new BufferSource(data),
         partSize,
         concurrency: 1,
+        onCleanupFailure: (event) =>
+          cleanupFailures.push({ fileId: event.fileId, error: event.error }),
       }),
     ).rejects.toThrow(/upload_part failure/)
+    expect(cleanupFailures).toHaveLength(1)
+    expect(cleanupFailures[0]?.fileId).toMatch(/^4_z/)
+    expect(cleanupFailures[0]?.error).toBeInstanceOf(Error)
+  })
+
+  it('does not cancel when finishLargeFile commits but its response body cannot be parsed', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let finishCalls = 0
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          const response = await inner.send(req)
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            finishCalls += 1
+            return {
+              ...response,
+              json: () => Promise.reject(new SyntaxError('malformed finish response body')),
+            }
+          }
+          return response
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-body-lost',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+
+    let finishError: unknown
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'ambiguous-finish.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          finishError = event.error
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.fileId).toMatch(/^4_z/)
+        },
+      }),
+    ).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+
+    expect(finishCalls).toBe(1)
+    expect(cancelCalls).toBe(0)
+    expect(finishError).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((finishError as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((finishError as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((finishError as FinishLargeFileResponseBodyError).fileName).toBe('ambiguous-finish.bin')
+    expect(await countFileVersions(bucket, 'ambiguous-finish.bin')).toBe(1)
+  })
+
+  it('does not retry or cancel when finishLargeFile times out after commit', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let finishCalls = 0
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 2, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            finishCalls += 1
+            await inner.send(req)
+            throw new DOMException('finish timed out after commit', 'TimeoutError')
+          }
+          return inner.send(req)
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-timeout-ambiguous',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    let finishError: unknown
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'ambiguous-finish-timeout.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          finishError = event.error
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.fileId).toMatch(/^4_z/)
+        },
+      }),
+    ).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
+
+    expect(finishCalls).toBe(1)
+    expect(cancelCalls).toBe(0)
+    expect(finishError).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((finishError as FinishLargeFileResponseBodyError).fileId).toMatch(/^4_z/)
+    expect((finishError as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((finishError as FinishLargeFileResponseBodyError).fileName).toBe(
+      'ambiguous-finish-timeout.bin',
+    )
+    expect(await countFileVersions(bucket, 'ambiguous-finish-timeout.bin')).toBe(1)
+  })
+
+  it('cancels instead of finishing when a sliceable upload aborts after all parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pre-abort-sliceable',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('deadline before finish')
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    let uploadPartCalls = 0
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      const result = await originalUploadPart(...args)
+      uploadPartCalls += 1
+      if (uploadPartCalls === 2) controller.abort(abortReason)
+      return result
+    })
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'finish-pre-abort-sliceable.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('deadline before finish')
+
+    expect(finishLargeFile).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledOnce()
+  })
+
+  it('returns promptly and cancels later when startLargeFile resolves after abort', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'start-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('shutdown during start')
+    const startSignal = deferred<AbortSignal>()
+    const releaseStart = deferred<void>()
+    const originalStartLargeFile = client.raw.startLargeFile.bind(client.raw)
+    vi.spyOn(client.raw, 'startLargeFile').mockImplementation(
+      async (apiUrl, authToken, request, options) => {
+        if (options?.signal === undefined) throw new Error('expected start abort signal')
+        startSignal.resolve(options.signal)
+        await releaseStart.promise
+        return originalStartLargeFile(apiUrl, authToken, request)
+      },
+    )
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'start-pending-abort.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    const signal = await startSignal.promise
+
+    controller.abort(abortReason)
+
+    await expect(upload).rejects.toBe(abortReason)
+    expect(signal.aborted).toBe(true)
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+
+    releaseStart.resolve(undefined)
+    await waitForExpectation(() => expect(cancelLargeFile).toHaveBeenCalledOnce())
+  })
+
+  it('cancels instead of finishing when a forward-only upload aborts after all parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pre-abort-stream',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const abortReason = new Error('stream deadline before finish')
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    let uploadPartCalls = 0
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      const result = await originalUploadPart(...args)
+      uploadPartCalls += 1
+      if (uploadPartCalls === 2) controller.abort(abortReason)
+      return result
+    })
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const payload = deterministicBytes(200_000)
+    const readable = new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(payload)
+        streamController.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'finish-pre-abort-stream.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize: 100_000,
+        concurrency: 1,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('stream deadline before finish')
+
+    expect(finishLargeFile).not.toHaveBeenCalled()
+    expect(cancelLargeFile).toHaveBeenCalledOnce()
+  })
+
+  it('reports reconciliation metadata when aborting while finish is pending', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'finish-pending-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const controller = new AbortController()
+    const finishStarted = Promise.withResolvers<AbortSignal>()
+    vi.spyOn(client.raw, 'finishLargeFile').mockImplementation(
+      async (_apiUrl, _authToken, _request, options) => {
+        if (options?.signal === undefined) throw new Error('expected finish abort signal')
+        finishStarted.resolve(options.signal)
+        return await new Promise<never>((_resolve, reject) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => reject(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      },
+    )
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const cleanupFailures: unknown[] = []
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'finish-pending-abort.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+      signal: controller.signal,
+      onCleanupFailure: (event) => {
+        expect(event.reason).toBe('finish-ambiguous')
+        cleanupFailures.push(event)
+      },
+    })
+
+    const finishSignal = await finishStarted.promise
+    controller.abort(new Error('shutdown during finish'))
+
+    const err = await upload.then(
+      () => null,
+      (rejection) => rejection,
+    )
+    expect(finishSignal.aborted).toBe(true)
+    expect(err).toBeInstanceOf(FinishLargeFileResponseBodyError)
+    expect((err as FinishLargeFileResponseBodyError).bucketId).toBe(bucket.id)
+    expect((err as FinishLargeFileResponseBodyError).fileName).toBe('finish-pending-abort.bin')
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+    expect(cleanupFailures).toHaveLength(1)
+  })
+
+  it('does not cancel a forward-only upload with an ambiguous finish response', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let cancelCalls = 0
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      retry: { maxRetries: 0 },
+      transport: {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          const response = await inner.send(req)
+          if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+          if (req.url.includes('b2_finish_large_file')) {
+            return {
+              ...response,
+              json: () => Promise.reject(new SyntaxError('malformed forward-only finish body')),
+            }
+          }
+          return response
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'forward-only-finish-body-lost',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    async function* chunks(): AsyncIterable<Uint8Array> {
+      yield deterministicBytes(partSize)
+      yield deterministicBytes(partSize)
+    }
+    const cleanupFailures: string[] = []
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'forward-only-ambiguous-finish.bin',
+        source: toContentSource(chunks(), partSize * 2),
+        partSize,
+        concurrency: 1,
+        onCleanupFailure: (event) => {
+          expect(event.reason).toBe('finish-ambiguous')
+          cleanupFailures.push(event.fileId)
+        },
+      }),
+    ).rejects.toMatchObject({
+      bucketId: bucket.id,
+      fileName: 'forward-only-ambiguous-finish.bin',
+    })
+
+    expect(cancelCalls).toBe(0)
+    expect(cleanupFailures).toHaveLength(1)
+  })
+
+  it('aborts and drains parallel part work before cancelling the large file', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let releasePartOneUpload: (() => void) | undefined
+    const partOneUploadStarted = new Promise<void>((resolve) => {
+      releasePartOneUpload = resolve
+    })
+    const uploadAttempts: number[] = []
+    let uploadAttemptsAfterCancel = 0
+    let cancelSeen = false
+    const controller = new AbortController()
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelSeen = true
+          return inner.send(req)
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          if (cancelSeen) uploadAttemptsAfterCancel += 1
+          const partNumber = Number(req.headers?.['X-Bz-Part-Number'])
+          uploadAttempts.push(partNumber)
+          if (partNumber === 1) {
+            releasePartOneUpload?.()
+            if (req.signal?.aborted === true) throw req.signal.reason
+            await new Promise<never>((_, reject) => {
+              req.signal?.addEventListener(
+                'abort',
+                () => reject(new DOMException('Aborted', 'AbortError')),
+                { once: true },
+              )
+            })
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'parallel-drain',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 3)
+    const source: ContentSource = {
+      canSlice: true,
+      size: data.byteLength,
+      slice(start, end) {
+        const partNumber = start / partSize + 1
+        if (partNumber === 2) {
+          return {
+            canSlice: true,
+            size: end - start,
+            slice: () => {
+              throw new Error('unexpected nested slice')
+            },
+            stream: () => new ReadableStream<Uint8Array>(),
+            toArrayBuffer: async () => {
+              await partOneUploadStarted
+              throw new Error('part 2 read failed')
+            },
+          }
+        }
+        return new BufferSource(data.slice(start, end))
+      },
+      stream: () => new ReadableStream<Uint8Array>(),
+      toArrayBuffer: async () => data.buffer as ArrayBuffer,
+    }
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'parallel-drain.bin',
+        source,
+        partSize,
+        concurrency: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/part 2 read failed/)
+
+    expect(cancelSeen).toBe(true)
+    expect(uploadAttempts).toEqual([1])
+    expect(uploadAttemptsAfterCancel).toBe(0)
   })
 })
 
@@ -1270,6 +1771,34 @@ describe('upload fresh-URL retry', () => {
     expect(await countFileVersions(bucket, 'duplicate.txt')).toBe(maxRetries + 1)
   })
 
+  it('continues fresh-URL retry when the retry observer throws', async () => {
+    const sim = new B2Simulator()
+    const harness = freshUrlRetryHarness(sim.transport(), 'file')
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: harness.transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'throwing-retry-observer',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'observer.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      onUploadRetry: () => {
+        throw new Error('metrics sink failed')
+      },
+    })
+
+    expect(result.fileName).toBe('observer.txt')
+    expect(harness.uploadFileAttempts).toBe(2)
+    expect(harness.getUploadUrlCalls).toBe(2)
+  })
+
   it('shares the retry budget with fresh upload URL fetch failures', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
@@ -1318,6 +1847,102 @@ describe('upload fresh-URL retry', () => {
 
     expect(getUploadUrlCalls).toBe(maxRetries + 1)
     expect(uploadAttempts).toBe(1)
+  })
+
+  it('honors per-call retry overrides for Bucket.upload small files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-small-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'small.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('small.txt')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for Bucket.upload multipart files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'bucket-large-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      concurrency: 1,
+      fileName: 'large.bin',
+      partSize: 100,
+      source: new BufferSource(deterministicBytes(250)),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('large.bin')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.upload small files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'object-small-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.file('small.txt').upload({
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('small.txt')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.upload multipart files', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'object-large-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.file('large.bin').upload({
+      concurrency: 1,
+      partSize: 100,
+      source: new BufferSource(deterministicBytes(250)),
+      retry: perCallRetry,
+    })
+
+    expect(result.fileName).toBe('large.bin')
+    expect(getFreshUrlCalls()).toBe(2)
+  })
+
+  it('honors per-call retry overrides for B2Object.createWriteStream', async () => {
+    const { client, getFreshUrlCalls } = makeClientWithOneFreshUrlFailure('b2_get_upload_part_url')
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-retry-override',
+      bucketType: BucketType.AllPrivate,
+    })
+    const upload = bucket.file('stream.bin').createWriteStream({
+      concurrency: 1,
+      partSize: 100,
+      retry: perCallRetry,
+    })
+
+    const writer = upload.writable.getWriter()
+    await writer.write(deterministicBytes(150))
+    await writer.close()
+    const result = await upload.done
+
+    expect(result.fileName).toBe('stream.bin')
+    expect(getFreshUrlCalls()).toBe(2)
   })
 
   it('stops sending payloads immediately when aborted from the upload retry callback', async () => {
@@ -1540,7 +2165,7 @@ describe('upload fresh-URL retry', () => {
         source: new BufferSource(new Uint8Array([1, 2, 3])),
         retryResponseBodyFailures: false,
       }),
-    ).rejects.toThrow(/response body lost/)
+    ).rejects.toBeInstanceOf(UploadResponseBodyError)
 
     expect(uploadAttempts).toBe(1)
     expect(await countFileVersions(bucket, 'lost-body-disabled.txt')).toBe(1)
@@ -1996,6 +2621,56 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(2)
   })
 
+  it('does not retry upload timeouts after the file may have been stored', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let getUploadUrlCalls = 0
+    let uploadAttempts = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&dom=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadAttempts += 1
+          if (uploadAttempts === 1) {
+            await inner.send(req)
+            throw new DOMException('upload timed out', 'TimeoutError')
+          }
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'no-retry-timeout',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'no-retry-timeout.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+      }),
+    ).rejects.toBeInstanceOf(NetworkError)
+
+    expect(uploadAttempts).toBe(1)
+    expect(getUploadUrlCalls).toBe(1)
+    expect(await countFileVersions(bucket, 'no-retry-timeout.txt')).toBe(1)
+  })
+
   it('recovers expired upload tokens through fresh URL retry without reauth', async () => {
     const sim = new B2Simulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file', {
@@ -2125,6 +2800,61 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadPartAttempts).toBe(3)
     expect(harness.uploadPartUrls[0]).toBe(harness.uploadPartUrls[1])
     expect(retryEvents).toEqual([])
+  })
+
+  it('does not retry multipart part timeouts after the part may have been stored', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let getUploadPartUrlCalls = 0
+    let uploadPartAttempts = 0
+    let cancelCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_part_url')) {
+          getUploadPartUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&partTimeout=${getUploadPartUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          uploadPartAttempts += 1
+          if (uploadPartAttempts === 1) {
+            await inner.send(req)
+            throw new DOMException('part upload timed out', 'TimeoutError')
+          }
+        }
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'no-retry-part-timeout',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'no-retry-part-timeout.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+      }),
+    ).rejects.toBeInstanceOf(NetworkError)
+
+    expect(uploadPartAttempts).toBe(1)
+    expect(getUploadPartUrlCalls).toBe(1)
+    expect(cancelCalls).toBe(1)
+    expect(await countFileVersions(bucket, 'no-retry-part-timeout.bin')).toBe(0)
   })
 })
 
@@ -3184,7 +3914,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 })
 
 describe('uploadLargeFile control-plane aborts', () => {
-  it('passes the caller signal to stalled startLargeFile requests', async () => {
+  it('passes a linked abort signal to stalled startLargeFile requests', async () => {
     const controller = new AbortController()
     let startSignal: AbortSignal | undefined
     const raw = {
@@ -3204,10 +3934,12 @@ describe('uploadLargeFile control-plane aborts', () => {
     controller.abort(new Error('start aborted'))
 
     await expect(upload).rejects.toThrow('start aborted')
-    expect(startSignal).toBe(controller.signal)
+    expect(startSignal).toBeDefined()
+    expect(startSignal).not.toBe(controller.signal)
+    expect(startSignal?.aborted).toBe(true)
   })
 
-  it('passes the abort-scope signal to stalled finishLargeFile requests', async () => {
+  it('classifies stalled finish aborts as ambiguous without cleanup', async () => {
     const controller = new AbortController()
     const finishStarted = Promise.withResolvers<void>()
     let finishSignal: AbortSignal | undefined
@@ -3248,9 +3980,9 @@ describe('uploadLargeFile control-plane aborts', () => {
     await finishStarted.promise
     controller.abort(new Error('finish aborted'))
 
-    await expect(upload).rejects.toThrow('finish aborted')
+    await expect(upload).rejects.toBeInstanceOf(FinishLargeFileResponseBodyError)
     expect(finishSignal?.aborted).toBe(true)
-    expect(cancelSignal?.aborted).toBe(false)
+    expect(cancelSignal).toBeUndefined()
   })
 
   it('uses an independent cleanup signal after multipart scope aborts', async () => {
@@ -3282,6 +4014,34 @@ describe('uploadLargeFile control-plane aborts', () => {
     ).rejects.toThrow('part failed')
 
     expect(cancelSignal?.aborted).toBe(false)
+  })
+
+  it('rejects an unknown explicit resumeFileId before inspecting or uploading parts', async () => {
+    const partSize = 100_000
+    const { client } = makeSmallPartClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'unknown-explicit-resume',
+      bucketType: BucketType.AllPrivate,
+    })
+    const listParts = vi.spyOn(client.raw, 'listParts')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const finishLargeFile = vi.spyOn(client.raw, 'finishLargeFile')
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'unknown-resume.bin',
+        source: new BufferSource(deterministicBytes(partSize * 2)),
+        partSize,
+        concurrency: 1,
+        resumeFileId: '4_z_unknown' as never,
+      }),
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+
+    expect(listParts).not.toHaveBeenCalled()
+    expect(uploadPart).not.toHaveBeenCalled()
+    expect(finishLargeFile).not.toHaveBeenCalled()
   })
 })
 
@@ -3392,6 +4152,37 @@ describe('uploadSmallFile cleanup path', () => {
         resumeFileId: largeFileId('unfinished-large-file'),
       }),
     ).rejects.toThrow(/resumeFileId is only supported for multipart uploads/)
+  })
+
+  it('aborts while buffering a forward-only small-file source', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'small-forward-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+    const readStarted = deferred<void>()
+    const cancel = vi.fn()
+    const controller = new AbortController()
+    const readable = new ReadableStream<Uint8Array>({
+      pull() {
+        readStarted.resolve()
+      },
+      cancel(reason) {
+        cancel(reason)
+      },
+    })
+
+    const upload = bucket.upload({
+      fileName: 'stalled-small.bin',
+      source: new StreamSource(readable, 1),
+      signal: controller.signal,
+    })
+    await readStarted.promise
+    controller.abort('stop small upload')
+
+    await expect(upload).rejects.toBe('stop small upload')
+    expect(cancel).toHaveBeenCalledWith('stop small upload')
   })
 
   it("normalizes the wire 'none' contentSha1 sentinel to null on multipart uploads", async () => {
@@ -3760,7 +4551,326 @@ describe('uploadSmallFile cleanup path', () => {
     expect(unfinished.files.find((f) => f.fileName === 'stream-boom.bin')).toBeUndefined()
   })
 
-  it('ignores resume true for fresh stream uploads without discovery', async () => {
+  it('cancels an async iterable source when sequential multipart upload fails', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'simulated async iterable upload_part failure',
+    })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'async-iterable-fail',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const chunk = deterministicBytes(25_000)
+    const totalSize = partSize * 2
+    let returned = false
+    const iterable: AsyncIterable<Uint8Array> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: chunk }
+          },
+          async return() {
+            returned = true
+            return { done: true, value: undefined }
+          },
+        }
+      },
+    }
+
+    await expect(
+      bucket.upload({
+        fileName: 'async-iterable-boom.bin',
+        source: toContentSource(iterable, totalSize),
+        partSize,
+      }),
+    ).rejects.toThrow(/simulated async iterable upload_part failure/)
+
+    expect(returned).toBe(true)
+  })
+
+  it('rejects a forward-only source that emits more bytes than advertised', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-bytes',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize + 10)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-extra.bin',
+        source: new StreamSource(readable, partSize + 1),
+        partSize,
+      }),
+    ).rejects.toThrow(/emitted more bytes than advertised size/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'stream-extra.bin')).toBeUndefined()
+  })
+
+  it('rejects extra forward-only bytes after an exact planned boundary', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-extra-boundary',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+        controller.enqueue(deterministicBytes(partSize).reverse())
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-extra-boundary.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/emitted more bytes than advertised size/)
+  })
+
+  it('accepts trailing empty forward-only chunks after advertised bytes', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-trailing-empty',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const first = deterministicBytes(partSize)
+    const second = deterministicBytes(partSize).reverse()
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(first)
+        controller.enqueue(second)
+        controller.enqueue(new Uint8Array(0))
+        controller.enqueue(new Uint8Array(0))
+        controller.close()
+      },
+    })
+
+    const result = await bucket.upload({
+      fileName: 'stream-trailing-empty.bin',
+      source: new StreamSource(readable, partSize * 2),
+      partSize,
+    })
+
+    expect(result.contentLength).toBe(partSize * 2)
+    const downloaded = await bucket.download('stream-trailing-empty.bin')
+    const bytes = await readStream(downloaded.body)
+    const expected = new Uint8Array(partSize * 2)
+    expected.set(first)
+    expected.set(second, partSize)
+    expect(bytes).toEqual(expected)
+  })
+
+  it('rejects unbounded trailing empty forward-only chunks after advertised bytes', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-trailer-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+        controller.enqueue(deterministicBytes(partSize).reverse())
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-trailer-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-trailer-poison.bin'),
+    ).toBeUndefined()
+  })
+
+  it('rejects unbounded empty forward-only chunks before data', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-before-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-before-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-before-poison.bin'),
+    ).toBeUndefined()
+  })
+
+  it('rejects unbounded empty forward-only chunks between parts', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-empty-between-poison',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(deterministicBytes(partSize))
+      },
+      pull(controller) {
+        controller.enqueue(new Uint8Array(0))
+      },
+      cancel() {
+        cancelled = true
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'stream-empty-between-poison.bin',
+        source: new StreamSource(readable, partSize * 2),
+        partSize,
+      }),
+    ).rejects.toThrow(/too many empty chunks/)
+
+    expect(cancelled).toBe(true)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(
+      unfinished.files.find((f) => f.fileName === 'stream-empty-between-poison.bin'),
+    ).toBeUndefined()
+  })
+
+  it('aborts a stalled forward-only multipart read', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-read-abort',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const controller = new AbortController()
+    const readStarted = Promise.withResolvers<void>()
+    let cancelled = false
+    const readable = new ReadableStream<Uint8Array>(
+      {
+        pull() {
+          readStarted.resolve()
+          return new Promise<never>(() => {})
+        },
+        cancel() {
+          cancelled = true
+        },
+      },
+      {
+        highWaterMark: 0,
+      },
+    )
+
+    const upload = uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'stream-read-abort.bin',
+      source: new StreamSource(readable, partSize),
+      partSize,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+
+    await readStarted.promise
+    controller.abort(new Error('stop stalled stream'))
+
+    await expect(upload).rejects.toThrow('stop stalled stream')
+    await waitForExpectation(() => expect(cancelled).toBe(true))
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((f) => f.fileName === 'stream-read-abort.bin')).toBeUndefined()
+  })
+
+  it('ignores resume: true on streaming-source uploads', async () => {
+    // Deprecated same-name resume is disabled; without an explicit
+    // resumeFileId, resume: true starts a fresh upload even when the source
+    // is forward-only. The `resume` option lives on `uploadLargeFile` rather
+    // than the high-level `bucket.upload`, so we call it directly.
     const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -3790,6 +4900,83 @@ describe('uploadSmallFile cleanup path', () => {
     expect(result.fileName).toBe('resume-stream.bin')
     expect(result.contentLength).toBe(payload.byteLength)
     expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+  })
+
+  it('rejects resumeFileId on streaming-source uploads', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-resume-file-id',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    const listUnfinishedLargeFiles = vi.spyOn(client.raw, 'listUnfinishedLargeFiles')
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-stream.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+        concurrency: 1,
+        resumeFileId: largeFileId('stream-resume-file-id'),
+      }),
+    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+    expect(listUnfinishedLargeFiles).not.toHaveBeenCalled()
+  })
+
+  it('does not cancel a pre-existing unfinished file for stream resume misuse', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-resume-preserve',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const started = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'resume-stream-preserve.bin',
+        contentType: 'b2/x-auto',
+      },
+    )
+
+    const partSize = 100_000
+    const payload = deterministicBytes(partSize * 2)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(payload)
+        controller.close()
+      },
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'resume-stream-preserve.bin',
+        source: new StreamSource(readable, payload.byteLength),
+        partSize,
+        concurrency: 1,
+        resumeFileId: started.fileId,
+      }),
+    ).rejects.toThrow(/resume is not supported on non-sliceable sources/)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.find((file) => file.fileId === started.fileId)).toBeDefined()
   })
 
   it('preserves a real contentSha1 hex digest for small-file uploads', async () => {

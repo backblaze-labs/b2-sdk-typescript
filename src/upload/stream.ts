@@ -1,5 +1,4 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
@@ -9,17 +8,23 @@ import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { createUploadAbortScope } from './abort-scope.ts'
-import { cancelLargeFileBestEffort, DEFAULT_CLEANUP_TIMEOUT_MS } from './cancel.ts'
+import { abortReason, createAbortScope, raceWithAbort } from './abort-scope.ts'
+import {
+  type CleanupFailureOptions,
+  cancelLargeFileBestEffort,
+  DEFAULT_CLEANUP_TIMEOUT_MS,
+  resolveLargeFileErrorAfterCleanup,
+} from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
+import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import {
   resolveRetryResponseBodyFailures,
-  type UploadRetryListener,
+  type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
 
 /** Options for creating a streaming multipart upload sink. */
-export interface CreateWriteStreamOptions {
+export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
   /** Destination file name in the bucket. */
@@ -42,16 +47,6 @@ export interface CreateWriteStreamOptions {
   readonly onProgress?: ProgressListener
   /** Aborts the upload and cancels the unfinished large file. */
   readonly signal?: AbortSignal
-  /** Retry settings for upload-layer fresh-URL retries. */
-  readonly retry?: Partial<RetryOptions>
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /**
-   * Retry when an upload response body cannot be read after B2 may have stored
-   * the part. Upload POST network errors still retry when this is false because
-   * re-posting the same part number is idempotent. Defaults to true.
-   */
-  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -94,7 +89,7 @@ export function createWriteStream(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const tracker = new ProgressTracker(options.onProgress, null, null)
   const sem = new Semaphore(concurrency)
-  const abortScope = createUploadAbortScope(options.signal)
+  const abortScope = createAbortScope(options.signal)
 
   let largeFileId: LargeFileId | null = null
   let startPromise: Promise<LargeFileId> | null = null
@@ -129,9 +124,8 @@ export function createWriteStream(
 
   function ensureStarted(): Promise<LargeFileId> {
     if (largeFileId !== null) return Promise.resolve(largeFileId)
-    if (startPromise !== null) return startPromise
-    startPromise = (async () => {
-      const resp = await raw.startLargeFile(
+    if (startPromise === null) {
+      const rawStart = raw.startLargeFile(
         accountInfo.getApiUrl(),
         accountInfo.getAuthToken(),
         {
@@ -143,15 +137,24 @@ export function createWriteStream(
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),
         },
-        { signal: abortScope.signal },
+        {
+          signal: abortScope.signal,
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        },
       )
-      largeFileId = resp.fileId
-      if (abortScope.signal.aborted) {
-        scheduleCancelLargeFileAfterStart(Promise.resolve(largeFileId))
-      }
-      return largeFileId
-    })()
-    return startPromise
+      startPromise = rawStart.then((resp) => {
+        largeFileId = resp.fileId
+        if (abortScope.signal.aborted || errored !== null) {
+          cancelStartedLargeFile(largeFileId)
+        }
+        return largeFileId
+      })
+    }
+    const started = startPromise
+    return raceWithAbort(started, abortScope.signal).catch((err) => {
+      if (abortScope.signal.aborted) scheduleCancelLargeFileAfterStart(started)
+      throw err
+    })
   }
 
   async function shipPart(data: Uint8Array, partNumber: number): Promise<void> {
@@ -177,7 +180,6 @@ export function createWriteStream(
       onUploadRetry: options.onUploadRetry,
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
-        'multipart',
       ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
@@ -195,21 +197,41 @@ export function createWriteStream(
     return error
   }
 
-  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
+  function cancelStartedLargeFile(fileId: LargeFileId): void {
     if (cancelAfterStartScheduled) return
     cancelAfterStartScheduled = true
+    void cancelLargeFileBestEffort(raw, accountInfo, fileId, cleanupWriteStreamOptions(options))
+  }
+
+  function scheduleCancelLargeFileAfterStart(started: Promise<LargeFileId>): void {
     void started
-      .then((fileId) =>
-        cancelLargeFileBestEffort(
-          raw,
-          accountInfo,
-          fileId,
-          options.signal === undefined ? undefined : { signal: options.signal },
-        ),
-      )
+      .then((fileId) => cancelStartedLargeFile(fileId))
       .catch(() => {
         // If start failed, no file ID is available to cancel.
       })
+  }
+
+  async function settleInflightForClose(): Promise<PromiseSettledResult<void>[]> {
+    const settled = Promise.allSettled(inflight)
+    if (startPromise === null || largeFileId !== null) return await settled
+
+    const abortWaiter = waitForAbort(abortScope.signal)
+    try {
+      const first = await Promise.race([
+        settled.then(() => 'settled' as const),
+        startPromise.then(
+          () => 'start-settled' as const,
+          () => 'start-settled' as const,
+        ),
+        abortWaiter.promise.then(() => 'aborted' as const),
+      ])
+      if (first === 'aborted' && largeFileId === null) {
+        throw abortReason(abortScope.signal)
+      }
+      return await settled
+    } finally {
+      abortWaiter.dispose()
+    }
   }
 
   function startPartWithAcquiredSlot(data: Uint8Array, partNumber: number): void {
@@ -289,6 +311,7 @@ export function createWriteStream(
     async write(chunk: Uint8Array): Promise<void> {
       if (errored) throw errored
       abortScope.signal.throwIfAborted()
+      if (chunk.byteLength === 0) return
 
       pending.push(chunk)
       pendingBytes += chunk.byteLength
@@ -318,7 +341,7 @@ export function createWriteStream(
           await dispatchPart()
         }
 
-        const settled = await Promise.allSettled(inflight)
+        const settled = await settleInflightForClose()
         const rejected = settled.find(
           (result): result is PromiseRejectedResult => result.status === 'rejected',
         )
@@ -334,37 +357,48 @@ export function createWriteStream(
           throw new Error('createWriteStream closed without any data written.')
         }
 
-        const result = await raw.finishLargeFile(
-          accountInfo.getApiUrl(),
-          accountInfo.getAuthToken(),
-          { fileId: largeFileId, partSha1Array: partSha1s },
-          { signal: abortScope.signal },
-        )
-        resolveDone(result)
+        const result = await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
+          fileId: largeFileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          partSha1s,
+          signal: abortScope.signal,
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        })
         abortScope.dispose()
+        resolveDone(result)
       } catch (err) {
-        markErrored(err)
-        const settled = await Promise.allSettled(inflight)
-        const rejected = settled.find(
-          (result): result is PromiseRejectedResult => result.status === 'rejected',
-        )
-        const observedError =
-          errored ?? (rejected !== undefined ? toError(rejected.reason) : toError(err))
+        const closeError = toError(err)
+        if (errored === null) errored = closeError
+        abortScope.abort(errored)
+        const observedError = errored
+        const fileIdToCancel = largeFileId
+        if (fileIdToCancel === null && startPromise !== null) {
+          // Mirror writer.abort(): close() must not wait for non-abortable
+          // b2_start_large_file. If a file ID arrives later, cancel it in the
+          // background.
+          scheduleCancelLargeFileAfterStart(startPromise)
+          abortScope.dispose()
+          rejectDone(observedError)
+          throw observedError
+        }
+        await Promise.allSettled(inflight)
         // Capture into a const so the cancel closure sees a non-null
         // `fileId`; closures don't observe the outer `!== null` narrowing
         // because the variable is mutable across the lambda boundary.
-        const fileIdToCancel = largeFileId
+        let finalError: unknown = observedError
         if (fileIdToCancel !== null) {
-          await cancelLargeFileBestEffort(
-            raw,
-            accountInfo,
-            fileIdToCancel,
-            options.signal === undefined ? undefined : { signal: options.signal },
-          )
+          finalError = await resolveLargeFileErrorAfterCleanup(observedError, raw, accountInfo, {
+            fileId: fileIdToCancel,
+            bucketId: options.bucketId,
+            fileName: options.fileName,
+            signal: options.signal,
+            onCleanupFailure: options.onCleanupFailure,
+          })
         }
-        rejectDone(observedError)
         abortScope.dispose()
-        throw observedError
+        rejectDone(finalError)
+        throw finalError
       }
     },
 
@@ -385,15 +419,26 @@ export function createWriteStream(
           raw,
           accountInfo,
           fileIdToCancel,
-          options.signal === undefined ? undefined : { signal: options.signal },
+          cleanupWriteStreamOptions(options),
         )
       }
-      rejectDone(abortError)
       abortScope.dispose()
+      rejectDone(abortError)
     },
   })
 
   return { writable, done }
+}
+
+function cleanupWriteStreamOptions(options: CreateWriteStreamOptions): {
+  readonly signal?: AbortSignal
+} & CleanupFailureOptions {
+  return {
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.onCleanupFailure !== undefined
+      ? { onCleanupFailure: options.onCleanupFailure }
+      : {}),
+  }
 }
 
 /**
@@ -424,4 +469,29 @@ function carveExact(chunks: Uint8Array[], size: number): Uint8Array {
     }
   }
   return out
+}
+
+function waitForAbort(signal: AbortSignal): {
+  readonly promise: Promise<unknown>
+  dispose(): void
+} {
+  if (signal.aborted) {
+    return {
+      promise: Promise.resolve(abortReason(signal)),
+      dispose() {},
+    }
+  }
+
+  let onAbort: (() => void) | undefined
+  const promise = new Promise<unknown>((resolve) => {
+    onAbort = () => resolve(abortReason(signal))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+
+  return {
+    promise,
+    dispose() {
+      if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+    },
+  }
 }

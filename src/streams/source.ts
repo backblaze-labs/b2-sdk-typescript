@@ -1,44 +1,79 @@
 import { arrayBufferFor } from '../util/bytes.ts'
 import { collectStream } from './collect.ts'
 
-// Keep per-read buffers modest; multipart upload concurrency, not this chunk
-// size, controls throughput and the number of simultaneously open file ranges.
-const FILE_SOURCE_CHUNK_SIZE = 64 * 1024
+export { FileSource, type FileSourcePath } from './file-source.ts'
 
-interface FileIdentity {
-  readonly dev: number
-  readonly ino: number
-  readonly size: number
-  readonly mtimeMs: number
-  readonly ctimeMs: number
+const READABLE_STREAM_SIZE_REQUIRED_ERROR = 'size is required when using a ReadableStream as input.'
+const FORWARD_ONLY_SIZE_REQUIRED_ERROR =
+  'size is required when using a forward-only content source as input.'
+const STREAM_SOURCE_ENDED_EARLY_ERROR = 'StreamSource ended before the advertised byte count.'
+const STREAM_SOURCE_TOO_MANY_BYTES_ERROR =
+  'StreamSource emitted more bytes than the advertised byte count.'
+const STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR =
+  'StreamSource emitted too many empty chunks without data.'
+/** Maximum consecutive empty chunks tolerated from a forward-only stream. */
+export const MAX_EMPTY_STREAM_CHUNKS = 1024
+
+function asyncIterableToReadableStream(
+  iterable: AsyncIterable<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  const iterator = iterable[Symbol.asyncIterator]()
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await iterator.next()
+        if (done === true) {
+          controller.close()
+          return
+        }
+        if (!(value instanceof Uint8Array)) {
+          throw new TypeError('Async iterable content sources must yield Uint8Array chunks.')
+        }
+        controller.enqueue(value)
+      } catch (err) {
+        /* v8 ignore next -- Iterator-return failure must not mask the pull error. */
+        await returnAsyncIteratorBestEffort(iterator)
+        throw err
+      }
+    },
+    async cancel(reason) {
+      await returnAsyncIteratorBestEffort(iterator, reason)
+    },
+  })
 }
 
-interface FileStatsLike {
-  readonly dev: number
-  readonly ino: number
-  readonly size: number
-  readonly mtimeMs: number
-  readonly ctimeMs: number
-  isFile(): boolean
+async function returnAsyncIteratorBestEffort(
+  iterator: AsyncIterator<Uint8Array>,
+  reason?: unknown,
+): Promise<void> {
+  try {
+    await iterator.return?.(reason)
+  } catch {
+    // Iterator cleanup is secondary and must not mask the pull error.
+  }
 }
 
-interface FileHandleLike {
-  read(
-    buffer: Uint8Array,
-    offset: number,
-    length: number,
-    position: number,
-  ): Promise<{ bytesRead: number }>
-  stat(): Promise<FileStatsLike>
-  close(): Promise<void>
+function isAsyncIterable(input: unknown): input is AsyncIterable<Uint8Array> {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    Symbol.asyncIterator in input &&
+    typeof input[Symbol.asyncIterator] === 'function'
+  )
 }
 
-const fileSourceIdentities = new WeakMap<object, FileIdentity>()
+function isReadableStream(input: unknown): input is ReadableStream<Uint8Array> {
+  return (
+    typeof input === 'object' &&
+    input !== null &&
+    typeof (input as { getReader?: unknown }).getReader === 'function'
+  )
+}
 
 /**
- * Uniform adapter for upload content. Wraps File, Blob, Buffer, file paths,
- * or ReadableStream behind a common interface so upload logic does not depend
- * on the input type.
+ * Uniform adapter for upload content. Wraps File, Blob, Buffer, local files,
+ * async iterables, or ReadableStream behind a common interface so upload logic
+ * does not depend on the input type.
  */
 export interface ContentSource {
   /** Total size of the content in bytes. */
@@ -49,12 +84,12 @@ export interface ContentSource {
    * Whether {@link slice} is safe to call on this source.
    *
    * `true` for in-memory / random-access sources (`BufferSource`,
-   * `BlobSource`, `FileSource`) — the multipart upload engine can dispatch part reads
-   * in parallel by slicing the source into disjoint ranges. `false`
-   * for forward-only sources (`StreamSource`) — the engine must read
-   * sequentially, one `partSize` chunk at a time. Callers that branch
-   * on this flag are expected to fall back to the sequential path
-   * rather than call `slice()` and catch the throw.
+   * `BlobSource`, `FileSource`) — the multipart upload engine can dispatch
+   * part reads in parallel by slicing the source into disjoint ranges.
+   * `false` for forward-only streams and async iterables — the engine must
+   * read sequentially, one `partSize` chunk at a time. Callers that branch on
+   * this flag are expected to fall back to the sequential path rather than call
+   * `slice()` and catch the throw.
    */
   readonly canSlice: boolean
   /** Return a sub-range of this source as a new ContentSource. */
@@ -155,179 +190,13 @@ export class BufferSource implements ContentSource {
 
   /**
    * Read the entire buffer content into an ArrayBuffer.
-   * @param options - Optional abort signal checked before returning the buffer.
+   * @param options - Optional abort signal checked before returning bytes.
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
-    options.signal?.throwIfAborted()
-    return Promise.resolve(
-      this.buffer.buffer.slice(
-        this.buffer.byteOffset,
-        this.buffer.byteOffset + this.buffer.byteLength,
-      ) as ArrayBuffer,
-    )
-  }
-}
-
-/**
- * ContentSource backed by a local filesystem path.
- *
- * This class is import-safe in non-Node runtimes so the root and `/streams`
- * barrels remain isomorphic, but reading methods require Node filesystem APIs
- * and will reject when invoked where `node:fs` is unavailable. `FileSource`
- * opens paths with no-follow semantics where Node exposes them. On platforms
- * without `O_NOFOLLOW`, a swapped symlink is opened and then rejected by the
- * post-open identity check. Each slice must still point at the same regular
- * file identity, size, mtime, and ctime captured by
- * {@link FileSource.fromPath}. Concurrent part uploads may open one
- * descriptor per in-flight part; the SDK's upload concurrency bounds that
- * descriptor count.
- */
-export class FileSource implements ContentSource {
-  /** Absolute path to the underlying local file. */
-  readonly filePath: string
-  /** {@inheritDoc} */
-  readonly size: number
-  /** Random-access: each slice opens and reads only its requested byte range. */
-  readonly canSlice = true
-  private readonly offset: number
-  private readonly identity: FileIdentity
-
-  /**
-   * Creates a FileSource for a local filesystem path.
-   * @param filePath - Path to the underlying file.
-   * @param size - Number of bytes exposed by this source.
-   * @param identity - Validated regular-file identity, when captured.
-   * @param offset - Byte offset where this source begins within the file.
-   */
-  private constructor(filePath: string, size: number, identity: FileIdentity, offset = 0) {
-    assertSafeByteCount(size, 'size')
-    assertSafeByteCount(offset, 'offset')
-    this.filePath = filePath
-    this.size = size
-    this.offset = offset
-    this.identity = identity
-    fileSourceIdentities.set(this, identity)
-  }
-
-  /**
-   * Creates a FileSource by opening and validating the given filesystem path.
-   * @param filePath - Path to the local file.
-   *
-   * @returns A FileSource sized from the current file metadata.
-   *
-   * @throws If the path does not resolve to a regular file.
-   */
-  static async fromPath(filePath: string): Promise<FileSource> {
-    const { resolve } = await import('node:path')
-    const resolvedFilePath = resolve(filePath)
-    const handle = await openNoFollow(resolvedFilePath)
-    try {
-      const stats = await handle.stat()
-      assertRegularFile(resolvedFilePath, stats)
-      return new FileSource(resolvedFilePath, stats.size, identityFromStats(stats))
-    } finally {
-      await handle.close()
-    }
-  }
-
-  /**
-   * Return a new FileSource covering the specified byte range.
-   * @param start - The zero-based byte offset to begin the slice.
-   * @param end - The exclusive byte offset where the slice ends.
-   *
-   * @returns A new ContentSource representing the requested sub-range.
-   */
-  slice(start: number, end: number): ContentSource {
-    const sliceStart = clampByteRange(start, this.size)
-    const sliceEnd = Math.max(sliceStart, clampByteRange(end, this.size))
-    return new FileSource(
-      this.filePath,
-      sliceEnd - sliceStart,
-      this.identity,
-      this.offset + sliceStart,
-    )
-  }
-
-  /**
-   * Open the file range as a ReadableStream.
-   * @returns A ReadableStream of the file bytes in this source's range.
-   */
-  stream(): ReadableStream<Uint8Array> {
-    const filePath = this.filePath
-    const offset = this.offset
-    const totalSize = this.size
-    const identity = this.identity
-    let handle: FileHandleLike | null = null
-    let position = offset
-    let remaining = totalSize
-
-    async function closeHandle(): Promise<void> {
-      const current = handle
-      handle = null
-      if (current !== null) await current.close()
-    }
-
-    return new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        try {
-          if (remaining <= 0) {
-            if (handle === null) {
-              handle = await openValidatedHandle(filePath, identity)
-            } else {
-              await assertHandleReady(filePath, handle, identity)
-            }
-            await closeHandle()
-            controller.close()
-            return
-          }
-
-          if (handle === null) {
-            handle = await openValidatedHandle(filePath, identity)
-          }
-
-          const length = Math.min(FILE_SOURCE_CHUNK_SIZE, remaining)
-          const chunk = new Uint8Array(length)
-          const { bytesRead } = await handle.read(chunk, 0, length, position)
-          if (bytesRead === 0) {
-            await assertHandleReady(filePath, handle, identity)
-            throw new Error(`FileSource file changed after validation: ${filePath}`)
-          }
-
-          position += bytesRead
-          remaining -= bytesRead
-          controller.enqueue(bytesRead === chunk.byteLength ? chunk : chunk.subarray(0, bytesRead))
-
-          if (remaining === 0) {
-            await assertHandleReady(filePath, handle, identity)
-            await closeHandle()
-            controller.close()
-          }
-        } catch (err) {
-          await closeHandle()
-          controller.error(err)
-        }
-      },
-
-      async cancel() {
-        await closeHandle()
-      },
-    })
-  }
-
-  /**
-   * Read this file range into an ArrayBuffer.
-   * @param options - Optional abort signal used while reading.
-   *
-   * @returns A promise that resolves with the bytes in this source's range.
-   */
   async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
-    const bytes = await collectStream(this.stream(), options)
-    if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
-      return bytes.buffer as ArrayBuffer
-    }
-    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+    options.signal?.throwIfAborted()
+    return arrayBufferFor(this.buffer)
   }
 }
 
@@ -353,6 +222,7 @@ export class StreamSource implements ContentSource {
     private readonly readable: ReadableStream<Uint8Array>,
     size: number,
   ) {
+    validateStreamSourceSize(size)
     this.size = size
   }
 
@@ -384,133 +254,171 @@ export class StreamSource implements ContentSource {
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
   async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
-    const bytes = await collectStream(this.stream(), options)
-    return arrayBufferFor(bytes)
+    const bytes = await collectStreamExactly(this.stream(), this.size, options.signal)
+    return bytes.buffer as ArrayBuffer
   }
 }
 
-function assertSafeByteCount(value: number, label: string): void {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`FileSource ${label} must be a non-negative safe integer`)
-  }
-}
-
-function clampByteRange(value: number, size: number): number {
-  if (Number.isNaN(value)) return 0
-  // Support Blob/ArrayBuffer-style `slice(start, Infinity)` while keeping
-  // negative infinity pinned to the start of the file range.
-  if (!Number.isFinite(value)) return value < 0 ? 0 : size
-  const offset = Math.trunc(value)
-  const relativeOffset = offset < 0 ? size + offset : offset
-  return Math.min(size, Math.max(0, relativeOffset))
-}
-
-async function openNoFollow(filePath: string): Promise<FileHandleLike> {
-  const { constants } = await import('node:fs')
-  const { open } = await import('node:fs/promises')
-  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-  const nonBlock = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0
-  return open(filePath, constants.O_RDONLY | noFollow | nonBlock)
-}
-
-async function openValidatedHandle(
-  filePath: string,
-  identity: FileIdentity,
-): Promise<FileHandleLike> {
-  const handle = await openNoFollow(filePath)
-  try {
-    await assertHandleReady(filePath, handle, identity)
-    return handle
-  } catch (err) {
-    await handle.close()
-    throw err
-  }
-}
-
-async function assertHandleReady(
-  filePath: string,
-  handle: FileHandleLike,
-  identity: FileIdentity,
-): Promise<void> {
-  const stats = await handle.stat()
-  assertRegularFile(filePath, stats)
-  assertSameIdentity(filePath, stats, identity)
-}
-
-function assertRegularFile(filePath: string, stats: FileStatsLike): void {
-  if (!stats.isFile()) throw new Error(`FileSource path is not a regular file: ${filePath}`)
-}
-
-function assertSameIdentity(filePath: string, stats: FileStatsLike, identity: FileIdentity): void {
-  if (
-    stats.dev !== identity.dev ||
-    stats.ino !== identity.ino ||
-    stats.size !== identity.size ||
-    stats.mtimeMs !== identity.mtimeMs ||
-    stats.ctimeMs !== identity.ctimeMs
-  ) {
-    throw new Error(`FileSource file changed after validation: ${filePath}`)
-  }
-}
-
-function identityFromStats(stats: FileStatsLike): FileIdentity {
-  return {
-    dev: stats.dev,
-    ino: stats.ino,
-    size: stats.size,
-    mtimeMs: stats.mtimeMs,
-    ctimeMs: stats.ctimeMs,
+function validateStreamSourceSize(size: number): void {
+  if (!Number.isFinite(size) || !Number.isInteger(size) || size < 0) {
+    throw new RangeError('StreamSource size must be a non-negative finite integer.')
   }
 }
 
 /**
- * Verifies an internal FileSource against a sync scanner identity without
- * exposing sync-only methods on the public FileSource class.
- * @param source - FileSource instance created for the local file.
- * @param identity - Previously scanned local file identity.
+ * Reads exactly the advertised number of bytes from a stream.
+ * @param stream - Stream to consume.
+ * @param expectedSize - Exact number of bytes expected from the stream.
+ * @param signal - Optional abort signal for cancelling the read.
  *
- * @throws If the source identity differs from the scanned identity.
+ * @returns A byte array of length `expectedSize`.
  *
- * @internal
+ * @throws If the stream emits too few bytes, too many bytes, too many empty chunks, or aborts.
  */
-export function assertFileSourceMatchesIdentity(
-  source: FileSource,
-  identity: {
-    readonly deviceId: number
-    readonly inode: number
-    readonly size: number
-    readonly modTimeMillis: number
-    readonly changeTimeMillis?: number
-  },
-): void {
-  const sourceIdentity = fileSourceIdentities.get(source)
-  if (sourceIdentity === undefined) {
-    throw new Error(`FileSource file changed after validation: ${source.filePath}`)
-  }
-  if (
-    sourceIdentity.dev !== identity.deviceId ||
-    sourceIdentity.ino !== identity.inode ||
-    sourceIdentity.size !== identity.size ||
-    Math.floor(sourceIdentity.mtimeMs) !== identity.modTimeMillis ||
-    (identity.changeTimeMillis !== undefined &&
-      Math.floor(sourceIdentity.ctimeMs) !== identity.changeTimeMillis)
-  ) {
-    throw new Error(`FileSource file changed after validation: ${source.filePath}`)
+export async function collectStreamExactly(
+  stream: ReadableStream<Uint8Array>,
+  expectedSize: number,
+  signal?: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  let completed = false
+
+  try {
+    while (total < expectedSize) {
+      const { done, value } = await readNextNonEmptyStreamChunk(
+        reader,
+        STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+        signal,
+      )
+      if (done) throw new Error(STREAM_SOURCE_ENDED_EARLY_ERROR)
+      if (total + value.byteLength > expectedSize) {
+        throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+
+    const extra = await readNextNonEmptyStreamChunk(
+      reader,
+      STREAM_SOURCE_TOO_MANY_EMPTY_CHUNKS_ERROR,
+      signal,
+    )
+    if (!extra.done) throw new Error(STREAM_SOURCE_TOO_MANY_BYTES_ERROR)
+
+    const result = new Uint8Array(expectedSize)
+    let offset = 0
+    for (const chunk of chunks) {
+      result.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    completed = true
+    return result
+  } finally {
+    if (!completed) {
+      cancelReaderBestEffort(reader)
+    }
+    try {
+      reader.releaseLock()
+    } catch {
+      // Aborted reads can leave a pending read while best-effort cancel is
+      // still unsettled. Preserve the original abort/error instead.
+    }
   }
 }
 
 /**
- * Convert a Uint8Array, Blob, or ReadableStream into a {@link ContentSource}.
- * When passing a ReadableStream, the `size` parameter is required.
- * @param input - The content to wrap, as a Uint8Array, Blob, or ReadableStream.
- * @param size - The total byte length, required when input is a ReadableStream.
+ * Reads from a stream until it receives data, EOF, or too many consecutive empty chunks.
+ * @param reader - Locked reader for a Uint8Array stream.
+ * @param emptyChunkErrorMessage - Error message to throw when the empty-chunk limit is exceeded.
+ * @param signal - Optional abort signal that cancels the reader and rejects the read.
+ *
+ * @returns The next non-empty chunk or EOF result.
+ */
+export async function readNextNonEmptyStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  emptyChunkErrorMessage: string,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let emptyChunks = 0
+  while (true) {
+    const result = await readStreamChunk(reader, signal)
+    if (result.done || result.value.byteLength > 0) return result
+    emptyChunks += 1
+    if (emptyChunks > MAX_EMPTY_STREAM_CHUNKS) {
+      throw new Error(emptyChunkErrorMessage)
+    }
+  }
+}
+
+async function readStreamChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (signal === undefined) return reader.read()
+  if (signal.aborted) {
+    const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+    cancelReaderBestEffort(reader, reason)
+    throw reason
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+      cancelReaderBestEffort(reader, reason)
+      reject(reason)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    const result = await Promise.race([reader.read(), abort])
+    if (signal.aborted) {
+      const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+      cancelReaderBestEffort(reader, reason)
+      throw reason
+    }
+    return result
+  } finally {
+    removeAbortListener?.()
+  }
+}
+
+function cancelReaderBestEffort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reason?: unknown,
+): void {
+  /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
+  void reader.cancel(reason).catch(() => {})
+}
+
+/** ContentSource backed by a forward-only async iterable of Uint8Array chunks. */
+class AsyncIterableSource extends StreamSource {
+  /**
+   * Create an AsyncIterableSource from a known-size async iterable.
+   * @param iterable - Async iterable that yields Uint8Array chunks.
+   * @param size - Total byte length the iterable will produce.
+   */
+  constructor(iterable: AsyncIterable<Uint8Array>, size: number) {
+    super(asyncIterableToReadableStream(iterable), size)
+  }
+}
+
+/**
+ * Convert a Uint8Array, Blob, ReadableStream, or async iterable into a {@link ContentSource}.
+ * When passing a ReadableStream or async iterable, the `size` parameter is required.
+ * @param input - The content to wrap.
+ * @param size - The total byte length, required for forward-only inputs.
  *
  * @returns A ContentSource adapter for the given input.
  *
- * @throws If input is a ReadableStream and size is not provided.
+ * @throws If input is forward-only and size is not provided.
  */
 export function toContentSource(
-  input: Uint8Array | Blob | ReadableStream<Uint8Array>,
+  input: Uint8Array | Blob | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>,
   size?: number,
 ): ContentSource {
   if (input instanceof Uint8Array) {
@@ -519,8 +427,17 @@ export function toContentSource(
   if (input instanceof Blob) {
     return new BlobSource(input)
   }
-  if (size === undefined) {
-    throw new Error('size is required when using a ReadableStream as input.')
+  if (isReadableStream(input)) {
+    if (size === undefined) {
+      throw new Error(READABLE_STREAM_SIZE_REQUIRED_ERROR)
+    }
+    return new StreamSource(input, size)
   }
-  return new StreamSource(input, size)
+  if (isAsyncIterable(input)) {
+    if (size === undefined) {
+      throw new Error(FORWARD_ONLY_SIZE_REQUIRED_ERROR)
+    }
+    return new AsyncIterableSource(input, size)
+  }
+  throw new TypeError('Unsupported content source input.')
 }

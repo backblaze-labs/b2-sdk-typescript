@@ -55,7 +55,7 @@ export interface B2ClientOptions {
   readonly accountInfo?: AccountInfo
   /** Custom HTTP transport. Defaults to {@link FetchTransport}. Wrapped by {@link RetryTransport}. */
   readonly transport?: HttpTransport
-  /** Override retry behavior (max retries, backoff, jitter). */
+  /** Override retry behavior (max retries, backoff, and per-attempt timeout). */
   readonly retry?: Partial<RetryOptions>
   /** Custom user-agent string prepended to the SDK default. */
   readonly userAgent?: string
@@ -107,7 +107,7 @@ export class B2Client {
   private readonly applicationKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
-  readonly #uploadRetryOptions: RetryOptions
+  private readonly resolvedUploadRetryOptions: RetryOptions
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -120,7 +120,7 @@ export class B2Client {
     this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
     bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
-    this.#uploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    this.resolvedUploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -140,7 +140,7 @@ export class B2Client {
 
     const retryTransport = new RetryTransport({
       transport: baseTransport,
-      retry: this.#uploadRetryOptions,
+      retry: this.resolvedUploadRetryOptions,
       onReauth: () => this.reauthorize(),
     })
 
@@ -149,6 +149,7 @@ export class B2Client {
 
     this.raw = new RawClient({ transport: retryTransport })
   }
+
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
    *
@@ -226,7 +227,7 @@ export class B2Client {
       this.accountInfo.getAuthToken(),
       request,
     )
-    return new Bucket(this, info, this.#uploadRetryOptions)
+    return new Bucket(this, info, this.resolvedUploadRetryOptions)
   }
 
   /**
@@ -251,7 +252,7 @@ export class B2Client {
         ...options,
       },
     )
-    return resp.buckets.map((info) => new Bucket(this, info, this.#uploadRetryOptions))
+    return resp.buckets.map((info) => new Bucket(this, info, this.resolvedUploadRetryOptions))
   }
 
   /**
@@ -262,7 +263,11 @@ export class B2Client {
    */
   async getBucket(bucketName: string): Promise<Bucket | null> {
     const buckets = await this.listBuckets({ bucketName })
-    return buckets[0] ?? null
+    const filteredMatch = buckets[0]
+    if (filteredMatch !== undefined) return filteredMatch
+
+    const unfilteredBuckets = await this.listBuckets()
+    return unfilteredBuckets.find((bucket) => bucket.name === bucketName) ?? null
   }
 
   /**

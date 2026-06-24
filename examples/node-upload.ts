@@ -5,9 +5,8 @@
  *   B2_APPLICATION_KEY_ID=xxx B2_APPLICATION_KEY=yyy npx tsx examples/node-upload.ts <bucket-name> <local-file-path>
  */
 
-import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
+import { FileSource } from '@backblaze-labs/b2-sdk/streams'
 import { setupClient } from './_smoke/cli.ts'
 
 async function main() {
@@ -28,11 +27,10 @@ async function main() {
     process.exit(1)
   }
 
-  const data = await readFile(filePath)
   const fileName = basename(filePath)
-  const source = new BufferSource(new Uint8Array(data))
+  const source = await FileSource.fromPath(filePath)
 
-  console.log(`Uploading ${fileName} (${data.byteLength} bytes) to ${bucketName}...`)
+  console.log(`Uploading ${fileName} (${source.size} bytes) to ${bucketName}...`)
 
   const file = await bucket.upload({
     fileName,

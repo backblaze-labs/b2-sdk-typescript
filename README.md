@@ -5,12 +5,12 @@
 [![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.3-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 
 A Backblaze-maintained TypeScript and JavaScript SDK for Backblaze B2 Cloud Storage, currently incubating in [Backblaze Labs](https://github.com/backblaze-labs).
 
-**Isomorphic at the source level.** One source tree runs unmodified in Node.js 22+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
+**Isomorphic at the source level.** One source tree runs unmodified in Node.js 22.3+, Bun, Deno, browsers, Cloudflare Workers, and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
 
 **Async-first.** Built on Web Streams, `AbortSignal`, and `crypto.subtle`. No callbacks, no legacy APIs.
 
@@ -85,7 +85,7 @@ await bucket.delete()
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.
 
 ```ts
-import { BufferSource, BlobSource, FileSource } from '@backblaze-labs/b2-sdk'
+import { BufferSource, BlobSource, FileSource, toContentSource } from '@backblaze-labs/b2-sdk'
 
 // From a Uint8Array
 await bucket.upload({
@@ -100,16 +100,22 @@ await bucket.upload({
   contentType: 'image/jpeg',
 })
 
-// From a local filesystem path (Node.js)
+// From a local file path (Node)
 await bucket.upload({
-  fileName: 'backups/db.tar.gz',
-  source: await FileSource.fromPath('/var/backups/db.tar.gz'),
+  fileName: 'backups/db.dump',
+  source: await FileSource.fromPath('/var/backups/db.dump'),
 })
 
-// Large file with progress tracking
+// From a forward-only stream or async iterable (size required)
+await bucket.upload({
+  fileName: 'exports/report.ndjson',
+  source: toContentSource(nodeReadable, knownByteLength),
+})
+
+// Large file with progress tracking (Node)
 await bucket.upload({
   fileName: 'backup.tar.gz',
-  source: new BlobSource(largeBlob),
+  source: await FileSource.fromPath('/path/to/backup.tar.gz'),
   concurrency: 8,
   partSize: 64 * 1024 * 1024,
   onProgress: (event) => {
@@ -119,13 +125,15 @@ await bucket.upload({
 })
 ```
 
-Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response body was lost, retrying can create a duplicate file version.
+`FileSource` rejects non-regular leaf paths, later leaf path swaps, and same-size rewrites that restore mtime on POSIX platforms. Parent directory symlinks are followed unless your application validates the containing root first. On Windows, `FileSource` skips unreliable dev/inode and ctime comparisons and validates size and mtime instead.
+
+Transient upload failures are retried with a fresh B2 upload URL, matching B2's documented flow. If the first upload POST succeeded but its response was lost, retrying can create a duplicate file version.
 
 Use `onUploadRetry` to log or count retry attempts, compare returned file IDs and SHA-1 values when reconciling uploads, and configure lifecycle or version-retention rules for buckets where duplicate versions must be cleaned up automatically. Retry diagnostics are event-only: the SDK does not log, count, or persist them unless this listener records them. Payload re-POSTs and fresh-URL fetches spend one upload retry budget and are bounded by `retry.maxRetries + 1` attempts per file or part; aggregate retries scale with multipart transfer concurrency. Upload 429 throttling backs off on the same upload URL instead of fetching a new one.
 
-Single-request uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart part uploads retry lost part response bodies and upload POST network errors by default because re-posting the same `partNumber` is idempotent; B2 keeps the latest write for that part number before `finishLargeFile`, including SSE-B2 encrypted parts.
+Uploads do not retry lost success response bodies or upload POST network errors by default because re-posting `b2_upload_file` can create duplicate versions, especially in versioned or Object Lock buckets. If callers opt into this ambiguity with `retryResponseBodyFailures: true`, retryable upload POST network errors and unreadable response bodies can re-post the payload with a fresh URL, bounded by `retry.maxRetries`; any uploaded `fileRetention` or `legalHold` applies to each duplicate version and can prevent deletion until the retention policy expires or the hold is cleared. Multipart callers may also opt in when replaying the same `partNumber` is acceptable before `finishLargeFile`, including SSE-B2 encrypted parts.
 
-Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. The SDK does not impose a default upload request timeout; pass `AbortSignal.timeout(...)` or your own abort signal when a hung connection needs a deadline.
+Large-file part retries are coordinated per part, not by a shared circuit breaker. During a B2 pod or main-API incident, concurrent parts can independently back off with jitter, fetch fresh part URLs, and retry in parallel; aggregate fresh-URL traffic scales with multipart concurrency and `retry.maxRetries`. Multipart workers abort sibling work promptly after a fatal part failure, and best-effort cleanup is bounded so aborting a stream does not hang indefinitely. Tune `concurrency`, `retry`, and `onUploadRetry` for operators that need outage counters or stricter load shedding. Each HTTP attempt has a 15 minute deadline by default; for streamed download bodies the timeout is idle/no-progress and resets after each chunk. Set `retry.requestTimeoutMs` higher for very slow upload links or to `0` to rely only on your own `AbortSignal`.
 
 `FileSource` is the Node.js-only content adapter. It is safe to import from the
 main package in browser builds, but `FileSource.fromPath()` and its read methods
@@ -493,6 +501,11 @@ import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 before constructing an AWS `S3Client`. The presign helpers sign internally and
 do not require AWS presigner packages.
 
+Raw methods use a trailing options bag for request controls such as cancellation
+and per-request retry overrides: pass `{ signal, retry }` to `getUploadUrl`,
+`getUploadPartUrl`, `uploadFile`, and `uploadPart`. The older positional
+`signal, retry` form remains available only for source compatibility.
+
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
 ## Sync filters
@@ -594,16 +607,16 @@ new B2Client({
 
 Passing `allowedHostSuffixes: []` disables the guard entirely and should be reserved for trusted tests or controlled local harnesses. For custom realms, the SDK uses the hosts returned by `b2_authorize_account` as scoped suffixes, allowing those hosts and their subdomains without broadening unknown domains to public suffixes such as `co.uk`.
 
-Passing a custom `transport` opts out of the guard (your transport, your threat model).
-
 The default transport follows same-origin `GET` / `HEAD` redirects after each target passes the SSRF guard. Cross-origin redirects and `POST` redirects are blocked with `B2RedirectError`. Pass `followSameOriginRedirects: false` to the `B2Client` constructor to block same-origin redirects as well.
+
+Passing a custom `transport` opts out of the guard (your transport, your threat model).
 
 ## Retry behavior
 
 The SDK automatically retries transient errors with exponential backoff:
 
 - **401 expired_auth_token**: re-authorizes and retries
-- **503, 408, 429**: exponential backoff with jitter, respects `Retry-After` header
+- **408, 429, transient 5xx (500, 502, 503, 504)**: exponential backoff with jitter, respects `Retry-After` header
 - **Network errors**: retried with backoff
 - **Permanent errors** (403 cap_exceeded, 404 not_found, etc.): thrown immediately
 
@@ -617,9 +630,20 @@ const client = new B2Client({
     maxRetries: 10,
     maxRetryDelayMs: 120_000,
     initialRetryDelayMs: 500,
+    requestTimeoutMs: 30 * 60_000,
   },
 })
 ```
+
+`requestTimeoutMs` covers request dispatch, upload POST bodies, and
+non-streaming response-body reads. For `response.body` download streams it is an
+idle/no-progress timeout that resets after each received chunk, so healthy large
+downloads are not aborted merely because the total transfer takes longer than
+the timeout. Slow large-part uploads may need a higher value or `0` to rely on
+your own `AbortSignal`. Worst-case terminal latency can be roughly
+`(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
+
+When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
 
 ## Testing with the simulator
 
@@ -731,14 +755,14 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22+ | Primary target. CI runs the full suite on Node 22 and 24 across Linux, Windows, and macOS. |
+| Node.js | 22.3+ | Primary target. CI runs Node coverage on Linux, Windows, and macOS; `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
 | Cloudflare Workers | - | Supported. |
 | Vercel Edge | - | Supported. |
 
-Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22 is not supported (Node 20 reached EOL April 2026).
+Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 

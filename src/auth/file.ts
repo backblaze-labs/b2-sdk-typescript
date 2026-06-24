@@ -5,10 +5,12 @@ import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, AuthContextAwareAccountInfo, UploadUrlEntry } from './account-info.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
-import { REALM_URLS } from './realms.ts'
+import { getRealmUrl } from './realms.ts'
 
 const PRIVATE_FILE_MODE = 0o600
 const PERSISTED_AUTH_VERSION = 1
+const BUILT_IN_PRODUCTION_REALM_URL = getRealmUrl('production')
+const BUILT_IN_STAGING_REALM_URL = getRealmUrl('staging')
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const STAGING_HOST_SUFFIX = 'backblaze.net'
 
@@ -107,15 +109,19 @@ function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
   }
 }
 
-function realmEndpointSuffix(realmUrl: string): string | null {
+function verifiedRealmEndpointSuffix(realmUrl: string): string | null {
   try {
-    const host = new URL(realmUrl).hostname.toLowerCase()
-    if (hasHostSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
-    if (hasHostSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
-    return parentDomainSuffix(host)
+    const realm = new URL(realmUrl)
+    if (realm.origin === new URL(BUILT_IN_PRODUCTION_REALM_URL).origin) {
+      return PRODUCTION_HOST_SUFFIX
+    }
+    if (realm.origin === new URL(BUILT_IN_STAGING_REALM_URL).origin) {
+      return STAGING_HOST_SUFFIX
+    }
   } catch {
-    return null
+    // Fall through below.
   }
+  return null
 }
 
 function hasHostSuffix(hostname: string, suffix: string): boolean {
@@ -124,27 +130,28 @@ function hasHostSuffix(hostname: string, suffix: string): boolean {
   return host === lowered || host.endsWith(`.${lowered}`)
 }
 
-function parentDomainSuffix(hostname: string): string {
-  const labels = hostname.toLowerCase().split('.')
-  return labels.length > 2 ? labels.slice(1).join('.') : hostname.toLowerCase()
-}
-
 function isEndpointInRealm(url: string, realmUrl: string): boolean {
-  const suffix = realmEndpointSuffix(realmUrl)
-  if (suffix === null) return false
   try {
-    const host = new URL(url).hostname.toLowerCase()
-    if (isLoopbackEndpointHost(host)) return true
-    return hasHostSuffix(host, suffix)
+    const realm = new URL(realmUrl)
+    const endpoint = new URL(url)
+    const endpointHost = endpoint.hostname.toLowerCase()
+    const realmHost = realm.hostname.toLowerCase()
+    if (isLoopbackEndpointHost(endpointHost) || isLoopbackEndpointHost(realmHost)) {
+      return endpoint.origin === realm.origin
+    }
+
+    const verifiedSuffix = verifiedRealmEndpointSuffix(realmUrl)
+    if (verifiedSuffix !== null) {
+      return endpoint.protocol === 'https:' && hasHostSuffix(endpointHost, verifiedSuffix)
+    }
+
+    return endpoint.protocol === realm.protocol && hasHostSuffix(endpointHost, realmHost)
   } catch {
     return false
   }
 }
 
 function isLoopbackEndpointHost(host: string): boolean {
-  // Cache matching includes localhost because local simulators and custom
-  // transports persist loopback endpoints. This is not an authorization
-  // plaintext-HTTP allow-list; see realms.ts for that stricter gate.
   if (host === 'localhost' || host === '::1' || host === '[::1]') return true
 
   const parts = host.split('.')
@@ -277,7 +284,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
       this.realmUrl === undefined ||
       this.loadedAuthRealmUrl === this.realmUrl ||
       (this.loadedAuthRealmUrl === null &&
-        this.realmUrl === REALM_URLS['production'] &&
+        this.realmUrl === BUILT_IN_PRODUCTION_REALM_URL &&
         isProductionAuthResponse(auth))
     const applicationKeyMatches =
       this.applicationKeyId === undefined ||

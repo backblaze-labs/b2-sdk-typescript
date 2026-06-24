@@ -1,12 +1,69 @@
 import type { AccountInfo } from '../auth/account-info.ts'
+import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
-import type { LargeFileId } from '../types/ids.ts'
+import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
+
+/** Event emitted when best-effort `b2_cancel_large_file` cleanup fails. */
+export interface CancelLargeFileCleanupFailureEvent {
+  /** Unfinished large file that may remain orphaned. */
+  readonly fileId: LargeFileId
+  /** Error thrown by `b2_cancel_large_file`. */
+  readonly error: unknown
+  /** Cleanup phase that produced the observable event. */
+  readonly reason: 'cancel-failed'
+}
+
+/** Event emitted when cleanup is skipped because finish may have committed. */
+export interface AmbiguousFinishCleanupFailureEvent {
+  /** Large file whose final server-side state is ambiguous. */
+  readonly fileId: LargeFileId
+  /** Error thrown to the caller with reconciliation metadata. */
+  readonly error: FinishLargeFileResponseBodyError
+  /** Cleanup phase that produced the observable event. */
+  readonly reason: 'finish-ambiguous'
+}
+
+/** Event emitted when large-file cleanup fails or is deliberately skipped. */
+export type CleanupFailureEvent =
+  | CancelLargeFileCleanupFailureEvent
+  | AmbiguousFinishCleanupFailureEvent
+
+/** Callback invoked when best-effort cancellation fails or finish cleanup is skipped. */
+export type CleanupFailureListener = (event: CleanupFailureEvent) => void
+
+/** Shared option for observing large-file cleanup failures or skipped cleanup. */
+export interface CleanupFailureOptions {
+  /**
+   * Callback invoked if best-effort cancellation fails, or if cancellation is
+   * skipped because `b2_finish_large_file` may already have committed.
+   */
+  readonly onCleanupFailure?: CleanupFailureListener
+}
 
 /** Default wall-clock bound for best-effort cleanup calls after upload failure. */
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000
 
 const fallbackCleanupDisposers = new WeakMap<AbortSignal, () => void>()
+
+/** Context needed to reconcile or cancel an unfinished large file after an error. */
+export interface LargeFileCleanupContext {
+  readonly fileId: LargeFileId
+  readonly bucketId: BucketId
+  readonly fileName: string
+  readonly signal?: AbortSignal | undefined
+  readonly onCleanupFailure?: CleanupFailureListener | undefined
+}
+
+/** Options for applying the shared large-file cleanup policy. */
+export interface LargeFileCleanupPolicyOptions {
+  /**
+   * Whether non-ambiguous failures should cancel the unfinished large file.
+   * Defaults to true. Explicit resume callers can disable this so the SDK does
+   * not cancel a large file that it did not create.
+   */
+  readonly cancelOnError?: boolean
+}
 
 /**
  * Cancels an unfinished large file on a best-effort basis. Used at every
@@ -22,7 +79,7 @@ const fallbackCleanupDisposers = new WeakMap<AbortSignal, () => void>()
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state for the API URL + token.
  * @param fileId - The in-progress large file ID to cancel.
- * @param options - Optional request controls for bounding the cleanup call.
+ * @param options - Optional request controls and cleanup-failure observer.
  *
  * @returns A promise that always resolves, regardless of the cancel
  *   call's outcome.
@@ -31,18 +88,21 @@ export async function cancelLargeFileBestEffort(
   raw: RawClient,
   accountInfo: AccountInfo,
   fileId: LargeFileId,
-  options?: { readonly signal?: AbortSignal },
+  options?: { readonly signal?: AbortSignal } & CleanupFailureOptions,
 ): Promise<void> {
-  await bestEffort(async () => {
-    const requestOptions = cleanupRequestOptions(options?.signal)
-    const request = raw.cancelLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      { fileId },
-      requestOptions,
-    )
-    await waitForCleanup(request, requestOptions.signal)
-  })
+  await bestEffort(
+    async () => {
+      const requestOptions = cleanupRequestOptions(options?.signal)
+      const request = raw.cancelLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        { fileId },
+        requestOptions,
+      )
+      await waitForCleanup(request, requestOptions.signal)
+    },
+    (error) => options?.onCleanupFailure?.({ fileId, error, reason: 'cancel-failed' }),
+  )
 }
 
 /**
@@ -144,4 +204,106 @@ function cleanupDomException(message: string, name: string): Error {
   const error = new Error(message)
   error.name = name
   return error
+}
+
+/**
+ * Emits an observable cleanup event when cancellation is deliberately skipped
+ * because `b2_finish_large_file` may already have committed the file.
+ * @param fileId - Large file whose final state is ambiguous.
+ * @param error - Ambiguous finish error that will be thrown to the caller.
+ * @param onCleanupFailure - Optional observer for cleanup-related events.
+ */
+export function notifyAmbiguousLargeFileCleanupSkipped(
+  fileId: LargeFileId,
+  error: FinishLargeFileResponseBodyError,
+  onCleanupFailure?: CleanupFailureListener,
+): void {
+  try {
+    onCleanupFailure?.({ fileId, error, reason: 'finish-ambiguous' })
+  } catch {
+    // Observer failures are secondary and must not hide the finish ambiguity.
+  }
+}
+
+/**
+ * Adds high-level reconciliation metadata to an ambiguous finish response-body
+ * error and notifies the cleanup observer that cancellation was skipped.
+ *
+ * @param err - Raw finish response-body error from the low-level client.
+ * @param options - Large-file context used for reconciliation.
+ *
+ * @returns The enriched {@link FinishLargeFileResponseBodyError}.
+ */
+export function handleAmbiguousFinishLargeFileResponseBodyError(
+  err: FinishLargeFileResponseBodyError,
+  options: LargeFileCleanupContext,
+): FinishLargeFileResponseBodyError {
+  const enriched =
+    err.fileId === options.fileId &&
+    err.bucketId === options.bucketId &&
+    err.fileName === options.fileName
+      ? err
+      : new FinishLargeFileResponseBodyError(err.message, {
+          cause: err.cause ?? err,
+          fileId: options.fileId,
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+        })
+  notifyAmbiguousLargeFileCleanupSkipped(options.fileId, enriched, options.onCleanupFailure)
+  return enriched
+}
+
+/**
+ * Performs the shared large-file failure policy: ambiguous finish-body errors
+ * are enriched and left uncancelled, while all pre-finish errors trigger
+ * best-effort cancellation.
+ *
+ * @param err - Error from a multipart upload/copy/write-stream path.
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param context - Large file metadata used for cleanup and diagnostics.
+ * @param options - Cleanup policy controls.
+ *
+ * @returns The error that should be surfaced to the caller.
+ */
+export async function resolveLargeFileErrorAfterCleanup(
+  err: unknown,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  context: LargeFileCleanupContext,
+  options: LargeFileCleanupPolicyOptions = {},
+): Promise<unknown> {
+  if (err instanceof FinishLargeFileResponseBodyError) {
+    return handleAmbiguousFinishLargeFileResponseBodyError(err, context)
+  }
+  if (options.cancelOnError ?? true) {
+    await cancelLargeFileBestEffort(raw, accountInfo, context.fileId, {
+      ...(context.signal !== undefined ? { signal: context.signal } : {}),
+      ...(context.onCleanupFailure !== undefined
+        ? { onCleanupFailure: context.onCleanupFailure }
+        : {}),
+    })
+  }
+  return err
+}
+
+/**
+ * Throwing wrapper around {@link resolveLargeFileErrorAfterCleanup} for paths
+ * that can surface the error directly.
+ * @param err - Error from a multipart upload/copy/write-stream path.
+ * @param raw - Low-level B2 API client.
+ * @param accountInfo - Authorized account state.
+ * @param context - Large file metadata used for cleanup and diagnostics.
+ * @param options - Cleanup policy controls.
+ *
+ * @throws The resolved large-file error after cleanup policy is applied.
+ */
+export async function cleanupAfterLargeFileError(
+  err: unknown,
+  raw: RawClient,
+  accountInfo: AccountInfo,
+  context: LargeFileCleanupContext,
+  options?: LargeFileCleanupPolicyOptions,
+): Promise<never> {
+  throw await resolveLargeFileErrorAfterCleanup(err, raw, accountInfo, context, options)
 }

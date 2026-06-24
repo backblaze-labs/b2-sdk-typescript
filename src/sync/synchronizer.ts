@@ -1,6 +1,6 @@
 import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
-import { assertFileSourceMatchesIdentity, FileSource } from '../streams/source.ts'
+import { type ContentSource, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -21,7 +21,11 @@ import {
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
-import { deleteLocalFileInsideRoot, writeLocalStreamInsideRoot } from './local-file-io.ts'
+import {
+  deleteLocalFileInsideRoot,
+  validateScannedLocalFile,
+  writeLocalStreamInsideRoot,
+} from './local-file-io.ts'
 import { isLocalFilesystemRoot } from './local-filesystem-root.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { type SyncPair, zipFolders } from './pairing.ts'
@@ -797,7 +801,7 @@ function createActionFactory(
         source.size,
         async (absPath, relPath, signal) => {
           const rootContext = localRootContexts.source
-          const root = rootContext ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
+          const root = rootContext?.root ?? (upConfig.source as Partial<LocalSyncFolder>).root ?? ''
           const fileName =
             dest !== undefined
               ? validateB2SyncPathInPrefix(uploadPrefix, dest)
@@ -805,11 +809,17 @@ function createActionFactory(
           if (rootContext !== undefined) {
             await assertLocalRootContextCurrent(rootContext, relPath, { allowSymlinkRoot: true })
           }
-          const fileSource = await createContainedScannedFileSource(
-            root,
-            { ...source, absolutePath: absPath },
-            signal,
-          )
+          const targetPath =
+            rootContext === undefined
+              ? await resolveContainedLocalPath(root, source.relativePath, absPath)
+              : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
+          throwIfAborted(signal)
+          // FileSource avoids whole-file buffering and rejects path swaps on a
+          // best-effort basis. On Windows, callers that need tamper-resistant
+          // same-size rewrite detection should use compareMode: 'sha1' or an
+          // independent digest because restored modification times can hide
+          // local rewrites.
+          const fileSource = await createValidatedUploadFileSource(source, targetPath)
           throwIfAborted(signal)
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
@@ -986,6 +996,33 @@ function createActionFactory(
   return factory
 }
 
+async function createValidatedUploadFileSource(
+  source: LocalSyncPath,
+  absolutePath: string,
+): Promise<ContentSource> {
+  try {
+    const fileSource = await FileSource.fromPath(absolutePath)
+    await validateScannedLocalFile({ ...source, absolutePath })
+    return fileSource
+  } catch (err) {
+    throw normalizeLocalUploadSourceError(err)
+  }
+}
+
+function normalizeLocalUploadSourceError(err: unknown): Error {
+  if (err instanceof Error && err.message.startsWith('local file changed before upload')) {
+    return err
+  }
+  const message = err instanceof Error ? err.message : String(err)
+  if (message.includes('not a regular file')) {
+    return new Error('local file changed before upload: not a regular file')
+  }
+  if (message.includes('changed') || message.includes('modified')) {
+    return new Error('local file changed before upload')
+  }
+  return new Error(`local file changed before upload: ${sanitizeErrorReason(err)}`)
+}
+
 function localSyncRoot(folder: LocalSyncFolder | undefined): string {
   return folder?.type === 'local' ? folder.root : ''
 }
@@ -1074,53 +1111,6 @@ async function cancelReadableStreamBody(
     await body.cancel(reason)
   } catch {
     // Best-effort response cleanup must not mask the setup or write failure.
-  }
-}
-
-async function createContainedScannedFileSource(
-  root: string | LocalRootContext,
-  path: LocalSyncPath,
-  signal: AbortSignal | undefined,
-): Promise<FileSource> {
-  const targetPath =
-    typeof root === 'string'
-      ? await resolveContainedLocalPath(root, path.relativePath, path.absolutePath)
-      : await resolveContainedLocalPath(root.realPath, path.relativePath)
-  throwIfAborted(signal)
-  await assertScannedLocalFileStillCurrent(targetPath, path)
-  throwIfAborted(signal)
-  const fileSource = await FileSource.fromPath(targetPath)
-  if (path.fileIdentity !== undefined) {
-    assertFileSourceMatchesIdentity(fileSource, path.fileIdentity)
-  }
-  if (typeof root === 'string') {
-    await resolveContainedLocalPath(root, path.relativePath, targetPath)
-  } else {
-    await resolveContainedLocalPath(root.realPath, path.relativePath, targetPath)
-  }
-  await assertScannedLocalFileStillCurrent(targetPath, path)
-  throwIfAborted(signal)
-  return fileSource
-}
-
-async function assertScannedLocalFileStillCurrent(
-  targetPath: string,
-  path: LocalSyncPath,
-): Promise<void> {
-  const { lstat } = await import('node:fs/promises')
-  const stats = await lstat(targetPath)
-  if (!stats.isFile()) throw new Error('local file changed before upload: not a regular file')
-  if (stats.size !== path.size) throw new Error('local file changed before upload: size changed')
-
-  const identity = path.fileIdentity
-  if (identity === undefined) return
-  if (
-    stats.dev !== identity.deviceId ||
-    stats.ino !== identity.inode ||
-    stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis
-  ) {
-    throw new Error('local file changed before upload')
   }
 }
 

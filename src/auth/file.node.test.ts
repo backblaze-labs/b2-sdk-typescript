@@ -8,6 +8,7 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { FileAccountInfo } from './file.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
+import { REALM_URLS } from './realms.ts'
 
 function makeCachedAuth(
   endpoints: Partial<{
@@ -63,6 +64,7 @@ describe('FileAccountInfo', () => {
     const client1 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: 'http://127.0.0.1',
       transport: sim.transport(),
       accountInfo: accountInfo1,
     })
@@ -84,6 +86,7 @@ describe('FileAccountInfo', () => {
     const client2 = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
+      realm: 'http://127.0.0.1',
       transport: sim.transport(),
       accountInfo: accountInfo2,
     })
@@ -266,6 +269,37 @@ describe('FileAccountInfo', () => {
     accountInfo.setRealmUrl('https://api.backblazeb2.com')
 
     expect(accountInfo.getAuth()).not.toBeNull()
+  })
+
+  it('retains a legacy production cache after REALM_URLS.production is mutated', async () => {
+    const originalProduction = REALM_URLS['production'] ?? 'https://api.backblazeb2.com'
+    try {
+      REALM_URLS['production'] = 'https://attacker.example'
+      await writeFile(
+        storePath,
+        JSON.stringify({
+          ...makeCachedAuth(),
+          _b2sdk: {
+            version: 1,
+            applicationKeyId: 'test-key-id',
+          },
+        }),
+        'utf8',
+      )
+      const accountInfo = new FileAccountInfo(storePath)
+      await accountInfo.load()
+
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        transport: new B2Simulator().transport(),
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).not.toBeNull()
+    } finally {
+      REALM_URLS['production'] = originalProduction
+    }
   })
 
   it('ignores a legacy custom-realm cache when bound to production', async () => {
@@ -491,14 +525,14 @@ describe('FileAccountInfo', () => {
     expect(discards).toEqual([])
   })
 
-  it('retains a custom-realm cache whose endpoints share the realm parent domain', async () => {
+  it('retains a custom-realm cache whose endpoints are exact realm subdomains', async () => {
     await writeFile(
       storePath,
       JSON.stringify({
         ...makeCachedAuth({
-          apiUrl: 'https://api.custom.example',
-          downloadUrl: 'https://download.custom.example',
-          s3ApiUrl: 'https://s3.custom.example',
+          apiUrl: 'https://api.auth.custom.example',
+          downloadUrl: 'https://download.auth.custom.example',
+          s3ApiUrl: 'https://s3.auth.custom.example',
         }),
         _b2sdk: {
           version: 1,
@@ -524,6 +558,168 @@ describe('FileAccountInfo', () => {
 
     expect(client.accountInfo.getAuth()).not.toBeNull()
     expect(discards).toEqual([])
+  })
+
+  it('rejects custom-realm sibling endpoints under Backblaze-owned suffixes', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth({
+        apiUrl: 'https://api.backblazeb2.com/api',
+        downloadUrl: 'https://f001.backblazeb2.com/download',
+        s3ApiUrl: 'https://s3.us-west-001.backblazeb2.com/s3',
+      }),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://auth.backblazeb2.com',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'https://auth.backblazeb2.com',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await readFile(storePath, 'utf8')).toBe(cached)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('rejects a custom-realm cache whose endpoints are sibling public-suffix hosts', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'https://attacker.ngrok-free.app/api',
+          downloadUrl: 'https://attacker.ngrok-free.app/download',
+          s3ApiUrl: 'https://attacker.ngrok-free.app/s3',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://victim.ngrok-free.app',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'https://victim.ngrok-free.app',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('rejects loopback endpoints in cached auth by default', async () => {
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...makeCachedAuth({
+          apiUrl: 'http://127.0.0.1:9876/api',
+          downloadUrl: 'http://localhost:9876/download',
+          s3ApiUrl: 'http://[::1]:9876/s3',
+        }),
+        _b2sdk: {
+          version: 1,
+          realmUrl: 'https://auth.custom.example',
+          applicationKeyId: 'test-key-id',
+        },
+      }),
+      'utf8',
+    )
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'https://auth.custom.example',
+      transport: new B2Simulator().transport(),
+      accountInfo,
+    })
+
+    expect(client.accountInfo.getAuth()).toBeNull()
+    expect(discards).toEqual(['endpoint_mismatch'])
+  })
+
+  it.each([
+    ['sibling IPv4', 'http://127.0.0.2:8180'],
+    ['localhost alias', 'http://localhost:8180'],
+    ['IPv6 alias', 'http://[::1]:8180'],
+    ['different port', 'http://127.0.0.1:9999'],
+  ])('rejects %s loopback endpoints for a loopback realm', async (_label, endpoint) => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth({
+        apiUrl: `${endpoint}/api`,
+        downloadUrl: `${endpoint}/download`,
+        s3ApiUrl: `${endpoint}/s3`,
+      }),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'http://127.0.0.1:8180',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'http://127.0.0.1:8180',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await readFile(storePath, 'utf8')).toBe(cached)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('delegates every AccountInfo getter to the in-memory backing', async () => {

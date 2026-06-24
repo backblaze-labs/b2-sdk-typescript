@@ -14,6 +14,7 @@ import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
 } from '../download-staging.ts'
+import { makeReservedSyncTempFileName } from '../path-safety.ts'
 import type { B2SyncPath, LocalSyncPath } from '../types.ts'
 import { B2Folder } from './b2.ts'
 import { LocalFolder } from './local.ts'
@@ -34,6 +35,10 @@ const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
+const reservedTempName = makeReservedSyncTempFileName(
+  'payload.bin',
+  'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+)
 
 /**
  * Advance the fake clock by 1 ms so the simulator assigns a distinct
@@ -463,6 +468,47 @@ describe('LocalFolder', () => {
     expect(entries.map((e) => e.relativePath)).toEqual(['.b2sdk-directory.partial/keep.txt'])
     await expect(access(partialDir)).resolves.toBeFalsy()
   })
+
+  it('skips local files in the reserved SDK temp namespace', async () => {
+    const tempPath = join(tmpDir, reservedTempName)
+    await writeFile(tempPath, 'user data')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const skips: string[] = []
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    expect(skips).toEqual([`stale-download-partial:${reservedTempName}`])
+    await expect(access(tempPath)).resolves.toBeFalsy()
+  })
+
+  it('skips local directories in the reserved SDK temp namespace', async () => {
+    const tempPath = join(tmpDir, reservedTempName)
+    await mkdir(tempPath)
+    await writeFile(join(tempPath, 'nested.txt'), 'user data')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+
+    const folder = new LocalFolder(tmpDir)
+    const skips: string[] = []
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
+    expect(skips).toEqual([`stale-download-partial:${reservedTempName}`])
+    await expect(access(tempPath)).resolves.toBeFalsy()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -557,6 +603,21 @@ describe('B2Folder', () => {
       expect.objectContaining({ signal: controller.signal }),
     )
     expect(errors).toEqual([])
+  })
+
+  it('rejects B2 objects in the reserved SDK temp namespace', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'reserved-temp-bucket',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: reservedTempName,
+      source: new BufferSource(enc.encode('remote data')),
+    })
+
+    const folder = new B2Folder(bucket)
+
+    await expect(collect<B2SyncPath>(folder.scan())).rejects.toThrow(/reserved SDK temporary/)
   })
 
   it('scans a bucket with files and yields them sorted by name', async () => {

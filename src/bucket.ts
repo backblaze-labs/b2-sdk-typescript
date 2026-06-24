@@ -6,7 +6,8 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
+import type { RetryOptions } from './http/retry.ts'
+import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
   BucketInfo,
@@ -32,6 +33,7 @@ import type {
 } from './types/notifications.ts'
 import type { ReplicationConfiguration, ReplicationRule } from './types/replication.ts'
 import type { CancelLargeFileResponse, PartInfo, UnfinishedLargeFile } from './types/upload.ts'
+import type { CleanupFailureListener } from './upload/cancel.ts'
 import { Semaphore } from './upload/concurrency.ts'
 import { uploadLargeFile } from './upload/large.ts'
 import {
@@ -147,15 +149,11 @@ export class Bucket {
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
-   * @param uploadRetryOptions - Resolved retry settings for upload-layer retries.
+   * @param uploadRetryOptions - Resolved client upload retry defaults.
    *
    * @internal
    */
-  constructor(
-    client: B2Client,
-    info: BucketInfo,
-    uploadRetryOptions: RetryOptions = DEFAULT_RETRY_OPTIONS,
-  ) {
+  constructor(client: B2Client, info: BucketInfo, uploadRetryOptions: RetryOptions) {
     this.client = client
     this.info = info
     this.id = info.bucketId
@@ -183,6 +181,7 @@ export class Bucket {
   async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
+    const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options.retry)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
@@ -190,7 +189,7 @@ export class Bucket {
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
-        retry: this.uploadRetryOptions,
+        retry: uploadRetryOptions,
         bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
@@ -203,7 +202,7 @@ export class Bucket {
     return uploadSmallFile(this.client.raw, this.client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
-      retry: this.uploadRetryOptions,
+      retry: uploadRetryOptions,
     })
   }
 
@@ -810,6 +809,11 @@ export class Bucket {
     destinationServerSideEncryption?: EncryptionSetting
     /** SSE-C settings for the source if it was uploaded with SSE-C. */
     sourceServerSideEncryption?: EncryptionSetting
+    /**
+     * Callback invoked if best-effort cancellation fails, or if cancellation is
+     * skipped because `b2_finish_large_file` may already have committed.
+     */
+    onCleanupFailure?: CleanupFailureListener
     /** Part size in bytes. Defaults to the account's recommended part size. */
     partSize?: number
     /**
@@ -839,6 +843,9 @@ export class Bucket {
         : {}),
       ...(options.partSize !== undefined ? { partSize: options.partSize } : {}),
       ...(options.concurrency !== undefined ? { concurrency: options.concurrency } : {}),
+      ...(options.onCleanupFailure !== undefined
+        ? { onCleanupFailure: options.onCleanupFailure }
+        : {}),
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     })
   }

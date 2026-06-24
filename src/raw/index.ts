@@ -10,6 +10,7 @@
  */
 
 import { assertSecureRealmUrl } from '../auth/realms.ts'
+import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
@@ -91,6 +92,21 @@ export interface RawRequestOptions {
  */
 export type JsonPostOptions = RawRequestOptions
 
+/** Optional request controls for {@link RawClient.finishLargeFile}. */
+export type FinishLargeFileOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.copyPart}. */
+export type CopyPartOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.startLargeFile}. */
+export type StartLargeFileOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.uploadFile}. */
+export type UploadFileOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.uploadPart}. */
+export type UploadPartOptions = RawRequestOptions
+
 function normalizeRawRequestOptions(
   optionsOrSignal?: RawRequestOptions | AbortSignal,
   retry?: Partial<RetryOptions>,
@@ -116,6 +132,17 @@ function isAbortSignal(value: unknown): value is AbortSignal {
     'aborted' in value &&
     typeof (value as AbortSignal).addEventListener === 'function'
   )
+}
+
+function uploadResponseBodyError(
+  err: unknown,
+  signal: AbortSignal | undefined,
+): UploadResponseBodyError {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+  const message = err instanceof Error ? err.message : 'Upload response body could not be read'
+  return new UploadResponseBodyError(message, { cause: err })
 }
 
 /**
@@ -299,7 +326,29 @@ export class RawClient {
    * @param uploadUrl - The upload endpoint URL.
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
-   * @param signal - An optional abort signal for cancellation.
+   * @param signal - Optional legacy abort signal for cancellation.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded file version metadata.
+   *
+   * @deprecated Use the options-bag overload: `uploadFile(uploadUrl, headers, body, { signal, retry })`.
+   */
+  async uploadFile(
+    uploadUrl: string,
+    headers: UploadFileHeaders,
+    body: BodyInit,
+    signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
+  ): Promise<FileVersion>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-upload-file | b2_upload_file}.
+   *
+   * Unlike most methods, this posts directly to the `uploadUrl` obtained
+   * from {@link getUploadUrl} rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The uploaded file version metadata.
    */
@@ -307,8 +356,26 @@ export class RawClient {
     uploadUrl: string,
     headers: UploadFileHeaders,
     body: BodyInit,
-    signal?: AbortSignal,
+    options?: UploadFileOptions,
+  ): Promise<FileVersion>
+  /**
+   * Implementation for both upload-file request-control signatures.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded file version metadata.
+   */
+  async uploadFile(
+    uploadUrl: string,
+    headers: UploadFileHeaders,
+    body: BodyInit,
+    optionsOrSignal?: UploadFileOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<FileVersion> {
+    const options = normalizeRawRequestOptions(optionsOrSignal, retry)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-File-Name': encodeFileName(headers.fileName),
@@ -346,9 +413,14 @@ export class RawClient {
       method: 'POST',
       headers: reqHeaders,
       body,
-      ...(signal !== undefined ? { signal } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
-    return normalizeFileVersionSha1(await response.json<FileVersion>())
+    try {
+      return normalizeFileVersionSha1(await response.json<FileVersion>())
+    } catch (err) {
+      throw uploadResponseBodyError(err, options?.signal)
+    }
   }
 
   /**
@@ -490,6 +562,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The copied part metadata.
    */
@@ -497,8 +570,9 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: CopyPartRequest,
+    options?: CopyPartOptions,
   ): Promise<CopyPartResponse> {
-    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request)
+    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request, options)
   }
 
   // --- Large Files ---
@@ -508,7 +582,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The started large file metadata with file ID.
    */
@@ -516,7 +590,7 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: StartLargeFileRequest,
-    options?: RawRequestOptions,
+    options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
     return this.postJson<StartLargeFileResponse>(
       apiUrl,
@@ -595,7 +669,29 @@ export class RawClient {
    * @param uploadUrl - The upload endpoint URL.
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
-   * @param signal - An optional abort signal for cancellation.
+   * @param signal - Optional legacy abort signal for cancellation.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded part metadata.
+   *
+   * @deprecated Use the options-bag overload: `uploadPart(uploadUrl, headers, body, { signal, retry })`.
+   */
+  async uploadPart(
+    uploadUrl: string,
+    headers: UploadPartHeaders,
+    body: BodyInit,
+    signal?: AbortSignal,
+    retry?: Partial<RetryOptions>,
+  ): Promise<UploadPartResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-upload-part | b2_upload_part}.
+   *
+   * Posts directly to the `uploadUrl` obtained from {@link getUploadPartUrl}
+   * rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The uploaded part metadata.
    */
@@ -603,8 +699,26 @@ export class RawClient {
     uploadUrl: string,
     headers: UploadPartHeaders,
     body: BodyInit,
-    signal?: AbortSignal,
+    options?: UploadPartOptions,
+  ): Promise<UploadPartResponse>
+  /**
+   * Implementation for both upload-part request-control signatures.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded part metadata.
+   */
+  async uploadPart(
+    uploadUrl: string,
+    headers: UploadPartHeaders,
+    body: BodyInit,
+    optionsOrSignal?: UploadPartOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<UploadPartResponse> {
+    const options = normalizeRawRequestOptions(optionsOrSignal, retry)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-Part-Number': String(headers.partNumber),
@@ -619,9 +733,14 @@ export class RawClient {
       method: 'POST',
       headers: reqHeaders,
       body,
-      ...(signal !== undefined ? { signal } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
-    return response.json<UploadPartResponse>()
+    try {
+      return await response.json<UploadPartResponse>()
+    } catch (err) {
+      throw uploadResponseBodyError(err, options?.signal)
+    }
   }
 
   /**
@@ -629,7 +748,7 @@ export class RawClient {
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
-   * @param options - Optional request controls such as cancellation and retry overrides.
+   * @param options - Optional abort and retry controls.
    *
    * @returns The completed file version metadata.
    */
@@ -637,11 +756,30 @@ export class RawClient {
     apiUrl: string,
     authToken: string,
     request: FinishLargeFileRequest,
-    options?: RawRequestOptions,
+    options?: FinishLargeFileOptions,
   ): Promise<FileVersion> {
-    return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_finish_large_file', request, options),
-    )
+    const response = await this.transport.send({
+      url: `${apiUrl}/b2api/v3/b2_finish_large_file`,
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+    })
+
+    let fileVersion: FileVersion
+    try {
+      fileVersion = await response.json<FileVersion>()
+    } catch (err) {
+      throw new FinishLargeFileResponseBodyError(
+        err instanceof Error ? err.message : 'Finish large file response body could not be read',
+        { cause: err, fileId: request.fileId },
+      )
+    }
+    return normalizeFileVersionSha1(fileVersion)
   }
 
   /**

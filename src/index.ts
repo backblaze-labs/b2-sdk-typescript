@@ -46,6 +46,7 @@ export {
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
+  FinishLargeFileResponseBodyError,
   InternalError,
   InvalidBucketIdError,
   InvalidBucketInfoError,
@@ -65,6 +66,7 @@ export {
   TooManyBucketsError,
   TooManyFilesError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from './errors/index.ts'
 export type { RetryOptions } from './http/retry.ts'
 export type {
@@ -85,7 +87,7 @@ export {
 } from './raw/index.ts'
 export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
 export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
-export type { ContentSource } from './streams/source.ts'
+export type { ContentSource, FileSourcePath } from './streams/source.ts'
 export {
   BlobSource,
   BufferSource,
@@ -128,16 +130,29 @@ export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
 export { EventType } from './types/notifications.ts'
 export type {
+  AmbiguousFinishCleanupFailureEvent,
+  CancelLargeFileCleanupFailureEvent,
+  CleanupFailureEvent,
+  CleanupFailureListener,
+  CleanupFailureOptions,
+} from './upload/cancel.ts'
+export type {
   ResumePartReusedEvent,
   ResumePartReusedListener,
 } from './upload/large.ts'
-export type { B2ObjectUploadOptions, BucketUploadOptions, UploadOptions } from './upload/options.ts'
+export type {
+  B2ObjectUploadOptions,
+  B2ObjectWriteStreamOptions,
+  BucketUploadOptions,
+  HighLevelUploadOptions,
+  UploadOptions,
+} from './upload/options.ts'
 export type {
   ResumeCandidateRejectedEvent,
   ResumeCandidateRejectedListener,
   ResumeCandidateRejectedReason,
 } from './upload/resume.ts'
-export type { UploadRetryEvent, UploadRetryListener } from './upload/retry.ts'
+export type { UploadRetryEvent, UploadRetryListener, UploadRetryOptions } from './upload/retry.ts'
 export type { UploadWriteHandle } from './upload/stream.ts'
 export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'
 // Generic pagination helpers. Most callers want the `paginateX()` method

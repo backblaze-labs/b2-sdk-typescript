@@ -7,6 +7,7 @@ describe('DEFAULT_RETRY_OPTIONS', () => {
       maxRetries: 5,
       maxRetryDelayMs: 64_000,
       initialRetryDelayMs: 1_000,
+      requestTimeoutMs: 900_000,
     })
   })
 })
@@ -16,6 +17,7 @@ describe('computeBackoff', () => {
     maxRetries: 5,
     maxRetryDelayMs: 10_000,
     initialRetryDelayMs: 1_000,
+    requestTimeoutMs: 900_000,
   }
 
   describe('when retryAfter is provided', () => {

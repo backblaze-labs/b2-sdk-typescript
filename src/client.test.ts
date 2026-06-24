@@ -1,9 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest'
+import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
-import { daysFromNow, makeClient, readStream, recordingTransport } from './test-utils/index.ts'
+import {
+  daysFromNow,
+  jsonResponse,
+  makeClient,
+  readStream,
+  recordingTransport,
+} from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
@@ -55,6 +62,39 @@ describe('B2Client with simulator', () => {
     })
 
     expect('uploadRetryOptions' in retryClient).toBe(false)
+  })
+
+  it('binds account-info auth context hooks independently', () => {
+    class RealmOnlyAccountInfo extends InMemoryAccountInfo {
+      boundRealmUrl: string | null = null
+      setRealmUrl(realmUrl: string): void {
+        this.boundRealmUrl = realmUrl
+      }
+    }
+    class KeyOnlyAccountInfo extends InMemoryAccountInfo {
+      boundApplicationKeyId: string | null = null
+      setApplicationKeyId(applicationKeyId: string): void {
+        this.boundApplicationKeyId = applicationKeyId
+      }
+    }
+
+    const realmOnly = new RealmOnlyAccountInfo()
+    const keyOnly = new KeyOnlyAccountInfo()
+
+    new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      realm: 'https://auth.custom.example',
+      accountInfo: realmOnly,
+    })
+    new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      accountInfo: keyOnly,
+    })
+
+    expect(realmOnly.boundRealmUrl).toBe('https://auth.custom.example')
+    expect(keyOnly.boundApplicationKeyId).toBe('test-key-id')
   })
 
   it('creates and lists buckets', async () => {
@@ -118,6 +158,41 @@ describe('B2Client with simulator', () => {
     const found = await client.getBucket('find-me')
     expect(found).not.toBeNull()
     expect(found?.name).toBe('find-me')
+  })
+
+  it('falls back to an unfiltered bucket list when filtered getBucket misses', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    let filteredListCalls = 0
+    let unfilteredListCalls = 0
+    const fallbackClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(req) {
+          if (req.url.includes('b2_list_buckets')) {
+            const body = JSON.parse(String(req.body)) as { bucketName?: string }
+            if (body.bucketName === 'fallback-me') {
+              filteredListCalls += 1
+              return jsonResponse({ buckets: [] })
+            }
+            unfilteredListCalls += 1
+          }
+          return inner.send(req)
+        },
+      },
+    })
+    await fallbackClient.authorize()
+    await fallbackClient.createBucket({
+      bucketName: 'fallback-me',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const found = await fallbackClient.getBucket('fallback-me')
+
+    expect(found?.name).toBe('fallback-me')
+    expect(filteredListCalls).toBe(1)
+    expect(unfilteredListCalls).toBe(1)
   })
 
   it('uploads and lists files', async () => {

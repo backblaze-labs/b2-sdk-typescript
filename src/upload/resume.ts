@@ -112,6 +112,8 @@ export interface ResumePartInfo {
   readonly contentLength: number
 }
 
+const LIST_PARTS_PAGE_SIZE = 100
+
 /** Information about an unfinished large file eligible for resume. */
 export interface ResumeCandidate {
   /** ID of the unfinished large file. */
@@ -277,7 +279,7 @@ async function collectResumePartInfo(
     const remainingParts =
       maxParts === Number.POSITIVE_INFINITY
         ? undefined
-        : Math.max(1, Math.min(1000, maxParts - parts.size + 1))
+        : Math.max(1, Math.min(LIST_PARTS_PAGE_SIZE, maxParts - parts.size + 1))
     const page = await abortableRequest(
       raw.listParts(
         accountInfo.getApiUrl(),
@@ -300,6 +302,7 @@ async function collectResumePartInfo(
       if (parts.size > maxParts) return { parts, truncated: true }
     }
     if (page.nextPartNumber === null) return { parts, truncated: false }
+    assertAdvancingPartCursor(fileId, startPartNumber, page.nextPartNumber)
     startPartNumber = page.nextPartNumber
   }
 
@@ -649,5 +652,17 @@ function normalizeEncryption(
   return {
     mode: encryption.mode,
     algorithm: encryption.algorithm,
+  }
+}
+
+function assertAdvancingPartCursor(
+  fileId: LargeFileId,
+  previous: number | undefined,
+  next: number,
+): void {
+  if (!Number.isInteger(next) || next < 1 || (previous !== undefined && next <= previous)) {
+    throw new Error(
+      `uploadLargeFile: listParts returned a non-advancing nextPartNumber for ${fileId}; aborting resume.`,
+    )
   }
 }

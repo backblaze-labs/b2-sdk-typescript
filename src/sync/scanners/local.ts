@@ -11,6 +11,7 @@ import {
 import { localFileIdentityFromStats } from '../local-file-identity.ts'
 import { registerLocalFilesystemRoot } from '../local-filesystem-root.ts'
 import { compareSyncRelativePaths } from '../path-order.ts'
+import { isReservedSyncTempFileName } from '../path-safety.ts'
 import { validateSyncFilters } from '../regexp-safety.ts'
 import { emitScannerSkip, regexpInputTooLongSkip } from '../scan-events.ts'
 import { assertScanEntryLimit, scanEntryLimit } from '../scan-limit.ts'
@@ -25,8 +26,8 @@ type LocalDirent = {
 type LocalStats = {
   readonly dev: number
   readonly ino: number
-  readonly ctimeMs: number
   readonly mtimeMs: number
+  readonly ctimeMs: number
   readonly size: number
   isFile(): boolean
 }
@@ -44,6 +45,8 @@ type LocalNodeDeps = {
  * Scans a local directory tree and yields {@link LocalSyncPath} entries sorted by relative path.
  * A root directory read failure aborts the scan with an error diagnostic. Per-entry file or
  * directory failures are reported through `onError` and the scan continues over readable siblings.
+ * SDK-managed partial download file names are skipped so unfinished internal
+ * temp files are not synchronized.
  * The current implementation collects matching entries before sorting, so memory usage is
  * proportional to the number of matched files.
  */
@@ -131,6 +134,16 @@ export class LocalFolder implements SyncFolder {
           size: 0,
           reason: 'unsafe-name',
           message: `Skipped local path ${JSON.stringify(rel)}: backslashes are not safe sync path characters`,
+        })
+        continue
+      }
+      if (isReservedSyncTempFileName(entry.name)) {
+        emitScannerSkip(options, {
+          type: 'skip',
+          path: rel,
+          size: 0,
+          reason: 'stale-download-partial',
+          message: `Skipped local path ${JSON.stringify(rel)}: reserved SDK partial download file`,
         })
         continue
       }

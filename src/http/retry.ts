@@ -6,14 +6,23 @@ export interface RetryOptions {
   readonly maxRetryDelayMs: number
   /** Base delay in milliseconds for the first retry. Doubles on each subsequent attempt. */
   readonly initialRetryDelayMs: number
+  /**
+   * Optional timeout for each HTTP request attempt. Defaults to 15 minutes
+   * when omitted. The timer covers request dispatch, upload bodies, and
+   * non-streaming response body reads. For `response.body` streams it is an
+   * idle timeout that resets after each received chunk. Set to 0 to disable
+   * the SDK timeout and rely only on the caller's AbortSignal.
+   */
+  readonly requestTimeoutMs?: number
 }
 
-/** Default retry settings: 5 retries, 1s initial delay, 64s max delay. */
-export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
+/** Default retry settings: 5 retries, 1s initial delay, 64s max delay, 15 minute timeout. */
+export const DEFAULT_RETRY_OPTIONS = {
   maxRetries: 5,
   maxRetryDelayMs: 64_000,
   initialRetryDelayMs: 1_000,
-}
+  requestTimeoutMs: 15 * 60_000,
+} satisfies Required<RetryOptions>
 
 /**
  * Computes the delay before the next retry using exponential backoff with jitter.

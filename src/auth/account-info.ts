@@ -35,14 +35,15 @@ export interface AuthContextAwareAccountInfo {
  */
 export interface AccountInfo {
   /**
-   * Bind persistent auth caches to the resolved realm URL. Implementations that
-   * persist auth should follow {@link AuthContextAwareAccountInfo}.
+   * @deprecated Persistent auth stores should implement
+   * {@link AuthContextAwareAccountInfo}. This optional hook remains for
+   * source compatibility with older integrations.
    */
   setRealmUrl?(realmUrl: string): void
   /**
-   * Bind persistent auth caches to the configured application key ID.
-   * Implementations that persist auth should follow
-   * {@link AuthContextAwareAccountInfo}.
+   * @deprecated Persistent auth stores should implement
+   * {@link AuthContextAwareAccountInfo}. This optional hook remains for
+   * source compatibility with older integrations.
    */
   setApplicationKeyId?(applicationKeyId: string): void
 

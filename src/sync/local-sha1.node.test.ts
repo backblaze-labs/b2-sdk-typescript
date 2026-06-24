@@ -97,36 +97,39 @@ describe('readLocalSha1File', () => {
     }
   })
 
-  it('rejects same-size rewrites whose mtime was restored before hashing', async () => {
-    const { tmpdir } = await import('node:os')
-    const { mkdtemp, rm, stat, utimes, writeFile } = await import('node:fs/promises')
-    const { join } = await import('node:path')
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-sha1-ctime-'))
-    try {
-      const filePath = join(root, 'changed.txt')
-      await writeFile(filePath, 'safe')
-      const originalTime = new Date('2024-01-01T00:00:00.000Z')
-      await utimes(filePath, originalTime, originalTime)
-      const stats = await stat(filePath)
-      const path = makeLocalPath('changed.txt', filePath, 4, {
-        deviceId: stats.dev,
-        inode: stats.ino,
-        size: stats.size,
-        modTimeMillis: Math.floor(stats.mtimeMs),
-        changeTimeMillis: Math.floor(stats.ctimeMs),
-      })
+  it.skipIf(isWindows)(
+    'rejects same-size rewrites whose mtime was restored before hashing',
+    async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, stat, utimes, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-sha1-ctime-'))
+      try {
+        const filePath = join(root, 'changed.txt')
+        await writeFile(filePath, 'safe')
+        const originalTime = new Date('2024-01-01T00:00:00.000Z')
+        await utimes(filePath, originalTime, originalTime)
+        const stats = await stat(filePath)
+        const path = makeLocalPath('changed.txt', filePath, 4, {
+          deviceId: stats.dev,
+          inode: stats.ino,
+          size: stats.size,
+          modTimeMillis: Math.floor(stats.mtimeMs),
+          changeTimeMillis: Math.floor(stats.ctimeMs),
+        })
 
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      await writeFile(filePath, 'evil')
-      await utimes(filePath, originalTime, originalTime)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        await writeFile(filePath, 'evil')
+        await utimes(filePath, originalTime, originalTime)
 
-      await expect(readLocalSha1File(path)).rejects.toThrow(
-        'local file changed before sha1 comparison',
-      )
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
+        await expect(readLocalSha1File(path)).rejects.toThrow(
+          'local file changed before sha1 comparison',
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
 
   it('observes an already-aborted signal', async () => {
     const controller = new AbortController()

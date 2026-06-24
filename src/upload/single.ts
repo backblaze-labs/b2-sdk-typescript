@@ -1,9 +1,8 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
-import type { ContentSource } from '../streams/source.ts'
+import { type ContentSource, collectStreamExactly } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId } from '../types/ids.ts'
@@ -12,12 +11,12 @@ import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
 import {
   fetchFreshUploadUrl,
   resolveRetryResponseBodyFailures,
-  type UploadRetryListener,
+  type UploadRetryOptions,
   withFreshUploadUrlRetry,
 } from './retry.ts'
 
 /** Options for uploading a small file in a single HTTP request. */
-export interface UploadFileOptions {
+export interface UploadFileOptions extends UploadRetryOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
   /** Full B2 file name including any path prefix. */
@@ -40,17 +39,6 @@ export interface UploadFileOptions {
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. */
   readonly signal?: AbortSignal
-  /** Retry settings for upload-layer fresh-URL retries. */
-  readonly retry?: Partial<RetryOptions>
-  /** Callback invoked before retrying with a fresh upload URL. */
-  readonly onUploadRetry?: UploadRetryListener
-  /**
-   * Retry when an upload response body cannot be read after B2 may have stored
-   * the file, or when the upload POST fails with an ambiguous network error.
-   * Defaults to false because re-sending a single-file upload can create a
-   * duplicate B2 file version.
-   */
-  readonly retryResponseBodyFailures?: boolean
 }
 
 /**
@@ -74,7 +62,13 @@ export async function uploadSmallFile(
   accountInfo: AccountInfo,
   options: UploadFileOptions,
 ): Promise<FileVersion> {
-  const data = new Uint8Array(await options.source.toArrayBuffer())
+  const data = await readSmallFileSource(options.source, options.signal)
+  if (data.byteLength !== options.source.size) {
+    throw new Error(
+      `uploadSmallFile: source byte count does not match advertised size ` +
+        `(expected ${options.source.size} bytes, got ${data.byteLength} bytes).`,
+    )
+  }
   const sha1 = new IncrementalSha1()
   await sha1.update(data)
   const sha1Hex = await sha1.digest()
@@ -93,10 +87,7 @@ export async function uploadSmallFile(
     retry: options.retry,
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
-    retryResponseBodyFailures: resolveRetryResponseBodyFailures(
-      options.retryResponseBodyFailures,
-      'single',
-    ),
+    retryResponseBodyFailures: resolveRetryResponseBodyFailures(options.retryResponseBodyFailures),
     checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
     fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
     returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
@@ -121,11 +112,29 @@ export async function uploadSmallFile(
             : {}),
         },
         data,
-        options.signal,
+        {
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        },
       ),
   })
 
   tracker.addBytes(data.byteLength)
   tracker.completePart()
   return result
+}
+
+async function readSmallFileSource(
+  source: ContentSource,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array<ArrayBuffer>> {
+  signal?.throwIfAborted()
+  if (!source.canSlice) {
+    return collectStreamExactly(source.stream(), source.size, signal)
+  }
+  const data = new Uint8Array(
+    await (signal === undefined ? source.toArrayBuffer() : source.toArrayBuffer({ signal })),
+  )
+  signal?.throwIfAborted()
+  return data
 }

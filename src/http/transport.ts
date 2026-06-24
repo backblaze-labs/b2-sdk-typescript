@@ -111,13 +111,23 @@ export class FetchTransport implements HttpTransport {
         headers.set('User-Agent', this.userAgent)
       }
 
-      const response = await fetch(currentRequest.url, {
-        method: currentRequest.method,
-        headers,
-        body: currentRequest.body ?? null,
-        redirect: 'manual',
-        ...(currentRequest.signal !== undefined ? { signal: currentRequest.signal } : {}),
-      })
+      const timeoutScope = createRequestTimeoutScope(currentRequest)
+      let response: Response
+      try {
+        response = await fetch(currentRequest.url, {
+          method: currentRequest.method,
+          headers,
+          body: currentRequest.body ?? null,
+          redirect: 'manual',
+          ...(timeoutScope.signal !== undefined ? { signal: timeoutScope.signal } : {}),
+        })
+      } catch (err) {
+        timeoutScope.dispose()
+        if (timeoutScope.timedOut) {
+          throw createRequestTimeoutError(timeoutScope)
+        }
+        throw err
+      }
 
       if (isBlockedRedirect(response)) {
         const location = response.headers.get('Location')
@@ -129,6 +139,7 @@ export class FetchTransport implements HttpTransport {
         ) {
           const nextUrl = new URL(location, currentRequest.url).toString()
           await cancelResponseBody(response)
+          timeoutScope.dispose()
           this.urlGuard.check(nextUrl)
           currentRequest = { ...currentRequest, url: nextUrl }
           redirectCount += 1
@@ -136,18 +147,223 @@ export class FetchTransport implements HttpTransport {
         }
 
         await cancelResponseBody(response)
+        timeoutScope.dispose()
         throw new B2RedirectError(currentRequest.url, response.status, location)
       }
 
-      return {
-        status: response.status,
-        headers: response.headers,
-        body: response.body,
-        json: <T>() => response.json() as Promise<T>,
-        text: () => response.text(),
-        arrayBuffer: () => response.arrayBuffer(),
-      }
+      return createTimedHttpResponse(response, timeoutScope)
     }
+  }
+}
+
+interface RequestTimeoutScope {
+  readonly signal?: AbortSignal
+  readonly timeoutMs: number
+  readonly timedOut: boolean
+  reset(): void
+  dispose(): void
+}
+
+function createRequestTimeoutScope(request: HttpRequest): RequestTimeoutScope {
+  const timeoutMs = request.retry?.requestTimeoutMs ?? DEFAULT_RETRY_OPTIONS.requestTimeoutMs
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const scope: RequestTimeoutScope = {
+      timeoutMs: 0,
+      timedOut: false,
+      reset() {},
+      dispose() {},
+    }
+    if (request.signal !== undefined) return { ...scope, signal: request.signal }
+    return scope
+  }
+
+  const controller = new AbortController()
+  let timedOut = false
+  let timer: ReturnType<typeof setTimeout>
+  const abortFromUpstream = (): void => {
+    clearTimeout(timer)
+    controller.abort(request.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+  }
+  const armTimer = (): ReturnType<typeof setTimeout> => {
+    const nextTimer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new DOMException('HTTP request timed out', 'TimeoutError'))
+    }, timeoutMs)
+    unrefTimer(nextTimer)
+    return nextTimer
+  }
+  timer = armTimer()
+
+  const reset = (): void => {
+    if (timedOut || controller.signal.aborted) return
+    clearTimeout(timer)
+    timer = armTimer()
+  }
+
+  if (request.signal?.aborted === true) {
+    clearTimeout(timer)
+    abortFromUpstream()
+  } else {
+    request.signal?.addEventListener('abort', abortFromUpstream, { once: true })
+  }
+
+  return {
+    signal: controller.signal,
+    timeoutMs,
+    get timedOut() {
+      return timedOut
+    },
+    reset,
+    dispose() {
+      clearTimeout(timer)
+      request.signal?.removeEventListener('abort', abortFromUpstream)
+    },
+  }
+}
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const maybeUnref = (timer as { unref?: () => void }).unref
+  if (typeof maybeUnref === 'function') maybeUnref.call(timer)
+}
+
+function createRequestTimeoutError(scope: RequestTimeoutScope): DOMException {
+  return new DOMException(`HTTP request timed out after ${scope.timeoutMs} ms`, 'TimeoutError')
+}
+
+function createTimedHttpResponse(
+  response: Response,
+  timeoutScope: RequestTimeoutScope,
+): HttpResponse {
+  const body = response.body
+  if (body === null) timeoutScope.dispose()
+  let timedBody: ReadableStream<Uint8Array> | undefined
+
+  return {
+    status: response.status,
+    headers: response.headers,
+    get body() {
+      if (body === null) return null
+      timedBody ??= createTimedResponseBody(body, timeoutScope)
+      return timedBody
+    },
+    json: <T>() =>
+      readTimedResponseBody(timeoutScope, response, () => response.json() as Promise<T>),
+    text: () => readTimedResponseBody(timeoutScope, response, () => response.text()),
+    arrayBuffer: () => readTimedResponseBody(timeoutScope, response, () => response.arrayBuffer()),
+  }
+}
+
+async function readTimedResponseBody<T>(
+  timeoutScope: RequestTimeoutScope,
+  response: Response,
+  read: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await raceBodyReadWithAbort(timeoutScope, read(), (reason) =>
+      cancelResponseBody(response, reason),
+    )
+  } catch (err) {
+    if (timeoutScope.timedOut) {
+      throw createRequestTimeoutError(timeoutScope)
+    }
+    throw err
+  } finally {
+    timeoutScope.dispose()
+  }
+}
+
+function createTimedResponseBody(
+  body: ReadableStream<Uint8Array>,
+  timeoutScope: RequestTimeoutScope,
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  let disposed = false
+  const dispose = (): void => {
+    if (disposed) return
+    disposed = true
+    timeoutScope.dispose()
+  }
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      reader ??= body.getReader()
+      try {
+        const result = await raceBodyReadWithAbort(timeoutScope, reader.read(), (reason) =>
+          reader?.cancel(reason),
+        )
+        if (result.done) {
+          dispose()
+          controller.close()
+          return
+        }
+        timeoutScope.reset()
+        controller.enqueue(result.value)
+      } catch (err) {
+        dispose()
+        if (timeoutScope.timedOut) {
+          controller.error(createRequestTimeoutError(timeoutScope))
+          return
+        }
+        controller.error(err)
+      }
+    },
+    async cancel(reason) {
+      dispose()
+      try {
+        if (reader !== undefined) {
+          await reader.cancel(reason)
+          return
+        }
+        await body.cancel(reason)
+      } catch {
+        // Best-effort cleanup when the caller cancels the wrapper body.
+      }
+    },
+  })
+}
+
+async function raceBodyReadWithAbort<T>(
+  timeoutScope: RequestTimeoutScope,
+  read: Promise<T>,
+  abortCleanup?: ((reason: unknown) => Promise<void> | void) | undefined,
+): Promise<T> {
+  const signal = timeoutScope.signal
+  if (signal === undefined) return read
+  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
+  if (signal.aborted) {
+    void read.catch(() => {})
+    const reason = abortReason()
+    await runAbortCleanup(abortCleanup, reason)
+    throw reason
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      const reason = abortReason()
+      void read.catch(() => {})
+      reject(reason)
+      void runAbortCleanup(abortCleanup, reason)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([read, abort])
+  } finally {
+    removeAbortListener?.()
+  }
+}
+
+async function runAbortCleanup(
+  abortCleanup: ((reason: unknown) => Promise<void> | void) | undefined,
+  reason: unknown,
+): Promise<void> {
+  try {
+    await abortCleanup?.(reason)
+  } catch {
+    // Abort cleanup is best-effort and must not mask the abort reason.
   }
 }
 
@@ -164,11 +380,11 @@ function canFollowSameOriginRedirect(request: HttpRequest, location: string): bo
   }
 }
 
-async function cancelResponseBody(response: Response): Promise<void> {
+async function cancelResponseBody(response: Response, reason?: unknown): Promise<void> {
   try {
-    await response.body?.cancel()
+    await response.body?.cancel(reason)
   } catch {
-    // Best-effort cleanup before throwing the redirect error.
+    // Best-effort cleanup before throwing the primary error.
   }
 }
 
@@ -205,20 +421,26 @@ export interface RetryTransportOptions {
  * @returns Whether the request is a direct upload endpoint.
  */
 function isUploadEndpoint(url: string): boolean {
-  // Match the upload POST endpoints, while avoiding two false positives:
-  //   - the `b2_get_upload_url` / `b2_get_upload_part_url` URL-fetch calls
-  //     (ordinary API endpoints — their paths don't contain `/b2_upload_*`); and
-  //   - download-by-name URLs `/file/<bucket>/<fileName>`, where the file name
-  //     is user-controlled and could literally be `b2_upload_file`.
-  // Real upload URLs live under `/b2api/.../b2_upload_file[/...]` and never
-  // start with `/file/`, so the prefix check cleanly excludes downloads while
-  // `includes` still matches upload URLs that carry path segments after the
-  // endpoint name (e.g. `/b2api/v2/b2_upload_file/<bucketId>/<token>`).
-  const path = new URL(url).pathname
-  return (
-    !path.startsWith('/file/') &&
-    (path.includes('/b2_upload_file') || path.includes('/b2_upload_part'))
-  )
+  const endpoint = b2ApiEndpointName(url)
+  return endpoint === 'b2_upload_file' || endpoint === 'b2_upload_part'
+}
+
+function isFinishLargeFileEndpoint(url: string): boolean {
+  return b2ApiEndpointName(url) === 'b2_finish_large_file'
+}
+
+function isStartLargeFileEndpoint(url: string): boolean {
+  return b2ApiEndpointName(url) === 'b2_start_large_file'
+}
+
+function b2ApiEndpointName(url: string): string | undefined {
+  const [, root, , endpoint] = new URL(url).pathname.split('/')
+  if (root !== 'b2api') return undefined
+  return endpoint
+}
+
+function isReplayUnsafePostEndpoint(url: string): boolean {
+  return isUploadEndpoint(url) || isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)
 }
 
 /**
@@ -234,9 +456,14 @@ function isUploadEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
   return true
+}
+
+function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'TimeoutError'
 }
 
 function isTerminalTransportError(err: unknown): boolean {
@@ -301,6 +528,8 @@ export class RetryTransport implements HttpTransport {
     let attempt = 0
 
     while (attempt <= retryOptions.maxRetries) {
+      throwIfSignalAborted(request.signal)
+
       if (attempt > 0 && lastError) {
         const retryAfter = lastError instanceof NetworkError ? undefined : lastError.retryAfter
         const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
@@ -308,7 +537,8 @@ export class RetryTransport implements HttpTransport {
       }
 
       try {
-        const response = await this.inner.send(request)
+        const response = await this.inner.send({ ...request, retry: retryOptions })
+        await throwIfSignalAbortedAfterResponse(request.signal, response)
 
         if (response.status >= 200 && response.status < 300) {
           return response
@@ -317,7 +547,8 @@ export class RetryTransport implements HttpTransport {
         let errorBody: B2ErrorResponse
         try {
           errorBody = await response.json<B2ErrorResponse>()
-        } catch {
+        } catch (err) {
+          if (isRequestTimeoutError(err)) throw err
           errorBody = {
             status: response.status,
             code: 'internal_error',
@@ -364,6 +595,7 @@ export class RetryTransport implements HttpTransport {
         lastError = error
         attempt += 1
       } catch (err) {
+        throwIfSignalAborted(request.signal)
         if (isTerminalTransportError(err)) {
           throw err
         }
@@ -373,7 +605,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isUploadEndpoint(request.url) || attempt === retryOptions.maxRetries) {
+        if (isReplayUnsafePostEndpoint(request.url) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 
@@ -384,4 +616,24 @@ export class RetryTransport implements HttpTransport {
 
     throw lastError ?? new NetworkError('Max retries exceeded')
   }
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+}
+
+async function throwIfSignalAbortedAfterResponse(
+  signal: AbortSignal | undefined,
+  response: HttpResponse,
+): Promise<void> {
+  if (signal?.aborted !== true) return
+  const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+  try {
+    await response.body?.cancel(reason)
+  } catch {
+    // Best-effort cleanup before preserving the caller's abort reason.
+  }
+  throw reason
 }

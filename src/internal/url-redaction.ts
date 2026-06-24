@@ -25,6 +25,9 @@ export function redactUrlForError(
         : options.baseUrl !== undefined
           ? new URL(url, options.baseUrl)
           : new URL(url)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return options.invalidUrlLabel ?? '<invalid URL>'
+    }
     parsed.username = ''
     parsed.password = ''
     parsed.search = ''

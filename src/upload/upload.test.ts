@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
-import { BufferSource } from '../streams/source.ts'
+import type { ContentSource } from '../streams/source.ts'
+import { BufferSource, StreamSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
@@ -225,6 +226,60 @@ describe('uploadSmallFile edge cases', () => {
     })
 
     expect(result.fileName).toBe('path/to/nested/file.txt')
+  })
+
+  it('rejects a forward-only small upload that emits too many bytes', async () => {
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'small-too-many.bin',
+        source: new StreamSource(readable, 1),
+      }),
+    ).rejects.toThrow(/emitted more bytes than the advertised byte count/)
+  })
+
+  it('rejects a forward-only small upload that emits too few bytes', async () => {
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+
+    await expect(
+      bucket.upload({
+        fileName: 'small-too-few.bin',
+        source: new StreamSource(readable, 2),
+      }),
+    ).rejects.toThrow(/ended before the advertised byte count/)
+  })
+
+  it('reports expected and actual byte counts for small upload size mismatches', async () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    const source: ContentSource = {
+      size: 5,
+      canSlice: true,
+      slice: () => source,
+      stream: () => new ReadableStream<Uint8Array>(),
+      toArrayBuffer: async () => bytes.buffer as ArrayBuffer,
+    }
+
+    await expect(
+      uploadSmallFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName: 'small-size-mismatch.bin',
+        source,
+      }),
+    ).rejects.toThrow(
+      'uploadSmallFile: source byte count does not match advertised size ' +
+        '(expected 5 bytes, got 3 bytes).',
+    )
   })
 
   it('passes lastModifiedMillis through to upload', async () => {

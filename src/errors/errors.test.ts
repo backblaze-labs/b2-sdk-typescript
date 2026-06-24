@@ -23,6 +23,7 @@ import {
   DuplicateBucketNameError,
   ExpiredAuthTokenError,
   FileNotPresentError,
+  FinishLargeFileResponseBodyError,
   InternalError,
   InvalidBucketIdError,
   InvalidBucketInfoError,
@@ -41,6 +42,7 @@ import {
   TooManyBucketsError,
   TooManyFilesError,
   TooManyRequestsError,
+  UploadResponseBodyError,
 } from './index.ts'
 
 // ---------------------------------------------------------------------------
@@ -611,6 +613,40 @@ describe('NetworkError', () => {
   it('leaves cause undefined when not provided', () => {
     const err = new NetworkError('Connection refused')
     expect(err.cause).toBeUndefined()
+  })
+})
+
+describe('UploadResponseBodyError', () => {
+  it('extends Error and stores the cause', () => {
+    const cause = new TypeError('body lost')
+    const err = new UploadResponseBodyError('body lost', { cause })
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(B2Error)
+    expect(err.name).toBe('UploadResponseBodyError')
+    expect(err.message).toBe('body lost')
+    expect(err.cause).toBe(cause)
+  })
+})
+
+describe('FinishLargeFileResponseBodyError', () => {
+  it('extends Error and stores reconciliation metadata', () => {
+    const cause = new TypeError('finish body lost')
+    const err = new FinishLargeFileResponseBodyError('finish body lost', {
+      cause,
+      fileId: '4_z_file' as never,
+      bucketId: 'bucket' as never,
+      fileName: 'file.bin',
+    })
+
+    expect(err).toBeInstanceOf(Error)
+    expect(err).not.toBeInstanceOf(B2Error)
+    expect(err.name).toBe('FinishLargeFileResponseBodyError')
+    expect(err.message).toBe('finish body lost')
+    expect(err.cause).toBe(cause)
+    expect(err.fileId).toBe('4_z_file')
+    expect(err.bucketId).toBe('bucket')
+    expect(err.fileName).toBe('file.bin')
   })
 })
 

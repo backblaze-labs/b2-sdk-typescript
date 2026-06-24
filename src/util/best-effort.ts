@@ -12,6 +12,7 @@
  *
  * @param fn - Cleanup async function. Its return value is ignored; any
  *   thrown error or rejected promise is caught and discarded.
+ * @param onError - Optional observer called with the swallowed cleanup error.
  *
  * @returns A promise that always resolves, regardless of `fn`'s outcome.
  *
@@ -27,10 +28,18 @@
  * }
  * ```
  */
-export async function bestEffort(fn: () => Promise<unknown>): Promise<void> {
+export async function bestEffort(
+  fn: () => Promise<unknown>,
+  onError?: (error: unknown) => void,
+): Promise<void> {
   try {
     await fn()
-  } catch {
+  } catch (error) {
+    try {
+      onError?.(error)
+    } catch {
+      // Observer failures are also secondary cleanup failures.
+    }
     // Intentional swallow: this helper exists for cleanup paths where a
     // secondary failure must not shadow the primary error.
   }
