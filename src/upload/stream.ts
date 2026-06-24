@@ -124,32 +124,33 @@ export function createWriteStream(
 
   function ensureStarted(): Promise<LargeFileId> {
     if (largeFileId !== null) return Promise.resolve(largeFileId)
-    if (startPromise !== null) return startPromise
-    const rawStart = raw.startLargeFile(
-      accountInfo.getApiUrl(),
-      accountInfo.getAuthToken(),
-      {
-        bucketId: options.bucketId,
-        fileName: options.fileName,
-        contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
-        ...(options.serverSideEncryption !== undefined
-          ? { serverSideEncryption: options.serverSideEncryption }
-          : {}),
-      },
-      {
-        signal: abortScope.signal,
-        ...(options.retry !== undefined ? { retry: options.retry } : {}),
-      },
-    )
-    const started = rawStart.then((resp) => {
-      largeFileId = resp.fileId
-      if (abortScope.signal.aborted || errored !== null) {
-        cancelStartedLargeFile(largeFileId)
-      }
-      return largeFileId
-    })
-    startPromise = started
+    if (startPromise === null) {
+      const rawStart = raw.startLargeFile(
+        accountInfo.getApiUrl(),
+        accountInfo.getAuthToken(),
+        {
+          bucketId: options.bucketId,
+          fileName: options.fileName,
+          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+          fileInfo: options.fileInfo ?? {},
+          ...(options.serverSideEncryption !== undefined
+            ? { serverSideEncryption: options.serverSideEncryption }
+            : {}),
+        },
+        {
+          signal: abortScope.signal,
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        },
+      )
+      startPromise = rawStart.then((resp) => {
+        largeFileId = resp.fileId
+        if (abortScope.signal.aborted || errored !== null) {
+          cancelStartedLargeFile(largeFileId)
+        }
+        return largeFileId
+      })
+    }
+    const started = startPromise
     return raceWithAbort(started, abortScope.signal).catch((err) => {
       if (abortScope.signal.aborted) scheduleCancelLargeFileAfterStart(started)
       throw err

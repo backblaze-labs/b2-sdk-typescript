@@ -114,6 +114,24 @@ describe('finishLargeFileWithAbortReconciliation', () => {
     }
   })
 
+  it('adds reconciliation metadata to raw finish response body errors', async () => {
+    const cause = new SyntaxError('truncated response')
+    const rawError = new FinishLargeFileResponseBodyError('finish body lost', {
+      cause,
+      fileId: largeFileId('4_z_unfinished'),
+    })
+    const raw = rawThatFinishes(async () => {
+      throw rawError
+    })
+
+    await expect(finish(raw)).rejects.toMatchObject({
+      fileId: largeFileId('4_z_unfinished'),
+      bucketId: bucketId('bucket'),
+      fileName: 'finished.bin',
+      cause,
+    })
+  })
+
   it('wraps abort errors after finish dispatch as ambiguous', async () => {
     const controller = new AbortController()
     const raw = rawThatFinishes(async () => {

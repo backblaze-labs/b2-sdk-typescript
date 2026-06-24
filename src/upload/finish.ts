@@ -47,6 +47,9 @@ export async function finishLargeFileWithAbortReconciliation(
           },
     )
   } catch (err) {
+    if (err instanceof FinishLargeFileResponseBodyError) {
+      throw finishLargeFileResponseBodyErrorWithContext(err, context)
+    }
     if (isAmbiguousFinishDispatchFailure(err, context.signal)) {
       throw new FinishLargeFileResponseBodyError(
         'b2_finish_large_file failed after dispatch; final file state is ambiguous.',
@@ -60,6 +63,25 @@ export async function finishLargeFileWithAbortReconciliation(
     }
     throw err
   }
+}
+
+function finishLargeFileResponseBodyErrorWithContext(
+  err: FinishLargeFileResponseBodyError,
+  context: FinishLargeFileContext,
+): FinishLargeFileResponseBodyError {
+  if (
+    err.fileId === context.fileId &&
+    err.bucketId === context.bucketId &&
+    err.fileName === context.fileName
+  ) {
+    return err
+  }
+  return new FinishLargeFileResponseBodyError(err.message, {
+    cause: err.cause ?? err,
+    fileId: context.fileId,
+    bucketId: context.bucketId,
+    fileName: context.fileName,
+  })
 }
 
 function isAmbiguousFinishDispatchFailure(err: unknown, signal: AbortSignal | undefined): boolean {
