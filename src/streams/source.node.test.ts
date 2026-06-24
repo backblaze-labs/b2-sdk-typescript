@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readStream } from '../test-utils/index.ts'
+import { deferred, readStream } from '../test-utils/index.ts'
 import { fileSourceTestHooks } from './file-source.ts'
 import { FileSource, toContentSource } from './source.ts'
 
@@ -169,6 +169,33 @@ describe.skipIf(isWindows)('FileSource', () => {
     }
 
     await expect(source.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
+
+  it('stops a pending stream range read when the stream is canceled', async () => {
+    const path = join(tmpDir, 'cancel-stream-read.txt')
+    await writeFile(path, '0123456789')
+    const source = new FileSource(path)
+    const firstIteration = deferred<void>()
+    const releaseRead = deferred<void>()
+    let iterations = 0
+    fileSourceTestHooks.maxReadSize = 4
+    fileSourceTestHooks.afterReadIteration = async () => {
+      iterations += 1
+      if (iterations === 1) {
+        firstIteration.resolve(undefined)
+        await releaseRead.promise
+      }
+    }
+
+    const reader = source.stream().getReader()
+    const read = reader.read().catch(() => undefined)
+    await firstIteration.promise
+
+    const cancel = reader.cancel(new Error('stop stream read'))
+    releaseRead.resolve(undefined)
+    await Promise.allSettled([read, cancel])
+
+    expect(iterations).toBe(1)
   })
 
   it('reads successfully while metadata still matches', async () => {

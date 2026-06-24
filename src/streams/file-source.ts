@@ -305,7 +305,10 @@ function streamFileRange(
   let position = offset
   let remaining = size
   let verifiedEmpty = false
+  const abortController = new AbortController()
 
+  // Open per pull so abandoned public streams do not strand file handles or
+  // retain Windows locks. Each chunk still verifies identity around its read.
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
@@ -319,7 +322,7 @@ function streamFileRange(
         }
 
         const length = Math.min(FILE_STREAM_CHUNK_SIZE, remaining)
-        const data = await readFileRange(path, identity, position, length)
+        const data = await readFileRange(path, identity, position, length, abortController.signal)
         position += data.byteLength
         remaining -= data.byteLength
         controller.enqueue(data)
@@ -327,6 +330,9 @@ function streamFileRange(
       } catch (err) {
         controller.error(err)
       }
+    },
+    cancel(reason) {
+      abortController.abort(reason)
     },
   })
 }
