@@ -48,6 +48,59 @@ describe('copyLargeFile', () => {
     expect(new TextDecoder().decode(data)).toBe('small enough for one part')
   })
 
+  it('does not dispatch the single-call copy path when already aborted', async () => {
+    const reason = new Error('stop before copy')
+    const controller = new AbortController()
+    controller.abort(reason)
+    const getFileInfo = vi.fn()
+    const copyFile = vi.fn()
+    const raw = {
+      getFileInfo,
+      copyFile,
+    } as never
+
+    await expect(
+      copyLargeFile(raw, client.accountInfo, {
+        sourceFileId: fileId('4_z_source'),
+        fileName: 'aborted-copy.bin',
+        partSize: 5_000_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+    expect(getFileInfo).not.toHaveBeenCalled()
+    expect(copyFile).not.toHaveBeenCalled()
+  })
+
+  it('passes the abort signal to the single-call copy path', async () => {
+    const controller = new AbortController()
+    const copyFile = vi.fn(
+      async (_apiUrl: string, _authToken: string, _request: unknown, _options?: unknown) => ({
+        fileId: fileId('4_z_copy'),
+        fileName: 'copy.bin',
+        action: 'copy',
+        contentLength: 1,
+        contentSha1: 'none',
+      }),
+    )
+    const raw = {
+      getFileInfo: vi.fn(async () => ({
+        bucketId: bucketId('bucket'),
+        contentLength: 1,
+        contentType: 'text/plain',
+      })),
+      copyFile,
+    } as never
+
+    await copyLargeFile(raw, client.accountInfo, {
+      sourceFileId: fileId('4_z_source'),
+      fileName: 'copy.bin',
+      partSize: 5_000_000,
+      signal: controller.signal,
+    })
+
+    expect(copyFile.mock.calls[0]?.[3]).toEqual({ signal: controller.signal })
+  })
+
   it('Bucket.copyLargeFile() exposes the orchestrator on the bucket handle', async () => {
     const bucket = await client.createBucket({
       bucketName: 'copy-bucket-method',

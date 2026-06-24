@@ -321,6 +321,55 @@ describe('createWriteStream branch coverage', () => {
     await expect(done).rejects.toThrow('stream start aborted')
   })
 
+  it('passes per-call retry overrides to start, part, and finish requests', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    const seenRetry = new Map<string, unknown>()
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          seenRetry.set('start', req.retry)
+        } else if (req.url.includes('b2_upload_part')) {
+          seenRetry.set('part', req.retry)
+        } else if (req.url.includes('b2_finish_large_file')) {
+          seenRetry.set('finish', req.retry)
+        }
+        return inner.send(req)
+      },
+    }
+    const retryClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0, requestTimeoutMs: 10_000 },
+    })
+    await retryClient.authorize()
+    const retryBucket = await retryClient.createBucket({
+      bucketName: 'stream-start-retry-options',
+      bucketType: BucketType.AllPrivate,
+    })
+    const retry = {
+      initialRetryDelayMs: 1,
+      maxRetries: 2,
+      maxRetryDelayMs: 1,
+      requestTimeoutMs: 123,
+    }
+
+    const { writable, done } = retryBucket.file('retry-options.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      retry,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+    await writer.close()
+    await done
+
+    expect(seenRetry.get('start')).toEqual(expect.objectContaining(retry))
+    expect(seenRetry.get('part')).toEqual(expect.objectContaining(retry))
+    expect(seenRetry.get('finish')).toEqual(expect.objectContaining(retry))
+  })
+
   it('passes abort signal to stalled finish and uses independent cleanup signal', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()

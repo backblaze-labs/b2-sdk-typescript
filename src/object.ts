@@ -9,7 +9,8 @@ import {
   headById,
   headByName,
 } from './download/single.ts'
-import { mergeClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import type { RetryOptions } from './http/retry.ts'
+import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { BucketRetentionPolicy } from './types/bucket.ts'
@@ -111,18 +112,26 @@ export class B2Object {
   readonly fileName: string
   private readonly client: B2Client
   private readonly bucket: Bucket
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param bucket - The parent Bucket this object belongs to.
    * @param fileName - The file path within the bucket.
+   * @param uploadRetryOptions - Resolved client upload retry defaults.
    *
    * @internal
    */
-  constructor(client: B2Client, bucket: Bucket, fileName: string) {
+  constructor(
+    client: B2Client,
+    bucket: Bucket,
+    fileName: string,
+    uploadRetryOptions: RetryOptions,
+  ) {
     this.client = client
     this.bucket = bucket
     this.fileName = fileName
+    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -134,7 +143,7 @@ export class B2Object {
   async upload(options: B2ObjectUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
-    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options.retry)
+    const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options.retry)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options)
@@ -278,7 +287,7 @@ export class B2Object {
    * @returns A handle with the writable sink and a completion promise.
    */
   createWriteStream(options?: B2ObjectWriteStreamOptions): UploadWriteHandle {
-    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options?.retry)
+    const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options?.retry)
     return createWriteStream(this.client.raw, this.client.accountInfo, {
       ...(options ?? {}),
       bucketId: this.bucket.id,

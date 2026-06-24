@@ -137,7 +137,10 @@ export function createWriteStream(
           ? { serverSideEncryption: options.serverSideEncryption }
           : {}),
       },
-      { signal: abortScope.signal },
+      {
+        signal: abortScope.signal,
+        ...(options.retry !== undefined ? { retry: options.retry } : {}),
+      },
     )
     const started = rawStart.then((resp) => {
       largeFileId = resp.fileId

@@ -317,10 +317,14 @@ export async function collectStreamExactly(
     return result
   } finally {
     if (!completed) {
-      /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
-      await reader.cancel().catch(() => {})
+      cancelReaderBestEffort(reader)
     }
-    reader.releaseLock()
+    try {
+      reader.releaseLock()
+    } catch {
+      // Aborted reads can leave a pending read while best-effort cancel is
+      // still unsettled. Preserve the original abort/error instead.
+    }
   }
 }
 
@@ -354,16 +358,16 @@ async function readStreamChunk(
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (signal === undefined) return reader.read()
   if (signal.aborted) {
-    await reader.cancel(signal.reason).catch(() => {})
-    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+    const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+    cancelReaderBestEffort(reader, reason)
+    throw reason
   }
 
   let removeAbortListener: (() => void) | undefined
-  let abortCancel: Promise<void> | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
       const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
-      abortCancel = reader.cancel(reason).catch(() => {})
+      cancelReaderBestEffort(reader, reason)
       reject(reason)
     }
     signal.addEventListener('abort', onAbort, { once: true })
@@ -373,16 +377,22 @@ async function readStreamChunk(
   try {
     const result = await Promise.race([reader.read(), abort])
     if (signal.aborted) {
-      await abortCancel
-      throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+      const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+      cancelReaderBestEffort(reader, reason)
+      throw reason
     }
     return result
-  } catch (err) {
-    await abortCancel
-    throw err
   } finally {
     removeAbortListener?.()
   }
+}
+
+function cancelReaderBestEffort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reason?: unknown,
+): void {
+  /* v8 ignore next -- Reader cancellation failure is deliberately best-effort. */
+  void reader.cancel(reason).catch(() => {})
 }
 
 /** ContentSource backed by a forward-only async iterable of Uint8Array chunks. */

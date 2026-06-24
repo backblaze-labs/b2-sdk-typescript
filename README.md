@@ -501,6 +501,11 @@ import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 before constructing an AWS `S3Client`. The presign helpers sign internally and
 do not require AWS presigner packages.
 
+Raw methods use a trailing options bag for request controls such as cancellation
+and per-request retry overrides: pass `{ signal, retry }` to `getUploadUrl`,
+`getUploadPartUrl`, `uploadFile`, and `uploadPart`. The older positional
+`signal, retry` form remains available only for source compatibility.
+
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
 ## Sync filters

@@ -6,6 +6,7 @@ import { ProgressTracker } from './progress.ts'
 import {
   BlobSource,
   BufferSource,
+  collectStreamExactly,
   FileSource,
   readNextNonEmptyStreamChunk,
   StreamSource,
@@ -524,6 +525,61 @@ describe('StreamSource', () => {
     controller.abort(abortReason)
 
     await expect(nextChunk).rejects.toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('readNextNonEmptyStreamChunk does not wait for a stuck cancel after abort', async () => {
+    const abortReason = new Error('abort without waiting for cancel')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+        return new Promise<void>(() => {})
+      },
+    })
+    const reader = stream.getReader()
+    const controller = new AbortController()
+    const nextChunk = readNextNonEmptyStreamChunk(
+      reader,
+      'empty chunks are not allowed',
+      controller.signal,
+    )
+
+    controller.abort(abortReason)
+
+    const result = await Promise.race([
+      nextChunk.then(
+        () => 'resolved' as const,
+        (err) => err,
+      ),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 20)),
+    ])
+    expect(result).toBe(abortReason)
+    expect(cancelReason).toBe(abortReason)
+  })
+
+  it('collectStreamExactly does not wait for a stuck cancel after abort', async () => {
+    const abortReason = new Error('abort collect without waiting for cancel')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      cancel(reason) {
+        cancelReason = reason
+        return new Promise<void>(() => {})
+      },
+    })
+    const controller = new AbortController()
+    const collect = collectStreamExactly(stream, 1, controller.signal)
+
+    controller.abort(abortReason)
+
+    const result = await Promise.race([
+      collect.then(
+        () => 'resolved' as const,
+        (err) => err,
+      ),
+      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 20)),
+    ])
+    expect(result).toBe(abortReason)
     expect(cancelReason).toBe(abortReason)
   })
 })

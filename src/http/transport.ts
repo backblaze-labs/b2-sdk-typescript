@@ -439,8 +439,12 @@ function isFinishLargeFileEndpoint(url: string): boolean {
   return new URL(url).pathname.includes('/b2_finish_large_file')
 }
 
+function isStartLargeFileEndpoint(url: string): boolean {
+  return new URL(url).pathname.includes('/b2_start_large_file')
+}
+
 function isReplayUnsafePostEndpoint(url: string): boolean {
-  return isUploadEndpoint(url) || isFinishLargeFileEndpoint(url)
+  return isUploadEndpoint(url) || isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)
 }
 
 /**
@@ -456,10 +460,14 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
-  if (isFinishLargeFileEndpoint(url)) return false
+  if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
   return true
+}
+
+function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'TimeoutError'
 }
 
 function isTerminalTransportError(err: unknown): boolean {
@@ -543,7 +551,8 @@ export class RetryTransport implements HttpTransport {
         let errorBody: B2ErrorResponse
         try {
           errorBody = await response.json<B2ErrorResponse>()
-        } catch {
+        } catch (err) {
+          if (isRequestTimeoutError(err)) throw err
           errorBody = {
             status: response.status,
             code: 'internal_error',

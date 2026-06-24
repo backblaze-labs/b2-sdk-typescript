@@ -101,6 +101,12 @@ export type CopyPartOptions = RawRequestOptions
 /** Optional request controls for {@link RawClient.startLargeFile}. */
 export type StartLargeFileOptions = RawRequestOptions
 
+/** Optional request controls for {@link RawClient.uploadFile}. */
+export type UploadFileOptions = RawRequestOptions
+
+/** Optional request controls for {@link RawClient.uploadPart}. */
+export type UploadPartOptions = RawRequestOptions
+
 function normalizeRawRequestOptions(
   optionsOrSignal?: RawRequestOptions | AbortSignal,
   retry?: Partial<RetryOptions>,
@@ -314,10 +320,12 @@ export class RawClient {
    * @param uploadUrl - The upload endpoint URL.
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
-   * @param signal - An optional abort signal for cancellation.
-   * @param retry - Optional per-request retry override.
+   * @param signal - Optional legacy abort signal for cancellation.
+   * @param retry - Optional legacy per-request retry override.
    *
    * @returns The uploaded file version metadata.
+   *
+   * @deprecated Use the options-bag overload: `uploadFile(uploadUrl, headers, body, { signal, retry })`.
    */
   async uploadFile(
     uploadUrl: string,
@@ -325,7 +333,43 @@ export class RawClient {
     body: BodyInit,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<FileVersion>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-upload-file | b2_upload_file}.
+   *
+   * Unlike most methods, this posts directly to the `uploadUrl` obtained
+   * from {@link getUploadUrl} rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The uploaded file version metadata.
+   */
+  async uploadFile(
+    uploadUrl: string,
+    headers: UploadFileHeaders,
+    body: BodyInit,
+    options?: UploadFileOptions,
+  ): Promise<FileVersion>
+  /**
+   * Implementation for both upload-file request-control signatures.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded file version metadata.
+   */
+  async uploadFile(
+    uploadUrl: string,
+    headers: UploadFileHeaders,
+    body: BodyInit,
+    optionsOrSignal?: UploadFileOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<FileVersion> {
+    const options = normalizeRawRequestOptions(optionsOrSignal, retry)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-File-Name': encodeFileName(headers.fileName),
@@ -363,8 +407,8 @@ export class RawClient {
       method: 'POST',
       headers: reqHeaders,
       body,
-      ...(signal !== undefined ? { signal } : {}),
-      ...(retry !== undefined ? { retry } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     try {
       return normalizeFileVersionSha1(await response.json<FileVersion>())
@@ -619,10 +663,12 @@ export class RawClient {
    * @param uploadUrl - The upload endpoint URL.
    * @param headers - The request headers including authorization and content metadata.
    * @param body - The file data to upload.
-   * @param signal - An optional abort signal for cancellation.
-   * @param retry - Optional per-request retry override.
+   * @param signal - Optional legacy abort signal for cancellation.
+   * @param retry - Optional legacy per-request retry override.
    *
    * @returns The uploaded part metadata.
+   *
+   * @deprecated Use the options-bag overload: `uploadPart(uploadUrl, headers, body, { signal, retry })`.
    */
   async uploadPart(
     uploadUrl: string,
@@ -630,7 +676,43 @@ export class RawClient {
     body: BodyInit,
     signal?: AbortSignal,
     retry?: Partial<RetryOptions>,
+  ): Promise<UploadPartResponse>
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-upload-part | b2_upload_part}.
+   *
+   * Posts directly to the `uploadUrl` obtained from {@link getUploadPartUrl}
+   * rather than the API URL.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param options - Optional request controls such as cancellation and retry overrides.
+   *
+   * @returns The uploaded part metadata.
+   */
+  async uploadPart(
+    uploadUrl: string,
+    headers: UploadPartHeaders,
+    body: BodyInit,
+    options?: UploadPartOptions,
+  ): Promise<UploadPartResponse>
+  /**
+   * Implementation for both upload-part request-control signatures.
+   * @param uploadUrl - The upload endpoint URL.
+   * @param headers - The request headers including authorization and content metadata.
+   * @param body - The file data to upload.
+   * @param optionsOrSignal - Options bag or legacy abort signal.
+   * @param retry - Optional legacy per-request retry override.
+   *
+   * @returns The uploaded part metadata.
+   */
+  async uploadPart(
+    uploadUrl: string,
+    headers: UploadPartHeaders,
+    body: BodyInit,
+    optionsOrSignal?: UploadPartOptions | AbortSignal,
+    retry?: Partial<RetryOptions>,
   ): Promise<UploadPartResponse> {
+    const options = normalizeRawRequestOptions(optionsOrSignal, retry)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-Part-Number': String(headers.partNumber),
@@ -645,8 +727,8 @@ export class RawClient {
       method: 'POST',
       headers: reqHeaders,
       body,
-      ...(signal !== undefined ? { signal } : {}),
-      ...(retry !== undefined ? { retry } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     try {
       return await response.json<UploadPartResponse>()

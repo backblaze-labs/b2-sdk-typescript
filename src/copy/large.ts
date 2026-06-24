@@ -75,6 +75,7 @@ export async function copyLargeFile(
   accountInfo: AccountInfo,
   options: CopyLargeFileOptions,
 ): Promise<FileVersion> {
+  options.signal?.throwIfAborted()
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
@@ -88,32 +89,38 @@ export async function copyLargeFile(
 
   // Below the part threshold, take the single-call fast path.
   if (totalSize <= partSize) {
+    options.signal?.throwIfAborted()
     // `b2_copy_file` only accepts replacement contentType/fileInfo under
     // `metadataDirective: REPLACE`; supplying them in the default COPY mode is
     // rejected by B2. When the caller sets either, switch to REPLACE with a
     // required contentType (the override, else the source's, else b2/x-auto),
     // matching the multipart path's metadata semantics below.
     const replaceMetadata = options.contentType !== undefined || options.fileInfo !== undefined
-    return raw.copyFile(accountInfo.getApiUrl(), accountInfo.getAuthToken(), {
-      sourceFileId: options.sourceFileId,
-      fileName: options.fileName,
-      ...(options.destinationBucketId !== undefined
-        ? { destinationBucketId: options.destinationBucketId }
-        : {}),
-      ...(replaceMetadata
-        ? {
-            metadataDirective: MetadataDirective.Replace,
-            contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-            fileInfo: options.fileInfo ?? {},
-          }
-        : {}),
-      ...(options.destinationServerSideEncryption !== undefined
-        ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
-        : {}),
-      ...(options.sourceServerSideEncryption !== undefined
-        ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
-        : {}),
-    })
+    return raw.copyFile(
+      accountInfo.getApiUrl(),
+      accountInfo.getAuthToken(),
+      {
+        sourceFileId: options.sourceFileId,
+        fileName: options.fileName,
+        ...(options.destinationBucketId !== undefined
+          ? { destinationBucketId: options.destinationBucketId }
+          : {}),
+        ...(replaceMetadata
+          ? {
+              metadataDirective: MetadataDirective.Replace,
+              contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
+              fileInfo: options.fileInfo ?? {},
+            }
+          : {}),
+        ...(options.destinationServerSideEncryption !== undefined
+          ? { destinationServerSideEncryption: options.destinationServerSideEncryption }
+          : {}),
+        ...(options.sourceServerSideEncryption !== undefined
+          ? { sourceServerSideEncryption: options.sourceServerSideEncryption }
+          : {}),
+      },
+      options.signal !== undefined ? { signal: options.signal } : undefined,
+    )
   }
 
   // Resolve destination bucket (defaults to source's bucket). Both operands

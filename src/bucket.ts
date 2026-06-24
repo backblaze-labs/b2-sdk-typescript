@@ -6,7 +6,8 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
-import { mergeClientUploadRetryOptions } from './internal/upload-retry-options.ts'
+import type { RetryOptions } from './http/retry.ts'
+import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
   BucketInfo,
@@ -143,18 +144,21 @@ export class Bucket {
   /** Full bucket metadata as returned by the B2 API. */
   readonly info: BucketInfo
   private readonly client: B2Client
+  private readonly uploadRetryOptions: RetryOptions
 
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
+   * @param uploadRetryOptions - Resolved client upload retry defaults.
    *
    * @internal
    */
-  constructor(client: B2Client, info: BucketInfo) {
+  constructor(client: B2Client, info: BucketInfo, uploadRetryOptions: RetryOptions) {
     this.client = client
     this.info = info
     this.id = info.bucketId
     this.name = info.bucketName
+    this.uploadRetryOptions = uploadRetryOptions
   }
 
   /**
@@ -164,7 +168,7 @@ export class Bucket {
    * @returns A B2Object handle bound to this bucket and file name.
    */
   file(fileName: string): B2Object {
-    return new B2Object(this.client, this, fileName)
+    return new B2Object(this.client, this, fileName, this.uploadRetryOptions)
   }
 
   /**
@@ -177,7 +181,7 @@ export class Bucket {
   async upload(options: BucketUploadOptions): Promise<FileVersion> {
     const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
-    const uploadRetryOptions = mergeClientUploadRetryOptions(this.client, options.retry)
+    const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options.retry)
 
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info

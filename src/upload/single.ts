@@ -112,8 +112,10 @@ export async function uploadSmallFile(
             : {}),
         },
         data,
-        options.signal,
-        options.retry,
+        {
+          ...(options.signal !== undefined ? { signal: options.signal } : {}),
+          ...(options.retry !== undefined ? { retry: options.retry } : {}),
+        },
       ),
   })
 

@@ -879,6 +879,26 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
+    it('does not retry b2_start_large_file transient responses in place', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(503, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { fileId: '4_z_duplicate' }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_start_large_file',
+        }),
+      ).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
     // Retryable upload pod failures are not retried in place. Upload endpoints
     // are URL-pinned, so pod failures bubble to the upload layer for fresh-URL
     // retry. HTTP 429 is covered separately because it is account-level
@@ -1340,6 +1360,33 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
+    it('retries non-2xx response body timeouts as network failures', async () => {
+      const okResponse = mockResponse(200, { ok: true })
+      const stalledErrorResponse: HttpResponse = {
+        status: 503,
+        headers: new Headers(),
+        body: null,
+        json: async () => {
+          throw new DOMException('HTTP request timed out after 1 ms', 'TimeoutError')
+        },
+        text: async () => 'unused',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      }
+
+      innerTransport.send
+        .mockResolvedValueOnce(stalledErrorResponse)
+        .mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+      const result = await transport.send(baseRequest)
+
+      expect(result).toBe(okResponse)
+      expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
     it('does not replay finishLargeFile request timeouts', async () => {
       innerTransport.send.mockRejectedValue(
         new DOMException('HTTP request timed out', 'TimeoutError'),
@@ -1354,6 +1401,28 @@ describe('RetryTransport', () => {
         transport.send({
           ...baseRequest,
           url: 'https://api.backblazeb2.com/b2api/v3/b2_finish_large_file',
+        }),
+      ).rejects.toMatchObject({
+        name: 'NetworkError',
+        cause: { name: 'TimeoutError' },
+      })
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not replay startLargeFile request timeouts', async () => {
+      innerTransport.send.mockRejectedValue(
+        new DOMException('HTTP request timed out', 'TimeoutError'),
+      )
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_start_large_file',
         }),
       ).rejects.toMatchObject({
         name: 'NetworkError',
