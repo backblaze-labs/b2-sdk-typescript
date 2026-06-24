@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readStream } from '../test-utils/index.ts'
+import { fileSourceTestHooks } from './file-source.ts'
 import { FileSource, toContentSource } from './source.ts'
 
 const decoder = new TextDecoder()
@@ -26,6 +27,9 @@ describe.skipIf(isWindows)('FileSource', () => {
   })
 
   afterEach(async () => {
+    delete fileSourceTestHooks.afterReadIteration
+    delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.platform
     await rm(tmpDir, { recursive: true, force: true })
   })
 
@@ -137,6 +141,31 @@ describe.skipIf(isWindows)('FileSource', () => {
     const source = new FileSource(path)
 
     expect(new Uint8Array(await source.toArrayBuffer())).toEqual(new Uint8Array())
+  })
+
+  it('rejects with the abort reason before opening a file range', async () => {
+    const path = join(tmpDir, 'aborted-before-open.txt')
+    await writeFile(path, 'payload')
+    const source = new FileSource(path)
+    const controller = new AbortController()
+    const reason = new Error('stop before read')
+    controller.abort(reason)
+
+    await expect(source.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
+
+  it('preserves abort reasons between ranged read iterations', async () => {
+    const path = join(tmpDir, 'aborted-between-reads.txt')
+    await writeFile(path, '0123456789')
+    const source = new FileSource(path)
+    const controller = new AbortController()
+    const reason = new Error('stop between reads')
+    fileSourceTestHooks.maxReadSize = 4
+    fileSourceTestHooks.afterReadIteration = (filled) => {
+      if (filled === 4) controller.abort(reason)
+    }
+
+    await expect(source.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
   })
 
   it('reads successfully while metadata still matches', async () => {
@@ -293,33 +322,42 @@ describe.skipIf(isWindows)('FileSource', () => {
   })
 })
 
-describe.skipIf(!isWindows)('FileSource on Windows', () => {
+describe('FileSource Windows identity policy', () => {
   let tmpDir: string
 
   beforeEach(async () => {
+    fileSourceTestHooks.platform = 'win32'
     tmpDir = await mkdtemp(join(tmpdir(), 'b2sdk-filesource-win-'))
   })
 
   afterEach(async () => {
+    delete fileSourceTestHooks.afterReadIteration
+    delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.platform
     await rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('rejects before a symlink replacement path can be uploaded', async () => {
+  it('constructs and reads regular files', async () => {
     const path = join(tmpDir, 'payload.txt')
-    await writeFile(path, 'safe payload')
+    await writeFile(path, 'windows payload')
 
-    expect(() => new FileSource(path)).toThrow(/not supported on Windows/)
-    await expect(FileSource.fromPath(path)).rejects.toThrow(/not supported on Windows/)
+    const source = new FileSource(path)
+    const asyncSource = await FileSource.fromPath(path)
+
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('windows payload')
+    expect(decoder.decode(await asyncSource.toArrayBuffer())).toBe('windows payload')
   })
 
-  it('rejects before a same-size restored-mtime rewrite can be uploaded', async () => {
+  it('rejects same-size rewrites when mtime changes', async () => {
     const path = join(tmpDir, 'restored-mtime.txt')
     const fixedTime = new Date('2026-01-01T00:00:00.000Z')
     await writeFile(path, 'original data')
     await utimes(path, fixedTime, fixedTime)
 
-    expect(() => new FileSource(path)).toThrow(/not supported on Windows/)
-    await expect(FileSource.fromPath(path)).rejects.toThrow(/not supported on Windows/)
+    const source = new FileSource(path)
+    await writeFile(path, 'tampered data')
+
+    await expect(source.toArrayBuffer()).rejects.toThrow(/modified before read/)
   })
 })
 

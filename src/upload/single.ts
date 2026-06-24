@@ -87,10 +87,7 @@ export async function uploadSmallFile(
     retry: options.retry,
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
-    retryResponseBodyFailures: resolveRetryResponseBodyFailures(
-      options.retryResponseBodyFailures,
-      'single',
-    ),
+    retryResponseBodyFailures: resolveRetryResponseBodyFailures(options.retryResponseBodyFailures),
     checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
     fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
     returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
@@ -133,7 +130,9 @@ async function readSmallFileSource(
   if (!source.canSlice) {
     return collectStreamExactly(source.stream(), source.size, signal)
   }
-  const data = new Uint8Array(await source.toArrayBuffer())
+  const data = new Uint8Array(
+    await (signal === undefined ? source.toArrayBuffer() : source.toArrayBuffer({ signal })),
+  )
   signal?.throwIfAborted()
   return data
 }

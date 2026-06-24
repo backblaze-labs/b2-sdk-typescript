@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import type { ContentSource } from '../streams/source.ts'
+import { type ContentSource, FileSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
@@ -1217,51 +1217,49 @@ describe('synchronize', () => {
       }
     })
 
-    it.skipIf(!isNode)(
-      'falls back to validated buffered uploads when FileSource is unsupported on Windows',
-      async () => {
-        const { tmpdir } = await import('node:os')
-        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
-        const { join } = await import('node:path')
-        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-win-buffer-'))
-        const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
-        try {
-          const filePath = join(root, 'win.txt')
-          await writeFile(filePath, 'win-ok')
-          const mockBucket = makeMockBucket()
-          const sourceFile: LocalSyncPath = {
-            relativePath: 'win.txt',
-            absolutePath: filePath,
-            modTimeMillis: 1000,
-            size: 6,
-          }
-          const config: SynchronizerUpConfig = {
-            source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
-            dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
-            options: { compareMode: 'modtime', keepMode: 'no-delete' },
-            bucket: mockBucket as unknown as Bucket,
-            prefix: '',
-          }
-
-          const events = await collectEvents(config)
-
-          expect(events).toContainEqual(
-            expect.objectContaining({ type: 'upload-done', path: 'win.txt' }),
-          )
-          const uploadOptions = mockBucket.upload.mock.calls[0]?.[0] as
-            | { readonly fileName: string; readonly source: ContentSource }
-            | undefined
-          expect(uploadOptions?.fileName).toBe('win.txt')
-          expect(uploadOptions?.source.size).toBe(6)
-          await expect(uploadOptions?.source.toArrayBuffer()).resolves.toEqual(
-            new TextEncoder().encode('win-ok').buffer,
-          )
-        } finally {
-          platformSpy.mockRestore()
-          await rm(root, { recursive: true, force: true })
+    it.skipIf(!isNode)('uses FileSource uploads under the Windows identity policy', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-up-win-buffer-'))
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+      try {
+        const filePath = join(root, 'win.txt')
+        await writeFile(filePath, 'win-ok')
+        const mockBucket = makeMockBucket()
+        const sourceFile: LocalSyncPath = {
+          relativePath: 'win.txt',
+          absolutePath: filePath,
+          modTimeMillis: 1000,
+          size: 6,
         }
-      },
-    )
+        const config: SynchronizerUpConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'local'), type: 'local', root },
+          dest: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+          prefix: '',
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({ type: 'upload-done', path: 'win.txt' }),
+        )
+        const uploadOptions = mockBucket.upload.mock.calls[0]?.[0] as
+          | { readonly fileName: string; readonly source: ContentSource }
+          | undefined
+        expect(uploadOptions?.fileName).toBe('win.txt')
+        expect(uploadOptions?.source).toBeInstanceOf(FileSource)
+        expect(uploadOptions?.source.size).toBe(6)
+        await expect(uploadOptions?.source.toArrayBuffer()).resolves.toEqual(
+          new TextEncoder().encode('win-ok').buffer,
+        )
+      } finally {
+        platformSpy.mockRestore()
+        await rm(root, { recursive: true, force: true })
+      }
+    })
 
     it.skipIf(!isNode)('rejects upload when the scanned file size changes', async () => {
       const { tmpdir } = await import('node:os')

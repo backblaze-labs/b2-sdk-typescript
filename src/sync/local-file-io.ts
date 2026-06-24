@@ -6,9 +6,11 @@ import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   isDownloadStagingDirectorySegment,
 } from './download-staging.ts'
+import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import {
   assertPathInsideRoot,
   hasErrorCode,
+  makeReservedSyncTempFileName,
   noFollowFlag,
   safeRelativePathSegments,
 } from './path-safety.ts'
@@ -23,6 +25,7 @@ export { DOWNLOAD_STAGING_DIRECTORY_NAME }
 /** @internal */
 export const localFileIoTestHooks: {
   afterParentDirectoryValidated?: (path: string) => Promise<void> | void
+  afterDownloadBackupRename?: (path: string) => Promise<void> | void
   afterTempFileCreated?: (path: string, stagingDirectory: string) => Promise<void> | void
   beforeDownloadPublish?: (path: string) => Promise<void> | void
   beforeFinalRename?: (path: string) => Promise<void> | void
@@ -98,7 +101,9 @@ async function openValidatedScannedLocalFile(path: LocalSyncPath): Promise<Scann
   })
   try {
     const stats = await handle.stat()
-    assertSameScannedRegularFile(stats, path)
+    assertSameScannedRegularFile(stats, path, 'upload', {
+      platform: localFileIoTestHooks.platform,
+    })
     return handle
   } catch (err) {
     await handle.close().catch(() => {})
@@ -395,6 +400,7 @@ async function assertExpectedDownloadDestination(
       stats,
       { ...expectedDestination, absolutePath: finalPath },
       'download',
+      { platform: localFileIoTestHooks.platform },
     )
   } catch (err) {
     if (hasErrorCode(err, 'ENOENT')) {
@@ -436,7 +442,10 @@ async function publishDownload(
     return
   }
 
-  const backupPath = path.join(path.dirname(publishPath), `.b2sdk-${randomUUID()}.partial`)
+  const backupPath = path.join(
+    path.dirname(publishPath),
+    makeReservedSyncTempFileName(path.basename(publishPath), randomUUID()),
+  )
   let backupExists = false
   let removeBackup = false
 
@@ -444,6 +453,7 @@ async function publishDownload(
     try {
       await rename(publishPath, backupPath)
       backupExists = true
+      await localFileIoTestHooks.afterDownloadBackupRename?.(backupPath)
     } catch (err) {
       if (hasErrorCode(err, 'ENOENT')) {
         throw new Error('local file changed before download: file missing')
@@ -456,6 +466,7 @@ async function publishDownload(
       backupStats,
       { ...expectedDestination, absolutePath: backupPath },
       'download',
+      { compareChangeTime: false, platform: localFileIoTestHooks.platform },
     )
     await linkDownloadNoOverwrite(
       link,
@@ -595,7 +606,9 @@ export async function deleteLocalFileInsideRoot(
         ? finalPath
         : path.join(anchoredParentPath, path.basename(expectedPath))
     const stats = await lstat(unlinkPath)
-    assertSameScannedRegularFile(stats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
+    assertSameScannedRegularFile(stats, { ...scannedPath, absolutePath: unlinkPath }, 'delete', {
+      platform: localFileIoTestHooks.platform,
+    })
     await localFileIoTestHooks.beforeLocalDeleteUnlink?.(parentRealPath)
     if (
       anchoredParentPath === undefined &&
@@ -618,7 +631,12 @@ export async function deleteLocalFileInsideRoot(
       }
     }
     const finalStats = await lstat(unlinkPath)
-    assertSameScannedRegularFile(finalStats, { ...scannedPath, absolutePath: unlinkPath }, 'delete')
+    assertSameScannedRegularFile(
+      finalStats,
+      { ...scannedPath, absolutePath: unlinkPath },
+      'delete',
+      { platform: localFileIoTestHooks.platform },
+    )
     await unlink(unlinkPath)
   } finally {
     /* v8 ignore next -- best-effort cleanup */
@@ -657,57 +675,4 @@ async function writeAll(
     if (bytesWritten <= 0) throw new Error('download write made no progress')
     offset += bytesWritten
   }
-}
-
-function assertSameScannedRegularFile(
-  stats: {
-    isFile(): boolean
-    readonly dev: number
-    readonly ino: number
-    readonly mtimeMs: number
-    readonly ctimeMs: number
-    readonly size: number
-  },
-  path: LocalSyncPath,
-  operation: 'upload' | 'download' | 'delete' = 'upload',
-): void {
-  const reason = `local file changed before ${operation}`
-  if (!stats.isFile()) {
-    if (operation === 'delete') {
-      throw Object.assign(new Error(`${reason}: not a regular file`), { code: 'EISDIR' })
-    }
-    throw new Error(`${reason}: not a regular file`)
-  }
-  if (stats.size !== path.size) {
-    throw new Error(`${reason}: size changed`)
-  }
-
-  const identity = path.fileIdentity
-  if (identity === undefined) return
-
-  if (
-    (shouldComparePosixFileIdentity() &&
-      (stats.dev !== identity.deviceId || stats.ino !== identity.inode)) ||
-    stats.size !== identity.size ||
-    Math.floor(stats.mtimeMs) !== identity.modTimeMillis ||
-    (shouldComparePosixChangeTime() &&
-      identity.changeTimeMillis !== undefined &&
-      Math.floor(stats.ctimeMs) !== identity.changeTimeMillis)
-  ) {
-    throw new Error(reason)
-  }
-}
-
-function shouldComparePosixFileIdentity(): boolean {
-  return currentPlatform() !== 'win32'
-}
-
-function shouldComparePosixChangeTime(): boolean {
-  return currentPlatform() !== 'win32'
-}
-
-function currentPlatform(): string | undefined {
-  if (localFileIoTestHooks.platform !== undefined) return localFileIoTestHooks.platform
-  const processLike = (globalThis as { process?: { platform?: string } }).process
-  return processLike?.platform
 }

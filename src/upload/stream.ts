@@ -176,7 +176,6 @@ export function createWriteStream(
       onUploadRetry: options.onUploadRetry,
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
-        'multipart',
       ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }

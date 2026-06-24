@@ -35,6 +35,7 @@ export function localFileIdentityFromStats(stats: LocalFileStatsLike): LocalFile
  * @param stats - Current filesystem stats for the candidate file.
  * @param path - Previously scanned local sync path.
  * @param operation - Operation name used in mutation diagnostics.
+ * @param options - Platform and ctime comparison overrides for controlled filesystem moves.
  *
  * @throws If the current file is not the scanned regular file.
  *
@@ -44,6 +45,10 @@ export function assertSameScannedRegularFile(
   stats: LocalRegularFileStatsLike,
   path: LocalSyncPath,
   operation: 'upload' | 'download' | 'delete' | 'sha1 comparison' = 'upload',
+  options: {
+    readonly compareChangeTime?: boolean | undefined
+    readonly platform?: string | undefined
+  } = {},
 ): void {
   const reason = `local file changed before ${operation}`
   if (!stats.isFile()) {
@@ -59,18 +64,46 @@ export function assertSameScannedRegularFile(
   const identity = path.fileIdentity
   if (identity === undefined) return
 
-  if (!sameLocalIdentity(stats, identity)) {
+  if (
+    !sameLocalIdentity(stats, identity, {
+      compareChangeTime: options.compareChangeTime,
+      platform: options.platform ?? currentPlatform(),
+    })
+  ) {
     throw new Error(reason)
   }
 }
 
-function sameLocalIdentity(stats: LocalFileStatsLike, identity: LocalFileIdentity): boolean {
+function sameLocalIdentity(
+  stats: LocalFileStatsLike,
+  identity: LocalFileIdentity,
+  options: {
+    readonly compareChangeTime?: boolean | undefined
+    readonly platform: string | undefined
+  },
+): boolean {
+  const compareChangeTime =
+    options.compareChangeTime ?? shouldComparePosixChangeTime(options.platform)
   return (
-    stats.dev === identity.deviceId &&
-    stats.ino === identity.inode &&
+    (!shouldComparePosixFileIdentity(options.platform) ||
+      (stats.dev === identity.deviceId && stats.ino === identity.inode)) &&
     stats.size === identity.size &&
     Math.floor(stats.mtimeMs) === identity.modTimeMillis &&
-    (identity.changeTimeMillis === undefined ||
+    (!compareChangeTime ||
+      identity.changeTimeMillis === undefined ||
       Math.floor(stats.ctimeMs) === identity.changeTimeMillis)
   )
+}
+
+function shouldComparePosixFileIdentity(platform: string | undefined): boolean {
+  return platform !== 'win32'
+}
+
+function shouldComparePosixChangeTime(platform: string | undefined): boolean {
+  return platform !== 'win32'
+}
+
+function currentPlatform(): string | undefined {
+  const processLike = (globalThis as { process?: { platform?: string } }).process
+  return processLike?.platform
 }

@@ -190,11 +190,13 @@ export class BufferSource implements ContentSource {
 
   /**
    * Read the entire buffer content into an ArrayBuffer.
+   * @param options - Optional abort signal checked before returning bytes.
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  toArrayBuffer(): Promise<ArrayBuffer> {
-    return Promise.resolve(arrayBufferFor(this.buffer))
+  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    options.signal?.throwIfAborted()
+    return arrayBufferFor(this.buffer)
   }
 }
 
@@ -247,11 +249,12 @@ export class StreamSource implements ContentSource {
 
   /**
    * Read the entire stream into an ArrayBuffer.
+   * @param options - Optional abort signal used while reading.
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
-  async toArrayBuffer(): Promise<ArrayBuffer> {
-    const bytes = await collectStreamExactly(this.stream(), this.size)
+  async toArrayBuffer(options: { readonly signal?: AbortSignal } = {}): Promise<ArrayBuffer> {
+    const bytes = await collectStreamExactly(this.stream(), this.size, options.signal)
     return bytes.buffer as ArrayBuffer
   }
 }

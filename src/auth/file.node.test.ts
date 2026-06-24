@@ -560,6 +560,46 @@ describe('FileAccountInfo', () => {
     expect(discards).toEqual([])
   })
 
+  it('rejects custom-realm sibling endpoints under Backblaze-owned suffixes', async () => {
+    const cached = JSON.stringify({
+      ...makeCachedAuth({
+        apiUrl: 'https://api.backblazeb2.com/api',
+        downloadUrl: 'https://f001.backblazeb2.com/download',
+        s3ApiUrl: 'https://s3.us-west-001.backblazeb2.com/s3',
+      }),
+      _b2sdk: {
+        version: 1,
+        realmUrl: 'https://auth.backblazeb2.com',
+        applicationKeyId: 'test-key-id',
+      },
+    })
+    await writeFile(storePath, cached, 'utf8')
+    const discards: string[] = []
+    const accountInfo = new FileAccountInfo(storePath, {
+      onDiscard: (event) => discards.push(event.reason),
+    })
+    await accountInfo.load()
+
+    const originalFetch = globalThis.fetch
+    const fetchSpy = vi.fn<typeof fetch>()
+    globalThis.fetch = fetchSpy
+    try {
+      const client = new B2Client({
+        applicationKeyId: 'test-key-id',
+        applicationKey: 'test-key',
+        realm: 'https://auth.backblazeb2.com',
+        accountInfo,
+      })
+
+      expect(client.accountInfo.getAuth()).toBeNull()
+      expect(discards).toEqual(['endpoint_mismatch'])
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(await readFile(storePath, 'utf8')).toBe(cached)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   it('rejects a custom-realm cache whose endpoints are sibling public-suffix hosts', async () => {
     await writeFile(
       storePath,

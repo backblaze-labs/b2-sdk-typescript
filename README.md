@@ -606,8 +606,6 @@ The default transport follows same-origin `GET` / `HEAD` redirects after each ta
 
 Passing a custom `transport` opts out of the guard (your transport, your threat model).
 
-The default transport follows same-origin `GET` / `HEAD` redirects after each target passes the SSRF guard. Cross-origin redirects and `POST` redirects are blocked with `B2RedirectError`. Pass `followSameOriginRedirects: false` to the `B2Client` constructor to block same-origin redirects as well.
-
 ## Retry behavior
 
 The SDK automatically retries transient errors with exponential backoff:

@@ -10,6 +10,7 @@ import { getRealmUrl } from './realms.ts'
 const PRIVATE_FILE_MODE = 0o600
 const PERSISTED_AUTH_VERSION = 1
 const BUILT_IN_PRODUCTION_REALM_URL = getRealmUrl('production')
+const BUILT_IN_STAGING_REALM_URL = getRealmUrl('staging')
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const STAGING_HOST_SUFFIX = 'backblaze.net'
 
@@ -110,9 +111,13 @@ function isProductionAuthResponse(auth: AuthorizeAccountResponse): boolean {
 
 function verifiedRealmEndpointSuffix(realmUrl: string): string | null {
   try {
-    const host = new URL(realmUrl).hostname.toLowerCase()
-    if (hasHostSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
-    if (hasHostSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
+    const realm = new URL(realmUrl)
+    if (realm.origin === new URL(BUILT_IN_PRODUCTION_REALM_URL).origin) {
+      return PRODUCTION_HOST_SUFFIX
+    }
+    if (realm.origin === new URL(BUILT_IN_STAGING_REALM_URL).origin) {
+      return STAGING_HOST_SUFFIX
+    }
   } catch {
     // Fall through below.
   }

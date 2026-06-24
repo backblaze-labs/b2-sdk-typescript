@@ -410,7 +410,6 @@ export async function uploadLargeFile(
           onUploadRetry: options.onUploadRetry,
           retryResponseBodyFailures: resolveRetryResponseBodyFailures(
             options.retryResponseBodyFailures,
-            'multipart',
           ),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
@@ -587,7 +586,6 @@ async function uploadPartsSequentially(
         onUploadRetry: options.onUploadRetry,
         retryResponseBodyFailures: resolveRetryResponseBodyFailures(
           options.retryResponseBodyFailures,
-          'multipart',
         ),
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }

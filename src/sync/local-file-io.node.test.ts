@@ -14,7 +14,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, sep } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
@@ -31,6 +31,8 @@ import {
   writeLocalFileInsideRoot,
   writeLocalStreamInsideRoot,
 } from './local-file-io.ts'
+import { isReservedSyncTempFileName } from './path-safety.ts'
+import { LocalFolder } from './scanners/local.ts'
 import type { LocalSyncPath } from './types.ts'
 
 const textEncoder = new TextEncoder()
@@ -45,6 +47,12 @@ function streamFromBytes(bytes: Uint8Array): ReadableStream<Uint8Array> {
       controller.close()
     },
   })
+}
+
+async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const items: T[] = []
+  for await (const item of iterable) items.push(item)
+  return items
 }
 
 async function makeScannedPath(
@@ -277,6 +285,47 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('concurrent')
     } finally {
       delete localFileIoTestHooks.beforeDownloadPublish
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses reserved backup names so crash leftovers are skipped by the next scan', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-backup-leftover-'))
+    try {
+      const scanned = await makeScannedPath(root, 'file.txt', 'old')
+      let backupName: string | undefined
+      localFileIoTestHooks.afterDownloadBackupRename = (backupPath) => {
+        backupName = basename(backupPath)
+        expect(isReservedSyncTempFileName(backupName)).toBe(true)
+      }
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('new')),
+        {
+          expectedBytes: 3,
+          expectedDestination: scanned,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      expect(backupName).toBeDefined()
+      await writeFile(join(root, backupName ?? ''), 'old')
+
+      const skips: string[] = []
+      const entries = await collect<LocalSyncPath>(
+        new LocalFolder(root).scan({
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
+      expect(skips).toEqual([`stale-download-partial:${backupName}`])
+    } finally {
+      delete localFileIoTestHooks.afterDownloadBackupRename
       await rm(root, { recursive: true, force: true })
     }
   })

@@ -38,12 +38,23 @@ interface FileIdentity {
   readonly ctimeMs: number
 }
 
+interface ToArrayBufferOptions {
+  readonly signal?: AbortSignal
+}
+
 const FILE_SOURCE_INTERNAL = Symbol('FileSource.internal')
 
 interface FileSourceInternalOptions {
   readonly key: typeof FILE_SOURCE_INTERNAL
   readonly identity: FileIdentity
 }
+
+/** @internal */
+export const fileSourceTestHooks: {
+  afterReadIteration?: (filled: number) => Promise<void> | void
+  maxReadSize?: number
+  platform?: string
+} = {}
 
 function getNodeFsSync(): NodeFsSync {
   // FileSource exposes `size` synchronously, so the constructor cannot use the
@@ -105,14 +116,6 @@ function assertStableIdentity(path: FileSourcePath, stats: FileStatsLike): void 
   }
 }
 
-function assertSupportedFileSourcePlatform(path: FileSourcePath): void {
-  if (isWindows()) {
-    throw new Error(
-      `FileSource: ${formatFilePath(path)} is not supported on Windows because Node's portable filesystem metadata cannot enforce stable path identity there.`,
-    )
-  }
-}
-
 function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
   if (!stats.isFile()) {
     throw new Error(`FileSource: ${formatFilePath(path)} is not a regular file.`)
@@ -120,9 +123,8 @@ function assertRegularFile(path: FileSourcePath, stats: FileStatsLike): void {
 }
 
 function validatedIdentityFromStats(path: FileSourcePath, stats: FileStatsLike): FileIdentity {
-  assertSupportedFileSourcePlatform(path)
   assertRegularFile(path, stats)
-  assertStableIdentity(path, stats)
+  if (shouldComparePosixFileIdentity()) assertStableIdentity(path, stats)
   return identityFromStats(stats)
 }
 
@@ -132,21 +134,42 @@ function assertSameIdentity(
   actual: FileStatsLike,
   when: string,
 ): void {
-  assertStableIdentity(path, actual)
-  if (actual.dev !== expected.dev || actual.ino !== expected.ino) {
+  if (shouldComparePosixFileIdentity()) assertStableIdentity(path, actual)
+  if (
+    shouldComparePosixFileIdentity() &&
+    (actual.dev !== expected.dev || actual.ino !== expected.ino)
+  ) {
     throw new Error(`FileSource: ${formatFilePath(path)} changed ${when}.`)
   }
   if (actual.size !== expected.size || actual.mtimeMs !== expected.mtimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
-  if (actual.ctimeMs !== expected.ctimeMs) {
+  if (shouldComparePosixChangeTime() && actual.ctimeMs !== expected.ctimeMs) {
     throw new Error(`FileSource: ${formatFilePath(path)} was modified ${when}.`)
   }
 }
 
 function isWindows(): boolean {
+  if (fileSourceTestHooks.platform !== undefined) return fileSourceTestHooks.platform === 'win32'
   const processLike = (globalThis as { process?: { platform?: string } }).process
   return processLike?.platform === 'win32'
+}
+
+function shouldComparePosixFileIdentity(): boolean {
+  return !isWindows()
+}
+
+function shouldComparePosixChangeTime(): boolean {
+  return !isWindows()
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal === undefined || !signal.aborted) return
+  throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+}
+
+function maxReadSize(): number {
+  return fileSourceTestHooks.maxReadSize ?? FILE_STREAM_CHUNK_SIZE
 }
 
 /* v8 ignore start -- Requires a file to pass identity checks and still EOF mid-range. */
@@ -197,21 +220,28 @@ async function readFileRange(
   identity: FileIdentity,
   offset: number,
   size: number,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  throwIfAborted(signal)
   if (size === 0) {
-    await verifyFileIdentityForEmptyRead(path, identity)
+    await verifyFileIdentityForEmptyRead(path, identity, signal)
     return new Uint8Array(0)
   }
 
+  throwIfAborted(signal)
   const file = await openValidatedFile(path, identity)
   const data = new Uint8Array(size)
   let filled = 0
   try {
     while (filled < data.byteLength) {
-      const { bytesRead } = await file.read(data, filled, data.byteLength - filled, offset + filled)
+      throwIfAborted(signal)
+      const length = Math.min(maxReadSize(), data.byteLength - filled)
+      const { bytesRead } = await file.read(data, filled, length, offset + filled)
       if (bytesRead === 0) throw rangeEndedEarlyError(path, offset, size)
       filled += bytesRead
+      await fileSourceTestHooks.afterReadIteration?.(filled)
     }
+    throwIfAborted(signal)
     const stats = await file.stat()
     assertSameIdentity(path, identity, stats, 'while being read')
     return data
@@ -224,9 +254,12 @@ async function readFileRange(
 async function verifyFileIdentityForEmptyRead(
   path: FileSourcePath,
   identity: FileIdentity,
+  signal?: AbortSignal,
 ): Promise<void> {
+  throwIfAborted(signal)
   const file = await openValidatedFile(path, identity)
   try {
+    throwIfAborted(signal)
     return
   } finally {
     /* v8 ignore next -- Cleanup failure is deliberately best-effort. */
@@ -292,8 +325,9 @@ async function fileRangeToArrayBuffer(
   identity: FileIdentity,
   offset: number,
   size: number,
+  options: ToArrayBufferOptions = {},
 ): Promise<ArrayBuffer> {
-  const data = await readFileRange(path, identity, offset, size)
+  const data = await readFileRange(path, identity, offset, size, options.signal)
   return data.buffer as ArrayBuffer
 }
 
@@ -315,8 +349,8 @@ class FileSliceSource implements ContentSource {
     return streamFileRange(this.path, this.identity, this.offset, this.size)
   }
 
-  toArrayBuffer(): Promise<ArrayBuffer> {
-    return fileRangeToArrayBuffer(this.path, this.identity, this.offset, this.size)
+  toArrayBuffer(options: ToArrayBufferOptions = {}): Promise<ArrayBuffer> {
+    return fileRangeToArrayBuffer(this.path, this.identity, this.offset, this.size, options)
   }
 }
 
@@ -332,9 +366,9 @@ class FileSliceSource implements ContentSource {
  * symlinks are followed by the operating system, so callers that constrain
  * paths under a trusted root should validate those parents separately. Reads
  * reject if the path is replaced, if the filesystem cannot report stable
- * identity, or if size/mtime/ctime changes before the configured byte range is
- * read. Windows construction is rejected because Node's portable filesystem
- * metadata cannot enforce a stable no-follow path identity there.
+ * identity on POSIX platforms, or if size/mtime/ctime changes before the
+ * configured byte range is read. On Windows, reads avoid unreliable dev/inode
+ * identity comparisons and validate size/mtime instead.
  * Slices preserve the captured identity, so multipart uploads can read
  * disjoint ranges without materialising the whole file in memory or following
  * later leaf path swaps.
@@ -353,7 +387,7 @@ export class FileSource implements ContentSource {
    *
    * @throws If the runtime has no Node-compatible filesystem API.
    * @throws If the path does not reference a regular non-symlink file.
-   * @throws If the filesystem cannot report stable file identity.
+   * @throws If a POSIX filesystem cannot report stable file identity.
    */
   constructor(path: FileSourcePath)
   /**
@@ -394,10 +428,12 @@ export class FileSource implements ContentSource {
 
   /**
    * Read this file into an ArrayBuffer.
+   * @param options - Optional abort signal used while reading.
+   *
    * @returns A promise resolving with the file bytes.
    */
-  toArrayBuffer(): Promise<ArrayBuffer> {
-    return fileRangeToArrayBuffer(this.path, this.identity, 0, this.size)
+  toArrayBuffer(options: ToArrayBufferOptions = {}): Promise<ArrayBuffer> {
+    return fileRangeToArrayBuffer(this.path, this.identity, 0, this.size, options)
   }
 
   /**
@@ -407,7 +443,7 @@ export class FileSource implements ContentSource {
    * @returns A FileSource bound to the validated file identity.
    *
    * @throws If the path does not reference a regular non-symlink file.
-   * @throws If the filesystem cannot report stable file identity.
+   * @throws If a POSIX filesystem cannot report stable file identity.
    */
   static async fromPath(path: FileSourcePath): Promise<FileSource> {
     const identity = validatedIdentityFromStats(path, await lstatNodeFile(path))

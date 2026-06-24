@@ -259,6 +259,15 @@ describe('BufferSource', () => {
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(data)
   })
+
+  it('toArrayBuffer rejects with an abort reason', async () => {
+    const src = new BufferSource(data)
+    const controller = new AbortController()
+    const reason = new Error('buffer aborted')
+    controller.abort(reason)
+
+    await expect(src.toArrayBuffer({ signal: controller.signal })).rejects.toBe(reason)
+  })
 })
 
 describe('FileSource export', () => {
@@ -377,6 +386,26 @@ describe('StreamSource', () => {
     const ab = await src.toArrayBuffer()
     expect(ab).toBeInstanceOf(ArrayBuffer)
     expect(new Uint8Array(ab)).toEqual(new Uint8Array([1, 2, 3, 4, 5, 6]))
+  })
+
+  it('toArrayBuffer cancels with the abort reason', async () => {
+    const reason = new Error('stream aborted')
+    let cancelReason: unknown
+    const stream = new ReadableStream<Uint8Array>({
+      pull() {
+        // Leave the read pending until the abort signal cancels it.
+      },
+      cancel(receivedReason) {
+        cancelReason = receivedReason
+      },
+    })
+    const src = new StreamSource(stream, 1)
+    const controller = new AbortController()
+    const promise = src.toArrayBuffer({ signal: controller.signal })
+    controller.abort(reason)
+
+    await expect(promise).rejects.toBe(reason)
+    expect(cancelReason).toBe(reason)
   })
 
   it('toArrayBuffer rejects when the stream emits too many bytes', async () => {

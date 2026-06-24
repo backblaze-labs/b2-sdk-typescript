@@ -68,22 +68,14 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
- * Resolves the public per-upload-mode default for `retryResponseBodyFailures`.
- * For single-request uploads, this value gates unreadable response bodies and
- * ambiguous upload POST network errors after the payload may have been sent.
- * For multipart uploads, callers must opt into replaying ambiguous upload POST
- * failures the same way single-request uploads do.
+ * Resolves the public default for `retryResponseBodyFailures`. Callers must
+ * opt into replaying ambiguous upload POST failures for every upload mode.
  *
  * @param value - Caller-provided override, if any.
- * @param mode - Upload path whose default should be applied.
  *
  * @returns The boolean value passed to the upload retry helper.
  */
-export function resolveRetryResponseBodyFailures(
-  value: boolean | undefined,
-  mode: 'single' | 'multipart',
-): boolean {
-  void mode
+export function resolveRetryResponseBodyFailures(value: boolean | undefined): boolean {
   return value ?? false
 }
 

@@ -1,26 +1,6 @@
+import { posix as posixPath, win32 as win32Path } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { assertSyncPathAllowed, resolveSafeLocalPath } from './paths.ts'
-
-const posixPath = {
-  isAbsolute(path: string): boolean {
-    return path.startsWith('/')
-  },
-  resolve(...paths: string[]): string {
-    const raw = paths.join('/')
-    const absolute = raw.startsWith('/')
-    const parts: string[] = []
-    for (const part of raw.split('/')) {
-      if (part === '' || part === '.') continue
-      if (part === '..') {
-        parts.pop()
-        continue
-      }
-      parts.push(part)
-    }
-    return `${absolute ? '/' : ''}${parts.join('/')}`
-  },
-  sep: '/',
-}
 
 describe('sync path safety', () => {
   it('resolves sync-relative local paths under the root', () => {
@@ -39,15 +19,44 @@ describe('sync path safety', () => {
     expect(resolveSafeLocalPath('/', 'nested/file.txt', posixPath)).toBe('/nested/file.txt')
   })
 
+  it('resolves slash-separated relative paths under a Windows root', () => {
+    expect(resolveSafeLocalPath('C:\\sync-root', 'nested/file.txt', win32Path)).toBe(
+      'C:\\sync-root\\nested\\file.txt',
+    )
+  })
+
   it('rejects absolute local paths', () => {
     expect(() => resolveSafeLocalPath('/sync-root', '/outside.txt', posixPath)).toThrow(
       'Sync path must be relative',
     )
   })
 
-  it('rejects paths that escape the local root', () => {
-    expect(() => resolveSafeLocalPath('/sync-root', '../outside.txt', posixPath)).toThrow(
-      'Sync path escapes the local root',
+  it.each([
+    '../outside.txt',
+    'a/../victim',
+    './victim',
+    'a//b',
+    'safe\\..\\victim.txt',
+    'C:foo',
+  ])('rejects unsafe sync-relative path %j on POSIX', (relativePath) => {
+    expect(() => resolveSafeLocalPath('/sync-root', relativePath, posixPath)).toThrow(
+      /unsafe local destination path|Sync path must be relative/,
+    )
+  })
+
+  it.each([
+    '../outside.txt',
+    'a/../victim',
+    './victim',
+    'a//b',
+    'safe\\..\\victim.txt',
+    'C:foo',
+    'a:b',
+    'CON',
+    'nested/LPT1.txt',
+  ])('rejects unsafe sync-relative path %j on Windows', (relativePath) => {
+    expect(() => resolveSafeLocalPath('C:\\sync-root', relativePath, win32Path)).toThrow(
+      /unsafe local destination path|Sync path must be relative/,
     )
   })
 
