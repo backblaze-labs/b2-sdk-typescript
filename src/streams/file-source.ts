@@ -53,6 +53,7 @@ interface FileSourceInternalOptions {
 export const fileSourceTestHooks: {
   afterReadIteration?: (filled: number) => Promise<void> | void
   maxReadSize?: number
+  openFile?: (path: FileSourcePath, flags: number) => Promise<FileHandleLike>
   platform?: string
 } = {}
 
@@ -82,9 +83,15 @@ function isNodeFsSync(value: unknown): value is NodeFsSync {
 
 async function fileOpenFlags(): Promise<number> {
   const { constants } = await import('node:fs')
-  // O_NOFOLLOW is unavailable on some platforms. When it is absent, the
-  // post-open fstat identity check below is the symlink-swap defense.
-  return constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+  // O_NOFOLLOW and O_NONBLOCK are unavailable on some platforms. When
+  // O_NOFOLLOW is absent, the post-open fstat identity check below is the
+  // symlink-swap defense. O_NONBLOCK avoids blocking indefinitely if a path is
+  // swapped to a FIFO or another blocking special file before fstat rejects it.
+  return (
+    constants.O_RDONLY |
+    (constants.O_NOFOLLOW ?? 0) |
+    ((constants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0)
+  )
 }
 
 function normalizeSliceOffset(value: number, size: number): number {
@@ -185,9 +192,13 @@ async function openValidatedFile(
   path: FileSourcePath,
   identity: FileIdentity,
 ): Promise<FileHandleLike> {
-  const { open } = (await import('node:fs/promises')) as {
-    open(path: FileSourcePath, flags: number): Promise<FileHandleLike>
-  }
+  const open =
+    fileSourceTestHooks.openFile ??
+    (
+      (await import('node:fs/promises')) as {
+        open(path: FileSourcePath, flags: number): Promise<FileHandleLike>
+      }
+    ).open
   let file: FileHandleLike
   try {
     file = await open(path, await fileOpenFlags())

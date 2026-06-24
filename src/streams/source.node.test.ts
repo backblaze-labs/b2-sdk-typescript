@@ -1,7 +1,9 @@
+import { constants } from 'node:fs'
 import {
   appendFile,
   chmod,
   mkdtemp,
+  open as openFile,
   rename,
   rm,
   symlink,
@@ -29,6 +31,7 @@ describe.skipIf(isWindows)('FileSource', () => {
   afterEach(async () => {
     delete fileSourceTestHooks.afterReadIteration
     delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.openFile
     delete fileSourceTestHooks.platform
     await rm(tmpDir, { recursive: true, force: true })
   })
@@ -175,6 +178,22 @@ describe.skipIf(isWindows)('FileSource', () => {
     const source = new FileSource(path)
 
     await expect(source.toArrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer)
+  })
+
+  it('opens read handles in nonblocking mode when available', async () => {
+    const path = join(tmpDir, 'nonblocking-open.txt')
+    await writeFile(path, 'stable payload')
+    const source = new FileSource(path)
+    const openedFlags: number[] = []
+
+    fileSourceTestHooks.openFile = (filePath, flags) => {
+      openedFlags.push(flags)
+      return openFile(filePath, flags)
+    }
+
+    expect(decoder.decode(await source.toArrayBuffer())).toBe('stable payload')
+    expect(openedFlags).toHaveLength(1)
+    expect((openedFlags[0] ?? 0) & constants.O_NONBLOCK).toBe(constants.O_NONBLOCK)
   })
 
   it('rejects a replaced empty file before reading it as a buffer', async () => {
@@ -333,6 +352,7 @@ describe('FileSource Windows identity policy', () => {
   afterEach(async () => {
     delete fileSourceTestHooks.afterReadIteration
     delete fileSourceTestHooks.maxReadSize
+    delete fileSourceTestHooks.openFile
     delete fileSourceTestHooks.platform
     await rm(tmpDir, { recursive: true, force: true })
   })
