@@ -1030,10 +1030,13 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it('does not treat a download of a file NAMED b2_upload_file as an upload endpoint (still retries 500)', async () => {
-      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name
-      // is user-controlled; a file literally named `b2_upload_file` must still
-      // get the generic 5xx retry, not be misread as the upload POST endpoint.
+    it.each([
+      'b2_upload_file',
+      'b2_start_large_file',
+      'b2_finish_large_file',
+    ] as const)('does not treat a download named %s as replay-unsafe', async (fileName) => {
+      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name is
+      // user-controlled, so B2 API endpoint names in file names must still retry.
       const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
       innerTransport.send
         .mockResolvedValueOnce(mockResponse(500, errorBody))
@@ -1044,7 +1047,7 @@ describe('RetryTransport', () => {
         retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
       const result = await transport.send({
-        url: 'https://f000.backblazeb2.com/file/my-bucket/b2_upload_file',
+        url: `https://f000.backblazeb2.com/file/my-bucket/${fileName}`,
         method: 'GET',
         headers: { Authorization: 'token' },
       })

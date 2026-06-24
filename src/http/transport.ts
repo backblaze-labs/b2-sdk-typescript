@@ -420,28 +420,22 @@ export interface RetryTransportOptions {
  * @returns Whether the request is a direct upload endpoint.
  */
 function isUploadEndpoint(url: string): boolean {
-  // Match the upload POST endpoints, while avoiding two false positives:
-  //   - the `b2_get_upload_url` / `b2_get_upload_part_url` URL-fetch calls
-  //     (ordinary API endpoints — their paths don't contain `/b2_upload_*`); and
-  //   - download-by-name URLs `/file/<bucket>/<fileName>`, where the file name
-  //     is user-controlled and could literally be `b2_upload_file`.
-  // Real upload URLs live under `/b2api/.../b2_upload_file[/...]` and never
-  // start with `/file/`, so the prefix check cleanly excludes downloads while
-  // `includes` still matches upload URLs that carry path segments after the
-  // endpoint name (e.g. `/b2api/v2/b2_upload_file/<bucketId>/<token>`).
-  const path = new URL(url).pathname
-  return (
-    !path.startsWith('/file/') &&
-    (path.includes('/b2_upload_file') || path.includes('/b2_upload_part'))
-  )
+  const endpoint = b2ApiEndpointName(url)
+  return endpoint === 'b2_upload_file' || endpoint === 'b2_upload_part'
 }
 
 function isFinishLargeFileEndpoint(url: string): boolean {
-  return new URL(url).pathname.includes('/b2_finish_large_file')
+  return b2ApiEndpointName(url) === 'b2_finish_large_file'
 }
 
 function isStartLargeFileEndpoint(url: string): boolean {
-  return new URL(url).pathname.includes('/b2_start_large_file')
+  return b2ApiEndpointName(url) === 'b2_start_large_file'
+}
+
+function b2ApiEndpointName(url: string): string | undefined {
+  const [, root, , endpoint] = new URL(url).pathname.split('/')
+  if (root !== 'b2api') return undefined
+  return endpoint
 }
 
 function isReplayUnsafePostEndpoint(url: string): boolean {
