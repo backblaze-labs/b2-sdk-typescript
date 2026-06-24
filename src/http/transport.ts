@@ -341,6 +341,7 @@ async function raceBodyReadWithAbort<T>(
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
       const reason = abortReason()
+      void read.catch(() => {})
       reject(reason)
       void runAbortCleanup(abortCleanup, reason)
     }
