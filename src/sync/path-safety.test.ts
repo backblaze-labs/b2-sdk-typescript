@@ -61,6 +61,12 @@ describe('safeRelativePathSegments', () => {
       makeReservedSyncTempFileName(finalName, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
     ).toThrow('invalid sync temporary-file basename')
   })
+
+  it('rejects invalid temporary-file nonces', () => {
+    expect(() => makeReservedSyncTempFileName('payload.bin', 'not-a-uuid')).toThrow(
+      'invalid sync temporary-file nonce',
+    )
+  })
 })
 
 describe('assertPathInsideRoot', () => {

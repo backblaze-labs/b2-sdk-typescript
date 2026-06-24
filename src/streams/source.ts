@@ -190,7 +190,6 @@ export class BufferSource implements ContentSource {
 
   /**
    * Read the entire buffer content into an ArrayBuffer.
-   * @param options - Optional abort signal checked before returning the buffer.
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */
@@ -248,7 +247,6 @@ export class StreamSource implements ContentSource {
 
   /**
    * Read the entire stream into an ArrayBuffer.
-   * @param options - Optional abort signal used while reading.
    *
    * @returns A promise that resolves with the full content as an ArrayBuffer.
    */

@@ -63,6 +63,32 @@ function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
   return makeClient({ minimumPartSize: 100_000 })
 }
 
+async function waitForExpectation(assertion: () => void): Promise<void> {
+  const maybeWaitFor = (
+    vi as typeof vi & {
+      waitFor?: (assertion: () => void, options?: { timeout?: number }) => Promise<void>
+    }
+  ).waitFor
+  if (maybeWaitFor !== undefined) {
+    await maybeWaitFor(assertion)
+    return
+  }
+
+  const deadline = Date.now() + 1_000
+  let lastError: unknown
+  while (Date.now() < deadline) {
+    try {
+      assertion()
+      return
+    } catch (err) {
+      lastError = err
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+  if (lastError !== undefined) throw lastError
+  assertion()
+}
+
 interface FreshUrlRetryHarness {
   readonly transport: HttpTransport
   readonly uploadFileUrls: string[]
@@ -1202,7 +1228,7 @@ describe('uploadLargeFile cleanup paths', () => {
     expect(cancelLargeFile).not.toHaveBeenCalled()
 
     releaseStart.resolve(undefined)
-    await vi.waitFor(() => expect(cancelLargeFile).toHaveBeenCalledOnce())
+    await waitForExpectation(() => expect(cancelLargeFile).toHaveBeenCalledOnce())
   })
 
   it('cancels instead of finishing when a forward-only upload aborts after all parts', async () => {
@@ -4701,7 +4727,7 @@ describe('uploadSmallFile cleanup path', () => {
     controller.abort(new Error('stop stalled stream'))
 
     await expect(upload).rejects.toThrow('stop stalled stream')
-    await vi.waitFor(() => expect(cancelled).toBe(true))
+    await waitForExpectation(() => expect(cancelled).toBe(true))
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),

@@ -6,6 +6,7 @@ import { BufferSource } from '../streams/source.ts'
 import { deferred, makeClient, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
+import { bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { copyLargeFile } from './large.ts'
 
 /**
@@ -65,6 +66,65 @@ describe('copyLargeFile', () => {
     })
 
     expect(copied.fileName).toBe('dst.txt')
+  })
+
+  it('rejects when multipart copy start returns no large file ID', async () => {
+    const raw = {
+      getFileInfo: vi.fn(async () => ({
+        bucketId: bucketId('bucket'),
+        contentLength: 10_000_000,
+        contentType: 'application/octet-stream',
+      })),
+      startLargeFile: vi.fn(async () => ({})),
+    } as never
+
+    await expect(
+      copyLargeFile(raw, client.accountInfo, {
+        sourceFileId: fileId('4_z_source'),
+        fileName: 'missing-start-id.bin',
+        partSize: 5_000_000,
+      }),
+    ).rejects.toThrow('copyLargeFile: start did not return a large file ID.')
+  })
+
+  it('cancels a late-started multipart copy after caller abort', async () => {
+    const reason = new Error('stop before copy start')
+    const start = deferred<{ readonly fileId: ReturnType<typeof largeFileId> }>()
+    const startLargeFile = vi.fn(() => start.promise)
+    const cancelLargeFile = vi.fn(async () => ({}))
+    const raw = {
+      getFileInfo: vi.fn(async () => ({
+        bucketId: bucketId('bucket'),
+        contentLength: 10_000_000,
+        contentType: 'application/octet-stream',
+      })),
+      startLargeFile,
+      cancelLargeFile,
+    } as never
+    const controller = new AbortController()
+
+    const copy = copyLargeFile(raw, client.accountInfo, {
+      sourceFileId: fileId('4_z_source'),
+      fileName: 'late-start-copy.bin',
+      partSize: 5_000_000,
+      signal: controller.signal,
+    })
+
+    for (let attempt = 0; attempt < 20 && startLargeFile.mock.calls.length === 0; attempt++) {
+      await Promise.resolve()
+    }
+    expect(startLargeFile).toHaveBeenCalledOnce()
+
+    controller.abort(reason)
+
+    await expect(copy).rejects.toBe(reason)
+    expect(cancelLargeFile).not.toHaveBeenCalled()
+
+    start.resolve({ fileId: largeFileId('4_z_late_start') })
+    for (let attempt = 0; attempt < 20 && cancelLargeFile.mock.calls.length === 0; attempt++) {
+      await Promise.resolve()
+    }
+    expect(cancelLargeFile).toHaveBeenCalledOnce()
   })
 
   it('clamps a too-small partSize up to the account minimum and falls back to copyFile', async () => {

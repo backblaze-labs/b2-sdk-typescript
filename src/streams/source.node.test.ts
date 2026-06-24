@@ -293,7 +293,7 @@ describe.skipIf(isWindows)('FileSource', () => {
   })
 })
 
-describe.runIf(isWindows)('FileSource on Windows', () => {
+describe.skipIf(!isWindows)('FileSource on Windows', () => {
   let tmpDir: string
 
   beforeEach(async () => {

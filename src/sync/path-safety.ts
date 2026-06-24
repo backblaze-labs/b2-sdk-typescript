@@ -1,7 +1,14 @@
 const RESERVED_SYNC_TEMP_FILE_RE = /^\.b2sdk-[0-9a-f]{24}-[^/\\]+-[0-9a-f]{32}\.partial$/i
 const UUID_HEX_RE = /^[0-9a-f]{32}$/i
 
-/** @internal */
+/**
+ * Checks whether a basename is reserved for SDK-owned sync partial files.
+ * @param name - Basename to inspect.
+ *
+ * @returns Whether the basename matches the SDK reserved partial-file pattern.
+ *
+ * @internal
+ */
 export function isReservedSyncTempFileName(name: string): boolean {
   return RESERVED_SYNC_TEMP_FILE_RE.test(name)
 }

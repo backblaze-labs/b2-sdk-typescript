@@ -331,11 +331,13 @@ describe('copyLargeFile (slow)', () => {
     expect(data).toEqual(content)
   })
 
-  it('cancels the unfinished large file when b2_finish_large_file fails', async () => {
+  it('reports ambiguous multipart-copy transport errors without cancelling', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
+    let cancelCalls = 0
     const transport = {
       async send(req: Parameters<typeof inner.send>[0]) {
+        if (req.url.includes('b2_cancel_large_file')) cancelCalls += 1
         if (req.url.includes('b2_finish_large_file')) {
           throw new Error('forced finish failure')
         }
@@ -360,6 +362,7 @@ describe('copyLargeFile (slow)', () => {
       partSize: 5_000_000,
       concurrency: 1,
     })
+    const cleanupEvents: string[] = []
 
     await expect(
       copyLargeFile(c.raw, c.accountInfo, {
@@ -367,15 +370,25 @@ describe('copyLargeFile (slow)', () => {
         fileName: 'finish-fail.bin',
         partSize: 5_000_000,
         concurrency: 1,
+        onCleanupFailure: (event) => {
+          expect(event.reason).toBe('finish-ambiguous')
+          expect(event.error).toBeInstanceOf(FinishLargeFileResponseBodyError)
+          cleanupEvents.push(event.fileId)
+        },
       }),
-    ).rejects.toThrow(/finish failure/)
+    ).rejects.toMatchObject({
+      bucketId: bucket.id,
+      fileName: 'finish-fail.bin',
+    })
 
     const unfinished = await c.raw.listUnfinishedLargeFiles(
       c.accountInfo.getApiUrl(),
       c.accountInfo.getAuthToken(),
       { bucketId: bucket.id },
     )
-    expect(unfinished.files.find((f) => f.fileName === 'finish-fail.bin')).toBeUndefined()
+    expect(unfinished.files.find((f) => f.fileName === 'finish-fail.bin')).toBeDefined()
+    expect(cancelCalls).toBe(0)
+    expect(cleanupEvents).toHaveLength(1)
   })
 
   it('reports ambiguous multipart-copy finish without cancelling it', async () => {
