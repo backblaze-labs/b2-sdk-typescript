@@ -1,9 +1,33 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 
+const packageJsonPath = resolve(__dirname, 'package.json')
+const versionJsonModuleId = '\0b2-sdk-version-json'
+
+function versionJsonOnlyPlugin() {
+  const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version: string }
+
+  return {
+    name: 'b2-sdk-version-json-only',
+    enforce: 'pre' as const,
+    resolveId(source: string, importer: string | undefined) {
+      if (source === '../package.json' && importer?.endsWith('/src/version.ts')) {
+        return versionJsonModuleId
+      }
+      return null
+    },
+    load(id: string) {
+      if (id !== versionJsonModuleId) return null
+      return `export default ${JSON.stringify({ version })};\n`
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
+    versionJsonOnlyPlugin(),
     dts({
       rollupTypes: false,
       include: ['src'],

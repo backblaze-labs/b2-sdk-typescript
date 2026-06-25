@@ -8,8 +8,8 @@ import pkg from '../package.json' with { type: 'json' }
  *
  * Works in every runtime the SDK targets:
  *   - Node 22.3+, Bun, Deno: native JSON import attributes.
- *   - Vite / esbuild / rollup builds: the JSON import is statically inlined
- *     as a JS module exporting the parsed object.
+ *   - Vite builds: the JSON import is replaced with a version-only shim so
+ *     published runtime chunks do not carry unrelated package metadata.
  *   - Vitest browser mode: Vite handles the import the same way as build.
  */
 export const VERSION: string = pkg.version

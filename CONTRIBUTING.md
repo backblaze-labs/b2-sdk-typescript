@@ -24,7 +24,7 @@ pnpm test
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
 | `pnpm test:watch` | Run tests in watch mode |
-| `pnpm test:coverage` | Run tests with v8 coverage report (target ≥ 95% statements) |
+| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 91% branches) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
 | `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |
@@ -58,7 +58,7 @@ One-time local browser setup: `pnpm exec playwright install chromium firefox web
 1. `pnpm typecheck` passes with zero errors
 2. `pnpm typecheck:examples` passes with zero errors
 3. `pnpm test` passes with all tests green
-4. `pnpm test:coverage` keeps coverage at or above 95% statements
+4. `pnpm test:coverage` keeps coverage at or above the configured statement, line, function, and branch thresholds
 5. `pnpm lint`, `pnpm lint:docs`, and `pnpm lint:spelling` all pass with **zero warnings** (the `lint` script uses `--error-on-warnings`). If CSpell flags a legitimate term, add it to `.cspell/project-words.txt` rather than inlining `// cspell:ignore`
 6. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
 7. If you added a new public API, add a test using the `B2Simulator`

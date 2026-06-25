@@ -67,7 +67,7 @@ Now wire up OIDC so every future release publishes from CI with zero secrets:
 
 There is **no `NPM_TOKEN` secret to create or rotate.** The `id-token: write` permission in `release.yml` is what lets pnpm mint a short-lived, single-use credential at publish time.
 
-> **Requirements for the OIDC path:** Node ≥ 22.14.0 (the workflow's `node-version: 22` resolves above this) and pnpm ≥ 11.0 for native OIDC publish (pinned via `packageManager`).
+> **Requirements for the OIDC path:** Node ≥ 22.14.0 (the artifact build job pins Node 22.18.0; publish-only jobs use GitHub's current Node 22 line) and pnpm ≥ 11.0 for native OIDC publish (pinned via `packageManager`).
 
 <details>
 <summary>Fallback: token-based publishing (only if you can't use OIDC)</summary>
@@ -135,7 +135,7 @@ pnpm run verify     # lint + lint:docs + lint:spelling + typecheck + typecheck:e
 `pnpm run verify` must exit `0`. For extra confidence on the published artifact:
 
 ```bash
-pnpm test:coverage  # coverage gate (>= 95% statements)
+pnpm test:coverage  # coverage gate: 97% statements, 98% lines, 97% functions, 91% branches
 pnpm test:browser   # real Chromium + Firefox + WebKit via Playwright
 pnpm pack --pack-destination /tmp && tar -tzf /tmp/backblaze-labs-b2-sdk-*.tgz | sort
 ```

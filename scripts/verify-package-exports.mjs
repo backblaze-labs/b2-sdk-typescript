@@ -23,7 +23,15 @@
 // `.github/workflows/{ci,release}.yml`.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +42,21 @@ const repo = resolvePath(here, '..')
 function fail(msg) {
   console.error(`verify-package-exports: ${msg}`)
   process.exitCode = 1
+}
+
+function walkFiles(dir) {
+  /** @type {string[]} */
+  const files = []
+  for (const entry of readdirSync(dir)) {
+    const file = join(dir, entry)
+    const stats = statSync(file)
+    if (stats.isDirectory()) {
+      files.push(...walkFiles(file))
+    } else {
+      files.push(file)
+    }
+  }
+  return files
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +121,26 @@ if (dctsTypeEntries === 0) {
   fail(
     'No exports entry has a require.types field — the dual-format type-resolution check is meaningless. Is the exports map intentionally ESM-only?',
   )
+}
+
+if (existsSync(join(repo, 'dist'))) {
+  const forbiddenMetadataTokens = [
+    '"devDependencies"',
+    '"scripts"',
+    '"packageManager"',
+    '@vitest/coverage-v8',
+  ]
+  for (const file of walkFiles(join(repo, 'dist'))) {
+    if (!/\.(?:cjs|js)$/.test(file)) continue
+    const contents = readFileSync(file, 'utf8')
+    for (const token of forbiddenMetadataTokens) {
+      if (contents.includes(token)) {
+        fail(
+          `${file.slice(repo.length + 1)} includes package metadata token ${token}; the build should emit only VERSION-facing metadata.`,
+        )
+      }
+    }
+  }
 }
 
 const publicExportProbes = [
