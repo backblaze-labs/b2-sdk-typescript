@@ -691,6 +691,8 @@ export class B2Simulator {
     const directFileName = requestStringField(body, 'fileName')
 
     switch (endpoint) {
+      case 'b2_create_bucket':
+        return { bucketIds: [], requiresBucketScope: true }
       case 'b2_list_buckets': {
         if (directBucketId !== undefined) {
           return { bucketIds: [directBucketId], requiresBucketScope: true }

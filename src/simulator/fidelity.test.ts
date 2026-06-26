@@ -564,6 +564,41 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
   })
 
+  it('rejects bucket creation with bucket-scoped application keys', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'create-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const scopedKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'create-scope-key',
+      bucketIds: [allowed.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, scopedKey)
+
+    await expect(
+      scopedClient.createBucket({
+        bucketName: 'create-scope-denied',
+        bucketType: BucketType.AllPrivate,
+      }),
+    ).rejects.toThrow(/bucket scope is required/)
+
+    const unrestrictedKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'create-all-key',
+      bucketIds: null,
+    })
+    const unrestrictedClient = await authorizeWithKey(sim, unrestrictedKey)
+    await expect(
+      unrestrictedClient.createBucket({
+        bucketName: 'create-scope-allowed',
+        bucketType: BucketType.AllPrivate,
+      }),
+    ).resolves.toMatchObject({ name: 'create-scope-allowed' })
+  })
+
   it('rejects deprecated bucketId on direct v4 b2_create_key simulator requests', async () => {
     const { sim } = makeClient()
     const resp = await sim.transport().send({
