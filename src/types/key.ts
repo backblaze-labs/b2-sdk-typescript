@@ -11,7 +11,10 @@ export interface CreateKeyRequest {
   readonly keyName: string
   /** Optional duration in seconds before the key expires. Omit for a key that never expires. */
   readonly validDurationInSeconds?: number
-  /** Optional bucket restrictions. When set, the key only grants access to these buckets. */
+  /**
+   * Optional bucket restrictions. A bucket list restricts the key to those
+   * buckets; null or omitted grants access to all buckets.
+   */
   readonly bucketIds?: readonly BucketId[] | null
   /**
    * Optional single-bucket restriction.
