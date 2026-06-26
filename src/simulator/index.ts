@@ -195,7 +195,7 @@ interface StoredKey {
 
 interface RequestScope {
   readonly bucketIds: readonly string[]
-  readonly fileName?: string
+  readonly fileNames?: readonly string[]
   readonly requiresBucketScope: boolean
 }
 
@@ -223,6 +223,11 @@ function requestStringField(body: unknown, field: string): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const value = (body as Record<string, unknown>)[field]
   return typeof value === 'string' ? value : undefined
+}
+
+function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
+  const present = names.filter((name): name is string => name !== undefined)
+  return present.length > 0 ? present : undefined
 }
 
 function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
@@ -668,16 +673,15 @@ export class B2Simulator {
         }
       }
     }
-    if (
-      token.namePrefix !== null &&
-      scope?.fileName !== undefined &&
-      !scope.fileName.startsWith(token.namePrefix)
-    ) {
-      return this.error(
-        403,
-        'unauthorized',
-        `application key is scoped to prefix "${token.namePrefix}"; "${scope.fileName}" is outside scope`,
-      )
+    if (token.namePrefix !== null) {
+      for (const fileName of scope?.fileNames ?? []) {
+        if (fileName.startsWith(token.namePrefix)) continue
+        return this.error(
+          403,
+          'unauthorized',
+          `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
+        )
+      }
     }
     return null
   }
@@ -685,16 +689,12 @@ export class B2Simulator {
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
     const directBucketId = requestStringField(body, 'bucketId')
     const directFileName = requestStringField(body, 'fileName')
-    if (directBucketId !== undefined) {
-      return {
-        bucketIds: [directBucketId],
-        ...(directFileName !== undefined ? { fileName: directFileName } : {}),
-        requiresBucketScope: true,
-      }
-    }
 
     switch (endpoint) {
       case 'b2_list_buckets': {
+        if (directBucketId !== undefined) {
+          return { bucketIds: [directBucketId], requiresBucketScope: true }
+        }
         const bucketName = requestStringField(body, 'bucketName')
         if (bucketName !== undefined) {
           const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
@@ -704,6 +704,14 @@ export class B2Simulator {
           }
         }
         return { bucketIds: [], requiresBucketScope: true }
+      }
+      case 'b2_list_file_names':
+      case 'b2_list_file_versions': {
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'prefix') ?? ''],
+          requiresBucketScope: true,
+        }
       }
       case 'b2_get_file_info':
       case 'b2_delete_file_version':
@@ -728,23 +736,48 @@ export class B2Simulator {
           ...(sourceScope?.bucketIds ?? []),
           ...(destinationBucketId !== undefined ? [destinationBucketId] : []),
         ]
+        const scopedFileNames = fileNames(...(sourceScope?.fileNames ?? []), directFileName)
         return {
           bucketIds,
-          ...(directFileName !== undefined ? { fileName: directFileName } : {}),
+          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
           requiresBucketScope: true,
         }
       }
       case 'b2_copy_part': {
         const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
         const largeScope = this.largeFileScope(requestStringField(body, 'largeFileId'))
+        const scopedFileNames = fileNames(
+          ...(sourceScope?.fileNames ?? []),
+          ...(largeScope?.fileNames ?? []),
+        )
         return {
           bucketIds: [...(sourceScope?.bucketIds ?? []), ...(largeScope?.bucketIds ?? [])],
+          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
           requiresBucketScope: true,
         }
       }
+      case 'b2_list_unfinished_large_files':
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'namePrefix') ?? ''],
+          requiresBucketScope: true,
+        }
+      case 'b2_get_download_authorization':
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'fileNamePrefix') ?? ''],
+          requiresBucketScope: true,
+        }
       default:
+        if (directBucketId !== undefined) {
+          return {
+            bucketIds: [directBucketId],
+            ...(directFileName !== undefined ? { fileNames: [directFileName] } : {}),
+            requiresBucketScope: true,
+          }
+        }
         return directFileName !== undefined
-          ? { bucketIds: [], fileName: directFileName, requiresBucketScope: false }
+          ? { bucketIds: [], fileNames: [directFileName], requiresBucketScope: false }
           : undefined
     }
   }
@@ -755,7 +788,7 @@ export class B2Simulator {
     if (found === null) return undefined
     return {
       bucketIds: [found.bucketId],
-      fileName: found.stored.fileVersion.fileName,
+      fileNames: [found.stored.fileVersion.fileName],
       requiresBucketScope: true,
     }
   }
@@ -764,7 +797,7 @@ export class B2Simulator {
     if (fileId === undefined) return undefined
     const large = this.largeFiles.get(fileId)
     if (large === undefined) return undefined
-    return { bucketIds: [large.bucketId], fileName: large.fileName, requiresBucketScope: true }
+    return { bucketIds: [large.bucketId], fileNames: [large.fileName], requiresBucketScope: true }
   }
 
   private issueUploadAuthToken(sourceAuthToken: string | undefined, bucketId: string): string {
@@ -1154,7 +1187,7 @@ export class B2Simulator {
         (bucketId !== undefined
           ? {
               bucketIds: [bucketId],
-              ...(fileName !== undefined ? { fileName } : {}),
+              ...(fileName !== undefined ? { fileNames: [fileName] } : {}),
               requiresBucketScope: true,
             }
           : { bucketIds: [], requiresBucketScope: true })
@@ -1214,7 +1247,7 @@ export class B2Simulator {
           'b2_download_file_by_name',
           {
             bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
-            fileName,
+            fileNames: [fileName],
             requiresBucketScope: true,
           },
         )

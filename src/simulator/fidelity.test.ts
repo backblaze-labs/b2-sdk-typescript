@@ -687,6 +687,138 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ),
     ).rejects.toThrow(/HTTP 403/)
   })
+
+  it('enforces namePrefix on list and download authorization prefixes', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-list-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'allowed/visible.txt',
+      source: new BufferSource(new TextEncoder().encode('visible')),
+    })
+    await bucket.upload({
+      fileName: 'blocked/hidden.txt',
+      source: new BufferSource(new TextEncoder().encode('hidden')),
+    })
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'allowed/incomplete.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'blocked/incomplete.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles, Capability.ShareFiles],
+      keyName: 'prefix-list-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.listFileNames(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.listFileVersions(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.listUnfinishedLargeFiles(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.getDownloadAuthorization(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileNamePrefix: '',
+        validDurationInSeconds: 60,
+      }),
+    ).rejects.toThrow(/outside scope/)
+
+    const names = await scopedClient.raw.listFileNames(apiUrl, authToken, {
+      bucketId: bucket.id,
+      prefix: 'allowed/',
+    })
+    expect(names.files.map((file) => file.fileName)).toEqual(['allowed/visible.txt'])
+
+    const versions = await scopedClient.raw.listFileVersions(apiUrl, authToken, {
+      bucketId: bucket.id,
+      prefix: 'allowed/',
+    })
+    expect(versions.files.map((file) => file.fileName)).toEqual(['allowed/visible.txt'])
+
+    const unfinished = await scopedClient.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'allowed/',
+    })
+    expect(unfinished.files.map((file) => file.fileName)).toEqual(['allowed/incomplete.bin'])
+
+    await expect(
+      scopedClient.raw.getDownloadAuthorization(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileNamePrefix: 'allowed/',
+        validDurationInSeconds: 60,
+      }),
+    ).resolves.toMatchObject({ fileNamePrefix: 'allowed/' })
+  })
+
+  it('enforces namePrefix on copy source and destination names', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-copy-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const allowedSource = await bucket.upload({
+      fileName: 'allowed/source.txt',
+      source: new BufferSource(new TextEncoder().encode('allowed source')),
+    })
+    const blockedSource = await bucket.upload({
+      fileName: 'blocked/source.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked source')),
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'prefix-copy-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: blockedSource.fileId,
+        fileName: 'allowed/from-blocked.txt',
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: allowedSource.fileId,
+        fileName: 'blocked/from-allowed.txt',
+      }),
+    ).rejects.toThrow(/outside scope/)
+
+    const copy = await scopedClient.raw.copyFile(apiUrl, authToken, {
+      sourceFileId: allowedSource.fileId,
+      fileName: 'allowed/copy.txt',
+    })
+    expect(copy.fileName).toBe('allowed/copy.txt')
+  })
 })
 
 // ---------------------------------------------------------------------------
