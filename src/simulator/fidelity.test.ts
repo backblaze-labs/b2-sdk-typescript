@@ -585,6 +585,79 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('normalizes legacy bucketId on direct v3 b2_create_key simulator requests', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'v3-key-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'v3-key-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_create_key',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'v3-wire-bucket-id',
+        bucketId: allowed.id,
+      }),
+    })
+
+    expect(resp.status).toBe(200)
+    const key = (await resp.json()) as {
+      applicationKeyId: string
+      applicationKey: string
+      bucketIds: readonly string[]
+      bucketId: string
+    }
+    expect(key.bucketIds).toEqual([allowed.id])
+    expect(key.bucketId).toBe(allowed.id)
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('rejects mixed bucketId and bucketIds on direct v3 b2_create_key simulator requests', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'v3-key-conflict',
+      bucketType: BucketType.AllPrivate,
+    })
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_create_key',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'v3-wire-conflict',
+        bucketId: bucket.id,
+        bucketIds: [bucket.id],
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('either bucketIds or bucketId'),
+    })
+  })
+
   it('keeps stored key scope immutable after request and response arrays mutate', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

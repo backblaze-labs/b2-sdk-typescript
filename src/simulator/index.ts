@@ -1111,6 +1111,7 @@ export class B2Simulator {
             keyName: string
             validDurationInSeconds?: number
             bucketIds?: readonly string[] | null
+            bucketId?: string
             namePrefix?: string
           },
           apiVersion,
@@ -2406,6 +2407,7 @@ export class B2Simulator {
       keyName: string
       validDurationInSeconds?: number
       bucketIds?: readonly string[] | null
+      bucketId?: string
       namePrefix?: string
     },
     apiVersion: string,
@@ -2417,6 +2419,13 @@ export class B2Simulator {
         'bucketId is not accepted by v4 b2_create_key; use bucketIds',
       )
     }
+    if (apiVersion !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
+      return this.error(400, 'bad_request', 'b2_create_key accepts either bucketIds or bucketId')
+    }
+    const bucketIds =
+      apiVersion !== 'v4' && req.bucketId !== undefined
+        ? Object.freeze([req.bucketId])
+        : normalizeKeyBucketIds(req)
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -2429,7 +2438,7 @@ export class B2Simulator {
       capabilities: req.capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
-      bucketIds: normalizeKeyBucketIds(req),
+      bucketIds,
       namePrefix: req.namePrefix ?? null,
       expirationTimestamp: expiration,
     }
