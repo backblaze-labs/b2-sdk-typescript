@@ -31,6 +31,7 @@ export type CreateKeyBucketScope =
        * @deprecated Use `bucketIds: [bucketId]` instead.
        */
       readonly bucketId: BucketId
+      /** Do not provide `bucketIds` with the deprecated `bucketId` alias. */
       readonly bucketIds?: never
     }
 
