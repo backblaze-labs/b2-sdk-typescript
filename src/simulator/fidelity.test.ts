@@ -917,6 +917,47 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     ).resolves.toMatchObject({ fileNamePrefix: 'allowed/' })
   })
 
+  it('handles malformed encoded upload file names during strict auth', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'malformed-upload-name',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'malformed-upload-name-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await scopedClient.raw.getUploadUrl(
+      apiUrl,
+      authToken,
+      { bucketId: bucket.id },
+    )
+
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers: {
+        Authorization: authorizationToken,
+        'Content-Type': 'application/octet-stream',
+        'X-Bz-Content-Sha1': 'do_not_verify',
+        'X-Bz-File-Name': 'blocked%zz.txt',
+      },
+      body: new Uint8Array([1]).buffer,
+    })
+
+    expect(resp.status).toBe(403)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringContaining('outside scope'),
+    })
+  })
+
   it('enforces namePrefix on copy source and destination names', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

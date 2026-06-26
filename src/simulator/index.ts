@@ -122,6 +122,14 @@ function parseFileInfoHeaders(headers: Record<string, string>): Record<string, s
   return info
 }
 
+function decodeHeaderValue(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 /**
  * Compares B2 file names with deterministic JS string order, not locale collation.
  *
@@ -1181,7 +1189,7 @@ export class B2Simulator {
       const fileName =
         isPart || headers['x-bz-file-name'] === undefined
           ? undefined
-          : decodeURIComponent(headers['x-bz-file-name'])
+          : decodeHeaderValue(headers['x-bz-file-name'])
       const partScope = isPart
         ? this.largeFileScope(parsedUrl.searchParams.get('fileId') ?? undefined)
         : undefined
@@ -1329,7 +1337,7 @@ export class B2Simulator {
     const bucket = this.buckets.get(bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
-    const fileName = decodeURIComponent(headers['x-bz-file-name'] ?? '')
+    const fileName = decodeHeaderValue(headers['x-bz-file-name'] ?? '')
     const contentType = headers['content-type'] ?? 'application/octet-stream'
 
     // B2 spec-compliance: validate file name and optional X-Bz-Info-*
