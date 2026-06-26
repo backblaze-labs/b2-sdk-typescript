@@ -42,6 +42,13 @@ export interface FullApplicationKey {
   readonly expirationTimestamp: number | null
   /** Bucket IDs this key is restricted to, or null if unrestricted. */
   readonly bucketIds: readonly BucketId[] | null
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated Use `bucketIds` instead.
+   */
+  readonly bucketId: BucketId | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */
@@ -64,6 +71,13 @@ export interface ApplicationKey {
   readonly expirationTimestamp: number | null
   /** Bucket IDs this key is restricted to, or null if unrestricted. */
   readonly bucketIds: readonly BucketId[] | null
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated Use `bucketIds` instead.
+   */
+  readonly bucketId: BucketId | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */

@@ -296,7 +296,7 @@ describe('B2Client SSRF guard', () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.fn(async (url: string | URL) => {
       const u = typeof url === 'string' ? url : url.toString()
-      if (u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+      if (u.startsWith('https://api.backblazeb2.com/b2api/v4/b2_authorize_account')) {
         // Minimal authorize-account response shape consumed by the SDK.
         return new Response(
           JSON.stringify({
@@ -359,7 +359,7 @@ describe('B2Client SSRF guard', () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.fn(async (url: string | URL) => {
       const u = typeof url === 'string' ? url : url.toString()
-      if (!u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+      if (!u.startsWith('https://api.backblazeb2.com/b2api/v4/b2_authorize_account')) {
         throw new Error(`unexpected fetch: ${u}`)
       }
       return new Response(
@@ -410,7 +410,7 @@ describe('B2Client SSRF guard', () => {
     const originalFetch = globalThis.fetch
     const fetchSpy = vi.fn(async (url: string | URL) => {
       const u = typeof url === 'string' ? url : url.toString()
-      if (!u.startsWith('https://api.backblazeb2.com/b2api/v3/b2_authorize_account')) {
+      if (!u.startsWith('https://api.backblazeb2.com/b2api/v4/b2_authorize_account')) {
         throw new Error(`unexpected fetch: ${u}`)
       }
       return new Response(

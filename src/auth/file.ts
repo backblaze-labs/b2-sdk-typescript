@@ -454,6 +454,15 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
   }
 
   /**
+   * Returns the buckets the key is restricted to, if any.
+   *
+   * @returns The restricted bucket IDs, or `null` if the key is unrestricted.
+   */
+  getAllowedBucketIds(): readonly BucketId[] | null {
+    return this.inner.getAllowedBucketIds()
+  }
+
+  /**
    * Takes an upload URL from the in-memory pool for the given bucket.
    *
    * @param bucketId - Bucket to check out an upload URL for.

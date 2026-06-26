@@ -6,6 +6,35 @@ import { bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { RawClient } from './index.ts'
 
 describe('RawClient authorizeAccount', () => {
+  it('uses the v4 authorize endpoint', async () => {
+    const seenUrls: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenUrls.push(request.url)
+        return jsonResponse({
+          accountId: 'account',
+          authorizationToken: 'token',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.example.com',
+              downloadUrl: 'https://download.example.com',
+              s3ApiUrl: 'https://s3.example.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              allowed: { capabilities: [], buckets: null, namePrefix: null },
+            },
+          },
+          applicationKeyExpirationTimestamp: null,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
+
+    expect(seenUrls).toEqual(['https://api.example.com/b2api/v4/b2_authorize_account'])
+  })
+
   it('rejects non-absolute realm URLs before sending credentials', async () => {
     const { seenUrls, transport } = recordingTransport()
     const raw = new RawClient({ transport })

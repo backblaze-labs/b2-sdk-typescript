@@ -128,7 +128,28 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @throws Error if not yet authorized.
    */
   getAllowedBucketId(): BucketId | null {
-    return this.requireAuth().apiInfo.storageApi.allowed.bucketId ?? null
+    const allowed = this.requireAuth().apiInfo.storageApi.allowed
+    const buckets = allowed.buckets
+    if (buckets !== undefined && buckets !== null) {
+      return buckets.length === 1 ? (buckets[0]?.id ?? null) : null
+    }
+    return allowed.bucketId ?? null
+  }
+
+  /**
+   * Bucket IDs the key is restricted to, or null if unrestricted.
+   *
+   * @returns The restricted bucket identifiers, or null if the key is unrestricted.
+   *
+   * @throws Error if not yet authorized.
+   */
+  getAllowedBucketIds(): readonly BucketId[] | null {
+    const allowed = this.requireAuth().apiInfo.storageApi.allowed
+    const buckets = allowed.buckets
+    if (buckets !== undefined && buckets !== null) {
+      return buckets.map((bucket) => bucket.id)
+    }
+    return allowed.bucketId !== undefined && allowed.bucketId !== null ? [allowed.bucketId] : null
   }
 
   /**

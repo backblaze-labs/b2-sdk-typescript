@@ -5,6 +5,7 @@
  */
 
 export type {
+  AllowedBucket,
   AllowedInfo,
   ApiInfo,
   AuthorizeAccountRequest,

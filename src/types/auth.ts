@@ -80,14 +80,32 @@ export const Capability = {
  */
 export type Capability = (typeof Capability)[keyof typeof Capability]
 
+/** Bucket restriction entry returned by v4 `b2_authorize_account`. */
+export interface AllowedBucket {
+  /** Bucket ID the key can access. */
+  readonly id: BucketId
+  /** Bucket name when available, or null when B2 does not include it. */
+  readonly name: string | null
+}
+
 /** Describes the capabilities and scope restrictions of an authorized application key. */
 export interface AllowedInfo {
   /** List of capabilities granted to this key. */
   readonly capabilities: readonly Capability[]
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
-  readonly bucketId: BucketId | null
-  /** Bucket name this key is restricted to, or null if unrestricted. */
-  readonly bucketName: string | null
+  /** Bucket restrictions for v4 authorization, or null if unrestricted. */
+  readonly buckets?: readonly AllowedBucket[] | null
+  /**
+   * Bucket ID this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The v4 authorization response returns `buckets`; use that instead.
+   */
+  readonly bucketId?: BucketId | null
+  /**
+   * Bucket name this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The v4 authorization response returns `buckets`; use that instead.
+   */
+  readonly bucketName?: string | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
 }
@@ -98,16 +116,32 @@ export interface StorageApiInfo {
   readonly absoluteMinimumPartSize: number
   /** Base URL for B2 API calls. */
   readonly apiUrl: string
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
-  readonly bucketId: BucketId | null
-  /** Bucket name this key is restricted to, or null if unrestricted. */
-  readonly bucketName: string | null
+  /**
+   * Bucket ID this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The v4 authorization response returns `allowed.buckets`; use that instead.
+   */
+  readonly bucketId?: BucketId | null
+  /**
+   * Bucket name this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The v4 authorization response returns `allowed.buckets`; use that instead.
+   */
+  readonly bucketName?: string | null
   /** Base URL for file downloads. */
   readonly downloadUrl: string
-  /** Discriminator indicating this is storage API info. Always `'storageApi'`. */
-  readonly infoType: 'storageApi'
-  /** File name prefix this key is restricted to, or null if unrestricted. */
-  readonly namePrefix: string | null
+  /**
+   * Discriminator indicating this is storage API info. Always `'storageApi'`.
+   *
+   * @deprecated Removed from the v4 storage API authorization shape.
+   */
+  readonly infoType?: 'storageApi'
+  /**
+   * File name prefix this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The v4 authorization response returns `allowed.namePrefix`; use that instead.
+   */
+  readonly namePrefix?: string | null
   /** Recommended part size for large file uploads, in bytes. */
   readonly recommendedPartSize: number
   /** Base URL for the S3-compatible API. */

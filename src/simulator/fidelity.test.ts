@@ -435,6 +435,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
+    expect(allowed?.buckets).toBeNull()
     // Master does NOT have BypassGovernance — tests that need it must
     // mint a key with that cap explicitly.
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
@@ -501,7 +502,8 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toEqual([allowed.id])
 
     const scopedClient = await authorizeWithKey(sim, key)
-    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(2)
+    await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
       /scoped to buckets/,
     )
@@ -530,8 +532,10 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toEqual([first.id, second.id])
 
     const scopedClient = await authorizeWithKey(sim, key)
-    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(3)
-    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(3)
+    expect(scopedClient.accountInfo.getAllowedBucketIds?.()).toEqual([first.id, second.id])
+    await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
       /scoped to buckets/,
     )
@@ -556,8 +560,132 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toBeNull()
 
     const scopedClient = await authorizeWithKey(sim, key)
-    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(2)
-    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(2)
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
+  })
+
+  it('rejects deprecated bucketId on direct v4 b2_create_key simulator requests', async () => {
+    const { sim } = makeClient()
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: { Authorization: 'unused', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ReadFiles],
+        keyName: 'wire-bucket-id',
+        bucketId: 'bucket-id',
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('bucketId is not accepted'),
+    })
+  })
+
+  it('keeps stored key scope immutable after request and response arrays mutate', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'immutable-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'immutable-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const requestBucketIds = [allowed.id]
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'immutable-scope-key',
+      bucketIds: requestBucketIds,
+    })
+
+    requestBucketIds.push(blocked.id)
+    ;(key.bucketIds as string[] | null)?.push(blocked.id)
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('rejects bucket-scoped file operations outside the key bucketIds', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'file-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'file-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blockedFile = await blocked.upload({
+      fileName: 'blocked.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked')),
+    })
+    const blockedLarge = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: blocked.id,
+        fileName: 'blocked-large.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const key = await client.createKey({
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.ListFiles,
+        Capability.ReadFiles,
+        Capability.WriteFiles,
+        Capability.DeleteFiles,
+      ],
+      keyName: 'file-scope-key',
+      bucketIds: [allowed.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const downloadUrl = scopedClient.accountInfo.getDownloadUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.listFileNames(apiUrl, authToken, { bucketId: blocked.id }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.getFileInfo(apiUrl, authToken, { fileId: blockedFile.fileId }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: blockedFile.fileId,
+        fileName: 'copy.txt',
+        destinationBucketId: allowed.id,
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.deleteFileVersion(apiUrl, authToken, {
+        fileId: blockedFile.fileId,
+        fileName: blockedFile.fileName,
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.getUploadPartUrl(apiUrl, authToken, { fileId: blockedLarge.fileId }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.downloadFileById(downloadUrl, authToken, blockedFile.fileId),
+    ).rejects.toThrow(/HTTP 403/)
+    await expect(
+      scopedClient.raw.downloadFileByName(
+        downloadUrl,
+        authToken,
+        blocked.name,
+        blockedFile.fileName,
+      ),
+    ).rejects.toThrow(/HTTP 403/)
   })
 })
 

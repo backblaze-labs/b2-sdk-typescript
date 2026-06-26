@@ -47,6 +47,51 @@ describe('RawClient list request controls', () => {
     expect(body).toMatchObject({ bucketIds: ['bucket'] })
     expect('bucketId' in body).toBe(false)
     expect(key.bucketIds).toEqual(['bucket'])
+    expect(key.bucketId).toBe('bucket')
+  })
+
+  it('rejects conflicting createKey bucketId and bucketIds inputs before transport', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        return jsonResponse({})
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await expect(
+      raw.createKey('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        capabilities: [],
+        keyName: 'conflict',
+        bucketIds: null,
+        bucketId: 'bucket' as never,
+      }),
+    ).rejects.toThrow('either bucketIds or deprecated bucketId')
+
+    await expect(
+      raw.createKey('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        capabilities: [],
+        keyName: 'mismatch',
+        bucketIds: ['bucket-a' as never],
+        bucketId: 'bucket-b' as never,
+      }),
+    ).rejects.toThrow('either bucketIds or deprecated bucketId')
+
+    const untrusted = { bucketIds: ['user-bucket' as never] }
+    await expect(
+      raw.createKey('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        capabilities: [],
+        keyName: 'safe-merge',
+        ...untrusted,
+        bucketId: 'trusted-bucket' as never,
+      }),
+    ).rejects.toThrow('either bucketIds or deprecated bucketId')
+
+    expect(requests).toEqual([])
   })
 
   it('passes abort signals and retry through listUnfinishedLargeFiles and listParts', async () => {

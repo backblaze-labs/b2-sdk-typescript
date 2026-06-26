@@ -16,6 +16,7 @@ import type { HttpTransport } from '../http/transport.ts'
 import type {
   ApplicationKey,
   AuthorizeAccountResponse,
+  BucketId,
   BucketInfo,
   CancelLargeFileRequest,
   CancelLargeFileResponse,
@@ -136,10 +137,23 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 
 function normalizeCreateKeyRequest(request: CreateKeyRequest): CreateKeyRequest {
   const { bucketId, ...withoutDeprecatedBucketId } = request
-  if (withoutDeprecatedBucketId.bucketIds !== undefined || bucketId === undefined) {
+  if (bucketId !== undefined && withoutDeprecatedBucketId.bucketIds !== undefined) {
+    throw new TypeError('createKey accepts either bucketIds or deprecated bucketId, not both')
+  }
+  if (bucketId === undefined) {
     return withoutDeprecatedBucketId
   }
   return { ...withoutDeprecatedBucketId, bucketIds: [bucketId] }
+}
+
+function singleBucketId(bucketIds: readonly BucketId[] | null): BucketId | null {
+  return bucketIds?.length === 1 ? (bucketIds[0] ?? null) : null
+}
+
+function normalizeKeyResponse<T extends { readonly bucketIds: readonly BucketId[] | null }>(
+  key: T,
+): T & { readonly bucketId: BucketId | null } {
+  return { ...key, bucketId: singleBucketId(key.bucketIds) }
 }
 
 function uploadResponseBodyError(
@@ -189,7 +203,7 @@ export class RawClient {
   ): Promise<AuthorizeAccountResponse> {
     assertSecureRealmUrl(realmUrl)
     const response = await this.transport.send({
-      url: `${realmUrl}/b2api/v3/b2_authorize_account`,
+      url: `${realmUrl}/b2api/v4/b2_authorize_account`,
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`,
@@ -972,7 +986,7 @@ export class RawClient {
     authToken: string,
     request: CreateKeyRequest,
   ): Promise<FullApplicationKey> {
-    return this.postJson<FullApplicationKey>(
+    const key = await this.postJson<FullApplicationKey>(
       apiUrl,
       authToken,
       'b2_create_key',
@@ -980,6 +994,7 @@ export class RawClient {
       undefined,
       'v4',
     )
+    return normalizeKeyResponse(key)
   }
 
   /**
@@ -995,7 +1010,7 @@ export class RawClient {
     authToken: string,
     request: ListKeysRequest,
   ): Promise<ListKeysResponse> {
-    return this.postJson<ListKeysResponse>(
+    const response = await this.postJson<ListKeysResponse>(
       apiUrl,
       authToken,
       'b2_list_keys',
@@ -1003,6 +1018,7 @@ export class RawClient {
       undefined,
       'v4',
     )
+    return { ...response, keys: response.keys.map((key) => normalizeKeyResponse(key)) }
   }
 
   /**
@@ -1018,7 +1034,7 @@ export class RawClient {
     authToken: string,
     request: DeleteKeyRequest,
   ): Promise<ApplicationKey> {
-    return this.postJson<ApplicationKey>(
+    const key = await this.postJson<ApplicationKey>(
       apiUrl,
       authToken,
       'b2_delete_key',
@@ -1026,6 +1042,7 @@ export class RawClient {
       undefined,
       'v4',
     )
+    return normalizeKeyResponse(key)
   }
 
   // --- Retention / Legal Hold ---

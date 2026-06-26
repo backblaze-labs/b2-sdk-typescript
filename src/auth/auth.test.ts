@@ -86,6 +86,36 @@ describe('InMemoryAccountInfo', () => {
     it('getAllowedBucketId returns null when unrestricted', () => {
       expect(info.getAllowedBucketId()).toBeNull()
     })
+
+    it('getAllowedBucketIds returns null when unrestricted', () => {
+      expect(info.getAllowedBucketIds()).toBeNull()
+    })
+
+    it('reads v4 multi-bucket restrictions from allowed.buckets', () => {
+      info.setAuth({
+        ...mockAuth,
+        apiInfo: {
+          storageApi: {
+            apiUrl: 'https://api.example.com',
+            downloadUrl: 'https://dl.example.com',
+            s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+            recommendedPartSize: 100_000_000,
+            absoluteMinimumPartSize: 5_000_000,
+            allowed: {
+              capabilities: [Capability.ListBuckets],
+              buckets: [
+                { id: bucketId('bucket1'), name: 'one' },
+                { id: bucketId('bucket2'), name: 'two' },
+              ],
+              namePrefix: null,
+            },
+          },
+        },
+      })
+
+      expect(info.getAllowedBucketId()).toBeNull()
+      expect(info.getAllowedBucketIds()).toEqual([bucketId('bucket1'), bucketId('bucket2')])
+    })
   })
 
   describe('getters throw before authorization', () => {
