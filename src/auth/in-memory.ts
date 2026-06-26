@@ -129,7 +129,10 @@ export class InMemoryAccountInfo implements AccountInfo {
    */
   getAllowedBucketId(): BucketId | null {
     const allowed = this.requireAuth().apiInfo.storageApi.allowed
-    const buckets = allowed.buckets
+    const buckets: typeof allowed.buckets | undefined = allowed.buckets
+    if (buckets === undefined) {
+      return allowed.bucketId ?? null
+    }
     if (buckets !== null) {
       if (buckets.length !== 1) {
         throw new Error(
@@ -150,7 +153,11 @@ export class InMemoryAccountInfo implements AccountInfo {
    */
   getAllowedBucketIds(): readonly BucketId[] | null {
     const allowed = this.requireAuth().apiInfo.storageApi.allowed
-    const buckets = allowed.buckets
+    const buckets: typeof allowed.buckets | undefined = allowed.buckets
+    if (buckets === undefined) {
+      const legacyBucketId = allowed.bucketId ?? null
+      return legacyBucketId === null ? null : [legacyBucketId]
+    }
     return buckets === null ? null : buckets.map((bucket) => bucket.id)
   }
 

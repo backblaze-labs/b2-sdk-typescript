@@ -6,6 +6,7 @@ import { B2Client } from '../client.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import { bucketId } from '../types/ids.ts'
 import { FileAccountInfo } from './file.ts'
 import { InMemoryAccountInfo } from './in-memory.ts'
 import { REALM_URLS } from './realms.ts'
@@ -92,6 +93,37 @@ describe('FileAccountInfo', () => {
       accountInfo: accountInfo2,
     })
     expect(client2.accountInfo.getAuth()).not.toBeNull()
+  })
+
+  it('loads legacy cached auth without allowed.buckets', async () => {
+    const legacyBucketId = bucketId('legacy-cache-bucket')
+    const cached = makeCachedAuth()
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        ...cached,
+        apiInfo: {
+          storageApi: {
+            ...cached.apiInfo.storageApi,
+            bucketId: legacyBucketId,
+            bucketName: 'legacy-cache',
+            allowed: {
+              capabilities: [Capability.ListBuckets],
+              bucketId: legacyBucketId,
+              bucketName: 'legacy-cache',
+              namePrefix: null,
+            },
+          },
+        },
+      }),
+      'utf8',
+    )
+    const accountInfo = new FileAccountInfo(storePath)
+
+    await accountInfo.load()
+
+    expect(accountInfo.getAllowedBucketId()).toBe(legacyBucketId)
+    expect(accountInfo.getAllowedBucketIds()).toEqual([legacyBucketId])
   })
 
   it('load() returns silently on missing file', async () => {
