@@ -26,7 +26,7 @@ export type CreateKeyBucketScope =
     }
   | {
       /**
-       * Optional single-bucket restriction.
+       * Single-bucket restriction.
        *
        * @deprecated Use `bucketIds: [bucketId]` instead.
        */
