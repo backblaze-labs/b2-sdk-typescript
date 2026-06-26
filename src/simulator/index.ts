@@ -1586,6 +1586,9 @@ export class B2Simulator {
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
     const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
+    const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
+    const legacyBucketName =
+      legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       capabilities: keyForAuth?.capabilities ?? capabilities,
@@ -1606,12 +1609,18 @@ export class B2Simulator {
           storageApi: {
             absoluteMinimumPartSize: this.minimumPartSize,
             apiUrl: origin,
+            bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+            bucketName: legacyBucketName,
             downloadUrl: origin,
+            infoType: 'storageApi',
+            namePrefix: keyForAuth?.namePrefix ?? null,
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
               capabilities: keyForAuth?.capabilities ?? capabilities,
               buckets: allowedBuckets,
+              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+              bucketName: legacyBucketName,
               namePrefix: keyForAuth?.namePrefix ?? null,
             },
           },

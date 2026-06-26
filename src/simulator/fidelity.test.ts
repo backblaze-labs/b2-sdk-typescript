@@ -3,7 +3,7 @@ import { B2Client } from '../client.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
@@ -502,6 +502,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toEqual([allowed.id])
 
     const scopedClient = await authorizeWithKey(sim, key)
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toEqual([{ id: allowed.id, name: allowed.name }])
+    expect(scopedAuth?.bucketId).toBe(allowed.id)
+    expect(scopedAuth?.allowed.bucketId).toBe(allowed.id)
+    expect(scopedClient.accountInfo.getAllowedBucketId()).toBe(allowed.id)
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toEqual([allowed.id])
     await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
     await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
@@ -532,7 +538,29 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toEqual([first.id, second.id])
 
     const scopedClient = await authorizeWithKey(sim, key)
-    expect(scopedClient.accountInfo.getAllowedBucketIds?.()).toEqual([first.id, second.id])
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toEqual([
+      { id: first.id, name: first.name },
+      { id: second.id, name: second.name },
+    ])
+    expect(scopedAuth?.bucketId).toBeNull()
+    expect(scopedAuth?.allowed.bucketId).toBeNull()
+    expect(() => scopedClient.accountInfo.getAllowedBucketId()).toThrow(/exactly one bucket/)
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toEqual([first.id, second.id])
+    const directAuthResponse = await sim.transport().send({
+      url: 'http://127.0.0.1/b2api/v4/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:${key.applicationKey}`)}`,
+      },
+    })
+    const directAuth = await directAuthResponse.json<AuthorizeAccountResponse>()
+    expect(directAuth.apiInfo.storageApi.allowed.buckets).toEqual([
+      { id: first.id, name: first.name },
+      { id: second.id, name: second.name },
+    ])
+    expect(directAuth.apiInfo.storageApi.bucketId).toBeNull()
+    expect(directAuth.apiInfo.storageApi.allowed.bucketId).toBeNull()
     await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
     await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
@@ -560,6 +588,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(key.bucketIds).toBeNull()
 
     const scopedClient = await authorizeWithKey(sim, key)
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toBeNull()
+    expect(scopedAuth?.bucketId).toBeNull()
+    expect(scopedAuth?.allowed.bucketId).toBeNull()
+    expect(scopedClient.accountInfo.getAllowedBucketId()).toBeNull()
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toBeNull()
     await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
   })

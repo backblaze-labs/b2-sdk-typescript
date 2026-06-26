@@ -64,6 +64,7 @@ function createMockAccountInfo(
     getRecommendedPartSize: () => 0,
     getAbsoluteMinimumPartSize: () => 0,
     getAllowedBucketId: () => null,
+    getAllowedBucketIds: () => null,
     checkoutUploadUrl: () => null,
     returnUploadUrl: () => {},
     evictUploadUrl: () => {},

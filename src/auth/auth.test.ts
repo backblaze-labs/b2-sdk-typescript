@@ -24,6 +24,7 @@ const mockAuth: AuthorizeAccountResponse = {
       namePrefix: null,
       allowed: {
         capabilities: [Capability.ListBuckets, Capability.ReadFiles],
+        buckets: null,
         bucketId: null,
         bucketName: null,
         namePrefix: null,
@@ -101,19 +102,25 @@ describe('InMemoryAccountInfo', () => {
             s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
             recommendedPartSize: 100_000_000,
             absoluteMinimumPartSize: 5_000_000,
+            infoType: 'storageApi',
+            bucketId: null,
+            bucketName: null,
+            namePrefix: null,
             allowed: {
               capabilities: [Capability.ListBuckets],
               buckets: [
                 { id: bucketId('bucket1'), name: 'one' },
                 { id: bucketId('bucket2'), name: 'two' },
               ],
+              bucketId: null,
+              bucketName: null,
               namePrefix: null,
             },
           },
         },
       })
 
-      expect(info.getAllowedBucketId()).toBeNull()
+      expect(() => info.getAllowedBucketId()).toThrow(/exactly one bucket/)
       expect(info.getAllowedBucketIds()).toEqual([bucketId('bucket1'), bucketId('bucket2')])
     })
   })

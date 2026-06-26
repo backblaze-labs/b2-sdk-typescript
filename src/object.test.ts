@@ -185,7 +185,7 @@ describe('B2Client high-level key management', () => {
         keyName: 'conflict-hl-null',
         bucketIds: null,
         bucketId: bucket.id,
-      }),
+      } as unknown as Parameters<B2Client['createKey']>[0]),
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
 
     const untrusted = { bucketIds: ['user-bucket'] as never }
@@ -195,7 +195,7 @@ describe('B2Client high-level key management', () => {
         keyName: 'conflict-hl-merge',
         ...untrusted,
         bucketId: bucket.id,
-      }),
+      } as unknown as Parameters<B2Client['createKey']>[0]),
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
   })
 

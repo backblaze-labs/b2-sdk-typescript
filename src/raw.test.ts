@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { RawClient } from './raw/index.ts'
+import { bucketId } from './types/ids.ts'
+import type { CreateKeyRequest } from './types/key.ts'
 
 function jsonResponse(value: unknown): HttpResponse {
   return {
@@ -60,6 +62,16 @@ describe('RawClient list request controls', () => {
     }
     const raw = new RawClient({ transport })
 
+    // @ts-expect-error bucketId and bucketIds are mutually exclusive.
+    const invalidCreateKeyRequest: CreateKeyRequest = {
+      accountId: 'account' as never,
+      capabilities: [],
+      keyName: 'invalid',
+      bucketIds: null,
+      bucketId: bucketId('bucket'),
+    }
+    expect(invalidCreateKeyRequest).toBeDefined()
+
     await expect(
       raw.createKey('https://api.example.test', 'auth', {
         accountId: 'account' as never,
@@ -67,7 +79,7 @@ describe('RawClient list request controls', () => {
         keyName: 'conflict',
         bucketIds: null,
         bucketId: 'bucket' as never,
-      }),
+      } as unknown as CreateKeyRequest),
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
 
     await expect(
@@ -77,7 +89,7 @@ describe('RawClient list request controls', () => {
         keyName: 'mismatch',
         bucketIds: ['bucket-a' as never],
         bucketId: 'bucket-b' as never,
-      }),
+      } as unknown as CreateKeyRequest),
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
 
     const untrusted = { bucketIds: ['user-bucket' as never] }
@@ -88,7 +100,7 @@ describe('RawClient list request controls', () => {
         keyName: 'safe-merge',
         ...untrusted,
         bucketId: 'trusted-bucket' as never,
-      }),
+      } as unknown as CreateKeyRequest),
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
 
     expect(requests).toEqual([])

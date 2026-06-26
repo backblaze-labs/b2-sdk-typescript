@@ -1,29 +1,46 @@
 import type { Capability } from './auth.ts'
 import type { AccountId, ApplicationKeyId, BucketId } from './ids.ts'
 
-/** Request parameters for the `b2_create_key` API call. Creates a new application key. */
-export interface CreateKeyRequest {
-  /** Account to create the key for. */
-  readonly accountId: AccountId
+/** Shared request parameters for creating an application key. */
+export interface CreateKeyOptionsBase {
   /** Capabilities to grant to the new key. */
   readonly capabilities: readonly Capability[]
   /** Human-readable name for the key (must be unique within the account). */
   readonly keyName: string
   /** Optional duration in seconds before the key expires. Omit for a key that never expires. */
   readonly validDurationInSeconds?: number
-  /**
-   * Optional bucket restrictions. A bucket list restricts the key to those
-   * buckets; null or omitted grants access to all buckets.
-   */
-  readonly bucketIds?: readonly BucketId[] | null
-  /**
-   * Optional single-bucket restriction.
-   *
-   * @deprecated Use `bucketIds: [bucketId]` instead.
-   */
-  readonly bucketId?: BucketId
   /** Optional file name prefix restriction. When set, the key only grants access to files with this prefix. */
   readonly namePrefix?: string
+}
+
+/** Mutually exclusive bucket scope fields for key creation. */
+export type CreateKeyBucketScope =
+  | {
+      /**
+       * Optional bucket restrictions. A bucket list restricts the key to those
+       * buckets; null or omitted grants access to all buckets.
+       */
+      readonly bucketIds?: readonly BucketId[] | null
+      /** @deprecated Use `bucketIds: [bucketId]` instead. */
+      readonly bucketId?: never
+    }
+  | {
+      /**
+       * Optional single-bucket restriction.
+       *
+       * @deprecated Use `bucketIds: [bucketId]` instead.
+       */
+      readonly bucketId: BucketId
+      readonly bucketIds?: never
+    }
+
+/** High-level options for creating an application key. */
+export type CreateKeyOptions = CreateKeyOptionsBase & CreateKeyBucketScope
+
+/** Request parameters for the `b2_create_key` API call. Creates a new application key. */
+export type CreateKeyRequest = CreateKeyOptions & {
+  /** Account to create the key for. */
+  readonly accountId: AccountId
 }
 
 /**

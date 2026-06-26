@@ -19,7 +19,12 @@ import type {
 import type { EncryptionSetting } from './types/encryption.ts'
 import type { ApplicationKeyId, BucketId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
-import type { ApplicationKey, FullApplicationKey, ListKeysResponse } from './types/key.ts'
+import type {
+  ApplicationKey,
+  CreateKeyOptions,
+  FullApplicationKey,
+  ListKeysResponse,
+} from './types/key.ts'
 import type { ReplicationConfiguration } from './types/replication.ts'
 import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -289,24 +294,7 @@ export class B2Client {
    *
    * @returns The full key including the secret (only returned at creation time).
    */
-  async createKey(options: {
-    /** Capabilities to grant (e.g., `["readFiles", "writeFiles"]`). */
-    capabilities: Capability[]
-    /** Human-readable name for the key. */
-    keyName: string
-    /** Key expiration in seconds from now. Omit for non-expiring keys. */
-    validDurationInSeconds?: number
-    /** Restrict the key to one or more buckets. Use `null` or omit for all buckets. */
-    bucketIds?: readonly BucketId[] | null
-    /**
-     * Restrict the key to a single bucket.
-     *
-     * @deprecated Use `bucketIds: [bucketId]` instead.
-     */
-    bucketId?: BucketId
-    /** Restrict the key to files with this name prefix. */
-    namePrefix?: string
-  }): Promise<FullApplicationKey> {
+  async createKey(options: CreateKeyOptions): Promise<FullApplicationKey> {
     return this.raw.createKey(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
       accountId: accountId(this.accountInfo.getAccountId()),
       ...options,

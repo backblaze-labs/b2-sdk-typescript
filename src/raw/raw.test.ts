@@ -30,9 +30,95 @@ describe('RawClient authorizeAccount', () => {
     }
     const raw = new RawClient({ transport })
 
-    await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
+    const auth = await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
 
     expect(seenUrls).toEqual(['https://api.example.com/b2api/v4/b2_authorize_account'])
+    expect(auth.apiInfo.storageApi.infoType).toBe('storageApi')
+    expect(auth.apiInfo.storageApi.bucketId).toBeNull()
+    expect(auth.apiInfo.storageApi.bucketName).toBeNull()
+    expect(auth.apiInfo.storageApi.namePrefix).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.buckets).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.bucketId).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.bucketName).toBeNull()
+  })
+
+  it('normalizes a single v4 allowed bucket to deprecated aliases', async () => {
+    const transport: HttpTransport = {
+      async send() {
+        return jsonResponse({
+          accountId: 'account',
+          authorizationToken: 'token',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.example.com',
+              downloadUrl: 'https://download.example.com',
+              s3ApiUrl: 'https://s3.example.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              allowed: {
+                capabilities: [],
+                buckets: [{ id: bucketId('bucket-a'), name: 'bucket-a-name' }],
+                namePrefix: 'photos/',
+              },
+            },
+          },
+          applicationKeyExpirationTimestamp: null,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const auth = await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
+
+    expect(auth.apiInfo.storageApi.allowed.buckets).toEqual([
+      { id: bucketId('bucket-a'), name: 'bucket-a-name' },
+    ])
+    expect(auth.apiInfo.storageApi.bucketId).toBe(bucketId('bucket-a'))
+    expect(auth.apiInfo.storageApi.bucketName).toBe('bucket-a-name')
+    expect(auth.apiInfo.storageApi.namePrefix).toBe('photos/')
+    expect(auth.apiInfo.storageApi.allowed.bucketId).toBe(bucketId('bucket-a'))
+    expect(auth.apiInfo.storageApi.allowed.bucketName).toBe('bucket-a-name')
+  })
+
+  it('normalizes multi-bucket v4 auth without a legacy single-bucket alias', async () => {
+    const transport: HttpTransport = {
+      async send() {
+        return jsonResponse({
+          accountId: 'account',
+          authorizationToken: 'token',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.example.com',
+              downloadUrl: 'https://download.example.com',
+              s3ApiUrl: 'https://s3.example.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              allowed: {
+                capabilities: [],
+                buckets: [
+                  { id: bucketId('bucket-a'), name: 'bucket-a-name' },
+                  { id: bucketId('bucket-b'), name: 'bucket-b-name' },
+                ],
+                namePrefix: null,
+              },
+            },
+          },
+          applicationKeyExpirationTimestamp: null,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const auth = await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
+
+    expect(auth.apiInfo.storageApi.allowed.buckets).toEqual([
+      { id: bucketId('bucket-a'), name: 'bucket-a-name' },
+      { id: bucketId('bucket-b'), name: 'bucket-b-name' },
+    ])
+    expect(auth.apiInfo.storageApi.bucketId).toBeNull()
+    expect(auth.apiInfo.storageApi.bucketName).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.bucketId).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.bucketName).toBeNull()
   })
 
   it('rejects non-absolute realm URLs before sending credentials', async () => {

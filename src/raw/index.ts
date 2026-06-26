@@ -14,6 +14,7 @@ import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../er
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type {
+  AllowedBucket,
   ApplicationKey,
   AuthorizeAccountResponse,
   BucketId,
@@ -156,6 +157,82 @@ function normalizeKeyResponse<T extends { readonly bucketIds: readonly BucketId[
   return { ...key, bucketId: singleBucketId(key.bucketIds) }
 }
 
+type NormalizedAllowedInfo = AuthorizeAccountResponse['apiInfo']['storageApi']['allowed']
+type NormalizedStorageApiInfo = AuthorizeAccountResponse['apiInfo']['storageApi']
+
+interface WireAllowedInfo {
+  readonly capabilities?: NormalizedAllowedInfo['capabilities']
+  readonly buckets?: readonly AllowedBucket[] | null
+  readonly bucketId?: BucketId | null
+  readonly bucketName?: string | null
+  readonly namePrefix?: string | null
+}
+
+type WireStorageApiInfo = Omit<
+  NormalizedStorageApiInfo,
+  'allowed' | 'bucketId' | 'bucketName' | 'infoType' | 'namePrefix'
+> & {
+  readonly allowed?: WireAllowedInfo
+  readonly capabilities?: NormalizedAllowedInfo['capabilities']
+  readonly bucketId?: BucketId | null
+  readonly bucketName?: string | null
+  readonly infoType?: 'storageApi'
+  readonly namePrefix?: string | null
+}
+
+type WireAuthorizeAccountResponse = Omit<AuthorizeAccountResponse, 'apiInfo'> & {
+  readonly apiInfo: Omit<AuthorizeAccountResponse['apiInfo'], 'storageApi'> & {
+    readonly storageApi: WireStorageApiInfo
+  }
+}
+
+function normalizeAllowedBuckets(storageApi: WireStorageApiInfo): readonly AllowedBucket[] | null {
+  const allowed = storageApi.allowed
+  if (allowed?.buckets !== undefined) {
+    return allowed.buckets === null ? null : allowed.buckets.map((bucket) => ({ ...bucket }))
+  }
+  const bucketId = allowed?.bucketId ?? storageApi.bucketId ?? null
+  if (bucketId === null) return null
+  return [{ id: bucketId, name: allowed?.bucketName ?? storageApi.bucketName ?? null }]
+}
+
+function normalizeAuthorizeAccountResponse(
+  response: WireAuthorizeAccountResponse,
+): AuthorizeAccountResponse {
+  const storageApi = response.apiInfo.storageApi
+  const allowed = storageApi.allowed
+  const buckets = normalizeAllowedBuckets(storageApi)
+  const singleBucket = buckets?.length === 1 ? buckets[0] : undefined
+  const bucketId = singleBucket?.id ?? null
+  const bucketName = singleBucket?.name ?? null
+  const namePrefix = allowed?.namePrefix ?? storageApi.namePrefix ?? null
+  const capabilities = allowed?.capabilities ?? storageApi.capabilities ?? []
+  const { allowed: _wireAllowed, capabilities: _legacyCapabilities, ...storageApiBase } = storageApi
+
+  return {
+    ...response,
+    apiInfo: {
+      ...response.apiInfo,
+      storageApi: {
+        ...storageApiBase,
+        bucketId,
+        bucketName,
+        downloadUrl: storageApi.downloadUrl,
+        infoType: 'storageApi',
+        namePrefix,
+        allowed: {
+          ...allowed,
+          capabilities,
+          buckets,
+          bucketId,
+          bucketName,
+          namePrefix,
+        },
+      },
+    },
+  }
+}
+
 function uploadResponseBodyError(
   err: unknown,
   signal: AbortSignal | undefined,
@@ -209,7 +286,7 @@ export class RawClient {
         Authorization: `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`,
       },
     })
-    return response.json<AuthorizeAccountResponse>()
+    return normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>())
   }
 
   // --- Buckets ---

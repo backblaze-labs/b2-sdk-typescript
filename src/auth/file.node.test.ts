@@ -33,6 +33,7 @@ function makeCachedAuth(
         recommendedPartSize: 100_000_000,
         allowed: {
           capabilities: [Capability.ListBuckets],
+          buckets: null,
           bucketId: null,
           bucketName: null,
           namePrefix: null,
@@ -742,6 +743,19 @@ describe('FileAccountInfo', () => {
     expect(accountInfo.getAbsoluteMinimumPartSize()).toBeGreaterThan(0)
     expect(accountInfo.getS3ApiUrl()).toBeTruthy()
     expect(accountInfo.getAllowedBucketId()).toBeNull()
+    expect(accountInfo.getAllowedBucketIds()).toBeNull()
+
+    const cached = accountInfo.getAuth()
+    expect(cached?.apiInfo.storageApi.allowed.buckets).toBeNull()
+    expect(cached?.apiInfo.storageApi.allowed.bucketId).toBeNull()
+    expect(cached?.apiInfo.storageApi.bucketId).toBeNull()
+    expect(cached?.apiInfo.storageApi.infoType).toBe('storageApi')
+
+    const persisted = JSON.parse(await readFile(storePath, 'utf8')) as AuthorizeAccountResponse
+    expect(persisted.apiInfo.storageApi.allowed.buckets).toBeNull()
+    expect(persisted.apiInfo.storageApi.allowed.bucketId).toBeNull()
+    expect(persisted.apiInfo.storageApi.bucketId).toBeNull()
+    expect(persisted.apiInfo.storageApi.infoType).toBe('storageApi')
   })
 
   it('delegates the upload URL pool methods to the in-memory backing', async () => {

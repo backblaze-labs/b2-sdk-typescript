@@ -71,7 +71,7 @@ export interface AccountInfo {
   /** Bucket ID the key is restricted to, or null if unrestricted. */
   getAllowedBucketId(): BucketId | null
   /** Bucket IDs the key is restricted to, or null if unrestricted. */
-  getAllowedBucketIds?(): readonly BucketId[] | null
+  getAllowedBucketIds(): readonly BucketId[] | null
 
   /** Take an upload URL from the pool for the given bucket, or null if none available. */
   checkoutUploadUrl(bucketId: BucketId): UploadUrlEntry | null

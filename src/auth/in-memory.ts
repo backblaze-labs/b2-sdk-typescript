@@ -130,10 +130,15 @@ export class InMemoryAccountInfo implements AccountInfo {
   getAllowedBucketId(): BucketId | null {
     const allowed = this.requireAuth().apiInfo.storageApi.allowed
     const buckets = allowed.buckets
-    if (buckets !== undefined && buckets !== null) {
-      return buckets.length === 1 ? (buckets[0]?.id ?? null) : null
+    if (buckets !== null) {
+      if (buckets.length !== 1) {
+        throw new Error(
+          'Authorized key is not restricted to exactly one bucket; use getAllowedBucketIds()',
+        )
+      }
+      return buckets[0]?.id ?? null
     }
-    return allowed.bucketId ?? null
+    return null
   }
 
   /**
@@ -146,10 +151,7 @@ export class InMemoryAccountInfo implements AccountInfo {
   getAllowedBucketIds(): readonly BucketId[] | null {
     const allowed = this.requireAuth().apiInfo.storageApi.allowed
     const buckets = allowed.buckets
-    if (buckets !== undefined && buckets !== null) {
-      return buckets.map((bucket) => bucket.id)
-    }
-    return allowed.bucketId !== undefined && allowed.bucketId !== null ? [allowed.bucketId] : null
+    return buckets === null ? null : buckets.map((bucket) => bucket.id)
   }
 
   /**
