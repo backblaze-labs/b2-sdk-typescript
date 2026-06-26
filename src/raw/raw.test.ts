@@ -80,6 +80,40 @@ describe('RawClient authorizeAccount', () => {
     expect(auth.apiInfo.storageApi.allowed.bucketName).toBe('bucket-a-name')
   })
 
+  it('normalizes a legacy auth response without allowed info', async () => {
+    const transport: HttpTransport = {
+      async send() {
+        return jsonResponse({
+          accountId: 'account',
+          authorizationToken: 'token',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.example.com',
+              downloadUrl: 'https://download.example.com',
+              s3ApiUrl: 'https://s3.example.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              capabilities: [],
+              bucketId: bucketId('legacy-bucket'),
+              bucketName: 'legacy-bucket-name',
+              namePrefix: 'legacy/',
+            },
+          },
+          applicationKeyExpirationTimestamp: null,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const auth = await raw.authorizeAccount('key-id', 'key-secret', 'https://api.example.com')
+
+    expect(auth.apiInfo.storageApi.allowed.buckets).toEqual([
+      { id: bucketId('legacy-bucket'), name: 'legacy-bucket-name' },
+    ])
+    expect(auth.apiInfo.storageApi.allowed.bucketId).toBe(bucketId('legacy-bucket'))
+    expect(auth.apiInfo.storageApi.allowed.namePrefix).toBe('legacy/')
+  })
+
   it('normalizes multi-bucket v4 auth without a legacy single-bucket alias', async () => {
     const transport: HttpTransport = {
       async send() {

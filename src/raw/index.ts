@@ -221,7 +221,7 @@ function normalizeAuthorizeAccountResponse(
         infoType: 'storageApi',
         namePrefix,
         allowed: {
-          ...allowed,
+          ...(allowed ?? {}),
           capabilities,
           buckets,
           bucketId,
