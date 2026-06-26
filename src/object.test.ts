@@ -121,7 +121,12 @@ describe('B2Client high-level key management', () => {
 
   it('createKey() returns a full application key', async () => {
     const key = await client.createKey({
-      capabilities: [Capability.ReadFiles, Capability.WriteFiles],
+      capabilities: [
+        Capability.ReadFiles,
+        Capability.WriteFiles,
+        Capability.ReadBucketLogging,
+        Capability.WriteBucketLogging,
+      ],
       keyName: 'hl-test-key',
     })
 
@@ -130,9 +135,12 @@ describe('B2Client high-level key management', () => {
     expect(key.applicationKey).toBeTruthy()
     expect(key.capabilities).toContain(Capability.ReadFiles)
     expect(key.capabilities).toContain(Capability.WriteFiles)
+    expect(key.capabilities).toContain(Capability.ReadBucketLogging)
+    expect(key.capabilities).toContain(Capability.WriteBucketLogging)
+    expect(key.bucketIds).toBeNull()
   })
 
-  it('createKey() with bucket scope and name prefix', async () => {
+  it('createKey() with single-bucket scope and name prefix', async () => {
     const bucket = await client.createBucket({
       bucketName: 'key-scope-hl',
       bucketType: BucketType.AllPrivate,
@@ -141,12 +149,79 @@ describe('B2Client high-level key management', () => {
     const key = await client.createKey({
       capabilities: [Capability.ReadFiles],
       keyName: 'scoped-hl',
-      bucketId: bucket.id,
+      bucketIds: [bucket.id],
       namePrefix: 'images/',
     })
 
-    expect(key.bucketId).toBe(bucket.id)
+    expect(key.bucketIds).toEqual([bucket.id])
     expect(key.namePrefix).toBe('images/')
+  })
+
+  it('createKey() accepts the deprecated bucketId alias', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'key-alias-hl',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const key = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'alias-hl',
+      bucketId: bucket.id,
+    })
+
+    expect(key.bucketIds).toEqual([bucket.id])
+    expect(key.bucketId).toBe(bucket.id)
+  })
+
+  it('createKey() rejects conflicting bucketId and bucketIds inputs', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'key-conflict-hl',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(
+      client.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: 'conflict-hl-null',
+        bucketIds: null,
+        bucketId: bucket.id,
+      } as unknown as Parameters<B2Client['createKey']>[0]),
+    ).rejects.toThrow('either bucketIds or deprecated bucketId')
+
+    const untrusted = { bucketIds: ['user-bucket'] as never }
+    await expect(
+      client.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: 'conflict-hl-merge',
+        ...untrusted,
+        bucketId: bucket.id,
+      } as unknown as Parameters<B2Client['createKey']>[0]),
+    ).rejects.toThrow('either bucketIds or deprecated bucketId')
+  })
+
+  it('createKey() supports multi-bucket scope', async () => {
+    const first = await client.createBucket({
+      bucketName: 'key-multi-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'key-multi-b',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const key = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'multi-hl',
+      bucketIds: [first.id, second.id],
+    })
+
+    expect(key.bucketIds).toEqual([first.id, second.id])
+    expect(key.bucketId).toBeNull()
+
+    const listing = await client.listKeys()
+    const found = listing.keys.find((k) => k.keyName === 'multi-hl')
+    expect(found?.bucketIds).toEqual([first.id, second.id])
+    expect(found?.bucketId).toBeNull()
   })
 
   it('listKeys() returns keys created via the high-level API', async () => {
@@ -200,13 +275,8 @@ describe('B2Client listBuckets with filter options', () => {
     await client.createBucket({ bucketName: 'alpha-bucket', bucketType: BucketType.AllPrivate })
     await client.createBucket({ bucketName: 'beta-bucket', bucketType: BucketType.AllPublic })
 
-    // The simulator does not filter server-side, but the high-level method
-    // still exercises the code path that builds and sends the request with
-    // the bucketName option. This ensures lines 180+ in client.ts are covered.
     const buckets = await client.listBuckets({ bucketName: 'alpha-bucket' })
-    // The simulator returns all buckets regardless, so we check that the
-    // call succeeds and returns results.
-    expect(buckets.length).toBeGreaterThanOrEqual(1)
+    expect(buckets.map((bucket) => bucket.name)).toEqual(['alpha-bucket'])
   })
 
   it('listBuckets() with bucketTypes filter passes the option through', async () => {
@@ -214,8 +284,7 @@ describe('B2Client listBuckets with filter options', () => {
     await client.createBucket({ bucketName: 'pub-bucket', bucketType: BucketType.AllPublic })
 
     const buckets = await client.listBuckets({ bucketTypes: [BucketType.AllPrivate] })
-    // Same note: simulator returns all, but the code path is exercised.
-    expect(buckets.length).toBeGreaterThanOrEqual(1)
+    expect(buckets.map((bucket) => bucket.name)).toEqual(['priv-bucket'])
   })
 
   it('listBuckets() with bucketId filter passes the option through', async () => {
@@ -225,7 +294,7 @@ describe('B2Client listBuckets with filter options', () => {
     })
 
     const buckets = await client.listBuckets({ bucketId: bucket.id })
-    expect(buckets.length).toBeGreaterThanOrEqual(1)
+    expect(buckets.map((found) => found.id)).toEqual([bucket.id])
   })
 })
 

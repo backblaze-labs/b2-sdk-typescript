@@ -48,6 +48,10 @@ export const Capability = {
   ReadBucketNotifications: 'readBucketNotifications',
   /** Modify bucket event-notification rules. */
   WriteBucketNotifications: 'writeBucketNotifications',
+  /** Read bucket logging settings. */
+  ReadBucketLogging: 'readBucketLogging',
+  /** Modify bucket logging settings. */
+  WriteBucketLogging: 'writeBucketLogging',
   /** List file names and versions. */
   ListFiles: 'listFiles',
   /** Download files. */
@@ -76,13 +80,35 @@ export const Capability = {
  */
 export type Capability = (typeof Capability)[keyof typeof Capability]
 
+/** Bucket restriction entry returned by v4 `b2_authorize_account`. */
+export interface AllowedBucket {
+  /** Bucket ID the key can access. */
+  readonly id: BucketId
+  /** Bucket name when available, or null when B2 does not include it. */
+  readonly name: string | null
+}
+
 /** Describes the capabilities and scope restrictions of an authorized application key. */
 export interface AllowedInfo {
   /** List of capabilities granted to this key. */
   readonly capabilities: readonly Capability[]
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
+  /** Bucket restrictions for v4 authorization, or null if unrestricted. */
+  readonly buckets: readonly AllowedBucket[] | null
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated The SDK normalizes this compatibility alias from v4
+   * `buckets`; use `buckets` instead.
+   */
   readonly bucketId: BucketId | null
-  /** Bucket name this key is restricted to, or null if unrestricted. */
+  /**
+   * Bucket name this key is restricted to when it has exactly one bucket, or
+   * null if unrestricted, multi-bucket, or unknown.
+   *
+   * @deprecated The SDK normalizes this compatibility alias from v4
+   * `buckets`; use `buckets` instead.
+   */
   readonly bucketName: string | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
@@ -94,15 +120,37 @@ export interface StorageApiInfo {
   readonly absoluteMinimumPartSize: number
   /** Base URL for B2 API calls. */
   readonly apiUrl: string
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated The SDK normalizes this compatibility alias from v4
+   * `allowed.buckets`; use `allowed.buckets` instead.
+   */
   readonly bucketId: BucketId | null
-  /** Bucket name this key is restricted to, or null if unrestricted. */
+  /**
+   * Bucket name this key is restricted to when it has exactly one bucket, or
+   * null if unrestricted, multi-bucket, or unknown.
+   *
+   * @deprecated The SDK normalizes this compatibility alias from v4
+   * `allowed.buckets`; use `allowed.buckets` instead.
+   */
   readonly bucketName: string | null
   /** Base URL for file downloads. */
   readonly downloadUrl: string
-  /** Discriminator indicating this is storage API info. Always `'storageApi'`. */
+  /**
+   * Discriminator indicating this is storage API info. Always `'storageApi'`.
+   *
+   * @deprecated Removed from the v4 wire shape but normalized by the SDK for
+   * compatibility.
+   */
   readonly infoType: 'storageApi'
-  /** File name prefix this key is restricted to, or null if unrestricted. */
+  /**
+   * File name prefix this key is restricted to, or null if unrestricted.
+   *
+   * @deprecated The SDK normalizes this compatibility alias from v4
+   * `allowed.namePrefix`; use `allowed.namePrefix` instead.
+   */
   readonly namePrefix: string | null
   /** Recommended part size for large file uploads, in bytes. */
   readonly recommendedPartSize: number
@@ -129,8 +177,9 @@ export interface ApiInfo {
 }
 
 /**
- * Response from the `b2_authorize_account` API call.
- * Contains the authorization token and API endpoint URLs needed for subsequent requests.
+ * Normalized SDK-facing response from the `b2_authorize_account` API call.
+ * The SDK uses the v4 endpoint and preserves deprecated v3 compatibility
+ * aliases such as `storageApi.bucketId` and `allowed.bucketId`.
  */
 export interface AuthorizeAccountResponse {
   /** The account ID for the authorized account. */

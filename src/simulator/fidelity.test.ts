@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { B2Client } from '../client.ts'
+import { B2Client } from '../client.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
@@ -414,6 +414,20 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 // ---------------------------------------------------------------------------
 
 describe('B2Simulator strictAuth: capability enforcement', () => {
+  async function authorizeWithKey(
+    sim: B2Simulator,
+    key: { applicationKeyId: string; applicationKey: string },
+  ): Promise<B2Client> {
+    const client = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    return client
+  }
+
   it('grants the master credential the documented capability set by default', async () => {
     const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -421,6 +435,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
+    expect(allowed?.buckets).toBeNull()
     // Master does NOT have BypassGovernance — tests that need it must
     // mint a key with that cap explicitly.
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
@@ -466,6 +481,526 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredResp.status).toBe(401)
     const expiredBody = (await expiredResp.json()) as { code: string }
     expect(expiredBody.code).toBe('expired_auth_token')
+  })
+
+  it('enforces single-bucket application key scope from the bucketId alias', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'single-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'single-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'single-scope-key',
+      bucketId: allowed.id,
+    })
+    expect(key.bucketIds).toEqual([allowed.id])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toEqual([{ id: allowed.id, name: allowed.name }])
+    expect(scopedAuth?.bucketId).toBe(allowed.id)
+    expect(scopedAuth?.allowed.bucketId).toBe(allowed.id)
+    expect(scopedClient.accountInfo.getAllowedBucketId()).toBe(allowed.id)
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toEqual([allowed.id])
+    await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('enforces multi-bucket application key scope', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'multi-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'multi-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'multi-scope-c',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'multi-scope-key',
+      bucketIds: [first.id, second.id],
+    })
+    expect(key.bucketIds).toEqual([first.id, second.id])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toEqual([
+      { id: first.id, name: first.name },
+      { id: second.id, name: second.name },
+    ])
+    expect(scopedAuth?.bucketId).toBeNull()
+    expect(scopedAuth?.allowed.bucketId).toBeNull()
+    expect(() => scopedClient.accountInfo.getAllowedBucketId()).toThrow(/exactly one bucket/)
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toEqual([first.id, second.id])
+    const directAuthResponse = await sim.transport().send({
+      url: 'http://127.0.0.1/b2api/v4/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:${key.applicationKey}`)}`,
+      },
+    })
+    const directAuth = await directAuthResponse.json<AuthorizeAccountResponse>()
+    expect(directAuth.apiInfo.storageApi.allowed.buckets).toEqual([
+      { id: first.id, name: first.name },
+      { id: second.id, name: second.name },
+    ])
+    expect(directAuth.apiInfo.storageApi.bucketId).toBeNull()
+    expect(directAuth.apiInfo.storageApi.allowed.bucketId).toBeNull()
+    await expect(scopedClient.listBuckets()).rejects.toThrow(/bucket scope is required/)
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('allows all buckets when application key bucketIds are null', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'all-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'all-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'all-scope-key',
+      bucketIds: null,
+    })
+    expect(key.bucketIds).toBeNull()
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const scopedAuth = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+    expect(scopedAuth?.allowed.buckets).toBeNull()
+    expect(scopedAuth?.bucketId).toBeNull()
+    expect(scopedAuth?.allowed.bucketId).toBeNull()
+    expect(scopedClient.accountInfo.getAllowedBucketId()).toBeNull()
+    expect(scopedClient.accountInfo.getAllowedBucketIds()).toBeNull()
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
+  })
+
+  it('rejects bucket creation with bucket-scoped application keys', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'create-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const scopedKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'create-scope-key',
+      bucketIds: [allowed.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, scopedKey)
+
+    await expect(
+      scopedClient.createBucket({
+        bucketName: 'create-scope-denied',
+        bucketType: BucketType.AllPrivate,
+      }),
+    ).rejects.toThrow(/bucket scope is required/)
+
+    const unrestrictedKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'create-all-key',
+      bucketIds: null,
+    })
+    const unrestrictedClient = await authorizeWithKey(sim, unrestrictedKey)
+    await expect(
+      unrestrictedClient.createBucket({
+        bucketName: 'create-scope-allowed',
+        bucketType: BucketType.AllPrivate,
+      }),
+    ).resolves.toMatchObject({ name: 'create-scope-allowed' })
+  })
+
+  it('rejects deprecated bucketId on direct v4 b2_create_key simulator requests', async () => {
+    const { sim } = makeClient()
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: { Authorization: 'unused', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ReadFiles],
+        keyName: 'wire-bucket-id',
+        bucketId: 'bucket-id',
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('bucketId is not accepted'),
+    })
+  })
+
+  it('normalizes legacy bucketId on direct v3 b2_create_key simulator requests', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'v3-key-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'v3-key-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_create_key',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'v3-wire-bucket-id',
+        bucketId: allowed.id,
+      }),
+    })
+
+    expect(resp.status).toBe(200)
+    const key = (await resp.json()) as {
+      applicationKeyId: string
+      applicationKey: string
+      bucketIds: readonly string[]
+      bucketId: string
+    }
+    expect(key.bucketIds).toEqual([allowed.id])
+    expect(key.bucketId).toBe(allowed.id)
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('rejects mixed bucketId and bucketIds on direct v3 b2_create_key simulator requests', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'v3-key-conflict',
+      bucketType: BucketType.AllPrivate,
+    })
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_create_key',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'v3-wire-conflict',
+        bucketId: bucket.id,
+        bucketIds: [bucket.id],
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('either bucketIds or bucketId'),
+    })
+  })
+
+  it('keeps stored key scope immutable after request and response arrays mutate', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'immutable-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'immutable-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const requestBucketIds = [allowed.id]
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'immutable-scope-key',
+      bucketIds: requestBucketIds,
+    })
+
+    requestBucketIds.push(blocked.id)
+    ;(key.bucketIds as string[] | null)?.push(blocked.id)
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(1)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('rejects bucket-scoped file operations outside the key bucketIds', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'file-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'file-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blockedFile = await blocked.upload({
+      fileName: 'blocked.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked')),
+    })
+    const blockedLarge = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: blocked.id,
+        fileName: 'blocked-large.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const key = await client.createKey({
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.ListFiles,
+        Capability.ReadFiles,
+        Capability.WriteFiles,
+        Capability.DeleteFiles,
+      ],
+      keyName: 'file-scope-key',
+      bucketIds: [allowed.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const downloadUrl = scopedClient.accountInfo.getDownloadUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.listFileNames(apiUrl, authToken, { bucketId: blocked.id }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.getFileInfo(apiUrl, authToken, { fileId: blockedFile.fileId }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: blockedFile.fileId,
+        fileName: 'copy.txt',
+        destinationBucketId: allowed.id,
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.deleteFileVersion(apiUrl, authToken, {
+        fileId: blockedFile.fileId,
+        fileName: blockedFile.fileName,
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.getUploadPartUrl(apiUrl, authToken, { fileId: blockedLarge.fileId }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.downloadFileById(downloadUrl, authToken, blockedFile.fileId),
+    ).rejects.toThrow(/HTTP 403/)
+    await expect(
+      scopedClient.raw.downloadFileByName(
+        downloadUrl,
+        authToken,
+        blocked.name,
+        blockedFile.fileName,
+      ),
+    ).rejects.toThrow(/HTTP 403/)
+  })
+
+  it('enforces namePrefix on list and download authorization prefixes', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-list-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'allowed/visible.txt',
+      source: new BufferSource(new TextEncoder().encode('visible')),
+    })
+    await bucket.upload({
+      fileName: 'blocked/hidden.txt',
+      source: new BufferSource(new TextEncoder().encode('hidden')),
+    })
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'allowed/incomplete.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'blocked/incomplete.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles, Capability.ShareFiles],
+      keyName: 'prefix-list-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.listFileNames(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.listFileVersions(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.listUnfinishedLargeFiles(apiUrl, authToken, { bucketId: bucket.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.getDownloadAuthorization(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileNamePrefix: '',
+        validDurationInSeconds: 60,
+      }),
+    ).rejects.toThrow(/outside scope/)
+
+    const names = await scopedClient.raw.listFileNames(apiUrl, authToken, {
+      bucketId: bucket.id,
+      prefix: 'allowed/',
+    })
+    expect(names.files.map((file) => file.fileName)).toEqual(['allowed/visible.txt'])
+
+    const versions = await scopedClient.raw.listFileVersions(apiUrl, authToken, {
+      bucketId: bucket.id,
+      prefix: 'allowed/',
+    })
+    expect(versions.files.map((file) => file.fileName)).toEqual(['allowed/visible.txt'])
+
+    const unfinished = await scopedClient.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'allowed/',
+    })
+    expect(unfinished.files.map((file) => file.fileName)).toEqual(['allowed/incomplete.bin'])
+
+    await expect(
+      scopedClient.raw.getDownloadAuthorization(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileNamePrefix: 'allowed/',
+        validDurationInSeconds: 60,
+      }),
+    ).resolves.toMatchObject({ fileNamePrefix: 'allowed/' })
+  })
+
+  it('handles malformed encoded upload file names during strict auth', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'malformed-upload-name',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'malformed-upload-name-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await scopedClient.raw.getUploadUrl(
+      apiUrl,
+      authToken,
+      { bucketId: bucket.id },
+    )
+
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers: {
+        Authorization: authorizationToken,
+        'Content-Type': 'application/octet-stream',
+        'X-Bz-Content-Sha1': 'do_not_verify',
+        'X-Bz-File-Name': 'blocked%zz.txt',
+      },
+      body: new Uint8Array([1]).buffer,
+    })
+
+    expect(resp.status).toBe(403)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringContaining('outside scope'),
+    })
+  })
+
+  it('enforces namePrefix on copy source and destination names', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-copy-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const allowedSource = await bucket.upload({
+      fileName: 'allowed/source.txt',
+      source: new BufferSource(new TextEncoder().encode('allowed source')),
+    })
+    const blockedSource = await bucket.upload({
+      fileName: 'blocked/source.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked source')),
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'prefix-copy-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: blockedSource.fileId,
+        fileName: 'allowed/from-blocked.txt',
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.copyFile(apiUrl, authToken, {
+        sourceFileId: allowedSource.fileId,
+        fileName: 'blocked/from-allowed.txt',
+      }),
+    ).rejects.toThrow(/outside scope/)
+
+    const copy = await scopedClient.raw.copyFile(apiUrl, authToken, {
+      sourceFileId: allowedSource.fileId,
+      fileName: 'allowed/copy.txt',
+    })
+    expect(copy.fileName).toBe('allowed/copy.txt')
   })
 })
 

@@ -1,20 +1,47 @@
 import type { Capability } from './auth.ts'
 import type { AccountId, ApplicationKeyId, BucketId } from './ids.ts'
 
-/** Request parameters for the `b2_create_key` API call. Creates a new application key. */
-export interface CreateKeyRequest {
-  /** Account to create the key for. */
-  readonly accountId: AccountId
+/** Shared request parameters for creating an application key. */
+export interface CreateKeyOptionsBase {
   /** Capabilities to grant to the new key. */
   readonly capabilities: readonly Capability[]
   /** Human-readable name for the key (must be unique within the account). */
   readonly keyName: string
   /** Optional duration in seconds before the key expires. Omit for a key that never expires. */
   readonly validDurationInSeconds?: number
-  /** Optional bucket restriction. When set, the key only grants access to this bucket. */
-  readonly bucketId?: BucketId
   /** Optional file name prefix restriction. When set, the key only grants access to files with this prefix. */
   readonly namePrefix?: string
+}
+
+/** Mutually exclusive bucket scope fields for key creation. */
+export type CreateKeyBucketScope =
+  | {
+      /**
+       * Optional bucket restrictions. A bucket list restricts the key to those
+       * buckets; null or omitted grants access to all buckets.
+       */
+      readonly bucketIds?: readonly BucketId[] | null
+      /** @deprecated Use `bucketIds: [bucketId]` instead. */
+      readonly bucketId?: never
+    }
+  | {
+      /**
+       * Single-bucket restriction.
+       *
+       * @deprecated Use `bucketIds: [bucketId]` instead.
+       */
+      readonly bucketId: BucketId
+      /** Do not provide `bucketIds` with the deprecated `bucketId` alias. */
+      readonly bucketIds?: never
+    }
+
+/** High-level options for creating an application key. */
+export type CreateKeyOptions = CreateKeyOptionsBase & CreateKeyBucketScope
+
+/** Request parameters for the `b2_create_key` API call. Creates a new application key. */
+export type CreateKeyRequest = CreateKeyOptions & {
+  /** Account to create the key for. */
+  readonly accountId: AccountId
 }
 
 /**
@@ -34,7 +61,14 @@ export interface FullApplicationKey {
   readonly accountId: AccountId
   /** UTC timestamp (milliseconds) when this key expires, or null if it does not expire. */
   readonly expirationTimestamp: number | null
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
+  /** Bucket IDs this key is restricted to, or null if unrestricted. */
+  readonly bucketIds: readonly BucketId[] | null
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated Use `bucketIds` instead.
+   */
   readonly bucketId: BucketId | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
@@ -56,7 +90,14 @@ export interface ApplicationKey {
   readonly accountId: AccountId
   /** UTC timestamp (milliseconds) when this key expires, or null if it does not expire. */
   readonly expirationTimestamp: number | null
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
+  /** Bucket IDs this key is restricted to, or null if unrestricted. */
+  readonly bucketIds: readonly BucketId[] | null
+  /**
+   * Bucket ID this key is restricted to when it has exactly one bucket, or null
+   * if unrestricted or multi-bucket.
+   *
+   * @deprecated Use `bucketIds` instead.
+   */
   readonly bucketId: BucketId | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null

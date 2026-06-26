@@ -5,6 +5,7 @@
  */
 
 export type {
+  AllowedBucket,
   AllowedInfo,
   ApiInfo,
   AuthorizeAccountRequest,
@@ -89,6 +90,9 @@ export type {
 export { accountId, applicationKeyId, bucketId, fileId, keyId, largeFileId } from './ids.ts'
 export type {
   ApplicationKey,
+  CreateKeyBucketScope,
+  CreateKeyOptions,
+  CreateKeyOptionsBase,
   CreateKeyRequest,
   DeleteKeyRequest,
   FullApplicationKey,

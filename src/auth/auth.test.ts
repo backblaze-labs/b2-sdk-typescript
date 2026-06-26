@@ -24,6 +24,7 @@ const mockAuth: AuthorizeAccountResponse = {
       namePrefix: null,
       allowed: {
         capabilities: [Capability.ListBuckets, Capability.ReadFiles],
+        buckets: null,
         bucketId: null,
         bucketName: null,
         namePrefix: null,
@@ -85,6 +86,85 @@ describe('InMemoryAccountInfo', () => {
 
     it('getAllowedBucketId returns null when unrestricted', () => {
       expect(info.getAllowedBucketId()).toBeNull()
+    })
+
+    it('getAllowedBucketIds returns null when unrestricted', () => {
+      expect(info.getAllowedBucketIds()).toBeNull()
+    })
+
+    it('reads v4 multi-bucket restrictions from allowed.buckets', () => {
+      info.setAuth({
+        ...mockAuth,
+        apiInfo: {
+          storageApi: {
+            apiUrl: 'https://api.example.com',
+            downloadUrl: 'https://dl.example.com',
+            s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+            recommendedPartSize: 100_000_000,
+            absoluteMinimumPartSize: 5_000_000,
+            infoType: 'storageApi',
+            bucketId: null,
+            bucketName: null,
+            namePrefix: null,
+            allowed: {
+              capabilities: [Capability.ListBuckets],
+              buckets: [
+                { id: bucketId('bucket1'), name: 'one' },
+                { id: bucketId('bucket2'), name: 'two' },
+              ],
+              bucketId: null,
+              bucketName: null,
+              namePrefix: null,
+            },
+          },
+        },
+      })
+
+      expect(() => info.getAllowedBucketId()).toThrow(/exactly one bucket/)
+      expect(info.getAllowedBucketIds()).toEqual([bucketId('bucket1'), bucketId('bucket2')])
+    })
+
+    it('falls back to legacy bucketId when allowed.buckets is absent', () => {
+      const legacyBucketId = bucketId('legacy-bucket')
+      info.setAuth({
+        ...mockAuth,
+        apiInfo: {
+          storageApi: {
+            ...mockAuth.apiInfo.storageApi,
+            bucketId: legacyBucketId,
+            bucketName: 'legacy',
+            allowed: {
+              capabilities: [Capability.ListBuckets],
+              bucketId: legacyBucketId,
+              bucketName: 'legacy',
+              namePrefix: null,
+            },
+          },
+        },
+      } as unknown as AuthorizeAccountResponse)
+
+      expect(info.getAllowedBucketId()).toBe(legacyBucketId)
+      expect(info.getAllowedBucketIds()).toEqual([legacyBucketId])
+
+      info.setAuth({
+        ...mockAuth,
+        apiInfo: {
+          storageApi: {
+            ...mockAuth.apiInfo.storageApi,
+            bucketId: null,
+            bucketName: null,
+            allowed: {
+              capabilities: [Capability.ListBuckets],
+              bucketId: null,
+              bucketName: null,
+              namePrefix: null,
+            },
+          },
+        },
+      } as unknown as AuthorizeAccountResponse)
+
+      expect(info.getAllowedBucketId()).toBeNull()
+      expect(info.getAllowedBucketIds()).toBeNull()
     })
   })
 

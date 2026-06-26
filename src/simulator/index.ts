@@ -122,6 +122,14 @@ function parseFileInfoHeaders(headers: Record<string, string>): Record<string, s
   return info
 }
 
+function decodeHeaderValue(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 /**
  * Compares B2 file names with deterministic JS string order, not locale collation.
  *
@@ -188,9 +196,46 @@ interface StoredKey {
   readonly capabilities: readonly string[]
   readonly accountId: string
   readonly applicationKey: string
-  readonly bucketId: string | null
+  readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
   readonly expirationTimestamp: number | null
+}
+
+interface RequestScope {
+  readonly bucketIds: readonly string[]
+  readonly fileNames?: readonly string[]
+  readonly requiresBucketScope: boolean
+}
+
+function normalizeKeyBucketIds(req: {
+  bucketIds?: readonly string[] | null
+}): readonly string[] | null {
+  return req.bucketIds === undefined || req.bucketIds === null
+    ? null
+    : Object.freeze([...req.bucketIds])
+}
+
+function singleBucketId(bucketIds: readonly string[] | null | undefined): string | null {
+  return bucketIds?.length === 1 ? (bucketIds[0] ?? null) : null
+}
+
+function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] | null {
+  return bucketIds === null ? null : [...bucketIds]
+}
+
+function hasOwnField(body: unknown, field: string): boolean {
+  return typeof body === 'object' && body !== null && Object.hasOwn(body, field)
+}
+
+function requestStringField(body: unknown, field: string): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const value = (body as Record<string, unknown>)[field]
+  return typeof value === 'string' ? value : undefined
+}
+
+function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
+  const present = names.filter((name): name is string => name !== undefined)
+  return present.length > 0 ? present : undefined
 }
 
 function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
@@ -389,7 +434,7 @@ export interface B2SimulatorOptions {
    * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
    * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
    * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
-   * - Calls outside the key's bucketId / namePrefix scope return HTTP 403 `unauthorized`.
+   * - Calls outside the key's bucketIds / namePrefix scope return HTTP 403 `unauthorized`.
    *
    * Each test can opt in: `new B2Simulator({ strictAuth: true })`.
    */
@@ -444,7 +489,7 @@ export class B2Simulator {
     string,
     {
       capabilities: readonly Capability[]
-      bucketId: string | null
+      bucketIds: readonly string[] | null
       namePrefix: string | null
       expiresAt: number
       /**
@@ -586,16 +631,14 @@ export class B2Simulator {
    *
    * @param authToken - The `Authorization` header value from the request.
    * @param endpoint - B2 endpoint name being invoked.
-   * @param bucketId - Optional bucket ID the request operates on, for scope check.
-   * @param fileName - Optional file name the request operates on, for prefix check.
+   * @param scope - Optional effective bucket and file-name scope derived from the request.
    *
    * @returns `null` when the request is authorized, otherwise a 401/403 response.
    */
   private authorizeRequest(
     authToken: string | undefined,
     endpoint: string,
-    bucketId?: string,
-    fileName?: string,
+    scope?: RequestScope,
   ): SimulatorJsonResponse | null {
     // Endpoints that don't require auth (just b2_authorize_account today).
     const required = missingCapabilitiesFor(endpoint, [])
@@ -620,25 +663,175 @@ export class B2Simulator {
         `application key lacks required capabilities: ${missing.join(', ')}`,
       )
     }
-    if (token.bucketId !== null && bucketId !== undefined && bucketId !== token.bucketId) {
-      return this.error(
-        403,
-        'unauthorized',
-        `application key is scoped to bucket ${token.bucketId}; cannot access ${bucketId}`,
-      )
+    if (token.bucketIds !== null) {
+      if ((scope?.bucketIds.length ?? 0) === 0 && scope?.requiresBucketScope === true) {
+        return this.error(
+          403,
+          'unauthorized',
+          `application key is scoped to buckets ${token.bucketIds.join(', ')}; bucket scope is required`,
+        )
+      }
+      for (const bucketId of scope?.bucketIds ?? []) {
+        if (!token.bucketIds.includes(bucketId)) {
+          return this.error(
+            403,
+            'unauthorized',
+            `application key is scoped to buckets ${token.bucketIds.join(', ')}; cannot access ${bucketId}`,
+          )
+        }
+      }
     }
-    if (
-      token.namePrefix !== null &&
-      fileName !== undefined &&
-      !fileName.startsWith(token.namePrefix)
-    ) {
-      return this.error(
-        403,
-        'unauthorized',
-        `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
-      )
+    if (token.namePrefix !== null) {
+      for (const fileName of scope?.fileNames ?? []) {
+        if (fileName.startsWith(token.namePrefix)) continue
+        return this.error(
+          403,
+          'unauthorized',
+          `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
+        )
+      }
     }
     return null
+  }
+
+  private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
+    const directBucketId = requestStringField(body, 'bucketId')
+    const directFileName = requestStringField(body, 'fileName')
+
+    switch (endpoint) {
+      case 'b2_create_bucket':
+        return { bucketIds: [], requiresBucketScope: true }
+      case 'b2_list_buckets': {
+        if (directBucketId !== undefined) {
+          return { bucketIds: [directBucketId], requiresBucketScope: true }
+        }
+        const bucketName = requestStringField(body, 'bucketName')
+        if (bucketName !== undefined) {
+          const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
+          return {
+            bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
+            requiresBucketScope: true,
+          }
+        }
+        return { bucketIds: [], requiresBucketScope: true }
+      }
+      case 'b2_list_file_names':
+      case 'b2_list_file_versions': {
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'prefix') ?? ''],
+          requiresBucketScope: true,
+        }
+      }
+      case 'b2_get_file_info':
+      case 'b2_delete_file_version':
+      case 'b2_update_file_retention':
+      case 'b2_update_file_legal_hold': {
+        const fileScope = this.fileIdScope(requestStringField(body, 'fileId'))
+        if (fileScope !== undefined) return fileScope
+        return { bucketIds: [], requiresBucketScope: true }
+      }
+      case 'b2_get_upload_part_url':
+      case 'b2_finish_large_file':
+      case 'b2_cancel_large_file':
+      case 'b2_list_parts': {
+        const largeScope = this.largeFileScope(requestStringField(body, 'fileId'))
+        if (largeScope !== undefined) return largeScope
+        return { bucketIds: [], requiresBucketScope: true }
+      }
+      case 'b2_copy_file': {
+        const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
+        const destinationBucketId = requestStringField(body, 'destinationBucketId')
+        const bucketIds = [
+          ...(sourceScope?.bucketIds ?? []),
+          ...(destinationBucketId !== undefined ? [destinationBucketId] : []),
+        ]
+        const scopedFileNames = fileNames(...(sourceScope?.fileNames ?? []), directFileName)
+        return {
+          bucketIds,
+          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
+          requiresBucketScope: true,
+        }
+      }
+      case 'b2_copy_part': {
+        const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
+        const largeScope = this.largeFileScope(requestStringField(body, 'largeFileId'))
+        const scopedFileNames = fileNames(
+          ...(sourceScope?.fileNames ?? []),
+          ...(largeScope?.fileNames ?? []),
+        )
+        return {
+          bucketIds: [...(sourceScope?.bucketIds ?? []), ...(largeScope?.bucketIds ?? [])],
+          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
+          requiresBucketScope: true,
+        }
+      }
+      case 'b2_list_unfinished_large_files':
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'namePrefix') ?? ''],
+          requiresBucketScope: true,
+        }
+      case 'b2_get_download_authorization':
+        return {
+          bucketIds: directBucketId === undefined ? [] : [directBucketId],
+          fileNames: [requestStringField(body, 'fileNamePrefix') ?? ''],
+          requiresBucketScope: true,
+        }
+      default:
+        if (directBucketId !== undefined) {
+          return {
+            bucketIds: [directBucketId],
+            ...(directFileName !== undefined ? { fileNames: [directFileName] } : {}),
+            requiresBucketScope: true,
+          }
+        }
+        return directFileName !== undefined
+          ? { bucketIds: [], fileNames: [directFileName], requiresBucketScope: false }
+          : undefined
+    }
+  }
+
+  private fileIdScope(fileId: string | undefined): RequestScope | undefined {
+    if (fileId === undefined) return undefined
+    const found = this.findFile(fileId)
+    if (found === null) return undefined
+    return {
+      bucketIds: [found.bucketId],
+      fileNames: [found.stored.fileVersion.fileName],
+      requiresBucketScope: true,
+    }
+  }
+
+  private largeFileScope(fileId: string | undefined): RequestScope | undefined {
+    if (fileId === undefined) return undefined
+    const large = this.largeFiles.get(fileId)
+    if (large === undefined) return undefined
+    return { bucketIds: [large.bucketId], fileNames: [large.fileName], requiresBucketScope: true }
+  }
+
+  private issueUploadAuthToken(sourceAuthToken: string | undefined, bucketId: string): string {
+    const tokenStr = `sim_upload_auth_${this.nextId++}`
+    const sourceToken =
+      sourceAuthToken === undefined ? undefined : this.issuedTokens.get(sourceAuthToken)
+    this.issuedTokens.set(tokenStr, {
+      capabilities: [Capability.WriteFiles],
+      bucketIds: [bucketId],
+      namePrefix: sourceToken?.namePrefix ?? null,
+      expiresAt: this.now() + this.authTokenTtlMs,
+      applicationKeyId: sourceToken?.applicationKeyId ?? null,
+    })
+    return tokenStr
+  }
+
+  private allowedBuckets(
+    bucketIds: readonly string[] | null | undefined,
+  ): readonly { readonly id: BucketId; readonly name: string | null }[] | null {
+    if (bucketIds === undefined || bucketIds === null) return null
+    return bucketIds.map((id) => ({
+      id: bucketIdOf(id),
+      name: this.buckets.get(id)?.info.bucketName ?? null,
+    }))
   }
 
   /**
@@ -656,7 +849,7 @@ export class B2Simulator {
    */
   private findKeyForAuthHeader(authzHeader: string | undefined): {
     capabilities: readonly Capability[]
-    bucketId: string | null
+    bucketIds: readonly string[] | null
     namePrefix: string | null
     applicationKeyId: string
   } | null {
@@ -679,7 +872,7 @@ export class B2Simulator {
     if (!stored || stored.applicationKey !== applicationKey) return null
     return {
       capabilities: stored.capabilities as readonly Capability[],
-      bucketId: stored.bucketId,
+      bucketIds: stored.bucketIds,
       namePrefix: stored.namePrefix,
       applicationKeyId,
     }
@@ -802,14 +995,17 @@ export class B2Simulator {
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
     const endpoint = path.split('/').pop() ?? ''
+    const apiVersion = path.match(/\/b2api\/(v\d+)\//)?.[1] ?? 'v3'
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
-    // the capability check. Bucket / file-name scope checks happen
-    // inside the per-endpoint handlers where the relevant fields are
-    // actually accessible.
+    // capability and scope checks.
     if (this.strictAuth) {
-      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      const authError = this.authorizeRequest(
+        headers['authorization'],
+        endpoint,
+        this.requestScope(endpoint, body),
+      )
       if (authError !== null) return authError
     }
 
@@ -821,13 +1017,19 @@ export class B2Simulator {
           body as { bucketName: string; bucketType: BucketType; accountId: string },
         )
       case 'b2_list_buckets':
-        return this.listBuckets()
+        return this.listBuckets(
+          body as {
+            bucketId?: string
+            bucketName?: string
+            bucketTypes?: readonly BucketType[]
+          },
+        )
       case 'b2_delete_bucket':
         return this.deleteBucket(body as { bucketId: string })
       case 'b2_update_bucket':
         return this.updateBucket(body as Record<string, unknown>)
       case 'b2_get_upload_url':
-        return this.getUploadUrl(body as { bucketId: string })
+        return this.getUploadUrl(body as { bucketId: string }, headers['authorization'])
       case 'b2_list_file_names':
         return this.listFileNames(
           body as {
@@ -880,7 +1082,7 @@ export class B2Simulator {
           },
         )
       case 'b2_get_upload_part_url':
-        return this.getUploadPartUrl(body as { fileId: string })
+        return this.getUploadPartUrl(body as { fileId: string }, headers['authorization'])
       case 'b2_finish_large_file':
         return this.finishLargeFile(body as { fileId: string; partSha1Array: string[] })
       case 'b2_cancel_large_file':
@@ -918,9 +1120,11 @@ export class B2Simulator {
             capabilities: string[]
             keyName: string
             validDurationInSeconds?: number
+            bucketIds?: readonly string[] | null
             bucketId?: string
             namePrefix?: string
           },
+          apiVersion,
         )
       case 'b2_list_keys':
         return this.listKeys(
@@ -980,7 +1184,25 @@ export class B2Simulator {
     const isPart = url.includes('b2_upload_part')
     if (this.strictAuth) {
       const endpoint = isPart ? 'b2_upload_part' : 'b2_upload_file'
-      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      const parsedUrl = new URL(url)
+      const bucketId = isPart ? undefined : (parsedUrl.searchParams.get('bucketId') ?? undefined)
+      const fileName =
+        isPart || headers['x-bz-file-name'] === undefined
+          ? undefined
+          : decodeHeaderValue(headers['x-bz-file-name'])
+      const partScope = isPart
+        ? this.largeFileScope(parsedUrl.searchParams.get('fileId') ?? undefined)
+        : undefined
+      const scope =
+        partScope ??
+        (bucketId !== undefined
+          ? {
+              bucketIds: [bucketId],
+              ...(fileName !== undefined ? { fileNames: [fileName] } : {}),
+              requiresBucketScope: true,
+            }
+          : { bucketIds: [], requiresBucketScope: true })
+      const authError = this.authorizeRequest(headers['authorization'], endpoint, scope)
       if (authError !== null) return authError
     }
     if (isPart) {
@@ -1009,7 +1231,15 @@ export class B2Simulator {
       // download response shape so the transport renders the right
       // status code.
       if (this.strictAuth) {
-        const authError = this.authorizeRequest(headers['authorization'], 'b2_download_file_by_id')
+        const url = new URL(`http://localhost${path}`)
+        const authError = this.authorizeRequest(
+          headers['authorization'],
+          'b2_download_file_by_id',
+          this.fileIdScope(url.searchParams.get('fileId') ?? undefined) ?? {
+            bucketIds: [],
+            requiresBucketScope: true,
+          },
+        )
         if (authError !== null) return this.errorAsDownload(authError)
       }
       const url = new URL(`http://localhost${path}`)
@@ -1022,11 +1252,15 @@ export class B2Simulator {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
       if (this.strictAuth) {
+        const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
         const authError = this.authorizeRequest(
           headers['authorization'],
           'b2_download_file_by_name',
-          undefined,
-          fileName,
+          {
+            bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
+            fileNames: [fileName],
+            requiresBucketScope: true,
+          },
         )
         if (authError !== null) return this.errorAsDownload(authError)
       }
@@ -1103,7 +1337,7 @@ export class B2Simulator {
     const bucket = this.buckets.get(bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
-    const fileName = decodeURIComponent(headers['x-bz-file-name'] ?? '')
+    const fileName = decodeHeaderValue(headers['x-bz-file-name'] ?? '')
     const contentType = headers['content-type'] ?? 'application/octet-stream'
 
     // B2 spec-compliance: validate file name and optional X-Bz-Info-*
@@ -1359,10 +1593,14 @@ export class B2Simulator {
     // seam, see `authorizeAsKey` below), the auth header identifies
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
+    const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
+    const legacyBucketName =
+      legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       capabilities: keyForAuth?.capabilities ?? capabilities,
-      bucketId: keyForAuth?.bucketId ?? null,
+      bucketIds: keyForAuth?.bucketIds ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
       applicationKeyId: keyForAuth?.applicationKeyId ?? null,
@@ -1379,8 +1617,8 @@ export class B2Simulator {
           storageApi: {
             absoluteMinimumPartSize: this.minimumPartSize,
             apiUrl: origin,
-            bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
-            bucketName: null,
+            bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+            bucketName: legacyBucketName,
             downloadUrl: origin,
             infoType: 'storageApi',
             namePrefix: keyForAuth?.namePrefix ?? null,
@@ -1388,8 +1626,9 @@ export class B2Simulator {
             s3ApiUrl: origin,
             allowed: {
               capabilities: keyForAuth?.capabilities ?? capabilities,
-              bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
-              bucketName: null,
+              buckets: allowedBuckets,
+              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+              bucketName: legacyBucketName,
               namePrefix: keyForAuth?.namePrefix ?? null,
             },
           },
@@ -1467,8 +1706,18 @@ export class B2Simulator {
     return { status: 200, body: info }
   }
 
-  private listBuckets(): SimulatorJsonResponse {
-    const buckets = [...this.buckets.values()].map((b) => b.info)
+  private listBuckets(req: {
+    bucketId?: string
+    bucketName?: string
+    bucketTypes?: readonly BucketType[]
+  }): SimulatorJsonResponse {
+    const buckets = [...this.buckets.values()]
+      .map((b) => b.info)
+      .filter((bucket) => req.bucketId === undefined || bucket.bucketId === req.bucketId)
+      .filter((bucket) => req.bucketName === undefined || bucket.bucketName === req.bucketName)
+      .filter(
+        (bucket) => req.bucketTypes === undefined || req.bucketTypes.includes(bucket.bucketType),
+      )
     return { status: 200, body: { buckets } }
   }
 
@@ -1533,7 +1782,7 @@ export class B2Simulator {
     return { status: 200, body: updated }
   }
 
-  private getUploadUrl(req: { bucketId: string }): SimulatorJsonResponse {
+  private getUploadUrl(req: { bucketId: string }, authToken?: string): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     return {
@@ -1541,7 +1790,9 @@ export class B2Simulator {
       body: {
         bucketId: req.bucketId,
         uploadUrl: `http://localhost:0/b2api/v3/b2_upload_file?bucketId=${req.bucketId}`,
-        authorizationToken: 'sim_upload_token',
+        authorizationToken: this.strictAuth
+          ? this.issueUploadAuthToken(authToken, req.bucketId)
+          : 'sim_upload_token',
       },
     }
   }
@@ -1887,15 +2138,17 @@ export class B2Simulator {
     }
   }
 
-  private getUploadPartUrl(req: { fileId: string }): SimulatorJsonResponse {
-    if (!this.largeFiles.has(req.fileId))
-      return this.error(400, 'bad_request', 'Large file not found')
+  private getUploadPartUrl(req: { fileId: string }, authToken?: string): SimulatorJsonResponse {
+    const large = this.largeFiles.get(req.fileId)
+    if (large === undefined) return this.error(400, 'bad_request', 'Large file not found')
     return {
       status: 200,
       body: {
         fileId: req.fileId,
         uploadUrl: `http://localhost:0/b2api/v3/b2_upload_part?fileId=${req.fileId}`,
-        authorizationToken: 'sim_part_token',
+        authorizationToken: this.strictAuth
+          ? this.issueUploadAuthToken(authToken, large.bucketId)
+          : 'sim_part_token',
       },
     }
   }
@@ -2166,14 +2419,32 @@ export class B2Simulator {
 
   // --- Keys ---
 
-  private createKey(req: {
-    accountId: string
-    capabilities: string[]
-    keyName: string
-    validDurationInSeconds?: number
-    bucketId?: string
-    namePrefix?: string
-  }): SimulatorJsonResponse {
+  private createKey(
+    req: {
+      accountId: string
+      capabilities: string[]
+      keyName: string
+      validDurationInSeconds?: number
+      bucketIds?: readonly string[] | null
+      bucketId?: string
+      namePrefix?: string
+    },
+    apiVersion: string,
+  ): SimulatorJsonResponse {
+    if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
+      return this.error(
+        400,
+        'bad_request',
+        'bucketId is not accepted by v4 b2_create_key; use bucketIds',
+      )
+    }
+    if (apiVersion !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
+      return this.error(400, 'bad_request', 'b2_create_key accepts either bucketIds or bucketId')
+    }
+    const bucketIds =
+      apiVersion !== 'v4' && req.bucketId !== undefined
+        ? Object.freeze([req.bucketId])
+        : normalizeKeyBucketIds(req)
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -2186,7 +2457,7 @@ export class B2Simulator {
       capabilities: req.capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
-      bucketId: req.bucketId ?? null,
+      bucketIds,
       namePrefix: req.namePrefix ?? null,
       expirationTimestamp: expiration,
     }
@@ -2201,7 +2472,8 @@ export class B2Simulator {
         capabilities: stored.capabilities,
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
-        bucketId: stored.bucketId,
+        bucketIds: cloneBucketIds(stored.bucketIds),
+        bucketId: singleBucketId(stored.bucketIds),
         namePrefix: stored.namePrefix,
         options: [],
       },
@@ -2231,7 +2503,8 @@ export class B2Simulator {
       capabilities: k.capabilities,
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
-      bucketId: k.bucketId,
+      bucketIds: cloneBucketIds(k.bucketIds),
+      bucketId: singleBucketId(k.bucketIds),
       namePrefix: k.namePrefix,
       options: [],
     }))
@@ -2262,7 +2535,8 @@ export class B2Simulator {
         capabilities: key.capabilities,
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
-        bucketId: key.bucketId,
+        bucketIds: cloneBucketIds(key.bucketIds),
+        bucketId: singleBucketId(key.bucketIds),
         namePrefix: key.namePrefix,
         options: [],
       },
