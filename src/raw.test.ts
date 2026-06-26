@@ -14,6 +14,41 @@ function jsonResponse(value: unknown): HttpResponse {
 }
 
 describe('RawClient list request controls', () => {
+  it('normalizes the deprecated createKey bucketId alias to bucketIds', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        return jsonResponse({
+          keyName: 'alias-key',
+          applicationKeyId: 'key-id',
+          applicationKey: 'secret',
+          capabilities: [],
+          accountId: 'account',
+          expirationTimestamp: null,
+          bucketIds: ['bucket'],
+          namePrefix: null,
+          options: [],
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const key = await raw.createKey('https://api.example.test', 'auth', {
+      accountId: 'account' as never,
+      capabilities: [],
+      keyName: 'alias-key',
+      bucketId: 'bucket' as never,
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe('https://api.example.test/b2api/v4/b2_create_key')
+    const body = JSON.parse(requests[0]?.body as string) as Record<string, unknown>
+    expect(body).toMatchObject({ bucketIds: ['bucket'] })
+    expect('bucketId' in body).toBe(false)
+    expect(key.bucketIds).toEqual(['bucket'])
+  })
+
   it('passes abort signals and retry through listUnfinishedLargeFiles and listParts', async () => {
     const requests: HttpRequest[] = []
     const transport: HttpTransport = {

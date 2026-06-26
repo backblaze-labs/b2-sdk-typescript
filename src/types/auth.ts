@@ -48,6 +48,10 @@ export const Capability = {
   ReadBucketNotifications: 'readBucketNotifications',
   /** Modify bucket event-notification rules. */
   WriteBucketNotifications: 'writeBucketNotifications',
+  /** Read bucket logging settings. */
+  ReadBucketLogging: 'readBucketLogging',
+  /** Modify bucket logging settings. */
+  WriteBucketLogging: 'writeBucketLogging',
   /** List file names and versions. */
   ListFiles: 'listFiles',
   /** Download files. */

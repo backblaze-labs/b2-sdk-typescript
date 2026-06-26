@@ -134,6 +134,14 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   )
 }
 
+function normalizeCreateKeyRequest(request: CreateKeyRequest): CreateKeyRequest {
+  const { bucketId, ...withoutDeprecatedBucketId } = request
+  if (withoutDeprecatedBucketId.bucketIds !== undefined || bucketId === undefined) {
+    return withoutDeprecatedBucketId
+  }
+  return { ...withoutDeprecatedBucketId, bucketIds: [bucketId] }
+}
+
 function uploadResponseBodyError(
   err: unknown,
   signal: AbortSignal | undefined,
@@ -964,7 +972,14 @@ export class RawClient {
     authToken: string,
     request: CreateKeyRequest,
   ): Promise<FullApplicationKey> {
-    return this.postJson<FullApplicationKey>(apiUrl, authToken, 'b2_create_key', request)
+    return this.postJson<FullApplicationKey>(
+      apiUrl,
+      authToken,
+      'b2_create_key',
+      normalizeCreateKeyRequest(request),
+      undefined,
+      'v4',
+    )
   }
 
   /**
@@ -980,7 +995,14 @@ export class RawClient {
     authToken: string,
     request: ListKeysRequest,
   ): Promise<ListKeysResponse> {
-    return this.postJson<ListKeysResponse>(apiUrl, authToken, 'b2_list_keys', request)
+    return this.postJson<ListKeysResponse>(
+      apiUrl,
+      authToken,
+      'b2_list_keys',
+      request,
+      undefined,
+      'v4',
+    )
   }
 
   /**
@@ -996,7 +1018,14 @@ export class RawClient {
     authToken: string,
     request: DeleteKeyRequest,
   ): Promise<ApplicationKey> {
-    return this.postJson<ApplicationKey>(apiUrl, authToken, 'b2_delete_key', request)
+    return this.postJson<ApplicationKey>(
+      apiUrl,
+      authToken,
+      'b2_delete_key',
+      request,
+      undefined,
+      'v4',
+    )
   }
 
   // --- Retention / Legal Hold ---
@@ -1096,6 +1125,7 @@ export class RawClient {
    * @param endpoint - The B2 API endpoint name.
    * @param body - The JSON request body.
    * @param options - Optional abort and per-request retry settings.
+   * @param apiVersion - B2 Native API version segment for this endpoint.
    *
    * @returns The parsed JSON response.
    */
@@ -1105,9 +1135,10 @@ export class RawClient {
     endpoint: string,
     body: unknown,
     options?: RawRequestOptions,
+    apiVersion: 'v3' | 'v4' = 'v3',
   ): Promise<T> {
     const response = await this.transport.send({
-      url: `${apiUrl}/b2api/v3/${endpoint}`,
+      url: `${apiUrl}/b2api/${apiVersion}/${endpoint}`,
       method: 'POST',
       headers: {
         Authorization: authToken,

@@ -296,7 +296,13 @@ export class B2Client {
     keyName: string
     /** Key expiration in seconds from now. Omit for non-expiring keys. */
     validDurationInSeconds?: number
-    /** Restrict the key to a single bucket. */
+    /** Restrict the key to one or more buckets. Use `null` or omit for all buckets. */
+    bucketIds?: readonly BucketId[] | null
+    /**
+     * Restrict the key to a single bucket.
+     *
+     * @deprecated Use `bucketIds: [bucketId]` instead.
+     */
     bucketId?: BucketId
     /** Restrict the key to files with this name prefix. */
     namePrefix?: string

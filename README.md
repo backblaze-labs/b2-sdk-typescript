@@ -298,7 +298,7 @@ import { Capability } from '@backblaze-labs/b2-sdk'
 const key = await client.createKey({
   capabilities: [Capability.ReadFiles, Capability.WriteFiles],
   keyName: 'my-app-key',
-  bucketId: bucket.id,
+  bucketIds: [bucket.id],
   namePrefix: 'uploads/',
   validDurationInSeconds: 86400,
 })

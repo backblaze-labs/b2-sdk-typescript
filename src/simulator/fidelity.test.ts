@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { B2Client } from '../client.ts'
+import { B2Client } from '../client.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
@@ -414,6 +414,20 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 // ---------------------------------------------------------------------------
 
 describe('B2Simulator strictAuth: capability enforcement', () => {
+  async function authorizeWithKey(
+    sim: B2Simulator,
+    key: { applicationKeyId: string; applicationKey: string },
+  ): Promise<B2Client> {
+    const client = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    return client
+  }
+
   it('grants the master credential the documented capability set by default', async () => {
     const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -466,6 +480,84 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredResp.status).toBe(401)
     const expiredBody = (await expiredResp.json()) as { code: string }
     expect(expiredBody.code).toBe('expired_auth_token')
+  })
+
+  it('enforces single-bucket application key scope from the bucketId alias', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'single-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'single-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'single-scope-key',
+      bucketId: allowed.id,
+    })
+    expect(key.bucketIds).toEqual([allowed.id])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: allowed.id })).resolves.toHaveLength(2)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('enforces multi-bucket application key scope', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'multi-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'multi-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'multi-scope-c',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'multi-scope-key',
+      bucketIds: [first.id, second.id],
+    })
+    expect(key.bucketIds).toEqual([first.id, second.id])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(3)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(3)
+    await expect(scopedClient.listBuckets({ bucketId: blocked.id })).rejects.toThrow(
+      /scoped to buckets/,
+    )
+  })
+
+  it('allows all buckets when application key bucketIds are null', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'all-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'all-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'all-scope-key',
+      bucketIds: null,
+    })
+    expect(key.bucketIds).toBeNull()
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(2)
+    await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(2)
   })
 })
 

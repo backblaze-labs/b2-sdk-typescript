@@ -1193,6 +1193,7 @@ describe('key management', () => {
     expect(key.applicationKey).toBeTruthy()
     expect(key.capabilities).toContain(Capability.ReadFiles)
     expect(key.capabilities).toContain(Capability.WriteFiles)
+    expect(key.bucketIds).toBeNull()
 
     const listing = await client.raw.listKeys(
       client.accountInfo.getApiUrl(),
@@ -1203,6 +1204,7 @@ describe('key management', () => {
     expect(listing.keys.length).toBeGreaterThanOrEqual(1)
     const found = listing.keys.find((k) => k.keyName === 'test-key')
     expect(found).toBeTruthy()
+    expect(found?.bucketIds).toBeNull()
   })
 
   it('deletes an application key', async () => {
@@ -1234,7 +1236,7 @@ describe('key management', () => {
     expect(found).toBeUndefined()
   })
 
-  it('creates a key scoped to a bucket', async () => {
+  it('creates a key scoped to a bucket through the bucketId alias', async () => {
     const { accountId } = await import('./types/ids.ts')
     const bucket = await client.createBucket({
       bucketName: 'key-scope',
@@ -1253,7 +1255,7 @@ describe('key management', () => {
       },
     )
 
-    expect(key.bucketId).toBe(bucket.id)
+    expect(key.bucketIds).toEqual([bucket.id])
     expect(key.namePrefix).toBe('photos/')
   })
 })

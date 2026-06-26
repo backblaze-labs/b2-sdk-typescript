@@ -11,7 +11,13 @@ export interface CreateKeyRequest {
   readonly keyName: string
   /** Optional duration in seconds before the key expires. Omit for a key that never expires. */
   readonly validDurationInSeconds?: number
-  /** Optional bucket restriction. When set, the key only grants access to this bucket. */
+  /** Optional bucket restrictions. When set, the key only grants access to these buckets. */
+  readonly bucketIds?: readonly BucketId[] | null
+  /**
+   * Optional single-bucket restriction.
+   *
+   * @deprecated Use `bucketIds: [bucketId]` instead.
+   */
   readonly bucketId?: BucketId
   /** Optional file name prefix restriction. When set, the key only grants access to files with this prefix. */
   readonly namePrefix?: string
@@ -34,8 +40,8 @@ export interface FullApplicationKey {
   readonly accountId: AccountId
   /** UTC timestamp (milliseconds) when this key expires, or null if it does not expire. */
   readonly expirationTimestamp: number | null
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
-  readonly bucketId: BucketId | null
+  /** Bucket IDs this key is restricted to, or null if unrestricted. */
+  readonly bucketIds: readonly BucketId[] | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */
@@ -56,8 +62,8 @@ export interface ApplicationKey {
   readonly accountId: AccountId
   /** UTC timestamp (milliseconds) when this key expires, or null if it does not expire. */
   readonly expirationTimestamp: number | null
-  /** Bucket ID this key is restricted to, or null if unrestricted. */
-  readonly bucketId: BucketId | null
+  /** Bucket IDs this key is restricted to, or null if unrestricted. */
+  readonly bucketIds: readonly BucketId[] | null
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */

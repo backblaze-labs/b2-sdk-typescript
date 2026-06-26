@@ -188,9 +188,27 @@ interface StoredKey {
   readonly capabilities: readonly string[]
   readonly accountId: string
   readonly applicationKey: string
-  readonly bucketId: string | null
+  readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
   readonly expirationTimestamp: number | null
+}
+
+function normalizeKeyBucketIds(req: {
+  bucketIds?: readonly string[] | null
+  bucketId?: string
+}): readonly string[] | null {
+  if (req.bucketIds !== undefined) return req.bucketIds
+  return req.bucketId !== undefined ? [req.bucketId] : null
+}
+
+function singleBucketId(bucketIds: readonly string[] | null | undefined): string | null {
+  return bucketIds?.length === 1 ? (bucketIds[0] ?? null) : null
+}
+
+function requestStringField(body: unknown, field: string): string | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const value = (body as Record<string, unknown>)[field]
+  return typeof value === 'string' ? value : undefined
 }
 
 function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
@@ -389,7 +407,7 @@ export interface B2SimulatorOptions {
    * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
    * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
    * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
-   * - Calls outside the key's bucketId / namePrefix scope return HTTP 403 `unauthorized`.
+   * - Calls outside the key's bucketIds / namePrefix scope return HTTP 403 `unauthorized`.
    *
    * Each test can opt in: `new B2Simulator({ strictAuth: true })`.
    */
@@ -444,7 +462,7 @@ export class B2Simulator {
     string,
     {
       capabilities: readonly Capability[]
-      bucketId: string | null
+      bucketIds: readonly string[] | null
       namePrefix: string | null
       expiresAt: number
       /**
@@ -620,11 +638,11 @@ export class B2Simulator {
         `application key lacks required capabilities: ${missing.join(', ')}`,
       )
     }
-    if (token.bucketId !== null && bucketId !== undefined && bucketId !== token.bucketId) {
+    if (token.bucketIds !== null && bucketId !== undefined && !token.bucketIds.includes(bucketId)) {
       return this.error(
         403,
         'unauthorized',
-        `application key is scoped to bucket ${token.bucketId}; cannot access ${bucketId}`,
+        `application key is scoped to buckets ${token.bucketIds.join(', ')}; cannot access ${bucketId}`,
       )
     }
     if (
@@ -656,7 +674,7 @@ export class B2Simulator {
    */
   private findKeyForAuthHeader(authzHeader: string | undefined): {
     capabilities: readonly Capability[]
-    bucketId: string | null
+    bucketIds: readonly string[] | null
     namePrefix: string | null
     applicationKeyId: string
   } | null {
@@ -679,7 +697,7 @@ export class B2Simulator {
     if (!stored || stored.applicationKey !== applicationKey) return null
     return {
       capabilities: stored.capabilities as readonly Capability[],
-      bucketId: stored.bucketId,
+      bucketIds: stored.bucketIds,
       namePrefix: stored.namePrefix,
       applicationKeyId,
     }
@@ -805,11 +823,14 @@ export class B2Simulator {
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
-    // the capability check. Bucket / file-name scope checks happen
-    // inside the per-endpoint handlers where the relevant fields are
-    // actually accessible.
+    // capability and scope checks.
     if (this.strictAuth) {
-      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      const authError = this.authorizeRequest(
+        headers['authorization'],
+        endpoint,
+        requestStringField(body, 'bucketId'),
+        requestStringField(body, 'fileName'),
+      )
       if (authError !== null) return authError
     }
 
@@ -918,6 +939,7 @@ export class B2Simulator {
             capabilities: string[]
             keyName: string
             validDurationInSeconds?: number
+            bucketIds?: readonly string[] | null
             bucketId?: string
             namePrefix?: string
           },
@@ -980,7 +1002,17 @@ export class B2Simulator {
     const isPart = url.includes('b2_upload_part')
     if (this.strictAuth) {
       const endpoint = isPart ? 'b2_upload_part' : 'b2_upload_file'
-      const authError = this.authorizeRequest(headers['authorization'], endpoint)
+      const bucketId = isPart ? undefined : (new URL(url).searchParams.get('bucketId') ?? undefined)
+      const fileName =
+        isPart || headers['x-bz-file-name'] === undefined
+          ? undefined
+          : decodeURIComponent(headers['x-bz-file-name'])
+      const authError = this.authorizeRequest(
+        headers['authorization'],
+        endpoint,
+        bucketId,
+        fileName,
+      )
       if (authError !== null) return authError
     }
     if (isPart) {
@@ -1359,10 +1391,11 @@ export class B2Simulator {
     // seam, see `authorizeAsKey` below), the auth header identifies
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    const authorizedBucketId = singleBucketId(keyForAuth?.bucketIds)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       capabilities: keyForAuth?.capabilities ?? capabilities,
-      bucketId: keyForAuth?.bucketId ?? null,
+      bucketIds: keyForAuth?.bucketIds ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
       applicationKeyId: keyForAuth?.applicationKeyId ?? null,
@@ -1379,7 +1412,7 @@ export class B2Simulator {
           storageApi: {
             absoluteMinimumPartSize: this.minimumPartSize,
             apiUrl: origin,
-            bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
+            bucketId: authorizedBucketId as BucketId | null,
             bucketName: null,
             downloadUrl: origin,
             infoType: 'storageApi',
@@ -1388,7 +1421,7 @@ export class B2Simulator {
             s3ApiUrl: origin,
             allowed: {
               capabilities: keyForAuth?.capabilities ?? capabilities,
-              bucketId: (keyForAuth?.bucketId ?? null) as BucketId | null,
+              bucketId: authorizedBucketId as BucketId | null,
               bucketName: null,
               namePrefix: keyForAuth?.namePrefix ?? null,
             },
@@ -2171,6 +2204,7 @@ export class B2Simulator {
     capabilities: string[]
     keyName: string
     validDurationInSeconds?: number
+    bucketIds?: readonly string[] | null
     bucketId?: string
     namePrefix?: string
   }): SimulatorJsonResponse {
@@ -2186,7 +2220,7 @@ export class B2Simulator {
       capabilities: req.capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
-      bucketId: req.bucketId ?? null,
+      bucketIds: normalizeKeyBucketIds(req),
       namePrefix: req.namePrefix ?? null,
       expirationTimestamp: expiration,
     }
@@ -2201,7 +2235,7 @@ export class B2Simulator {
         capabilities: stored.capabilities,
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
-        bucketId: stored.bucketId,
+        bucketIds: stored.bucketIds,
         namePrefix: stored.namePrefix,
         options: [],
       },
@@ -2231,7 +2265,7 @@ export class B2Simulator {
       capabilities: k.capabilities,
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
-      bucketId: k.bucketId,
+      bucketIds: k.bucketIds,
       namePrefix: k.namePrefix,
       options: [],
     }))
@@ -2262,7 +2296,7 @@ export class B2Simulator {
         capabilities: key.capabilities,
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
-        bucketId: key.bucketId,
+        bucketIds: key.bucketIds,
         namePrefix: key.namePrefix,
         options: [],
       },

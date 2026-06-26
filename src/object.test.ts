@@ -121,7 +121,12 @@ describe('B2Client high-level key management', () => {
 
   it('createKey() returns a full application key', async () => {
     const key = await client.createKey({
-      capabilities: [Capability.ReadFiles, Capability.WriteFiles],
+      capabilities: [
+        Capability.ReadFiles,
+        Capability.WriteFiles,
+        Capability.ReadBucketLogging,
+        Capability.WriteBucketLogging,
+      ],
       keyName: 'hl-test-key',
     })
 
@@ -130,9 +135,12 @@ describe('B2Client high-level key management', () => {
     expect(key.applicationKey).toBeTruthy()
     expect(key.capabilities).toContain(Capability.ReadFiles)
     expect(key.capabilities).toContain(Capability.WriteFiles)
+    expect(key.capabilities).toContain(Capability.ReadBucketLogging)
+    expect(key.capabilities).toContain(Capability.WriteBucketLogging)
+    expect(key.bucketIds).toBeNull()
   })
 
-  it('createKey() with bucket scope and name prefix', async () => {
+  it('createKey() with single-bucket scope and name prefix', async () => {
     const bucket = await client.createBucket({
       bucketName: 'key-scope-hl',
       bucketType: BucketType.AllPrivate,
@@ -141,12 +149,50 @@ describe('B2Client high-level key management', () => {
     const key = await client.createKey({
       capabilities: [Capability.ReadFiles],
       keyName: 'scoped-hl',
-      bucketId: bucket.id,
+      bucketIds: [bucket.id],
       namePrefix: 'images/',
     })
 
-    expect(key.bucketId).toBe(bucket.id)
+    expect(key.bucketIds).toEqual([bucket.id])
     expect(key.namePrefix).toBe('images/')
+  })
+
+  it('createKey() accepts the deprecated bucketId alias', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'key-alias-hl',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const key = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'alias-hl',
+      bucketId: bucket.id,
+    })
+
+    expect(key.bucketIds).toEqual([bucket.id])
+  })
+
+  it('createKey() supports multi-bucket scope', async () => {
+    const first = await client.createBucket({
+      bucketName: 'key-multi-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'key-multi-b',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const key = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'multi-hl',
+      bucketIds: [first.id, second.id],
+    })
+
+    expect(key.bucketIds).toEqual([first.id, second.id])
+
+    const listing = await client.listKeys()
+    const found = listing.keys.find((k) => k.keyName === 'multi-hl')
+    expect(found?.bucketIds).toEqual([first.id, second.id])
   })
 
   it('listKeys() returns keys created via the high-level API', async () => {
