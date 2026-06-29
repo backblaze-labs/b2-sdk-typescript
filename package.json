@@ -151,7 +151,7 @@
     "@biomejs/biome": "^2.4.16",
     "@eslint/js": "^10.0.1",
     "@microsoft/tsdoc-config": "^0.18.1",
-    "@types/node": "^25.9.2",
+    "@types/node": "^26.0.0",
     "@vitest/browser": "^4.1.8",
     "@vitest/browser-playwright": "^4.1.8",
     "@vitest/coverage-v8": "^4.1.8",
