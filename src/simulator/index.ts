@@ -201,6 +201,21 @@ interface StoredKey {
   readonly expirationTimestamp: number | null
 }
 
+interface IssuedToken {
+  readonly capabilities: readonly Capability[]
+  readonly bucketIds: readonly string[] | null
+  readonly namePrefix: string | null
+  readonly expiresAt: number
+  /**
+   * The application-key ID this token was minted for, or `null`
+   * for tokens minted from the implicit master credential. Set so
+   * {@link B2Simulator.deleteKey} can evict every outstanding token whose
+   * underlying key was just revoked — without this back-pointer
+   * deleted keys keep working until the token TTL expires.
+   */
+  readonly applicationKeyId: string | null
+}
+
 interface RequestScope {
   readonly bucketIds: readonly string[]
   readonly fileNames?: readonly string[]
@@ -236,6 +251,34 @@ function requestStringField(body: unknown, field: string): string | undefined {
 function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
   const present = names.filter((name): name is string => name !== undefined)
   return present.length > 0 ? present : undefined
+}
+
+function notificationRulePrefixes(body: unknown): readonly string[] | undefined {
+  if (typeof body !== 'object' || body === null) return undefined
+  const rules = (body as Record<string, unknown>)['eventNotificationRules']
+  if (!Array.isArray(rules)) return undefined
+  return rules.map((rule) => {
+    if (typeof rule !== 'object' || rule === null) return ''
+    const objectNamePrefix = (rule as Record<string, unknown>)['objectNamePrefix']
+    return typeof objectNamePrefix === 'string' ? objectNamePrefix : ''
+  })
+}
+
+function storedNotificationRulePrefixes(
+  rules: readonly EventNotificationRule[] | undefined,
+): readonly string[] {
+  return (rules ?? []).map((rule) =>
+    typeof rule.objectNamePrefix === 'string' ? rule.objectNamePrefix : '',
+  )
+}
+
+function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
+  return capabilities.some(
+    (capability) =>
+      capability === Capability.ListKeys ||
+      capability === Capability.WriteKeys ||
+      capability === Capability.DeleteKeys,
+  )
 }
 
 function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
@@ -485,23 +528,7 @@ export class B2Simulator {
    * `authorize` but never consulted on subsequent requests. In strict
    * mode each request looks up its `Authorization` header here.
    */
-  private readonly issuedTokens = new Map<
-    string,
-    {
-      capabilities: readonly Capability[]
-      bucketIds: readonly string[] | null
-      namePrefix: string | null
-      expiresAt: number
-      /**
-       * The application-key ID this token was minted for, or `null`
-       * for tokens minted from the implicit master credential. Set so
-       * {@link deleteKey} can evict every outstanding token whose
-       * underlying key was just revoked — without this back-pointer
-       * deleted keys keep working until the token TTL expires.
-       */
-      applicationKeyId: string | null
-    }
-  >()
+  private readonly issuedTokens = new Map<string, IssuedToken>()
   /**
    * Virtual-clock offset applied to `Date.now()` for expiry checks.
    * Defaults to 0. Tests advance via {@link advanceTime} to fast-forward
@@ -701,71 +728,40 @@ export class B2Simulator {
     switch (endpoint) {
       case 'b2_create_bucket':
         return { bucketIds: [], requiresBucketScope: true }
-      case 'b2_list_buckets': {
-        if (directBucketId !== undefined) {
-          return { bucketIds: [directBucketId], requiresBucketScope: true }
-        }
-        const bucketName = requestStringField(body, 'bucketName')
-        if (bucketName !== undefined) {
-          const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
-          return {
-            bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
-            requiresBucketScope: true,
-          }
-        }
-        return { bucketIds: [], requiresBucketScope: true }
-      }
+      case 'b2_list_buckets':
+        return this.listBucketsScope(body, directBucketId)
       case 'b2_list_file_names':
-      case 'b2_list_file_versions': {
+      case 'b2_list_file_versions':
         return {
           bucketIds: directBucketId === undefined ? [] : [directBucketId],
           fileNames: [requestStringField(body, 'prefix') ?? ''],
           requiresBucketScope: true,
         }
-      }
       case 'b2_get_file_info':
+        return (
+          this.fileIdScope(requestStringField(body, 'fileId')) ?? {
+            bucketIds: [],
+            requiresBucketScope: true,
+          }
+        )
       case 'b2_delete_file_version':
       case 'b2_update_file_retention':
-      case 'b2_update_file_legal_hold': {
-        const fileScope = this.fileIdScope(requestStringField(body, 'fileId'))
-        if (fileScope !== undefined) return fileScope
-        return { bucketIds: [], requiresBucketScope: true }
-      }
+      case 'b2_update_file_legal_hold':
+        return this.fileVersionScope(body, directFileName)
       case 'b2_get_upload_part_url':
       case 'b2_finish_large_file':
       case 'b2_cancel_large_file':
-      case 'b2_list_parts': {
-        const largeScope = this.largeFileScope(requestStringField(body, 'fileId'))
-        if (largeScope !== undefined) return largeScope
-        return { bucketIds: [], requiresBucketScope: true }
-      }
-      case 'b2_copy_file': {
-        const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
-        const destinationBucketId = requestStringField(body, 'destinationBucketId')
-        const bucketIds = [
-          ...(sourceScope?.bucketIds ?? []),
-          ...(destinationBucketId !== undefined ? [destinationBucketId] : []),
-        ]
-        const scopedFileNames = fileNames(...(sourceScope?.fileNames ?? []), directFileName)
-        return {
-          bucketIds,
-          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
-          requiresBucketScope: true,
-        }
-      }
-      case 'b2_copy_part': {
-        const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
-        const largeScope = this.largeFileScope(requestStringField(body, 'largeFileId'))
-        const scopedFileNames = fileNames(
-          ...(sourceScope?.fileNames ?? []),
-          ...(largeScope?.fileNames ?? []),
+      case 'b2_list_parts':
+        return (
+          this.largeFileScope(requestStringField(body, 'fileId')) ?? {
+            bucketIds: [],
+            requiresBucketScope: true,
+          }
         )
-        return {
-          bucketIds: [...(sourceScope?.bucketIds ?? []), ...(largeScope?.bucketIds ?? [])],
-          ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
-          requiresBucketScope: true,
-        }
-      }
+      case 'b2_copy_file':
+        return this.copyFileScope(body, directFileName)
+      case 'b2_copy_part':
+        return this.copyPartScope(body)
       case 'b2_list_unfinished_large_files':
         return {
           bucketIds: directBucketId === undefined ? [] : [directBucketId],
@@ -778,18 +774,101 @@ export class B2Simulator {
           fileNames: [requestStringField(body, 'fileNamePrefix') ?? ''],
           requiresBucketScope: true,
         }
+      case 'b2_get_bucket_notification_rules':
+        return this.notificationRulesScope(body, directBucketId, false)
+      case 'b2_set_bucket_notification_rules':
+        return this.notificationRulesScope(body, directBucketId, true)
       default:
-        if (directBucketId !== undefined) {
-          return {
-            bucketIds: [directBucketId],
-            ...(directFileName !== undefined ? { fileNames: [directFileName] } : {}),
-            requiresBucketScope: true,
-          }
-        }
-        return directFileName !== undefined
-          ? { bucketIds: [], fileNames: [directFileName], requiresBucketScope: false }
-          : undefined
+        return this.defaultRequestScope(directBucketId, directFileName)
     }
+  }
+
+  private listBucketsScope(body: unknown, directBucketId: string | undefined): RequestScope {
+    if (directBucketId !== undefined) {
+      return { bucketIds: [directBucketId], requiresBucketScope: true }
+    }
+    const bucketName = requestStringField(body, 'bucketName')
+    if (bucketName !== undefined) {
+      const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
+      return {
+        bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
+        requiresBucketScope: true,
+      }
+    }
+    return { bucketIds: [], requiresBucketScope: true }
+  }
+
+  private fileVersionScope(body: unknown, directFileName: string | undefined): RequestScope {
+    const fileScope = this.fileIdScope(requestStringField(body, 'fileId'))
+    if (fileScope !== undefined) return fileScope
+    return {
+      bucketIds: [],
+      ...(directFileName !== undefined ? { fileNames: [directFileName] } : {}),
+      requiresBucketScope: true,
+    }
+  }
+
+  private copyFileScope(body: unknown, directFileName: string | undefined): RequestScope {
+    const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
+    const destinationBucketId = requestStringField(body, 'destinationBucketId')
+    const bucketIds = [
+      ...(sourceScope?.bucketIds ?? []),
+      ...(destinationBucketId !== undefined ? [destinationBucketId] : []),
+    ]
+    const scopedFileNames = fileNames(...(sourceScope?.fileNames ?? []), directFileName)
+    return {
+      bucketIds,
+      ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
+      requiresBucketScope: true,
+    }
+  }
+
+  private copyPartScope(body: unknown): RequestScope {
+    const sourceScope = this.fileIdScope(requestStringField(body, 'sourceFileId'))
+    const largeScope = this.largeFileScope(requestStringField(body, 'largeFileId'))
+    const scopedFileNames = fileNames(
+      ...(sourceScope?.fileNames ?? []),
+      ...(largeScope?.fileNames ?? []),
+    )
+    return {
+      bucketIds: [...(sourceScope?.bucketIds ?? []), ...(largeScope?.bucketIds ?? [])],
+      ...(scopedFileNames !== undefined ? { fileNames: scopedFileNames } : {}),
+      requiresBucketScope: true,
+    }
+  }
+
+  private notificationRulesScope(
+    body: unknown,
+    directBucketId: string | undefined,
+    includeRequestRules: boolean,
+  ): RequestScope {
+    const existingPrefixes =
+      directBucketId === undefined
+        ? []
+        : storedNotificationRulePrefixes(this.notificationRules.get(directBucketId))
+    const requestPrefixes = includeRequestRules ? (notificationRulePrefixes(body) ?? []) : []
+    const prefixes = [...existingPrefixes, ...requestPrefixes]
+    return {
+      bucketIds: directBucketId === undefined ? [] : [directBucketId],
+      ...(prefixes.length > 0 ? { fileNames: prefixes } : {}),
+      requiresBucketScope: true,
+    }
+  }
+
+  private defaultRequestScope(
+    directBucketId: string | undefined,
+    directFileName: string | undefined,
+  ): RequestScope | undefined {
+    if (directBucketId !== undefined) {
+      return {
+        bucketIds: [directBucketId],
+        ...(directFileName !== undefined ? { fileNames: [directFileName] } : {}),
+        requiresBucketScope: true,
+      }
+    }
+    return directFileName !== undefined
+      ? { bucketIds: [], fileNames: [directFileName], requiresBucketScope: false }
+      : undefined
   }
 
   private fileIdScope(fileId: string | undefined): RequestScope | undefined {
@@ -2445,6 +2524,17 @@ export class B2Simulator {
       apiVersion !== 'v4' && req.bucketId !== undefined
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
+    const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
+    if (
+      hasKeyManagementCapability(req.capabilities) &&
+      (bucketIds !== null || namePrefix !== null)
+    ) {
+      return this.error(
+        400,
+        'bad_request',
+        'key-management capabilities are account-level and cannot be bucket or name-prefix scoped',
+      )
+    }
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -2458,7 +2548,7 @@ export class B2Simulator {
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,
-      namePrefix: req.namePrefix ?? null,
+      namePrefix,
       expirationTimestamp: expiration,
     }
     this.keys.set(kid, stored)
