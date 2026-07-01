@@ -8,6 +8,7 @@ import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import type { LargeFileId } from '../types/ids.ts'
+import { EventType } from '../types/notifications.ts'
 import type { B2Simulator } from './index.ts'
 
 /**
@@ -755,6 +756,78 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('keeps key operations inside the caller bucket and namePrefix scope', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'key-op-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'key-op-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const parentKey = await client.createKey({
+      capabilities: [Capability.ListKeys, Capability.WriteKeys, Capability.DeleteKeys],
+      keyName: 'key-op-parent',
+      bucketIds: [allowed.id],
+      namePrefix: 'allowed/',
+    })
+    const blockedKey = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'key-op-blocked-bucket',
+      bucketIds: [blocked.id],
+      namePrefix: 'allowed/',
+    })
+    const broadKey = await client.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'key-op-broad',
+      bucketIds: null,
+    })
+    const scopedClient = await authorizeWithKey(sim, parentKey)
+
+    await expect(
+      scopedClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: 'key-op-outside-bucket',
+        bucketIds: [blocked.id],
+        namePrefix: 'allowed/',
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: 'key-op-broader-prefix',
+        bucketIds: [allowed.id],
+      }),
+    ).rejects.toThrow(/outside scope/)
+
+    const childKey = await scopedClient.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'key-op-child',
+      bucketIds: [allowed.id],
+      namePrefix: 'allowed/reports/',
+    })
+    expect(childKey.namePrefix).toBe('allowed/reports/')
+
+    const listing = await scopedClient.listKeys()
+    const listedNames = listing.keys.map((key) => key.keyName)
+    expect(listedNames).toContain('key-op-parent')
+    expect(listedNames).toContain('key-op-child')
+    expect(listedNames).not.toContain('key-op-blocked-bucket')
+    expect(listedNames).not.toContain('key-op-broad')
+
+    await expect(scopedClient.deleteKey(blockedKey.applicationKeyId)).rejects.toThrow(
+      /scoped to buckets/,
+    )
+    await expect(scopedClient.deleteKey(broadKey.applicationKeyId)).rejects.toThrow(
+      /bucket scope is required|outside scope/,
+    )
+    await expect(scopedClient.deleteKey(childKey.applicationKeyId)).resolves.toMatchObject({
+      keyName: 'key-op-child',
+    })
+  })
+
   it('rejects bucket-scoped file operations outside the key bucketIds', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -917,6 +990,70 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     ).resolves.toMatchObject({ fileNamePrefix: 'allowed/' })
   })
 
+  it('enforces namePrefix on uploads and large-file starts', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'prefix-upload-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'prefix-upload-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await scopedClient.raw.getUploadUrl(
+      apiUrl,
+      authToken,
+      { bucketId: bucket.id },
+    )
+
+    await expect(
+      scopedClient.raw.uploadFile(
+        uploadUrl,
+        {
+          authorization: authorizationToken,
+          fileName: 'blocked/upload.txt',
+          contentLength: 1,
+          contentSha1: 'do_not_verify',
+          contentType: 'text/plain',
+        },
+        new Uint8Array([1]).buffer,
+      ),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.uploadFile(
+        uploadUrl,
+        {
+          authorization: authorizationToken,
+          fileName: 'allowed/upload.txt',
+          contentLength: 1,
+          contentSha1: 'do_not_verify',
+          contentType: 'text/plain',
+        },
+        new Uint8Array([1]).buffer,
+      ),
+    ).resolves.toMatchObject({ fileName: 'allowed/upload.txt' })
+    await expect(
+      scopedClient.raw.startLargeFile(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileName: 'blocked/large.bin',
+        contentType: 'application/octet-stream',
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.startLargeFile(apiUrl, authToken, {
+        bucketId: bucket.id,
+        fileName: 'allowed/large.bin',
+        contentType: 'application/octet-stream',
+      }),
+    ).resolves.toMatchObject({ fileName: 'allowed/large.bin' })
+  })
+
   it('handles malformed encoded upload file names during strict auth', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -1001,6 +1138,126 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       fileName: 'allowed/copy.txt',
     })
     expect(copy.fileName).toBe('allowed/copy.txt')
+  })
+
+  it('enforces bucket and namePrefix scope on notification rules', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'notify-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'notify-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ReadBucketNotifications, Capability.WriteBucketNotifications],
+      keyName: 'notify-scope-key',
+      bucketIds: [allowed.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const allowedRule = {
+      eventTypes: [EventType.ObjectCreatedAll],
+      isEnabled: true,
+      isSuspended: false,
+      name: 'allowed-rule',
+      objectNamePrefix: 'allowed/',
+      suspensionReason: '',
+      targetConfiguration: { targetType: 'url', url: 'https://example.com/allowed' },
+    }
+    const blockedRule = {
+      ...allowedRule,
+      name: 'blocked-rule',
+      objectNamePrefix: 'blocked/',
+    }
+
+    await expect(
+      scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
+        bucketId: blocked.id,
+        eventNotificationRules: [allowedRule],
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
+        bucketId: allowed.id,
+        eventNotificationRules: [blockedRule],
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
+        bucketId: allowed.id,
+        eventNotificationRules: [allowedRule],
+      }),
+    ).resolves.toMatchObject({
+      bucketId: allowed.id,
+      eventNotificationRules: [allowedRule],
+    })
+    await expect(
+      scopedClient.raw.getBucketNotificationRules(apiUrl, authToken, { bucketId: blocked.id }),
+    ).rejects.toThrow(/scoped to buckets/)
+  })
+
+  it('enforces bucket and namePrefix scope on object-lock updates', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = await client.createBucket({
+      bucketName: 'lock-scope-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blocked = await client.createBucket({
+      bucketName: 'lock-scope-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const allowedFile = await allowed.upload({
+      fileName: 'allowed/legal.txt',
+      source: new BufferSource(new TextEncoder().encode('allowed')),
+    })
+    const blockedPrefixFile = await allowed.upload({
+      fileName: 'blocked/legal.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked prefix')),
+    })
+    const blockedBucketFile = await blocked.upload({
+      fileName: 'allowed/legal.txt',
+      source: new BufferSource(new TextEncoder().encode('blocked bucket')),
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFileLegalHolds, Capability.WriteFileRetentions],
+      keyName: 'lock-scope-key',
+      bucketIds: [allowed.id],
+      namePrefix: 'allowed/',
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    await expect(
+      scopedClient.raw.updateFileLegalHold(apiUrl, authToken, {
+        fileId: blockedBucketFile.fileId,
+        fileName: blockedBucketFile.fileName,
+        legalHold: 'on',
+      }),
+    ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.updateFileLegalHold(apiUrl, authToken, {
+        fileId: blockedPrefixFile.fileId,
+        fileName: blockedPrefixFile.fileName,
+        legalHold: 'on',
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.updateFileRetention(apiUrl, authToken, {
+        fileId: allowedFile.fileId,
+        fileName: allowedFile.fileName,
+        fileRetention: { mode: null, retainUntilTimestamp: null },
+      }),
+    ).resolves.toMatchObject({
+      fileId: allowedFile.fileId,
+      fileName: allowedFile.fileName,
+    })
   })
 })
 
