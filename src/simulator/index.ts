@@ -2524,7 +2524,7 @@ export class B2Simulator {
       apiVersion !== 'v4' && req.bucketId !== undefined
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
-    const namePrefix = req.namePrefix ?? null
+    const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
     if (
       hasKeyManagementCapability(req.capabilities) &&
       (bucketIds !== null || namePrefix !== null)

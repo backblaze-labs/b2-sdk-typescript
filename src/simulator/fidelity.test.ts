@@ -785,6 +785,13 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         bucketIds: null,
       }),
     ).resolves.toMatchObject({ keyName: 'key-admin-unscoped', bucketIds: null })
+    await expect(
+      client.createKey({
+        capabilities: [Capability.DeleteKeys],
+        keyName: 'key-admin-empty-prefix',
+        namePrefix: '',
+      }),
+    ).resolves.toMatchObject({ keyName: 'key-admin-empty-prefix', namePrefix: null })
   })
 
   it('rejects bucket-scoped file operations outside the key bucketIds', async () => {
