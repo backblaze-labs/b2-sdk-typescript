@@ -248,14 +248,6 @@ function requestStringField(body: unknown, field: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function requestStringArrayField(body: unknown, field: string): readonly string[] | undefined {
-  if (typeof body !== 'object' || body === null) return undefined
-  const value = (body as Record<string, unknown>)[field]
-  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === 'string')
-    ? value
-    : undefined
-}
-
 function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
   const present = names.filter((name): name is string => name !== undefined)
   return present.length > 0 ? present : undefined
@@ -271,6 +263,21 @@ function notificationRulePrefixes(body: unknown): readonly string[] | undefined 
     typeof (rule as Record<string, unknown>)['objectNamePrefix'] === 'string'
       ? ((rule as Record<string, string>)['objectNamePrefix'] ?? '')
       : '',
+  )
+}
+
+function storedNotificationRulePrefixes(
+  rules: readonly EventNotificationRule[] | undefined,
+): readonly string[] {
+  return (rules ?? []).map((rule) => rule.objectNamePrefix)
+}
+
+function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
+  return capabilities.some(
+    (capability) =>
+      capability === Capability.ListKeys ||
+      capability === Capability.WriteKeys ||
+      capability === Capability.DeleteKeys,
   )
 }
 
@@ -767,12 +774,10 @@ export class B2Simulator {
           fileNames: [requestStringField(body, 'fileNamePrefix') ?? ''],
           requiresBucketScope: true,
         }
-      case 'b2_create_key':
-        return this.createKeyScope(body, directBucketId)
-      case 'b2_delete_key':
-        return this.keyScope(requestStringField(body, 'applicationKeyId'))
+      case 'b2_get_bucket_notification_rules':
+        return this.notificationRulesScope(body, directBucketId, false)
       case 'b2_set_bucket_notification_rules':
-        return this.notificationRulesScope(body, directBucketId)
+        return this.notificationRulesScope(body, directBucketId, true)
       default:
         return this.defaultRequestScope(directBucketId, directFileName)
     }
@@ -832,21 +837,20 @@ export class B2Simulator {
     }
   }
 
-  private createKeyScope(body: unknown, directBucketId: string | undefined): RequestScope {
-    const bucketIds = requestStringArrayField(body, 'bucketIds')
-    return {
-      bucketIds:
-        bucketIds !== undefined ? bucketIds : directBucketId === undefined ? [] : [directBucketId],
-      fileNames: [requestStringField(body, 'namePrefix') ?? ''],
-      requiresBucketScope: true,
-    }
-  }
-
-  private notificationRulesScope(body: unknown, directBucketId: string | undefined): RequestScope {
-    const prefixes = notificationRulePrefixes(body)
+  private notificationRulesScope(
+    body: unknown,
+    directBucketId: string | undefined,
+    includeRequestRules: boolean,
+  ): RequestScope {
+    const existingPrefixes =
+      directBucketId === undefined
+        ? []
+        : storedNotificationRulePrefixes(this.notificationRules.get(directBucketId))
+    const requestPrefixes = includeRequestRules ? (notificationRulePrefixes(body) ?? []) : []
+    const prefixes = [...existingPrefixes, ...requestPrefixes]
     return {
       bucketIds: directBucketId === undefined ? [] : [directBucketId],
-      ...(prefixes !== undefined ? { fileNames: prefixes } : {}),
+      ...(prefixes.length > 0 ? { fileNames: prefixes } : {}),
       requiresBucketScope: true,
     }
   }
@@ -865,17 +869,6 @@ export class B2Simulator {
     return directFileName !== undefined
       ? { bucketIds: [], fileNames: [directFileName], requiresBucketScope: false }
       : undefined
-  }
-
-  private keyScope(applicationKeyId: string | undefined): RequestScope | undefined {
-    if (applicationKeyId === undefined) return undefined
-    const key = this.keys.get(applicationKeyId)
-    if (key === undefined) return undefined
-    return {
-      bucketIds: key.bucketIds ?? [],
-      fileNames: [key.namePrefix ?? ''],
-      requiresBucketScope: true,
-    }
   }
 
   private fileIdScope(fileId: string | undefined): RequestScope | undefined {
@@ -1215,7 +1208,6 @@ export class B2Simulator {
       case 'b2_list_keys':
         return this.listKeys(
           body as { accountId: string; maxKeyCount?: number; startApplicationKeyId?: string },
-          this.strictAuth ? this.issuedTokens.get(headers['authorization'] ?? '') : undefined,
         )
       case 'b2_delete_key':
         return this.deleteKey(body as { applicationKeyId: string })
@@ -2532,6 +2524,17 @@ export class B2Simulator {
       apiVersion !== 'v4' && req.bucketId !== undefined
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
+    const namePrefix = req.namePrefix ?? null
+    if (
+      hasKeyManagementCapability(req.capabilities) &&
+      (bucketIds !== null || namePrefix !== null)
+    ) {
+      return this.error(
+        400,
+        'bad_request',
+        'key-management capabilities are account-level and cannot be bucket or name-prefix scoped',
+      )
+    }
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -2545,7 +2548,7 @@ export class B2Simulator {
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,
-      namePrefix: req.namePrefix ?? null,
+      namePrefix,
       expirationTimestamp: expiration,
     }
     this.keys.set(kid, stored)
@@ -2567,20 +2570,17 @@ export class B2Simulator {
     }
   }
 
-  private listKeys(
-    req: {
-      accountId: string
-      maxKeyCount?: number
-      startApplicationKeyId?: string
-    },
-    token?: IssuedToken,
-  ): SimulatorJsonResponse {
+  private listKeys(req: {
+    accountId: string
+    maxKeyCount?: number
+    startApplicationKeyId?: string
+  }): SimulatorJsonResponse {
     const countError = validateMaxCount(req.maxKeyCount, 'b2_list_keys')
     if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxKeyCount ?? 1000
-    let allKeys = [...this.keys.values()]
-      .filter((key) => this.keyIsVisibleToToken(key, token))
-      .sort((a, b) => a.applicationKeyId.localeCompare(b.applicationKeyId))
+    let allKeys = [...this.keys.values()].sort((a, b) =>
+      a.applicationKeyId.localeCompare(b.applicationKeyId),
+    )
 
     if (req.startApplicationKeyId) {
       const start = req.startApplicationKeyId
@@ -2602,21 +2602,6 @@ export class B2Simulator {
     const nextId = allKeys.length > max ? (allKeys[max]?.applicationKeyId ?? null) : null
 
     return { status: 200, body: { keys, nextApplicationKeyId: nextId } }
-  }
-
-  private keyIsVisibleToToken(key: StoredKey, token: IssuedToken | undefined): boolean {
-    if (token === undefined) return true
-    if (token.bucketIds !== null) {
-      if (key.bucketIds === null) return false
-      for (const bucketId of key.bucketIds) {
-        if (!token.bucketIds.includes(bucketId)) return false
-      }
-    }
-    if (token.namePrefix !== null) {
-      if (key.namePrefix === null) return false
-      if (!key.namePrefix.startsWith(token.namePrefix)) return false
-    }
-    return true
   }
 
   private deleteKey(req: { applicationKeyId: string }): SimulatorJsonResponse {

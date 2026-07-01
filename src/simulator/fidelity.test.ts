@@ -756,76 +756,35 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
-  it('keeps key operations inside the caller bucket and namePrefix scope', async () => {
-    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+  it('rejects bucket or prefix scoped key-management capabilities', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
-    const allowed = await client.createBucket({
-      bucketName: 'key-op-scope-a',
+    const bucket = await client.createBucket({
+      bucketName: 'key-admin-scope',
       bucketType: BucketType.AllPrivate,
     })
-    const blocked = await client.createBucket({
-      bucketName: 'key-op-scope-b',
-      bucketType: BucketType.AllPrivate,
-    })
-    const parentKey = await client.createKey({
-      capabilities: [Capability.ListKeys, Capability.WriteKeys, Capability.DeleteKeys],
-      keyName: 'key-op-parent',
-      bucketIds: [allowed.id],
-      namePrefix: 'allowed/',
-    })
-    const blockedKey = await client.createKey({
-      capabilities: [Capability.ReadFiles],
-      keyName: 'key-op-blocked-bucket',
-      bucketIds: [blocked.id],
-      namePrefix: 'allowed/',
-    })
-    const broadKey = await client.createKey({
-      capabilities: [Capability.ReadFiles],
-      keyName: 'key-op-broad',
-      bucketIds: null,
-    })
-    const scopedClient = await authorizeWithKey(sim, parentKey)
 
     await expect(
-      scopedClient.createKey({
-        capabilities: [Capability.ReadFiles],
-        keyName: 'key-op-outside-bucket',
-        bucketIds: [blocked.id],
-        namePrefix: 'allowed/',
+      client.createKey({
+        capabilities: [Capability.WriteKeys],
+        keyName: 'key-admin-bucket-scoped',
+        bucketIds: [bucket.id],
       }),
-    ).rejects.toThrow(/scoped to buckets/)
+    ).rejects.toThrow(/account-level/)
     await expect(
-      scopedClient.createKey({
-        capabilities: [Capability.ReadFiles],
-        keyName: 'key-op-broader-prefix',
-        bucketIds: [allowed.id],
+      client.createKey({
+        capabilities: [Capability.ListKeys],
+        keyName: 'key-admin-prefix-scoped',
+        namePrefix: 'tenant/',
       }),
-    ).rejects.toThrow(/outside scope/)
-
-    const childKey = await scopedClient.createKey({
-      capabilities: [Capability.ReadFiles],
-      keyName: 'key-op-child',
-      bucketIds: [allowed.id],
-      namePrefix: 'allowed/reports/',
-    })
-    expect(childKey.namePrefix).toBe('allowed/reports/')
-
-    const listing = await scopedClient.listKeys()
-    const listedNames = listing.keys.map((key) => key.keyName)
-    expect(listedNames).toContain('key-op-parent')
-    expect(listedNames).toContain('key-op-child')
-    expect(listedNames).not.toContain('key-op-blocked-bucket')
-    expect(listedNames).not.toContain('key-op-broad')
-
-    await expect(scopedClient.deleteKey(blockedKey.applicationKeyId)).rejects.toThrow(
-      /scoped to buckets/,
-    )
-    await expect(scopedClient.deleteKey(broadKey.applicationKeyId)).rejects.toThrow(
-      /bucket scope is required|outside scope/,
-    )
-    await expect(scopedClient.deleteKey(childKey.applicationKeyId)).resolves.toMatchObject({
-      keyName: 'key-op-child',
-    })
+    ).rejects.toThrow(/account-level/)
+    await expect(
+      client.createKey({
+        capabilities: [Capability.DeleteKeys],
+        keyName: 'key-admin-unscoped',
+        bucketIds: null,
+      }),
+    ).resolves.toMatchObject({ keyName: 'key-admin-unscoped', bucketIds: null })
   })
 
   it('rejects bucket-scoped file operations outside the key bucketIds', async () => {
@@ -1174,6 +1133,14 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       name: 'blocked-rule',
       objectNamePrefix: 'blocked/',
     }
+    await client.raw.setBucketNotificationRules(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: allowed.id,
+        eventNotificationRules: [blockedRule],
+      },
+    )
 
     await expect(
       scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
@@ -1181,6 +1148,29 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         eventNotificationRules: [allowedRule],
       }),
     ).rejects.toThrow(/scoped to buckets/)
+    await expect(
+      scopedClient.raw.getBucketNotificationRules(apiUrl, authToken, { bucketId: allowed.id }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
+        bucketId: allowed.id,
+        eventNotificationRules: [],
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await expect(
+      scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
+        bucketId: allowed.id,
+        eventNotificationRules: [allowedRule],
+      }),
+    ).rejects.toThrow(/outside scope/)
+    await client.raw.setBucketNotificationRules(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: allowed.id,
+        eventNotificationRules: [],
+      },
+    )
     await expect(
       scopedClient.raw.setBucketNotificationRules(apiUrl, authToken, {
         bucketId: allowed.id,
@@ -1196,6 +1186,9 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       bucketId: allowed.id,
       eventNotificationRules: [allowedRule],
     })
+    await expect(
+      scopedClient.raw.getBucketNotificationRules(apiUrl, authToken, { bucketId: allowed.id }),
+    ).resolves.toMatchObject({ bucketId: allowed.id, eventNotificationRules: [allowedRule] })
     await expect(
       scopedClient.raw.getBucketNotificationRules(apiUrl, authToken, { bucketId: blocked.id }),
     ).rejects.toThrow(/scoped to buckets/)
