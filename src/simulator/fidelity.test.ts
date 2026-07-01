@@ -8,7 +8,7 @@ import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import type { LargeFileId } from '../types/ids.ts'
-import { EventType } from '../types/notifications.ts'
+import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { B2Simulator } from './index.ts'
 
 /**
@@ -1140,6 +1140,14 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       name: 'blocked-rule',
       objectNamePrefix: 'blocked/',
     }
+    const missingPrefixRule = {
+      eventTypes: allowedRule.eventTypes,
+      isEnabled: allowedRule.isEnabled,
+      isSuspended: allowedRule.isSuspended,
+      name: 'missing-prefix-rule',
+      suspensionReason: allowedRule.suspensionReason,
+      targetConfiguration: allowedRule.targetConfiguration,
+    }
     await client.raw.setBucketNotificationRules(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -1169,6 +1177,25 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         bucketId: allowed.id,
         eventNotificationRules: [allowedRule],
       }),
+    ).rejects.toThrow(/outside scope/)
+    await client.raw.setBucketNotificationRules(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: allowed.id,
+        eventNotificationRules: [],
+      },
+    )
+    await client.raw.setBucketNotificationRules(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: allowed.id,
+        eventNotificationRules: [missingPrefixRule as unknown as EventNotificationRule],
+      },
+    )
+    await expect(
+      scopedClient.raw.getBucketNotificationRules(apiUrl, authToken, { bucketId: allowed.id }),
     ).rejects.toThrow(/outside scope/)
     await client.raw.setBucketNotificationRules(
       client.accountInfo.getApiUrl(),

@@ -269,7 +269,9 @@ function notificationRulePrefixes(body: unknown): readonly string[] | undefined 
 function storedNotificationRulePrefixes(
   rules: readonly EventNotificationRule[] | undefined,
 ): readonly string[] {
-  return (rules ?? []).map((rule) => rule.objectNamePrefix)
+  return (rules ?? []).map((rule) =>
+    typeof rule.objectNamePrefix === 'string' ? rule.objectNamePrefix : '',
+  )
 }
 
 function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
