@@ -257,13 +257,11 @@ function notificationRulePrefixes(body: unknown): readonly string[] | undefined 
   if (typeof body !== 'object' || body === null) return undefined
   const rules = (body as Record<string, unknown>)['eventNotificationRules']
   if (!Array.isArray(rules)) return undefined
-  return rules.map((rule) =>
-    typeof rule === 'object' &&
-    rule !== null &&
-    typeof (rule as Record<string, unknown>)['objectNamePrefix'] === 'string'
-      ? ((rule as Record<string, string>)['objectNamePrefix'] ?? '')
-      : '',
-  )
+  return rules.map((rule) => {
+    if (typeof rule !== 'object' || rule === null) return ''
+    const objectNamePrefix = (rule as Record<string, unknown>)['objectNamePrefix']
+    return typeof objectNamePrefix === 'string' ? objectNamePrefix : ''
+  })
 }
 
 function storedNotificationRulePrefixes(
