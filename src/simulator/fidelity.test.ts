@@ -1178,6 +1178,34 @@ describe('B2Simulator upload authorization tokens', () => {
     )
   })
 
+  it('rejects upload tokens used with the wrong upload endpoint type', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-kind',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'kind-mismatch.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    const resp = await wireUploadPart(sim, partUrl.uploadUrl, fileUrl.authorizationToken)
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_auth_token',
+      message: expect.stringContaining('type mismatch'),
+    })
+  })
+
   it('rejects upload-file tokens used with another bucket upload URL', async () => {
     const { client, sim } = makeClient()
     await client.authorize()
