@@ -715,15 +715,22 @@ export class B2Simulator {
       typeof payload['uploadUrl'] !== 'string' ||
       typeof payload['expiresAt'] !== 'number' ||
       !Number.isFinite(payload['expiresAt']) ||
-      !(payload['fileName'] === null || typeof payload['fileName'] === 'string') ||
       !(payload['namePrefix'] === null || typeof payload['namePrefix'] === 'string') ||
       !(payload['applicationKeyId'] === null || typeof payload['applicationKeyId'] === 'string')
     ) {
       return null
     }
+    let fileName: string | null
+    if (expectedKind === 'part') {
+      if (typeof payload['fileName'] !== 'string') return null
+      fileName = payload['fileName']
+    } else {
+      if (payload['fileName'] !== null) return null
+      fileName = null
+    }
     return {
       kind: expectedKind,
-      fileName: payload['fileName'],
+      fileName,
       uploadUrl: payload['uploadUrl'],
       namePrefix: payload['namePrefix'],
       applicationKeyId: payload['applicationKeyId'],

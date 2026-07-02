@@ -1053,6 +1053,26 @@ describe('B2Simulator upload authorization tokens', () => {
     })
   }
 
+  function rewritePartUploadTokenPayload(
+    authorizationToken: string,
+    mutate: (payload: Record<string, unknown>) => void,
+  ): string {
+    const prefix = 'sim_part_auth_'
+    expect(authorizationToken.startsWith(prefix)).toBe(true)
+    const encoded = authorizationToken.slice(prefix.length)
+    const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
+    const padding = (4 - (base64.length % 4)) % 4
+    const binary = atob(base64.padEnd(base64.length + padding, '='))
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+    mutate(payload)
+    let rewritten = ''
+    for (const byte of new TextEncoder().encode(JSON.stringify(payload))) {
+      rewritten += String.fromCharCode(byte)
+    }
+    return `${prefix}${btoa(rewritten).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`
+  }
+
   it('accepts issued upload-file and upload-part authorization tokens', async () => {
     const { client } = makeClient()
     await client.authorize()
@@ -1098,6 +1118,34 @@ describe('B2Simulator upload authorization tokens', () => {
     )
     expect(part.fileId).toBe(large.fileId)
     expect(part.partNumber).toBe(1)
+  })
+
+  it('rejects upload-part tokens with missing file-name scope', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-part-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'part-scope.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+    const malformedToken = rewritePartUploadTokenPayload(partUrl.authorizationToken, (payload) => {
+      payload['fileName'] = null
+    })
+
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, malformedToken),
+      401,
+      'bad_auth_token',
+    )
   })
 
   it('classifies upload type from the URL path, not query parameters', async () => {
