@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
+import type { HttpResponse } from '../http/transport.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
@@ -7,7 +8,6 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import type { LargeFileId } from '../types/ids.ts'
 import type { B2Simulator } from './index.ts'
 
 /**
@@ -1004,6 +1004,477 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
   })
 })
 
+describe('B2Simulator upload authorization tokens', () => {
+  const fileBytes = new Uint8Array([1, 2, 3])
+
+  async function expectError(resp: HttpResponse, status: number, code: string): Promise<void> {
+    expect(resp.status).toBe(status)
+    await expect(resp.json()).resolves.toMatchObject({ code })
+  }
+
+  async function wireUploadFile(
+    sim: B2Simulator,
+    uploadUrl: string,
+    authorizationToken?: string,
+    fileName = 'wire.txt',
+  ): Promise<HttpResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(fileBytes.byteLength),
+      'X-Bz-Content-Sha1': 'do_not_verify',
+      'X-Bz-File-Name': fileName,
+    }
+    if (authorizationToken !== undefined) headers['Authorization'] = authorizationToken
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers,
+      body: fileBytes as BodyInit,
+    })
+  }
+
+  async function wireUploadPart(
+    sim: B2Simulator,
+    uploadUrl: string,
+    authorizationToken?: string,
+  ): Promise<HttpResponse> {
+    const part = new Uint8Array(1024).fill(7)
+    const headers: Record<string, string> = {
+      'X-Bz-Part-Number': '1',
+      'Content-Length': String(part.byteLength),
+      'X-Bz-Content-Sha1': await sha1Hex(part),
+    }
+    if (authorizationToken !== undefined) headers['Authorization'] = authorizationToken
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers,
+      body: part as BodyInit,
+    })
+  }
+
+  function rewritePartUploadTokenPayload(
+    authorizationToken: string,
+    mutate: (payload: Record<string, unknown>) => void,
+  ): string {
+    const prefix = 'sim_part_auth_'
+    expect(authorizationToken.startsWith(prefix)).toBe(true)
+    const [encoded, signature] = authorizationToken.slice(prefix.length).split('.')
+    if (encoded === undefined || signature === undefined) {
+      throw new Error('unexpected upload token format')
+    }
+    const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
+    const padding = (4 - (base64.length % 4)) % 4
+    const binary = atob(base64.padEnd(base64.length + padding, '='))
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
+    mutate(payload)
+    let rewritten = ''
+    for (const byte of new TextEncoder().encode(JSON.stringify(payload))) {
+      rewritten += String.fromCharCode(byte)
+    }
+    const rewrittenPayload = btoa(rewritten)
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replace(/=+$/, '')
+    return `${prefix}${rewrittenPayload}.${signature}`
+  }
+
+  it('accepts issued upload-file and upload-part authorization tokens', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-valid',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const file = await client.raw.uploadFile(
+      fileUrl.uploadUrl,
+      {
+        authorization: fileUrl.authorizationToken,
+        fileName: 'valid-file.txt',
+        contentType: 'application/octet-stream',
+        contentLength: fileBytes.byteLength,
+        contentSha1: 'do_not_verify',
+      },
+      fileBytes as BodyInit,
+    )
+    expect(file.fileName).toBe('valid-file.txt')
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'valid-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+    const partBytes = new Uint8Array(1024).fill(8)
+    const part = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partBytes.byteLength,
+        contentSha1: await sha1Hex(partBytes),
+      },
+      partBytes as BodyInit,
+    )
+    expect(part.fileId).toBe(large.fileId)
+    expect(part.partNumber).toBe(1)
+  })
+
+  it('rejects upload-part tokens with missing file-name scope', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-part-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'part-scope.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+    const malformedToken = rewritePartUploadTokenPayload(partUrl.authorizationToken, (payload) => {
+      payload['fileName'] = null
+    })
+
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, malformedToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('classifies upload type from the URL path, not query parameters', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-path-kind',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    const trickyUrl = `${fileUrl.uploadUrl}&echo=b2_upload_part`
+
+    const resp = await wireUploadFile(sim, trickyUrl, fileUrl.authorizationToken, 'path-kind.txt')
+
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'path-kind.txt' })
+  })
+
+  it('accepts an issued upload token after simulator replacement in default mode', async () => {
+    const first = makeClient()
+    await first.client.authorize()
+    const bucket = await first.client.createBucket({
+      bucketName: 'upload-token-replacement',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await first.client.raw.getUploadUrl(
+      first.client.accountInfo.getApiUrl(),
+      first.client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+
+    const replacement = makeClient()
+    await replacement.client.authorize()
+    const replacementBucket = await replacement.client.createBucket({
+      bucketName: 'upload-token-replacement',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    expect(replacementBucket.id).toBe(bucket.id)
+    const resp = await wireUploadFile(
+      replacement.sim,
+      fileUrl.uploadUrl,
+      fileUrl.authorizationToken,
+      'replacement.txt',
+    )
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'replacement.txt' })
+  })
+
+  it('rejects missing and wrong upload-file authorization tokens', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-missing',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+
+    await expectError(await wireUploadFile(sim, fileUrl.uploadUrl), 401, 'bad_auth_token')
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, 'not-an-upload-token'),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('invalidates issued upload-file and upload-part tokens', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-invalidate',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    expect(sim.invalidateUploadToken(fileUrl.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, fileUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+    expect(sim.invalidateUploadToken('unknown-upload-token')).toBe(false)
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'invalidated-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    expect(sim.invalidateUploadToken(partUrl.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, partUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('rejects upload tokens used with the wrong upload endpoint type', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-kind',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'kind-mismatch.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    const resp = await wireUploadPart(sim, partUrl.uploadUrl, fileUrl.authorizationToken)
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_auth_token',
+      message: expect.stringContaining('type mismatch'),
+    })
+  })
+
+  it('rejects upload-file tokens used with another bucket upload URL', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'upload-token-bucket-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'upload-token-bucket-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const firstUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: first.id })
+    const secondUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: second.id })
+
+    await expectError(
+      await wireUploadFile(sim, secondUrl.uploadUrl, firstUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('rejects upload-part tokens used with another large-file upload URL', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-part-url',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const first = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'first-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const second = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'second-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const firstUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: first.fileId,
+    })
+    const secondUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: second.fileId,
+    })
+
+    await expectError(
+      await wireUploadPart(sim, secondUrl.uploadUrl, firstUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('rejects upload tokens at the exact expiry boundary', async () => {
+    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 0 } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-zero-ttl',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, fileUrl.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'zero-ttl-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, partUrl.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+  })
+
+  it('expires upload-file tokens for stale upload URL retry tests', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-stale',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const stale = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    expect(sim.expireUploadToken(stale.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadFile(sim, stale.uploadUrl, stale.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const fresh = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const resp = await wireUploadFile(sim, fresh.uploadUrl, fresh.authorizationToken, 'fresh.txt')
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'fresh.txt' })
+  })
+
+  it('expires upload-part tokens for stale part URL retry tests', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-stale-part',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'stale-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const stale = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    expect(sim.expireUploadToken(stale.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadPart(sim, stale.uploadUrl, stale.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const fresh = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+    const resp = await wireUploadPart(sim, fresh.uploadUrl, fresh.authorizationToken)
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileId: large.fileId, partNumber: 1 })
+  })
+
+  it('prunes expired upload tokens during repeated URL issuance', async () => {
+    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 60_000 } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-prune',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const expiredFile = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'pruned-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const expiredPart = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    sim.advanceTime(60_000)
+    await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    expect(sim.invalidateUploadToken(expiredFile.authorizationToken)).toBe(false)
+    expect(sim.invalidateUploadToken(expiredPart.authorizationToken)).toBe(false)
+
+    const active = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    await expect(
+      wireUploadFile(sim, active.uploadUrl, active.authorizationToken, 'active-one.txt'),
+    ).resolves.toMatchObject({ status: 200 })
+    await expect(
+      wireUploadFile(sim, active.uploadUrl, active.authorizationToken, 'active-two.txt'),
+    ).resolves.toMatchObject({ status: 200 })
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Upload integrity: SHA-1 verification (spec: b2_upload_file rejects with
 // 400 "Sha1 did not match data received" when the header disagrees with the
@@ -1177,7 +1648,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: start.fileId as unknown as LargeFileId,
+      fileId: start.fileId,
     })
     const part = new Uint8Array(1024).fill(7)
     await expect(
@@ -1203,7 +1674,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: start.fileId as unknown as LargeFileId,
+      fileId: start.fileId,
     })
     const part = new Uint8Array(1024).fill(9)
     await client.raw.uploadPart(
@@ -1219,7 +1690,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
     // The part uploaded fine, but finish supplies the wrong checksum for it.
     await expect(
       client.raw.finishLargeFile(apiUrl, authToken, {
-        fileId: start.fileId as unknown as LargeFileId,
+        fileId: start.fileId,
         partSha1Array: ['0'.repeat(40)],
       }),
     ).rejects.toThrow(/does not match the uploaded part/i)
