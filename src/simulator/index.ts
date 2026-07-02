@@ -462,8 +462,9 @@ export interface B2SimulatorOptions {
    * authorization tokens issued via `b2_get_upload_url` and
    * `b2_get_upload_part_url`. Defaults to 24 hours (real B2). Tests
    * that want to exercise the 401/reauth retry path or stale upload
-   * URL handling can lower this so a single call to
-   * {@link B2Simulator.advanceTime} expires the token.
+   * URL handling can lower this and use {@link B2Simulator.advanceTime}
+   * to move simulator time past account-token expiry. Upload tokens are
+   * rejected at the exact expiry boundary.
    */
   authTokenTtlMs?: number
 }
