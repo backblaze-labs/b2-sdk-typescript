@@ -1383,7 +1383,7 @@ describe('B2Simulator upload authorization tokens', () => {
   })
 
   it('prunes expired upload tokens during repeated URL issuance', async () => {
-    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 1 } })
+    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 60_000 } })
     await client.authorize()
     const bucket = await client.createBucket({
       bucketName: 'upload-token-prune',
@@ -1401,7 +1401,7 @@ describe('B2Simulator upload authorization tokens', () => {
       fileId: large.fileId,
     })
 
-    sim.advanceTime(1)
+    sim.advanceTime(60_000)
     await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
     await client.raw.getUploadPartUrl(apiUrl, authToken, {
       fileId: large.fileId,

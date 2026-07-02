@@ -625,9 +625,9 @@ export class B2Simulator {
    * Invalidate an upload authorization token previously returned by
    * `b2_get_upload_url` or `b2_get_upload_part_url`.
    *
-   * @param authorizationToken - The upload authorization token to remove.
+   * @param authorizationToken - The upload authorization token to invalidate.
    *
-   * @returns `true` when the token existed and was removed, otherwise `false`.
+   * @returns `true` when the token existed and was invalidated, otherwise `false`.
    */
   invalidateUploadToken(authorizationToken: string): boolean {
     const now = this.now()
@@ -673,7 +673,7 @@ export class B2Simulator {
       uploadUrl: token.uploadUrl,
       namePrefix: token.namePrefix,
       applicationKeyId: token.applicationKeyId,
-      expiresAt: token.cleanupAt,
+      expiresAt: token.expiresAt,
     }
     let binary = ''
     for (const byte of utf8Encoder.encode(JSON.stringify(payload))) {
