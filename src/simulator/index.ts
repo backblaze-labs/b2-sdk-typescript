@@ -205,8 +205,6 @@ type UploadTokenKind = 'file' | 'part'
 
 interface StoredUploadToken {
   readonly kind: UploadTokenKind
-  readonly bucketId: string
-  readonly fileId: string | null
   readonly fileName: string | null
   readonly uploadUrl: string
   readonly namePrefix: string | null
@@ -439,8 +437,14 @@ export interface B2SimulatorOptions {
    * When `true`, the simulator enforces application-key capability
    * checks, bucket scoping, prefix scoping, and auth-token expiry on
    * every request. The default `false` keeps the simulator permissive
-   * (matching its long-standing behaviour) so the existing test suite
-   * doesn't have to set up keys with the right capabilities.
+   * for account/application-key authorization (matching its
+   * long-standing behaviour) so the existing test suite doesn't have
+   * to set up keys with the right capabilities.
+   *
+   * Upload authorization tokens returned by `b2_get_upload_url` and
+   * `b2_get_upload_part_url` are always enforced, regardless of this
+   * option. Upload handlers reject missing, unknown, expired, or
+   * wrong-URL upload tokens in both permissive and strict modes.
    *
    * In strict mode:
    *
@@ -454,9 +458,12 @@ export interface B2SimulatorOptions {
   strictAuth?: boolean
   /**
    * How long auth tokens issued via `b2_authorize_account` are valid
-   * for, in milliseconds. Defaults to 24 hours (real B2). Tests that
-   * want to exercise the 401/reauth retry path can lower this so a
-   * single call to {@link B2Simulator.advanceTime} expires the token.
+   * for, in milliseconds. The simulator also uses this TTL for upload
+   * authorization tokens issued via `b2_get_upload_url` and
+   * `b2_get_upload_part_url`. Defaults to 24 hours (real B2). Tests
+   * that want to exercise the 401/reauth retry path or stale upload
+   * URL handling can lower this so a single call to
+   * {@link B2Simulator.advanceTime} expires the token.
    */
   authTokenTtlMs?: number
 }
@@ -608,7 +615,9 @@ export class B2Simulator {
    * @returns `true` when the token existed and was removed, otherwise `false`.
    */
   invalidateUploadToken(authorizationToken: string): boolean {
-    return this.uploadTokens.delete(authorizationToken)
+    const removed = this.uploadTokens.delete(authorizationToken)
+    this.pruneExpiredUploadTokens()
+    return removed
   }
 
   /**
@@ -618,6 +627,14 @@ export class B2Simulator {
    */
   private now(): number {
     return Date.now() + this.clockOffsetMs
+  }
+
+  private pruneExpiredUploadTokens(now = this.now()): void {
+    for (const [authorizationToken, token] of this.uploadTokens.entries()) {
+      if (now >= token.expiresAt) {
+        this.uploadTokens.delete(authorizationToken)
+      }
+    }
   }
 
   /**
@@ -859,16 +876,25 @@ export class B2Simulator {
     return { bucketIds: [large.bucketId], fileNames: [large.fileName], requiresBucketScope: true }
   }
 
-  private issueUploadAuthorization(options: {
-    kind: UploadTokenKind
-    sourceAuthToken: string | undefined
-    bucketId: string
-    fileId?: string
-    fileName?: string
-  }): { uploadUrl: string; authorizationToken: string } {
+  private issueUploadAuthorization(
+    options:
+      | {
+          kind: 'file'
+          sourceAuthToken: string | undefined
+          bucketId: string
+        }
+      | {
+          kind: 'part'
+          sourceAuthToken: string | undefined
+          fileId: string
+          fileName: string
+        },
+  ): { uploadUrl: string; authorizationToken: string } {
+    const now = this.now()
+    this.pruneExpiredUploadTokens(now)
     const endpoint = options.kind === 'file' ? 'b2_upload_file' : 'b2_upload_part'
     const idParam = options.kind === 'file' ? 'bucketId' : 'fileId'
-    const scopedId = options.kind === 'file' ? options.bucketId : (options.fileId ?? '')
+    const scopedId = options.kind === 'file' ? options.bucketId : options.fileId
     const uploadId = this.genId(options.kind === 'file' ? 'upload_file' : 'upload_part')
     const uploadUrl = new URL(`http://localhost:0/b2api/v3/${endpoint}`)
     uploadUrl.searchParams.set(idParam, scopedId)
@@ -883,13 +909,11 @@ export class B2Simulator {
     )
     this.uploadTokens.set(authorizationToken, {
       kind: options.kind,
-      bucketId: options.bucketId,
-      fileId: options.fileId ?? null,
-      fileName: options.fileName ?? null,
+      fileName: options.kind === 'part' ? options.fileName : null,
       uploadUrl: uploadUrl.toString(),
       namePrefix: this.strictAuth ? (sourceToken?.namePrefix ?? null) : null,
       applicationKeyId: sourceToken?.applicationKeyId ?? null,
-      expiresAt: this.now() + this.authTokenTtlMs,
+      expiresAt: now + this.authTokenTtlMs,
     })
     return { uploadUrl: uploadUrl.toString(), authorizationToken }
   }
@@ -906,18 +930,24 @@ export class B2Simulator {
 
     const token = this.uploadTokens.get(authToken)
     if (token === undefined) {
+      this.pruneExpiredUploadTokens()
       return this.error(401, 'bad_auth_token', 'unknown upload authorization token')
     }
-    if (token.kind !== kind) {
-      return this.error(401, 'bad_auth_token', 'upload authorization token type mismatch')
-    }
-    if (this.now() > token.expiresAt) {
+    const now = this.now()
+    if (now >= token.expiresAt) {
+      this.uploadTokens.delete(authToken)
+      this.pruneExpiredUploadTokens(now)
       return this.error(
         401,
         'expired_auth_token',
         'upload authorization token has expired; get a new upload URL',
       )
     }
+    if (token.kind !== kind) {
+      this.pruneExpiredUploadTokens(now)
+      return this.error(401, 'bad_auth_token', 'upload authorization token type mismatch')
+    }
+    this.pruneExpiredUploadTokens(now)
     if (!this.uploadUrlMatches(token, uploadUrl)) {
       return this.error(
         401,
@@ -2262,7 +2292,6 @@ export class B2Simulator {
     const uploadAuth = this.issueUploadAuthorization({
       kind: 'part',
       sourceAuthToken: authToken,
-      bucketId: large.bucketId,
       fileId: req.fileId,
       fileName: large.fileName,
     })

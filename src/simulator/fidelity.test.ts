@@ -1122,6 +1122,42 @@ describe('B2Simulator upload authorization tokens', () => {
     )
   })
 
+  it('invalidates issued upload-file and upload-part tokens', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-invalidate',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    expect(sim.invalidateUploadToken(fileUrl.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, fileUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+    expect(sim.invalidateUploadToken('unknown-upload-token')).toBe(false)
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'invalidated-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    expect(sim.invalidateUploadToken(partUrl.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, partUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
   it('rejects upload-file tokens used with another bucket upload URL', async () => {
     const { client, sim } = makeClient()
     await client.authorize()
@@ -1175,6 +1211,39 @@ describe('B2Simulator upload authorization tokens', () => {
       await wireUploadPart(sim, secondUrl.uploadUrl, firstUrl.authorizationToken),
       401,
       'bad_auth_token',
+    )
+  })
+
+  it('rejects upload tokens at the exact expiry boundary', async () => {
+    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 0 } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-zero-ttl',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, fileUrl.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'zero-ttl-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, partUrl.authorizationToken),
+      401,
+      'expired_auth_token',
     )
   })
 
@@ -1233,6 +1302,35 @@ describe('B2Simulator upload authorization tokens', () => {
     const resp = await wireUploadPart(sim, fresh.uploadUrl, fresh.authorizationToken)
     expect(resp.status).toBe(200)
     await expect(resp.json()).resolves.toMatchObject({ fileId: large.fileId, partNumber: 1 })
+  })
+
+  it('prunes expired upload tokens during repeated URL issuance', async () => {
+    const { client, sim } = makeClient({ sim: { authTokenTtlMs: 1 } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-prune',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const expiredFile = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'pruned-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const expiredPart = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    sim.advanceTime(1)
+    await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    expect(sim.invalidateUploadToken(expiredFile.authorizationToken)).toBe(false)
+    expect(sim.invalidateUploadToken(expiredPart.authorizationToken)).toBe(false)
   })
 })
 
