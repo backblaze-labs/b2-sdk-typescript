@@ -8,7 +8,6 @@ import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import type { LargeFileId } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { B2Simulator } from './index.ts'
 
@@ -1344,7 +1343,10 @@ describe('B2Simulator upload authorization tokens', () => {
   ): string {
     const prefix = 'sim_part_auth_'
     expect(authorizationToken.startsWith(prefix)).toBe(true)
-    const encoded = authorizationToken.slice(prefix.length)
+    const [encoded, signature] = authorizationToken.slice(prefix.length).split('.')
+    if (encoded === undefined || signature === undefined) {
+      throw new Error('unexpected upload token format')
+    }
     const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
     const padding = (4 - (base64.length % 4)) % 4
     const binary = atob(base64.padEnd(base64.length + padding, '='))
@@ -1355,7 +1357,11 @@ describe('B2Simulator upload authorization tokens', () => {
     for (const byte of new TextEncoder().encode(JSON.stringify(payload))) {
       rewritten += String.fromCharCode(byte)
     }
-    return `${prefix}${btoa(rewritten).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`
+    const rewrittenPayload = btoa(rewritten)
+      .replaceAll('+', '-')
+      .replaceAll('/', '_')
+      .replace(/=+$/, '')
+    return `${prefix}${rewrittenPayload}.${signature}`
   }
 
   it('accepts issued upload-file and upload-part authorization tokens', async () => {
