@@ -30,8 +30,39 @@ import {
 } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import { hmacSha256 } from '../util/crypto.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
+
+const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+
+function base64UrlEncode(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+}
+
+function base64UrlDecode(encoded: string): Uint8Array | null {
+  const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
+  const padding = (4 - (base64.length % 4)) % 4
+  try {
+    const binary = atob(base64.padEnd(base64.length + padding, '='))
+    return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  } catch {
+    return null
+  }
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const max = Math.max(left.length, right.length)
+  let mismatch = left.length === right.length ? 0 : 1
+  for (let i = 0; i < max; i++) {
+    mismatch |= (left.charCodeAt(i) || 0) ^ (right.charCodeAt(i) || 0)
+  }
+  return mismatch === 0
+}
 
 /**
  * Result of {@link parseRangeHeader}. `'ok'` is satisfiable,
@@ -537,9 +568,10 @@ export class B2Simulator {
   >()
   /**
    * Mutable upload-token overrides for tokens minted by `b2_get_upload_url`
-   * and `b2_get_upload_part_url`. The token string is self-describing so
-   * another simulator instance can validate it, while this map records
-   * local invalidation / forced-expiry state for tests.
+   * and `b2_get_upload_part_url`. The token string is self-describing
+   * and signed so another simulator instance can validate issued-token
+   * state, while this map records local invalidation / forced-expiry
+   * state for tests.
    */
   private readonly uploadTokens = new Map<string, StoredUploadToken>()
   /**
@@ -614,8 +646,8 @@ export class B2Simulator {
    */
   expireUploadToken(authorizationToken: string): boolean {
     const now = this.now()
-    const token = this.uploadTokenState(authorizationToken)
-    if (token === null || now >= token.cleanupAt) return false
+    const token = this.uploadTokens.get(authorizationToken)
+    if (token === undefined || now >= token.cleanupAt) return false
     token.expiresAt = now - 1
     this.uploadTokens.set(authorizationToken, token)
     return true
@@ -631,8 +663,8 @@ export class B2Simulator {
    */
   invalidateUploadToken(authorizationToken: string): boolean {
     const now = this.now()
-    const token = this.uploadTokenState(authorizationToken)
-    if (token === null || now >= token.cleanupAt) {
+    const token = this.uploadTokens.get(authorizationToken)
+    if (token === undefined || now >= token.cleanupAt) {
       this.pruneExpiredUploadTokens(now)
       return false
     }
@@ -659,13 +691,13 @@ export class B2Simulator {
     }
   }
 
-  private uploadTokenState(authorizationToken: string): StoredUploadToken | null {
+  private async uploadTokenState(authorizationToken: string): Promise<StoredUploadToken | null> {
     const stored = this.uploadTokens.get(authorizationToken)
     if (stored !== undefined) return stored
-    return this.decodeUploadAuthorizationToken(authorizationToken)
+    return await this.decodeUploadAuthorizationToken(authorizationToken)
   }
 
-  private encodeUploadAuthorizationToken(token: StoredUploadToken): string {
+  private async encodeUploadAuthorizationToken(token: StoredUploadToken): Promise<string> {
     const payload: UploadTokenPayload = {
       v: 1,
       kind: token.kind,
@@ -675,16 +707,15 @@ export class B2Simulator {
       applicationKeyId: token.applicationKeyId,
       expiresAt: token.expiresAt,
     }
-    let binary = ''
-    for (const byte of utf8Encoder.encode(JSON.stringify(payload))) {
-      binary += String.fromCharCode(byte)
-    }
-    const encoded = btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+    const encoded = base64UrlEncode(utf8Encoder.encode(JSON.stringify(payload)))
+    const signature = await this.signUploadTokenPayload(encoded)
     const prefix = token.kind === 'file' ? 'sim_upload_auth' : 'sim_part_auth'
-    return `${prefix}_${encoded}`
+    return `${prefix}_${encoded}.${signature}`
   }
 
-  private decodeUploadAuthorizationToken(authorizationToken: string): StoredUploadToken | null {
+  private async decodeUploadAuthorizationToken(
+    authorizationToken: string,
+  ): Promise<StoredUploadToken | null> {
     const filePrefix = 'sim_upload_auth_'
     const partPrefix = 'sim_part_auth_'
     const expectedKind = authorizationToken.startsWith(filePrefix)
@@ -697,12 +728,16 @@ export class B2Simulator {
     const encoded = authorizationToken.slice(
       expectedKind === 'file' ? filePrefix.length : partPrefix.length,
     )
-    const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
-    const padding = (4 - (base64.length % 4)) % 4
+    const tokenParts = encoded.split('.')
+    if (tokenParts.length !== 2) return null
+    const [payloadBytes, signature] = tokenParts as [string, string]
+    const expectedSignature = await this.signUploadTokenPayload(payloadBytes)
+    if (!timingSafeStringEqual(signature, expectedSignature)) return null
+
     let parsed: unknown
     try {
-      const binary = atob(base64.padEnd(base64.length + padding, '='))
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      const bytes = base64UrlDecode(payloadBytes)
+      if (bytes === null) return null
       parsed = JSON.parse(utf8Decoder.decode(bytes)) as unknown
     } catch {
       return null
@@ -738,6 +773,10 @@ export class B2Simulator {
       cleanupAt: payload['expiresAt'],
       invalidated: false,
     }
+  }
+
+  private async signUploadTokenPayload(encodedPayload: string): Promise<string> {
+    return base64UrlEncode(await hmacSha256(UPLOAD_TOKEN_SIGNING_KEY, encodedPayload))
   }
 
   /**
@@ -979,7 +1018,7 @@ export class B2Simulator {
     return { bucketIds: [large.bucketId], fileNames: [large.fileName], requiresBucketScope: true }
   }
 
-  private issueUploadAuthorization(
+  private async issueUploadAuthorization(
     options:
       | {
           kind: 'file'
@@ -992,7 +1031,7 @@ export class B2Simulator {
           fileId: string
           fileName: string
         },
-  ): { uploadUrl: string; authorizationToken: string } {
+  ): Promise<{ uploadUrl: string; authorizationToken: string }> {
     const now = this.now()
     this.pruneExpiredUploadTokens(now)
     const endpoint = options.kind === 'file' ? 'b2_upload_file' : 'b2_upload_part'
@@ -1017,22 +1056,22 @@ export class B2Simulator {
       cleanupAt: now + this.authTokenTtlMs,
       invalidated: false,
     }
-    const authorizationToken = this.encodeUploadAuthorizationToken(token)
+    const authorizationToken = await this.encodeUploadAuthorizationToken(token)
     this.uploadTokens.set(authorizationToken, token)
     return { uploadUrl: uploadUrl.toString(), authorizationToken }
   }
 
-  private validateUploadAuthorization(
+  private async validateUploadAuthorization(
     kind: UploadTokenKind,
     uploadUrl: string,
     authToken: string | undefined,
     fileName: string | undefined,
-  ): SimulatorJsonResponse | null {
+  ): Promise<SimulatorJsonResponse | null> {
     if (authToken === undefined || authToken === '') {
       return this.error(401, 'bad_auth_token', 'missing upload Authorization header')
     }
 
-    const token = this.uploadTokenState(authToken)
+    const token = await this.uploadTokenState(authToken)
     if (token === null) {
       this.pruneExpiredUploadTokens()
       return this.error(401, 'bad_auth_token', 'unknown upload authorization token')
@@ -1304,7 +1343,7 @@ export class B2Simulator {
       case 'b2_update_bucket':
         return this.updateBucket(body as Record<string, unknown>)
       case 'b2_get_upload_url':
-        return this.getUploadUrl(body as { bucketId: string }, headers['authorization'])
+        return await this.getUploadUrl(body as { bucketId: string }, headers['authorization'])
       case 'b2_list_file_names':
         return this.listFileNames(
           body as {
@@ -1357,7 +1396,7 @@ export class B2Simulator {
           },
         )
       case 'b2_get_upload_part_url':
-        return this.getUploadPartUrl(body as { fileId: string }, headers['authorization'])
+        return await this.getUploadPartUrl(body as { fileId: string }, headers['authorization'])
       case 'b2_finish_large_file':
         return this.finishLargeFile(body as { fileId: string; partSha1Array: string[] })
       case 'b2_cancel_large_file':
@@ -1459,7 +1498,7 @@ export class B2Simulator {
       kind === 'part' || headers['x-bz-file-name'] === undefined
         ? undefined
         : decodeHeaderValue(headers['x-bz-file-name'])
-    const authError = this.validateUploadAuthorization(
+    const authError = await this.validateUploadAuthorization(
       kind,
       url,
       headers['authorization'],
@@ -2044,10 +2083,13 @@ export class B2Simulator {
     return { status: 200, body: updated }
   }
 
-  private getUploadUrl(req: { bucketId: string }, authToken?: string): SimulatorJsonResponse {
+  private async getUploadUrl(
+    req: { bucketId: string },
+    authToken?: string,
+  ): Promise<SimulatorJsonResponse> {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
-    const uploadAuth = this.issueUploadAuthorization({
+    const uploadAuth = await this.issueUploadAuthorization({
       kind: 'file',
       sourceAuthToken: authToken,
       bucketId: req.bucketId,
@@ -2403,10 +2445,13 @@ export class B2Simulator {
     }
   }
 
-  private getUploadPartUrl(req: { fileId: string }, authToken?: string): SimulatorJsonResponse {
+  private async getUploadPartUrl(
+    req: { fileId: string },
+    authToken?: string,
+  ): Promise<SimulatorJsonResponse> {
     const large = this.largeFiles.get(req.fileId)
     if (large === undefined) return this.error(400, 'bad_request', 'Large file not found')
-    const uploadAuth = this.issueUploadAuthorization({
+    const uploadAuth = await this.issueUploadAuthorization({
       kind: 'part',
       sourceAuthToken: authToken,
       fileId: req.fileId,
