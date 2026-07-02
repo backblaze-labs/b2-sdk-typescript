@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
+import type { HttpResponse } from '../http/transport.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient } from '../test-utils/index.ts'
@@ -1001,6 +1002,237 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       fileName: 'allowed/copy.txt',
     })
     expect(copy.fileName).toBe('allowed/copy.txt')
+  })
+})
+
+describe('B2Simulator upload authorization tokens', () => {
+  const fileBytes = new Uint8Array([1, 2, 3])
+
+  async function expectError(resp: HttpResponse, status: number, code: string): Promise<void> {
+    expect(resp.status).toBe(status)
+    await expect(resp.json()).resolves.toMatchObject({ code })
+  }
+
+  async function wireUploadFile(
+    sim: B2Simulator,
+    uploadUrl: string,
+    authorizationToken?: string,
+    fileName = 'wire.txt',
+  ): Promise<HttpResponse> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': String(fileBytes.byteLength),
+      'X-Bz-Content-Sha1': 'do_not_verify',
+      'X-Bz-File-Name': fileName,
+    }
+    if (authorizationToken !== undefined) headers['Authorization'] = authorizationToken
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers,
+      body: fileBytes as BodyInit,
+    })
+  }
+
+  async function wireUploadPart(
+    sim: B2Simulator,
+    uploadUrl: string,
+    authorizationToken?: string,
+  ): Promise<HttpResponse> {
+    const part = new Uint8Array(1024).fill(7)
+    const headers: Record<string, string> = {
+      'X-Bz-Part-Number': '1',
+      'Content-Length': String(part.byteLength),
+      'X-Bz-Content-Sha1': await sha1Hex(part),
+    }
+    if (authorizationToken !== undefined) headers['Authorization'] = authorizationToken
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers,
+      body: part as BodyInit,
+    })
+  }
+
+  it('accepts issued upload-file and upload-part authorization tokens', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-valid',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+
+    const fileUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const file = await client.raw.uploadFile(
+      fileUrl.uploadUrl,
+      {
+        authorization: fileUrl.authorizationToken,
+        fileName: 'valid-file.txt',
+        contentType: 'application/octet-stream',
+        contentLength: fileBytes.byteLength,
+        contentSha1: 'do_not_verify',
+      },
+      fileBytes as BodyInit,
+    )
+    expect(file.fileName).toBe('valid-file.txt')
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'valid-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+    const partBytes = new Uint8Array(1024).fill(8)
+    const part = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partBytes.byteLength,
+        contentSha1: await sha1Hex(partBytes),
+      },
+      partBytes as BodyInit,
+    )
+    expect(part.fileId).toBe(large.fileId)
+    expect(part.partNumber).toBe(1)
+  })
+
+  it('rejects missing and wrong upload-file authorization tokens', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-missing',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+
+    await expectError(await wireUploadFile(sim, fileUrl.uploadUrl), 401, 'bad_auth_token')
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, 'not-an-upload-token'),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('rejects upload-file tokens used with another bucket upload URL', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const first = await client.createBucket({
+      bucketName: 'upload-token-bucket-a',
+      bucketType: BucketType.AllPrivate,
+    })
+    const second = await client.createBucket({
+      bucketName: 'upload-token-bucket-b',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const firstUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: first.id })
+    const secondUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: second.id })
+
+    await expectError(
+      await wireUploadFile(sim, secondUrl.uploadUrl, firstUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('rejects upload-part tokens used with another large-file upload URL', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-part-url',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const first = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'first-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const second = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'second-large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const firstUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: first.fileId as unknown as LargeFileId,
+    })
+    const secondUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: second.fileId as unknown as LargeFileId,
+    })
+
+    await expectError(
+      await wireUploadPart(sim, secondUrl.uploadUrl, firstUrl.authorizationToken),
+      401,
+      'bad_auth_token',
+    )
+  })
+
+  it('expires upload-file tokens for stale upload URL retry tests', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-stale',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const stale = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    expect(sim.expireUploadToken(stale.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadFile(sim, stale.uploadUrl, stale.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const fresh = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const resp = await wireUploadFile(sim, fresh.uploadUrl, fresh.authorizationToken, 'fresh.txt')
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'fresh.txt' })
+  })
+
+  it('expires upload-part tokens for stale part URL retry tests', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-stale-part',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'stale-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const stale = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+
+    expect(sim.expireUploadToken(stale.authorizationToken)).toBe(true)
+    await expectError(
+      await wireUploadPart(sim, stale.uploadUrl, stale.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+
+    const fresh = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId as unknown as LargeFileId,
+    })
+    const resp = await wireUploadPart(sim, fresh.uploadUrl, fresh.authorizationToken)
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileId: large.fileId, partNumber: 1 })
   })
 })
 
