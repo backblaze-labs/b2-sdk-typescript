@@ -203,6 +203,16 @@ interface StoredKey {
 
 type UploadTokenKind = 'file' | 'part'
 
+interface UploadTokenPayload {
+  readonly v: 1
+  readonly kind: UploadTokenKind
+  readonly fileName: string | null
+  readonly uploadUrl: string
+  readonly namePrefix: string | null
+  readonly applicationKeyId: string | null
+  readonly expiresAt: number
+}
+
 interface StoredUploadToken {
   readonly kind: UploadTokenKind
   readonly fileName: string | null
@@ -210,6 +220,8 @@ interface StoredUploadToken {
   readonly namePrefix: string | null
   readonly applicationKeyId: string | null
   expiresAt: number
+  readonly cleanupAt: number
+  invalidated: boolean
 }
 
 interface RequestScope {
@@ -524,10 +536,10 @@ export class B2Simulator {
     }
   >()
   /**
-   * Upload authorization tokens minted by `b2_get_upload_url` and
-   * `b2_get_upload_part_url`. These are deliberately separate from
-   * account auth tokens: upload tokens are only valid for the issued
-   * upload endpoint URL and its bucket / large-file scope.
+   * Mutable upload-token overrides for tokens minted by `b2_get_upload_url`
+   * and `b2_get_upload_part_url`. The token string is self-describing so
+   * another simulator instance can validate it, while this map records
+   * local invalidation / forced-expiry state for tests.
    */
   private readonly uploadTokens = new Map<string, StoredUploadToken>()
   /**
@@ -601,9 +613,11 @@ export class B2Simulator {
    * @returns `true` when the token existed and was expired, otherwise `false`.
    */
   expireUploadToken(authorizationToken: string): boolean {
-    const token = this.uploadTokens.get(authorizationToken)
-    if (token === undefined) return false
-    token.expiresAt = this.now() - 1
+    const now = this.now()
+    const token = this.uploadTokenState(authorizationToken)
+    if (token === null || now >= token.cleanupAt) return false
+    token.expiresAt = now - 1
+    this.uploadTokens.set(authorizationToken, token)
     return true
   }
 
@@ -616,9 +630,16 @@ export class B2Simulator {
    * @returns `true` when the token existed and was removed, otherwise `false`.
    */
   invalidateUploadToken(authorizationToken: string): boolean {
-    const removed = this.uploadTokens.delete(authorizationToken)
+    const now = this.now()
+    const token = this.uploadTokenState(authorizationToken)
+    if (token === null || now >= token.cleanupAt) {
+      this.pruneExpiredUploadTokens(now)
+      return false
+    }
+    token.invalidated = true
+    this.uploadTokens.set(authorizationToken, token)
     this.pruneExpiredUploadTokens()
-    return removed
+    return true
   }
 
   /**
@@ -632,9 +653,83 @@ export class B2Simulator {
 
   private pruneExpiredUploadTokens(now = this.now()): void {
     for (const [authorizationToken, token] of this.uploadTokens.entries()) {
-      if (now >= token.expiresAt) {
+      if (now >= token.cleanupAt) {
         this.uploadTokens.delete(authorizationToken)
       }
+    }
+  }
+
+  private uploadTokenState(authorizationToken: string): StoredUploadToken | null {
+    const stored = this.uploadTokens.get(authorizationToken)
+    if (stored !== undefined) return stored
+    return this.decodeUploadAuthorizationToken(authorizationToken)
+  }
+
+  private encodeUploadAuthorizationToken(token: StoredUploadToken): string {
+    const payload: UploadTokenPayload = {
+      v: 1,
+      kind: token.kind,
+      fileName: token.fileName,
+      uploadUrl: token.uploadUrl,
+      namePrefix: token.namePrefix,
+      applicationKeyId: token.applicationKeyId,
+      expiresAt: token.cleanupAt,
+    }
+    let binary = ''
+    for (const byte of utf8Encoder.encode(JSON.stringify(payload))) {
+      binary += String.fromCharCode(byte)
+    }
+    const encoded = btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+    const prefix = token.kind === 'file' ? 'sim_upload_auth' : 'sim_part_auth'
+    return `${prefix}_${encoded}`
+  }
+
+  private decodeUploadAuthorizationToken(authorizationToken: string): StoredUploadToken | null {
+    const filePrefix = 'sim_upload_auth_'
+    const partPrefix = 'sim_part_auth_'
+    const expectedKind = authorizationToken.startsWith(filePrefix)
+      ? 'file'
+      : authorizationToken.startsWith(partPrefix)
+        ? 'part'
+        : null
+    if (expectedKind === null) return null
+
+    const encoded = authorizationToken.slice(
+      expectedKind === 'file' ? filePrefix.length : partPrefix.length,
+    )
+    const base64 = encoded.replaceAll('-', '+').replaceAll('_', '/')
+    const padding = (4 - (base64.length % 4)) % 4
+    let parsed: unknown
+    try {
+      const binary = atob(base64.padEnd(base64.length + padding, '='))
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      parsed = JSON.parse(utf8Decoder.decode(bytes)) as unknown
+    } catch {
+      return null
+    }
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const payload = parsed as Record<string, unknown>
+    if (
+      payload['v'] !== 1 ||
+      payload['kind'] !== expectedKind ||
+      typeof payload['uploadUrl'] !== 'string' ||
+      typeof payload['expiresAt'] !== 'number' ||
+      !Number.isFinite(payload['expiresAt']) ||
+      !(payload['fileName'] === null || typeof payload['fileName'] === 'string') ||
+      !(payload['namePrefix'] === null || typeof payload['namePrefix'] === 'string') ||
+      !(payload['applicationKeyId'] === null || typeof payload['applicationKeyId'] === 'string')
+    ) {
+      return null
+    }
+    return {
+      kind: expectedKind,
+      fileName: payload['fileName'],
+      uploadUrl: payload['uploadUrl'],
+      namePrefix: payload['namePrefix'],
+      applicationKeyId: payload['applicationKeyId'],
+      expiresAt: payload['expiresAt'],
+      cleanupAt: payload['expiresAt'],
+      invalidated: false,
     }
   }
 
@@ -905,17 +1000,18 @@ export class B2Simulator {
       options.sourceAuthToken === undefined
         ? undefined
         : this.issuedTokens.get(options.sourceAuthToken)
-    const authorizationToken = this.genId(
-      options.kind === 'file' ? 'sim_upload_auth' : 'sim_part_auth',
-    )
-    this.uploadTokens.set(authorizationToken, {
+    const token: StoredUploadToken = {
       kind: options.kind,
       fileName: options.kind === 'part' ? options.fileName : null,
       uploadUrl: uploadUrl.toString(),
       namePrefix: this.strictAuth ? (sourceToken?.namePrefix ?? null) : null,
       applicationKeyId: sourceToken?.applicationKeyId ?? null,
       expiresAt: now + this.authTokenTtlMs,
-    })
+      cleanupAt: now + this.authTokenTtlMs,
+      invalidated: false,
+    }
+    const authorizationToken = this.encodeUploadAuthorizationToken(token)
+    this.uploadTokens.set(authorizationToken, token)
     return { uploadUrl: uploadUrl.toString(), authorizationToken }
   }
 
@@ -929,20 +1025,29 @@ export class B2Simulator {
       return this.error(401, 'bad_auth_token', 'missing upload Authorization header')
     }
 
-    const token = this.uploadTokens.get(authToken)
-    if (token === undefined) {
+    const token = this.uploadTokenState(authToken)
+    if (token === null) {
       this.pruneExpiredUploadTokens()
       return this.error(401, 'bad_auth_token', 'unknown upload authorization token')
     }
     const now = this.now()
     if (now >= token.expiresAt) {
-      this.uploadTokens.delete(authToken)
+      if (now >= token.cleanupAt) {
+        this.uploadTokens.delete(authToken)
+      } else {
+        this.uploadTokens.set(authToken, token)
+      }
       this.pruneExpiredUploadTokens(now)
       return this.error(
         401,
         'expired_auth_token',
         'upload authorization token has expired; get a new upload URL',
       )
+    }
+    if (token.invalidated) {
+      this.uploadTokens.set(authToken, token)
+      this.pruneExpiredUploadTokens(now)
+      return this.error(401, 'bad_auth_token', 'upload authorization token has been invalidated')
     }
     if (token.kind !== kind) {
       this.pruneExpiredUploadTokens(now)
@@ -2686,7 +2791,8 @@ export class B2Simulator {
     }
     for (const [token, scope] of this.uploadTokens.entries()) {
       if (scope.applicationKeyId === req.applicationKeyId) {
-        this.uploadTokens.delete(token)
+        scope.invalidated = true
+        this.uploadTokens.set(token, scope)
       }
     }
     return {
