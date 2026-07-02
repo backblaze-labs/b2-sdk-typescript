@@ -1337,20 +1337,24 @@ export class B2Simulator {
     headers: Record<string, string>,
     data: Uint8Array,
   ): Promise<SimulatorJsonResponse> {
-    const isPart = url.includes('b2_upload_part')
+    const endpoint = new URL(url).pathname.split('/').pop() ?? ''
+    const kind: UploadTokenKind | null =
+      endpoint === 'b2_upload_file' ? 'file' : endpoint === 'b2_upload_part' ? 'part' : null
+    if (kind === null) return this.error(400, 'bad_request', `Unknown upload endpoint: ${endpoint}`)
+
     const fileName =
-      isPart || headers['x-bz-file-name'] === undefined
+      kind === 'part' || headers['x-bz-file-name'] === undefined
         ? undefined
         : decodeHeaderValue(headers['x-bz-file-name'])
     const authError = this.validateUploadAuthorization(
-      isPart ? 'part' : 'file',
+      kind,
       url,
       headers['authorization'],
       fileName,
     )
     if (authError !== null) return authError
 
-    if (isPart) {
+    if (kind === 'part') {
       return await this.handleUploadPart(url, headers, data)
     }
     return await this.handleUploadFile(url, headers, data)
@@ -3012,8 +3016,9 @@ class SimulatorTransport implements HttpTransport {
       }
     }
 
-    const isUpload = url.includes('b2_upload_file') || url.includes('b2_upload_part')
     const parsedUrl = new URL(url)
+    const endpoint = parsedUrl.pathname.split('/').pop() ?? ''
+    const isUpload = endpoint === 'b2_upload_file' || endpoint === 'b2_upload_part'
     const isDownload =
       parsedUrl.pathname.includes('b2_download_file_by_id') || parsedUrl.pathname.includes('/file/')
 

@@ -1101,6 +1101,26 @@ describe('B2Simulator upload authorization tokens', () => {
     expect(part.partNumber).toBe(1)
   })
 
+  it('classifies upload type from the URL path, not query parameters', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-path-kind',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    const trickyUrl = `${fileUrl.uploadUrl}&echo=b2_upload_part`
+
+    const resp = await wireUploadFile(sim, trickyUrl, fileUrl.authorizationToken, 'path-kind.txt')
+
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'path-kind.txt' })
+  })
+
   it('rejects missing and wrong upload-file authorization tokens', async () => {
     const { client, sim } = makeClient()
     await client.authorize()
