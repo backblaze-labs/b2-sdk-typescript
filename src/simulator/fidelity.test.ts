@@ -1368,7 +1368,7 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
     const partBytes = new Uint8Array(1024).fill(8)
     const part = await client.raw.uploadPart(
@@ -1403,6 +1403,37 @@ describe('B2Simulator upload authorization tokens', () => {
 
     expect(resp.status).toBe(200)
     await expect(resp.json()).resolves.toMatchObject({ fileName: 'path-kind.txt' })
+  })
+
+  it('accepts an issued upload token after simulator replacement in default mode', async () => {
+    const first = makeClient()
+    await first.client.authorize()
+    const bucket = await first.client.createBucket({
+      bucketName: 'upload-token-replacement',
+      bucketType: BucketType.AllPrivate,
+    })
+    const fileUrl = await first.client.raw.getUploadUrl(
+      first.client.accountInfo.getApiUrl(),
+      first.client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+
+    const replacement = makeClient()
+    await replacement.client.authorize()
+    const replacementBucket = await replacement.client.createBucket({
+      bucketName: 'upload-token-replacement',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    expect(replacementBucket.id).toBe(bucket.id)
+    const resp = await wireUploadFile(
+      replacement.sim,
+      fileUrl.uploadUrl,
+      fileUrl.authorizationToken,
+      'replacement.txt',
+    )
+    expect(resp.status).toBe(200)
+    await expect(resp.json()).resolves.toMatchObject({ fileName: 'replacement.txt' })
   })
 
   it('rejects missing and wrong upload-file authorization tokens', async () => {
@@ -1451,7 +1482,7 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     expect(sim.invalidateUploadToken(partUrl.authorizationToken)).toBe(true)
@@ -1478,7 +1509,7 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     const resp = await wireUploadPart(sim, partUrl.uploadUrl, fileUrl.authorizationToken)
@@ -1533,10 +1564,10 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const firstUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: first.fileId as unknown as LargeFileId,
+      fileId: first.fileId,
     })
     const secondUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: second.fileId as unknown as LargeFileId,
+      fileId: second.fileId,
     })
 
     await expectError(
@@ -1569,7 +1600,7 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     await expectError(
@@ -1618,7 +1649,7 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const stale = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     expect(sim.expireUploadToken(stale.authorizationToken)).toBe(true)
@@ -1629,7 +1660,7 @@ describe('B2Simulator upload authorization tokens', () => {
     )
 
     const fresh = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
     const resp = await wireUploadPart(sim, fresh.uploadUrl, fresh.authorizationToken)
     expect(resp.status).toBe(200)
@@ -1652,17 +1683,25 @@ describe('B2Simulator upload authorization tokens', () => {
       contentType: 'application/octet-stream',
     })
     const expiredPart = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     sim.advanceTime(1)
     await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
     await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: large.fileId as unknown as LargeFileId,
+      fileId: large.fileId,
     })
 
     expect(sim.invalidateUploadToken(expiredFile.authorizationToken)).toBe(false)
     expect(sim.invalidateUploadToken(expiredPart.authorizationToken)).toBe(false)
+
+    const active = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    await expect(
+      wireUploadFile(sim, active.uploadUrl, active.authorizationToken, 'active-one.txt'),
+    ).resolves.toMatchObject({ status: 200 })
+    await expect(
+      wireUploadFile(sim, active.uploadUrl, active.authorizationToken, 'active-two.txt'),
+    ).resolves.toMatchObject({ status: 200 })
   })
 })
 
@@ -1839,7 +1878,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: start.fileId as unknown as LargeFileId,
+      fileId: start.fileId,
     })
     const part = new Uint8Array(1024).fill(7)
     await expect(
@@ -1865,7 +1904,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       contentType: 'application/octet-stream',
     })
     const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
-      fileId: start.fileId as unknown as LargeFileId,
+      fileId: start.fileId,
     })
     const part = new Uint8Array(1024).fill(9)
     await client.raw.uploadPart(
@@ -1881,7 +1920,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
     // The part uploaded fine, but finish supplies the wrong checksum for it.
     await expect(
       client.raw.finishLargeFile(apiUrl, authToken, {
-        fileId: start.fileId as unknown as LargeFileId,
+        fileId: start.fileId,
         partSha1Array: ['0'.repeat(40)],
       }),
     ).rejects.toThrow(/does not match the uploaded part/i)
