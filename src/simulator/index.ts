@@ -359,10 +359,10 @@ function publicServerSideEncryption(
   return encryption
 }
 
-function customerKeyDigest(customerKey: string): string {
+function customerKeyDigest(customerKey: Uint8Array): string {
   let first = 0x811c9dc5
   let second = 0x27d4eb2d
-  for (const byte of utf8Encoder.encode(customerKey)) {
+  for (const byte of customerKey) {
     first = Math.imul(first ^ byte, 0x01000193) >>> 0
     second = Math.imul(second ^ byte, 0x85ebca6b) >>> 0
   }
@@ -429,7 +429,7 @@ async function storedServerSideEncryption(
     return {
       mode: encryption.mode,
       algorithm: encryption.algorithm,
-      customerKeyDigest: customerKeyDigest(customerKey),
+      customerKeyDigest: customerKeyDigest(customerKeyBytes),
       customerKeyMd5,
     }
   }
@@ -2003,11 +2003,13 @@ export class B2Simulator {
     const algorithm = headers['x-bz-server-side-encryption-customer-algorithm']
     const customerKey = headers['x-bz-server-side-encryption-customer-key']
     const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+    const customerKeyBytes = customerKey === undefined ? null : base64ToBytes(customerKey)
     if (
       algorithm !== encryption.algorithm ||
-      customerKey === undefined ||
+      customerKeyBytes === null ||
+      customerKeyBytes.byteLength !== 32 ||
       customerKeyMd5 !== encryption.customerKeyMd5 ||
-      customerKeyDigest(customerKey) !== encryption.customerKeyDigest
+      customerKeyDigest(customerKeyBytes) !== encryption.customerKeyDigest
     ) {
       return this.errorAsDownload(
         this.error(

@@ -2100,6 +2100,10 @@ describe('B2Simulator upload SHA-1 verification', () => {
     const data = new TextEncoder().encode('customer-key protected content')
     const encryption = await customerSetting(7)
     const wrongEncryption = await customerSetting(8)
+    const normalizedEncryption = sseCustomer(
+      encryption.customerKey.replace(/=+$/, ''),
+      encryption.customerKeyMd5,
+    )
     const uploaded = await rawUpload('sse-c-download.txt', data, await sha1Hex(data), encryption)
 
     expect(uploaded.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
@@ -2117,6 +2121,10 @@ describe('B2Simulator upload SHA-1 verification', () => {
       serverSideEncryption: encryption,
     })
     expect(await readStream(downloaded.body)).toEqual(data)
+    const normalizedDownload = await bucket.download('sse-c-download.txt', {
+      serverSideEncryption: normalizedEncryption,
+    })
+    expect(await readStream(normalizedDownload.body)).toEqual(data)
 
     const info = await client.raw.getFileInfo(
       client.accountInfo.getApiUrl(),
@@ -2135,6 +2143,10 @@ describe('B2Simulator upload SHA-1 verification', () => {
     const sourceEncryption = await customerSetting(9)
     const wrongSourceEncryption = await customerSetting(10)
     const destinationEncryption = await customerSetting(11)
+    const normalizedSourceEncryption = sseCustomer(
+      sourceEncryption.customerKey.replace(/=+$/, ''),
+      sourceEncryption.customerKeyMd5,
+    )
     const source = await rawUpload(
       'copy-sse-c-source.txt',
       data,
@@ -2159,7 +2171,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
     const retained = await bucket.copyFile({
       sourceFileId: source.fileId,
       fileName: 'copy-retains-source-key.txt',
-      sourceServerSideEncryption: sourceEncryption,
+      sourceServerSideEncryption: normalizedSourceEncryption,
     })
     expect(retained.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
     await expect(bucket.download('copy-retains-source-key.txt')).rejects.toMatchObject({
@@ -2199,6 +2211,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
     const publicJson = JSON.stringify([source, retained, reencrypted])
     expect(publicJson).not.toContain(sourceEncryption.customerKey)
+    expect(publicJson).not.toContain(normalizedSourceEncryption.customerKey)
     expect(publicJson).not.toContain(destinationEncryption.customerKey)
   })
 
