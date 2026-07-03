@@ -3,7 +3,7 @@ import { B2Client } from '../client.ts'
 import type { HttpResponse } from '../http/transport.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient } from '../test-utils/index.ts'
+import { makeClient, readStream } from '../test-utils/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
 import { type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
@@ -1766,12 +1766,13 @@ describe('B2Simulator upload authorization tokens', () => {
 // ---------------------------------------------------------------------------
 
 describe('B2Simulator upload SHA-1 verification', () => {
+  let sim: B2Simulator
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
 
   beforeEach(async () => {
     // maxRetries: 0 so a deliberate 400 surfaces immediately, no backoff.
-    ;({ client } = makeClient({ client: { retry: { maxRetries: 0 } } }))
+    ;({ client, sim } = makeClient({ client: { retry: { maxRetries: 0 } } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'sha1-fidelity',
@@ -1803,6 +1804,32 @@ describe('B2Simulator upload SHA-1 verification', () => {
       },
       data as BodyInit,
     )
+  }
+
+  function inspectRuntimeState(value: unknown, seen = new Set<object>()): string {
+    if (typeof value === 'string') return value
+    if (typeof value !== 'object' || value === null) return ''
+    if (seen.has(value)) return ''
+    seen.add(value)
+
+    if (value instanceof Map) {
+      return [...value.entries()]
+        .map(
+          ([key, entryValue]) =>
+            `${inspectRuntimeState(key, seen)}:${inspectRuntimeState(entryValue, seen)}`,
+        )
+        .join('|')
+    }
+    if (value instanceof Set) {
+      return [...value.values()]
+        .map((entryValue) => inspectRuntimeState(entryValue, seen))
+        .join('|')
+    }
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return ''
+
+    return Object.entries(value)
+      .map(([key, entryValue]) => `${key}:${inspectRuntimeState(entryValue, seen)}`)
+      .join('|')
   }
 
   it('rejects an upload whose X-Bz-Content-Sha1 does not match the bytes', async () => {
@@ -1884,6 +1911,41 @@ describe('B2Simulator upload SHA-1 verification', () => {
       sseCustomer('customer-key', 'customer-key-md5'),
     )
     expect(sseC.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+  })
+
+  it('requires matching SSE-C customer headers to download', async () => {
+    const data = new TextEncoder().encode('customer-key protected content')
+    const customerKey = 'dGhpcy1pcy1hLWJhc2U2NC1lbmNvZGVkLXNlY3JldCE='
+    const customerKeyMd5 = 'mZFLkyvTelC5g8XnyQrpOw=='
+    const encryption = sseCustomer(customerKey, customerKeyMd5)
+    const uploaded = await rawUpload('sse-c-download.txt', data, await sha1Hex(data), encryption)
+
+    expect(uploaded.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKey')
+    expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
+
+    await expect(bucket.download('sse-c-download.txt')).rejects.toMatchObject({ status: 400 })
+    await expect(
+      bucket.download('sse-c-download.txt', {
+        serverSideEncryption: sseCustomer('d3Jvbmcta2V5', customerKeyMd5),
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+
+    const downloaded = await bucket.download('sse-c-download.txt', {
+      serverSideEncryption: encryption,
+    })
+    expect(await readStream(downloaded.body)).toEqual(data)
+
+    const info = await client.raw.getFileInfo(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: uploaded.fileId },
+    )
+    const listed = await bucket.listFileNames({ prefix: 'sse-c-download.txt' })
+    expect(info.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    expect(listed.files[0]?.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    expect(JSON.stringify([uploaded, info, listed])).not.toContain(customerKey)
+    expect(inspectRuntimeState(sim)).not.toContain(customerKey)
   })
 
   it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {

@@ -30,7 +30,7 @@ import {
 } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
-import { hmacSha256 } from '../util/crypto.ts'
+import { hmacSha256, sha256Hex } from '../util/crypto.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
@@ -201,7 +201,18 @@ export {
 interface StoredFile {
   readonly fileVersion: FileVersion
   readonly data: Uint8Array
+  readonly serverSideEncryption: StoredServerSideEncryption
 }
+
+type StoredServerSideEncryption =
+  | { readonly mode: 'none' }
+  | { readonly mode: 'SSE-B2'; readonly algorithm: EncryptionAlgorithm }
+  | {
+      readonly mode: 'SSE-C'
+      readonly algorithm: EncryptionAlgorithm
+      readonly customerKeySha256: string
+      readonly customerKeyMd5: string
+    }
 
 interface StoredBucket {
   readonly info: BucketInfo
@@ -216,7 +227,7 @@ interface LargeFileInProgress {
   readonly fileInfo: Record<string, string>
   readonly fileRetention: FileRetentionValue | null
   readonly legalHold: LegalHoldValue | null
-  readonly serverSideEncryption: EncryptionSetting
+  readonly serverSideEncryption: StoredServerSideEncryption
   readonly uploadTimestamp: number
   readonly parts: Map<number, { data: Uint8Array; sha1: string }>
 }
@@ -335,7 +346,9 @@ function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
   )
 }
 
-function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
+function publicServerSideEncryption(
+  encryption: EncryptionSetting | StoredServerSideEncryption,
+): PublicEncryptionSetting {
   if (encryption.mode === EncryptionMode.SseC) {
     return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
@@ -345,25 +358,42 @@ function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryp
   return encryption
 }
 
-function uploadServerSideEncryption(
+async function storedServerSideEncryption(
+  encryption: EncryptionSetting,
+): Promise<StoredServerSideEncryption> {
+  if (encryption.mode === EncryptionMode.SseC) {
+    return {
+      mode: encryption.mode,
+      algorithm: encryption.algorithm,
+      customerKeySha256: await sha256Hex(encryption.customerKey),
+      customerKeyMd5: encryption.customerKeyMd5,
+    }
+  }
+  if (encryption.mode === EncryptionMode.SseB2) {
+    return { mode: encryption.mode, algorithm: encryption.algorithm }
+  }
+  return { mode: EncryptionMode.None }
+}
+
+async function uploadServerSideEncryption(
   headers: Record<string, string>,
   fallback: EncryptionSetting,
-): EncryptionSetting {
+): Promise<StoredServerSideEncryption> {
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
   if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
-    return {
+    return await storedServerSideEncryption({
       mode: EncryptionMode.SseC,
       algorithm: EncryptionAlgorithm.Aes256,
       customerKey: headers['x-bz-server-side-encryption-customer-key'] ?? '',
       customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] ?? '',
-    }
+    })
   }
 
   if (headers['x-bz-server-side-encryption'] === EncryptionAlgorithm.Aes256) {
     return { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 }
   }
 
-  return fallback
+  return await storedServerSideEncryption(fallback)
 }
 
 function defaultFileRetention(
@@ -1463,7 +1493,7 @@ export class B2Simulator {
           },
         )
       case 'b2_start_large_file':
-        return this.startLargeFile(
+        return await this.startLargeFile(
           body as {
             bucketId: string
             fileName: string
@@ -1600,11 +1630,11 @@ export class B2Simulator {
    *
    * @returns The download response containing file data and B2 headers.
    */
-  handleDownload(
+  async handleDownload(
     path: string,
     headers: Record<string, string>,
     method: 'GET' | 'HEAD' = 'GET',
-  ): SimulatorDownloadResponse {
+  ): Promise<SimulatorDownloadResponse> {
     if (path.includes('b2_download_file_by_id')) {
       // Strict-mode auth gate for download-by-id. Mirrors the gate in
       // `handleRequest`. Returns a synthetic JSON error body in the
@@ -1624,7 +1654,11 @@ export class B2Simulator {
       }
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
-      return this.finalizeDownload(this.downloadById(fileId, headers['range']), url, method)
+      return this.finalizeDownload(
+        await this.downloadById(fileId, headers, headers['range']),
+        url,
+        method,
+      )
     }
 
     const fileMatch = path.match(/^([^?]+)/)?.[1]?.match(/\/file\/([^/]+)\/(.+)/)
@@ -1646,7 +1680,7 @@ export class B2Simulator {
       }
       const url = new URL(`http://localhost${path}`)
       return this.finalizeDownload(
-        this.downloadByName(bucketName, fileName, headers['range']),
+        await this.downloadByName(bucketName, fileName, headers, headers['range']),
         url,
         method,
       )
@@ -1742,6 +1776,10 @@ export class B2Simulator {
     if ('status' in resolved) return resolved
     const { sha1: contentSha1, data: storedData } = resolved
 
+    const serverSideEncryption = await uploadServerSideEncryption(
+      headers,
+      bucket.info.defaultServerSideEncryption,
+    )
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -1750,12 +1788,9 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
-      serverSideEncryption: uploadServerSideEncryption(
-        headers,
-        bucket.info.defaultServerSideEncryption,
-      ),
+      serverSideEncryption,
     })
-    const stored: StoredFile = { fileVersion, data: storedData }
+    const stored: StoredFile = { fileVersion, data: storedData, serverSideEncryption }
     const existing = bucket.files.get(fileName)
     if (existing) {
       existing.push(stored)
@@ -1845,17 +1880,22 @@ export class B2Simulator {
     }
   }
 
-  private downloadById(fileId: string, range?: string): SimulatorDownloadResponse {
+  private async downloadById(
+    fileId: string,
+    headers: Record<string, string>,
+    range?: string,
+  ): Promise<SimulatorDownloadResponse> {
     const found = this.findFile(fileId)
     if (found === null) return { status: 404, headers: {}, data: null }
-    return this.serveFile(found.stored, range)
+    return await this.serveFile(found.stored, headers, range)
   }
 
-  private downloadByName(
+  private async downloadByName(
     bucketName: string,
     fileName: string,
+    headers: Record<string, string>,
     range?: string,
-  ): SimulatorDownloadResponse {
+  ): Promise<SimulatorDownloadResponse> {
     for (const bucket of this.buckets.values()) {
       if (bucket.info.bucketName !== bucketName) continue
       const versions = bucket.files.get(fileName)
@@ -1864,15 +1904,47 @@ export class B2Simulator {
       if (!latest || latest.fileVersion.action === FileAction.Hide) {
         return { status: 404, headers: {}, data: null }
       }
-      return this.serveFile(latest, range)
+      return await this.serveFile(latest, headers, range)
     }
     return { status: 404, headers: {}, data: null }
   }
 
-  private serveFile(
+  private async validateDownloadEncryption(
     stored: StoredFile,
+    headers: Record<string, string>,
+  ): Promise<SimulatorDownloadResponse | null> {
+    const encryption = stored.serverSideEncryption
+    if (encryption.mode !== EncryptionMode.SseC) return null
+
+    const algorithm = headers['x-bz-server-side-encryption-customer-algorithm']
+    const customerKey = headers['x-bz-server-side-encryption-customer-key']
+    const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+    if (
+      algorithm !== encryption.algorithm ||
+      customerKey === undefined ||
+      customerKeyMd5 !== encryption.customerKeyMd5 ||
+      (await sha256Hex(customerKey)) !== encryption.customerKeySha256
+    ) {
+      return this.errorAsDownload(
+        this.error(
+          400,
+          'bad_request',
+          'SSE-C downloads require matching customer encryption headers',
+        ),
+      )
+    }
+
+    return null
+  }
+
+  private async serveFile(
+    stored: StoredFile,
+    requestHeaders: Record<string, string>,
     range?: string,
-  ): { status: number; headers: Record<string, string>; data: Uint8Array } {
+  ): Promise<SimulatorDownloadResponse> {
+    const encryptionError = await this.validateDownloadEncryption(stored, requestHeaders)
+    if (encryptionError !== null) return encryptionError
+
     const fullData = stored.data
     let data = fullData
     let status = 200
@@ -2301,7 +2373,11 @@ export class B2Simulator {
       action: FileAction.Hide,
     })
     const existing = bucket.files.get(req.fileName)
-    const stored: StoredFile = { fileVersion, data: new Uint8Array(0) }
+    const stored: StoredFile = {
+      fileVersion,
+      data: new Uint8Array(0),
+      serverSideEncryption: { mode: EncryptionMode.None },
+    }
     if (existing) {
       existing.push(stored)
     } else {
@@ -2449,7 +2525,11 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Copy,
     })
-    const copied: StoredFile = { fileVersion, data: new Uint8Array(data) }
+    const copied: StoredFile = {
+      fileVersion,
+      data: new Uint8Array(data),
+      serverSideEncryption: { mode: EncryptionMode.None },
+    }
     const existing = destBucket.files.get(req.fileName)
     if (existing) {
       existing.push(copied)
@@ -2461,7 +2541,7 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private startLargeFile(req: {
+  private async startLargeFile(req: {
     bucketId: string
     fileName: string
     contentType: string
@@ -2469,7 +2549,7 @@ export class B2Simulator {
     fileRetention?: FileRetentionValue
     legalHold?: LegalHoldValue
     serverSideEncryption?: EncryptionSetting
-  }): SimulatorJsonResponse {
+  }): Promise<SimulatorJsonResponse> {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -2482,6 +2562,9 @@ export class B2Simulator {
 
     const fid = this.genId('4_z')
     const uploadTimestamp = this.monotonicTimestamp()
+    const serverSideEncryption = await storedServerSideEncryption(
+      req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+    )
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
@@ -2491,7 +2574,7 @@ export class B2Simulator {
       fileRetention:
         req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
       legalHold: req.legalHold ?? null,
-      serverSideEncryption: req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+      serverSideEncryption,
       uploadTimestamp,
       parts: new Map(),
     }
@@ -2642,7 +2725,11 @@ export class B2Simulator {
       legalHold: large.legalHold,
       serverSideEncryption: large.serverSideEncryption,
     })
-    const stored: StoredFile = { fileVersion, data: combined }
+    const stored: StoredFile = {
+      fileVersion,
+      data: combined,
+      serverSideEncryption: large.serverSideEncryption,
+    }
     const existing = bucket.files.get(large.fileName)
     if (existing) {
       existing.push(stored)
@@ -2970,6 +3057,7 @@ export class B2Simulator {
         fileRetention: { isClientAuthorizedToRead: true, value: req.fileRetention },
       },
       data: found.stored.data,
+      serverSideEncryption: found.stored.serverSideEncryption,
     }
     return {
       status: 200,
@@ -2999,6 +3087,7 @@ export class B2Simulator {
         },
       },
       data: found.stored.data,
+      serverSideEncryption: found.stored.serverSideEncryption,
     }
     return {
       status: 200,
@@ -3080,7 +3169,7 @@ export class B2Simulator {
     readonly fileInfo?: Record<string, string>
     readonly fileRetention?: FileRetentionValue | null
     readonly legalHold?: LegalHoldValue | null
-    readonly serverSideEncryption?: EncryptionSetting
+    readonly serverSideEncryption?: EncryptionSetting | StoredServerSideEncryption
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -3273,7 +3362,11 @@ class SimulatorTransport implements HttpTransport {
 
     if (isDownload) {
       const method = request.method === 'HEAD' ? 'HEAD' : 'GET'
-      const result = this.sim.handleDownload(parsedUrl.pathname + parsedUrl.search, headers, method)
+      const result = await this.sim.handleDownload(
+        parsedUrl.pathname + parsedUrl.search,
+        headers,
+        method,
+      )
       const data = result.data ?? new Uint8Array(0)
       const responseHeaders = new Headers(result.headers)
       responseHeaders.set(
