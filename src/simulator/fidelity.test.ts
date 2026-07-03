@@ -1909,7 +1909,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
     expect(result.data).toEqual(data)
   })
 
-  it('treats incomplete SSE-C upload headers as absent', async () => {
+  it('rejects incomplete SSE-C upload headers', async () => {
     const valid = await customerSetting(2)
     const data = new TextEncoder().encode('bad sse-c upload')
     const incomplete: readonly [string, EncryptionSetting][] = [
@@ -1950,14 +1950,9 @@ describe('B2Simulator upload SHA-1 verification', () => {
     ]
 
     for (const [name, serverSideEncryption] of incomplete) {
-      const uploaded = await rawUpload(
-        `${name}.txt`,
-        data,
-        await sha1Hex(data),
-        serverSideEncryption,
-      )
-      expect(uploaded.serverSideEncryption).toEqual({ mode: null, algorithm: null })
-      expect(await readStream((await bucket.download(`${name}.txt`)).body)).toEqual(data)
+      await expect(
+        rawUpload(`${name}.txt`, data, await sha1Hex(data), serverSideEncryption),
+      ).rejects.toMatchObject({ status: 400 })
     }
   })
 

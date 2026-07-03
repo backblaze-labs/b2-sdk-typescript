@@ -444,7 +444,9 @@ async function uploadServerSideEncryption(
   if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
     const customerKey = headers['x-bz-server-side-encryption-customer-key']
     const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
-    if (!customerKey || !customerKeyMd5) return await storedServerSideEncryption(fallback)
+    if (!customerKey || !customerKeyMd5) {
+      return encryptionValidationError('SSE-C customer key and MD5 are required')
+    }
     return await storedServerSideEncryption({
       mode: EncryptionMode.SseC,
       algorithm: EncryptionAlgorithm.Aes256,
