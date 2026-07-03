@@ -2049,7 +2049,7 @@ export class B2Simulator {
     const supplied = await storedServerSideEncryption(encryption)
     if ('status' in supplied) return supplied
     if (!sameStoredServerSideEncryption(large.serverSideEncryption, supplied)) {
-      return this.error(400, 'bad_request', 'Destination customer encryption does not match')
+      return this.error(400, 'bad_request', 'Destination server-side encryption does not match')
     }
     return null
   }
