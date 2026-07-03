@@ -135,7 +135,7 @@ function bytesToBase64(bytes: Uint8Array): string {
  *
  * @returns The base64-encoded MD5 digest.
  */
-async function md5Base64(bytes: Uint8Array): Promise<string> {
+export async function md5Base64(bytes: Uint8Array): Promise<string> {
   try {
     const { createHash } = await import('node:crypto')
     // Vite's browser shim resolves the import but does not implement
