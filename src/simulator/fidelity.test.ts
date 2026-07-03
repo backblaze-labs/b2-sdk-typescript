@@ -2187,13 +2187,13 @@ describe('B2Simulator upload SHA-1 verification', () => {
       ),
     ).toEqual(data)
 
-    const reencrypted = await bucket.copyFile({
+    const reEncrypted = await bucket.copyFile({
       sourceFileId: source.fileId,
       fileName: 'copy-uses-destination-key.txt',
       sourceServerSideEncryption: sourceEncryption,
       destinationServerSideEncryption: destinationEncryption,
     })
-    expect(reencrypted.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    expect(reEncrypted.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
     await expect(
       bucket.download('copy-uses-destination-key.txt', {
         serverSideEncryption: sourceEncryption,
@@ -2209,7 +2209,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       ),
     ).toEqual(data)
 
-    const publicJson = JSON.stringify([source, retained, reencrypted])
+    const publicJson = JSON.stringify([source, retained, reEncrypted])
     expect(publicJson).not.toContain(sourceEncryption.customerKey)
     expect(publicJson).not.toContain(normalizedSourceEncryption.customerKey)
     expect(publicJson).not.toContain(destinationEncryption.customerKey)
