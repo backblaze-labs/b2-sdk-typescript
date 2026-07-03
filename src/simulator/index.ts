@@ -407,6 +407,9 @@ async function storedServerSideEncryption(
   encryption: EncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   if (encryption.mode === EncryptionMode.SseC) {
+    if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-C customer algorithm must be AES256')
+    }
     const customerKey = encryption.customerKey
     const customerKeyMd5 = encryption.customerKeyMd5
     if (typeof customerKey !== 'string' || customerKey === '') {
@@ -431,6 +434,9 @@ async function storedServerSideEncryption(
     }
   }
   if (encryption.mode === EncryptionMode.SseB2) {
+    if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-B2 algorithm must be AES256')
+    }
     return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
   return { mode: EncryptionMode.None }
@@ -441,9 +447,16 @@ async function uploadServerSideEncryption(
   fallback: EncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
-  if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
-    const customerKey = headers['x-bz-server-side-encryption-customer-key']
-    const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+  const customerKey = headers['x-bz-server-side-encryption-customer-key']
+  const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+  if (
+    customerAlgorithm !== undefined ||
+    customerKey !== undefined ||
+    customerKeyMd5 !== undefined
+  ) {
+    if (customerAlgorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-C customer algorithm must be AES256')
+    }
     if (!customerKey || !customerKeyMd5) {
       return encryptionValidationError('SSE-C customer key and MD5 are required')
     }

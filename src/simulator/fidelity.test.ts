@@ -1807,6 +1807,30 @@ describe('B2Simulator upload SHA-1 verification', () => {
     )
   }
 
+  async function directSimulatorUpload(
+    fileName: string,
+    data: Uint8Array,
+    extraHeaders: Record<string, string>,
+  ) {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    return await sim.handleUpload(
+      uploadUrl,
+      {
+        authorization: authorizationToken,
+        'x-bz-file-name': fileName,
+        'content-type': 'text/plain',
+        'content-length': String(data.byteLength),
+        'x-bz-content-sha1': await sha1Hex(data),
+        ...extraHeaders,
+      },
+      data,
+    )
+  }
+
   async function customerSetting(fill: number): Promise<EncryptionSetting & { mode: 'SSE-C' }> {
     const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(fill))
     return sseCustomer(key.customerKey, key.customerKeyMd5)
@@ -1954,6 +1978,42 @@ describe('B2Simulator upload SHA-1 verification', () => {
         rawUpload(`${name}.txt`, data, await sha1Hex(data), serverSideEncryption),
       ).rejects.toMatchObject({ status: 400 })
     }
+
+    const malformedHeaders: readonly [string, Record<string, string>][] = [
+      [
+        'missing-algorithm-key',
+        {
+          'x-bz-server-side-encryption-customer-key': valid.customerKey,
+        },
+      ],
+      [
+        'missing-algorithm-md5',
+        {
+          'x-bz-server-side-encryption-customer-key-md5': valid.customerKeyMd5,
+        },
+      ],
+      [
+        'missing-algorithm-key-and-md5',
+        {
+          'x-bz-server-side-encryption-customer-key': valid.customerKey,
+          'x-bz-server-side-encryption-customer-key-md5': valid.customerKeyMd5,
+        },
+      ],
+      [
+        'unsupported-algorithm',
+        {
+          'x-bz-server-side-encryption-customer-algorithm': 'AES512',
+          'x-bz-server-side-encryption-customer-key': valid.customerKey,
+          'x-bz-server-side-encryption-customer-key-md5': valid.customerKeyMd5,
+        },
+      ],
+    ]
+
+    for (const [name, headers] of malformedHeaders) {
+      await expect(directSimulatorUpload(`${name}.txt`, data, headers)).resolves.toMatchObject({
+        status: 400,
+      })
+    }
   })
 
   it('rejects SSE-C upload headers with mismatched MD5', async () => {
@@ -2008,6 +2068,15 @@ describe('B2Simulator upload SHA-1 verification', () => {
           customerKey: valid.customerKey,
           customerKeyMd5: '',
         },
+      ],
+      [
+        'unsupported-algorithm',
+        {
+          mode: 'SSE-C',
+          algorithm: 'AES512',
+          customerKey: valid.customerKey,
+          customerKeyMd5: valid.customerKeyMd5,
+        } as unknown as EncryptionSetting,
       ],
       [
         'wrong-md5',
