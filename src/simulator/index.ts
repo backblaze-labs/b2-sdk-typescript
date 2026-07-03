@@ -442,11 +442,14 @@ async function uploadServerSideEncryption(
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
   if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
+    const customerKey = headers['x-bz-server-side-encryption-customer-key']
+    const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+    if (!customerKey || !customerKeyMd5) return await storedServerSideEncryption(fallback)
     return await storedServerSideEncryption({
       mode: EncryptionMode.SseC,
       algorithm: EncryptionAlgorithm.Aes256,
-      customerKey: headers['x-bz-server-side-encryption-customer-key'] ?? '',
-      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] ?? '',
+      customerKey,
+      customerKeyMd5,
     })
   }
 

@@ -1909,11 +1909,10 @@ describe('B2Simulator upload SHA-1 verification', () => {
     expect(result.data).toEqual(data)
   })
 
-  it('rejects malformed SSE-C upload headers', async () => {
+  it('treats incomplete SSE-C upload headers as absent', async () => {
     const valid = await customerSetting(2)
-    const other = await customerSetting(3)
     const data = new TextEncoder().encode('bad sse-c upload')
-    const malformed: readonly [string, EncryptionSetting][] = [
+    const incomplete: readonly [string, EncryptionSetting][] = [
       [
         'missing-key',
         {
@@ -1948,27 +1947,38 @@ describe('B2Simulator upload SHA-1 verification', () => {
           customerKeyMd5: '',
         },
       ],
-      [
-        'wrong-md5',
-        {
-          mode: 'SSE-C',
-          algorithm: 'AES256',
-          customerKey: valid.customerKey,
-          customerKeyMd5: other.customerKeyMd5,
-        },
-      ],
     ]
 
-    for (const [name, serverSideEncryption] of malformed) {
-      await expect(
-        rawUpload(`${name}.txt`, data, await sha1Hex(data), serverSideEncryption),
-      ).rejects.toMatchObject({ status: 400 })
+    for (const [name, serverSideEncryption] of incomplete) {
+      const uploaded = await rawUpload(
+        `${name}.txt`,
+        data,
+        await sha1Hex(data),
+        serverSideEncryption,
+      )
+      expect(uploaded.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+      expect(await readStream((await bucket.download(`${name}.txt`)).body)).toEqual(data)
     }
   })
 
+  it('rejects SSE-C upload headers with mismatched MD5', async () => {
+    const valid = await customerSetting(3)
+    const other = await customerSetting(4)
+    const data = new TextEncoder().encode('bad sse-c upload md5')
+
+    await expect(
+      rawUpload('wrong-upload-md5.txt', data, await sha1Hex(data), {
+        mode: 'SSE-C',
+        algorithm: 'AES256',
+        customerKey: valid.customerKey,
+        customerKeyMd5: other.customerKeyMd5,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
   it('rejects malformed SSE-C start-large-file settings', async () => {
-    const valid = await customerSetting(4)
-    const other = await customerSetting(5)
+    const valid = await customerSetting(5)
+    const other = await customerSetting(6)
     const malformed: readonly [string, EncryptionSetting][] = [
       [
         'missing-key',
@@ -2024,8 +2034,8 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
   it('requires matching SSE-C customer headers to download', async () => {
     const data = new TextEncoder().encode('customer-key protected content')
-    const encryption = await customerSetting(6)
-    const wrongEncryption = await customerSetting(7)
+    const encryption = await customerSetting(7)
+    const wrongEncryption = await customerSetting(8)
     const uploaded = await rawUpload('sse-c-download.txt', data, await sha1Hex(data), encryption)
 
     expect(uploaded.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
@@ -2058,9 +2068,9 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
   it('requires SSE-C source keys for copyFile and preserves destination encryption', async () => {
     const data = new TextEncoder().encode('copyFile source key boundary')
-    const sourceEncryption = await customerSetting(8)
-    const wrongSourceEncryption = await customerSetting(9)
-    const destinationEncryption = await customerSetting(10)
+    const sourceEncryption = await customerSetting(9)
+    const wrongSourceEncryption = await customerSetting(10)
+    const destinationEncryption = await customerSetting(11)
     const source = await rawUpload(
       'copy-sse-c-source.txt',
       data,
@@ -2130,9 +2140,9 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
   it('requires SSE-C source keys for copyPart into encrypted large files', async () => {
     const data = new TextEncoder().encode('copyPart source key boundary')
-    const sourceEncryption = await customerSetting(11)
-    const wrongSourceEncryption = await customerSetting(12)
-    const destinationEncryption = await customerSetting(13)
+    const sourceEncryption = await customerSetting(12)
+    const wrongSourceEncryption = await customerSetting(13)
+    const destinationEncryption = await customerSetting(14)
     const source = await rawUpload(
       'copy-part-sse-c-source.txt',
       data,
