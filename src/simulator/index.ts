@@ -379,6 +379,16 @@ function requestStringField(body: unknown, field: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
+function requestHeaderValue(headers: Record<string, string>, name: string): string | undefined {
+  const exact = headers[name]
+  if (exact !== undefined) return exact
+  const lowerName = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName) return value
+  }
+  return undefined
+}
+
 function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
   const present = names.filter((name): name is string => name !== undefined)
   return present.length > 0 ? present : undefined
@@ -1309,7 +1319,7 @@ export class B2Simulator {
     url: URL,
   ): string | undefined {
     return (
-      headers['authorization'] ??
+      requestHeaderValue(headers, 'authorization') ??
       url.searchParams.get('Authorization') ??
       url.searchParams.get('authorization') ??
       undefined

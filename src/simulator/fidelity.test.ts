@@ -1079,6 +1079,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(byName.status).toBe(200)
     await expect(byName.text()).resolves.toBe('visible')
 
+    const directByName = sim.handleDownload(`/file/${bucket.name}/allowed/visible.txt`, {
+      Authorization: auth.authorizationToken,
+    })
+    expect(directByName.status).toBe(200)
+    expect(directByName.data).toEqual(new TextEncoder().encode('visible'))
+
     const accountById = await transport.send({
       method: 'GET',
       url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
