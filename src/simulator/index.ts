@@ -1202,7 +1202,7 @@ export class B2Simulator {
     url: URL,
   ): SimulatorJsonResponse | null {
     if (authToken === undefined || authToken === '') {
-      return this.error(401, 'bad_auth_token', 'missing Authorization header')
+      return this.error(401, 'bad_auth_token', 'missing authorization token')
     }
 
     const downloadAuth = this.downloadAuthorizationTokens.get(authToken)
@@ -1317,12 +1317,13 @@ export class B2Simulator {
   private downloadAuthorizationFromRequest(
     headers: Record<string, string>,
     url: URL,
+    options: { readonly allowQueryAuthorization?: boolean } = {},
   ): string | undefined {
+    const headerToken = requestHeaderValue(headers, 'authorization')
+    if (headerToken !== undefined) return headerToken
+    if (options.allowQueryAuthorization !== true) return undefined
     return (
-      requestHeaderValue(headers, 'authorization') ??
-      url.searchParams.get('Authorization') ??
-      url.searchParams.get('authorization') ??
-      undefined
+      url.searchParams.get('Authorization') ?? url.searchParams.get('authorization') ?? undefined
     )
   }
 
@@ -2012,7 +2013,7 @@ export class B2Simulator {
       // status code.
       if (this.strictAuth) {
         const authError = this.authorizeDownloadRequest(
-          this.downloadAuthorizationFromRequest(headers, url),
+          this.downloadAuthorizationFromRequest(headers, url, { allowQueryAuthorization: false }),
           'b2_download_file_by_id',
           this.fileIdScope(url.searchParams.get('fileId') ?? undefined) ?? {
             bucketIds: [],
@@ -2038,7 +2039,7 @@ export class B2Simulator {
       if (this.strictAuth) {
         const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
         const authError = this.authorizeDownloadRequest(
-          this.downloadAuthorizationFromRequest(headers, url),
+          this.downloadAuthorizationFromRequest(headers, url, { allowQueryAuthorization: true }),
           'b2_download_file_by_name',
           {
             bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],

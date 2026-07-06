@@ -1093,6 +1093,16 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(accountById.status).toBe(200)
     await expect(accountById.text()).resolves.toBe('visible')
 
+    const accountQueryById = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}&Authorization=${encodeURIComponent(client.accountInfo.getAuthToken())}`,
+    })
+    expect(accountQueryById.status).toBe(401)
+    expect(JSON.parse(await accountQueryById.text())).toMatchObject({
+      code: 'bad_auth_token',
+      message: expect.stringContaining('missing authorization token'),
+    })
+
     const downloadAuthById = await transport.send({
       method: 'GET',
       url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
