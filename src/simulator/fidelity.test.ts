@@ -1052,6 +1052,19 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       fileName: 'blocked/hidden.txt',
       source: new BufferSource(new TextEncoder().encode('hidden')),
     })
+    const nonCurrent = await bucket.upload({
+      fileName: 'allowed/history.txt',
+      source: new BufferSource(new TextEncoder().encode('old history')),
+    })
+    await bucket.upload({
+      fileName: 'allowed/history.txt',
+      source: new BufferSource(new TextEncoder().encode('new history')),
+    })
+    const hidden = await bucket.upload({
+      fileName: 'allowed/hidden.txt',
+      source: new BufferSource(new TextEncoder().encode('hidden version')),
+    })
+    await bucket.hideFile('allowed/hidden.txt')
     const auth = await bucket.getDownloadAuthorization('allowed/', 60)
     const transport = sim.transport()
     const authorizationQuery = `Authorization=${encodeURIComponent(auth.authorizationToken)}`
@@ -1065,13 +1078,38 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(byName.status).toBe(200)
     await expect(byName.text()).resolves.toBe('visible')
 
-    const byId = await transport.send({
+    const accountById = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
+      headers: { Authorization: client.accountInfo.getAuthToken() },
+    })
+    expect(accountById.status).toBe(200)
+    await expect(accountById.text()).resolves.toBe('visible')
+
+    const downloadAuthById = await transport.send({
       method: 'GET',
       url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
       headers: { Authorization: auth.authorizationToken },
     })
-    expect(byId.status).toBe(200)
-    await expect(byId.text()).resolves.toBe('visible')
+    expect(downloadAuthById.status).toBe(403)
+    expect(JSON.parse(await downloadAuthById.text())).toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringContaining('b2_download_file_by_id'),
+    })
+
+    const nonCurrentById = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(nonCurrent.fileId)}`,
+      headers: { Authorization: auth.authorizationToken },
+    })
+    expect(nonCurrentById.status).toBe(403)
+
+    const hiddenById = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(hidden.fileId)}`,
+      headers: { Authorization: auth.authorizationToken },
+    })
+    expect(hiddenById.status).toBe(403)
 
     const forgedByName = await transport.send({
       method: 'GET',
@@ -1108,6 +1146,31 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expired.status).toBe(401)
     expect(JSON.parse(await expired.text())).toMatchObject({ code: 'expired_auth_token' })
     expect(downloadAuthorizationTokenCount(sim)).toBe(0)
+  })
+
+  it('bounds expired download authorization cleanup during high-volume issuance', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'download-auth-cleanup',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    for (let i = 0; i < 150; i++) {
+      await bucket.getDownloadAuthorization(`allowed/${i}/`, DOWNLOAD_AUTH_DURATION_MIN_SECONDS)
+    }
+    expect(downloadAuthorizationTokenCount(sim)).toBe(150)
+
+    sim.advanceTime(DOWNLOAD_AUTH_DURATION_MIN_SECONDS * 1000)
+
+    await bucket.getDownloadAuthorization('allowed/fresh-1/', 60)
+    const afterOneIssuance = downloadAuthorizationTokenCount(sim)
+    expect(afterOneIssuance).toBeGreaterThan(1)
+    expect(afterOneIssuance).toBeLessThan(150)
+
+    await bucket.getDownloadAuthorization('allowed/fresh-2/', 60)
+    await bucket.getDownloadAuthorization('allowed/fresh-3/', 60)
+    expect(downloadAuthorizationTokenCount(sim)).toBe(3)
   })
 
   it('enforces download authorization response-header constraints', async () => {
