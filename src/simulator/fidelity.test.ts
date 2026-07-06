@@ -6,6 +6,7 @@ import { BufferSource } from '../streams/source.ts'
 import { makeClient, readStream } from '../test-utils/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
+import type { DownloadAuthorizationRequest } from '../types/download.ts'
 import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
@@ -1280,6 +1281,46 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expect(
       bucket.getDownloadAuthorization('allowed/', DOWNLOAD_AUTH_DURATION_MAX_SECONDS),
     ).resolves.toMatchObject({ fileNamePrefix: 'allowed/' })
+  })
+
+  it('rejects malformed download authorization prefixes', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'download-auth-prefix',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const getDownloadAuthorization = (request: unknown) =>
+      client.raw.getDownloadAuthorization(
+        apiUrl,
+        authToken,
+        request as DownloadAuthorizationRequest,
+      )
+    const prefixError = /fileNamePrefix must be a string/
+
+    await expect(
+      getDownloadAuthorization({
+        bucketId: bucket.id,
+        validDurationInSeconds: 60,
+      }),
+    ).rejects.toThrow(prefixError)
+    await expect(
+      getDownloadAuthorization({
+        bucketId: bucket.id,
+        fileNamePrefix: 42,
+        validDurationInSeconds: 60,
+      }),
+    ).rejects.toThrow(prefixError)
+    await expect(
+      getDownloadAuthorization({
+        bucketId: bucket.id,
+        fileNamePrefix: '',
+        validDurationInSeconds: 60,
+      }),
+    ).resolves.toMatchObject({ fileNamePrefix: '' })
+    expect(downloadAuthorizationTokenCount(sim)).toBe(1)
   })
 
   it('handles malformed encoded upload file names during strict auth', async () => {

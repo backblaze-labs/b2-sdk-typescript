@@ -181,6 +181,7 @@ import {
   validateBucketInfo,
   validateBucketName,
   validateDownloadAuthorizationDuration,
+  validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
   validateMaxCount,
@@ -3355,6 +3356,8 @@ export class B2Simulator {
   private getDownloadAuthorization(req: DownloadAuthorizationRequestBody): SimulatorJsonResponse {
     this.purgeExpiredDownloadAuthorizationTokens()
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const prefixError = validateDownloadAuthorizationPrefix(req.fileNamePrefix)
+    if (prefixError) return this.error(400, prefixError.code, prefixError.message)
     const durationError = validateDownloadAuthorizationDuration(req.validDurationInSeconds)
     if (durationError) return this.error(400, durationError.code, durationError.message)
     let authorizationToken = randomDownloadAuthorizationToken()

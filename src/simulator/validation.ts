@@ -312,3 +312,20 @@ export function validateDownloadAuthorizationDuration(requested: unknown): Valid
   }
   return null
 }
+
+/**
+ * Validates a `b2_get_download_authorization` file name prefix.
+ *
+ * B2 allows an empty prefix, but the field must still be present as a
+ * string so later prefix checks cannot crash on malformed request bodies.
+ *
+ * @param requested - Caller-supplied file name prefix.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateDownloadAuthorizationPrefix(requested: unknown): ValidationError | null {
+  if (typeof requested !== 'string') {
+    return { code: 'bad_request', message: 'fileNamePrefix must be a string' }
+  }
+  return null
+}

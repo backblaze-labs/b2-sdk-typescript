@@ -13,6 +13,7 @@ import {
   validateBucketInfo,
   validateBucketName,
   validateDownloadAuthorizationDuration,
+  validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
   validateMaxCount,
@@ -148,6 +149,18 @@ describe('validateDownloadAuthorizationDuration', () => {
   it('rejects non-integer and non-number values', () => {
     expect(validateDownloadAuthorizationDuration(1.5)?.code).toBe('bad_request')
     expect(validateDownloadAuthorizationDuration('60')?.code).toBe('bad_request')
+  })
+})
+
+describe('validateDownloadAuthorizationPrefix', () => {
+  it('accepts empty and non-empty string prefixes', () => {
+    expect(validateDownloadAuthorizationPrefix('')).toBeNull()
+    expect(validateDownloadAuthorizationPrefix('allowed/')).toBeNull()
+  })
+
+  it('rejects missing and non-string prefixes', () => {
+    expect(validateDownloadAuthorizationPrefix(undefined)?.code).toBe('bad_request')
+    expect(validateDownloadAuthorizationPrefix(42)?.code).toBe('bad_request')
   })
 })
 
