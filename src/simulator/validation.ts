@@ -280,3 +280,35 @@ export function validateMaxCount(
   }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Download authorization duration
+// ---------------------------------------------------------------------------
+
+/** Minimum `b2_get_download_authorization.validDurationInSeconds`. */
+export const DOWNLOAD_AUTH_DURATION_MIN_SECONDS = 1
+/** Maximum `b2_get_download_authorization.validDurationInSeconds`. */
+export const DOWNLOAD_AUTH_DURATION_MAX_SECONDS = 604_800
+
+/**
+ * Validates a `b2_get_download_authorization` duration against B2's
+ * documented inclusive 1-second to 7-day range.
+ *
+ * @param requested - Caller-supplied duration in seconds.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateDownloadAuthorizationDuration(requested: unknown): ValidationError | null {
+  if (
+    typeof requested !== 'number' ||
+    !Number.isInteger(requested) ||
+    requested < DOWNLOAD_AUTH_DURATION_MIN_SECONDS ||
+    requested > DOWNLOAD_AUTH_DURATION_MAX_SECONDS
+  ) {
+    return {
+      code: 'bad_request',
+      message: `validDurationInSeconds must be an integer from ${DOWNLOAD_AUTH_DURATION_MIN_SECONDS} through ${DOWNLOAD_AUTH_DURATION_MAX_SECONDS}`,
+    }
+  }
+  return null
+}
