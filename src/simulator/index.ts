@@ -178,6 +178,7 @@ function compareB2FileNames(a: string, b: string): number {
 
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
+  type ValidationError,
   validateBucketInfo,
   validateBucketName,
   validateDownloadAuthorizationDuration,
@@ -231,7 +232,7 @@ type DownloadAuthorizationRequestBody = {
   bucketId: string
   fileNamePrefix: string
   validDurationInSeconds: number
-} & DownloadResponseOverrides
+} & Partial<Record<DownloadResponseOverrideParam, unknown>>
 
 function randomDownloadAuthorizationToken(): string {
   const crypto = globalThis.crypto
@@ -243,13 +244,26 @@ function randomDownloadAuthorizationToken(): string {
   return `sim_dl_auth_${hexEncode(bytes)}`
 }
 
-function pickDownloadResponseOverrides(req: DownloadResponseOverrides): DownloadResponseOverrides {
+function pickDownloadResponseOverrides(
+  req: Partial<Record<DownloadResponseOverrideParam, unknown>>,
+): DownloadResponseOverrides {
   const overrides: DownloadResponseOverrides = {}
   for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
     const value = req[param]
     if (typeof value === 'string') overrides[param] = value
   }
   return overrides
+}
+
+function validateDownloadResponseOverrides(
+  req: Partial<Record<DownloadResponseOverrideParam, unknown>>,
+): ValidationError | null {
+  for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
+    const value = req[param]
+    if (value === undefined || typeof value === 'string') continue
+    return { code: 'bad_request', message: `${param} must be a string` }
+  }
+  return null
 }
 
 interface StoredFile {
@@ -3371,6 +3385,8 @@ export class B2Simulator {
     if (prefixError) return this.error(400, prefixError.code, prefixError.message)
     const durationError = validateDownloadAuthorizationDuration(req.validDurationInSeconds)
     if (durationError) return this.error(400, durationError.code, durationError.message)
+    const overrideError = validateDownloadResponseOverrides(req)
+    if (overrideError) return this.error(400, overrideError.code, overrideError.message)
     let authorizationToken = randomDownloadAuthorizationToken()
     while (this.downloadAuthorizationTokens.has(authorizationToken)) {
       authorizationToken = randomDownloadAuthorizationToken()

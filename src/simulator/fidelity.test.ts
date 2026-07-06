@@ -1190,6 +1190,41 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(downloadAuthorizationTokenCount(sim)).toBe(3)
   })
 
+  it('rejects malformed download authorization response-header overrides', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'download-auth-bad-headers',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const getDownloadAuthorization = (request: unknown) =>
+      client.raw.getDownloadAuthorization(
+        apiUrl,
+        authToken,
+        request as DownloadAuthorizationRequest,
+      )
+
+    await expect(
+      getDownloadAuthorization({
+        bucketId: bucket.id,
+        fileNamePrefix: 'allowed/',
+        validDurationInSeconds: 60,
+        b2ContentType: 42,
+      }),
+    ).rejects.toThrow(/b2ContentType must be a string/)
+    await expect(
+      getDownloadAuthorization({
+        bucketId: bucket.id,
+        fileNamePrefix: 'allowed/',
+        validDurationInSeconds: 60,
+        b2CacheControl: null,
+      }),
+    ).rejects.toThrow(/b2CacheControl must be a string/)
+    expect(downloadAuthorizationTokenCount(sim)).toBe(0)
+  })
+
   it('enforces download authorization response-header constraints', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
