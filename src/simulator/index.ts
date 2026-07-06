@@ -205,6 +205,7 @@ export {
 } from './validation.ts'
 
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
+const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
 
 const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
@@ -241,7 +242,7 @@ function randomDownloadAuthorizationToken(): string {
   }
   const bytes = new Uint8Array(DOWNLOAD_AUTH_TOKEN_BYTES)
   crypto.getRandomValues(bytes)
-  return `sim_dl_auth_${hexEncode(bytes)}`
+  return `${DOWNLOAD_AUTH_TOKEN_PREFIX}${hexEncode(bytes)}`
 }
 
 function pickDownloadResponseOverrides(
@@ -1336,9 +1337,9 @@ export class B2Simulator {
     const headerToken = requestHeaderValue(headers, 'authorization')
     if (headerToken !== undefined) return headerToken
     if (options.allowQueryAuthorization !== true) return undefined
-    return (
-      url.searchParams.get('Authorization') ?? url.searchParams.get('authorization') ?? undefined
-    )
+    const queryToken =
+      url.searchParams.get('Authorization') ?? url.searchParams.get('authorization')
+    return queryToken?.startsWith(DOWNLOAD_AUTH_TOKEN_PREFIX) ? queryToken : undefined
   }
 
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {

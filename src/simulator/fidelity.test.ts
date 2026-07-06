@@ -1079,6 +1079,16 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(byName.status).toBe(200)
     await expect(byName.text()).resolves.toBe('visible')
 
+    const accountQueryByName = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/file/${bucket.name}/allowed/visible.txt?Authorization=${encodeURIComponent(client.accountInfo.getAuthToken())}`,
+    })
+    expect(accountQueryByName.status).toBe(401)
+    expect(JSON.parse(await accountQueryByName.text())).toMatchObject({
+      code: 'bad_auth_token',
+      message: expect.stringContaining('missing authorization token'),
+    })
+
     const directByName = sim.handleDownload(`/file/${bucket.name}/allowed/visible.txt`, {
       Authorization: auth.authorizationToken,
     })
