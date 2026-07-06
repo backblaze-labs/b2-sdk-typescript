@@ -1085,6 +1085,13 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(directByName.status).toBe(200)
     expect(directByName.data).toEqual(new TextEncoder().encode('visible'))
 
+    const directRangeByName = sim.handleDownload(`/file/${bucket.name}/allowed/visible.txt`, {
+      Authorization: auth.authorizationToken,
+      Range: 'bytes=0-2',
+    })
+    expect(directRangeByName.status).toBe(206)
+    expect(directRangeByName.data).toEqual(new TextEncoder().encode('vis'))
+
     const accountById = await transport.send({
       method: 'GET',
       url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
@@ -1092,6 +1099,16 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
     expect(accountById.status).toBe(200)
     await expect(accountById.text()).resolves.toBe('visible')
+
+    const directRangeById = sim.handleDownload(
+      `/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
+      {
+        Authorization: client.accountInfo.getAuthToken(),
+        Range: 'bytes=0-2',
+      },
+    )
+    expect(directRangeById.status).toBe(206)
+    expect(directRangeById.data).toEqual(new TextEncoder().encode('vis'))
 
     const accountQueryById = await transport.send({
       method: 'GET',

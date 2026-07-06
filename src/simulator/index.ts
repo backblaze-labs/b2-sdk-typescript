@@ -2039,7 +2039,7 @@ export class B2Simulator {
       }
       const fileId = url.searchParams.get('fileId') ?? ''
       return this.finalizeDownload(
-        this.downloadById(fileId, headers, headers['range']),
+        this.downloadById(fileId, headers, requestHeaderValue(headers, 'range')),
         url,
         method,
       )
@@ -2065,7 +2065,7 @@ export class B2Simulator {
         if (authError !== null) return this.errorAsDownload(authError)
       }
       return this.finalizeDownload(
-        this.downloadByName(bucketName, fileName, headers, headers['range']),
+        this.downloadByName(bucketName, fileName, headers, requestHeaderValue(headers, 'range')),
         url,
         method,
       )
