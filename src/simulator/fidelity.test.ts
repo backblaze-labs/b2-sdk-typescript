@@ -1021,6 +1021,81 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     ).resolves.toMatchObject({ fileName: 'allowed/large.bin' })
   })
 
+  it('enforces download authorization token prefix and expiry on downloads', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'download-auth-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const allowed = await bucket.upload({
+      fileName: 'allowed/visible.txt',
+      source: new BufferSource(new TextEncoder().encode('visible')),
+    })
+    await bucket.upload({
+      fileName: 'blocked/hidden.txt',
+      source: new BufferSource(new TextEncoder().encode('hidden')),
+    })
+    const auth = await bucket.getDownloadAuthorization('allowed/', 60)
+    const transport = sim.transport()
+    const authorizationQuery = `Authorization=${encodeURIComponent(auth.authorizationToken)}`
+
+    const byName = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/file/${bucket.name}/allowed/visible.txt?${authorizationQuery}`,
+    })
+    expect(byName.status).toBe(200)
+    await expect(byName.text()).resolves.toBe('visible')
+
+    const byId = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(allowed.fileId)}`,
+      headers: { Authorization: auth.authorizationToken },
+    })
+    expect(byId.status).toBe(200)
+    await expect(byId.text()).resolves.toBe('visible')
+
+    const wrongPrefix = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/file/${bucket.name}/blocked/hidden.txt?${authorizationQuery}`,
+    })
+    expect(wrongPrefix.status).toBe(403)
+    expect(JSON.parse(await wrongPrefix.text())).toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringContaining('outside scope'),
+    })
+
+    sim.advanceTime(61_000)
+
+    const expired = await transport.send({
+      method: 'GET',
+      url: `http://localhost:0/file/${bucket.name}/allowed/visible.txt?${authorizationQuery}`,
+    })
+    expect(expired.status).toBe(401)
+    expect(JSON.parse(await expired.text())).toMatchObject({ code: 'expired_auth_token' })
+  })
+
+  it('rejects download authorization durations outside the B2 range', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'download-auth-duration',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    await expect(bucket.getDownloadAuthorization('allowed/', 0)).rejects.toThrow(/1 through 604800/)
+    await expect(bucket.getDownloadAuthorization('allowed/', 604_801)).rejects.toThrow(
+      /1 through 604800/,
+    )
+    await expect(bucket.getDownloadAuthorization('allowed/', 1.5)).rejects.toThrow(/integer/)
+    await expect(bucket.getDownloadAuthorization('allowed/', 1)).resolves.toMatchObject({
+      fileNamePrefix: 'allowed/',
+    })
+    await expect(bucket.getDownloadAuthorization('allowed/', 604_800)).resolves.toMatchObject({
+      fileNamePrefix: 'allowed/',
+    })
+  })
+
   it('handles malformed encoded upload file names during strict auth', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

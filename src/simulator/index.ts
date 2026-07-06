@@ -282,6 +282,12 @@ interface StoredUploadToken {
   invalidated: boolean
 }
 
+interface DownloadAuthorizationToken {
+  readonly bucketId: string
+  readonly fileNamePrefix: string
+  readonly expiresAt: number
+}
+
 interface RequestScope {
   readonly bucketIds: readonly string[]
   readonly fileNames?: readonly string[]
@@ -781,6 +787,7 @@ export class B2Simulator {
    * state for tests.
    */
   private readonly uploadTokens = new Map<string, StoredUploadToken>()
+  private readonly downloadAuthorizationTokens = new Map<string, DownloadAuthorizationToken>()
   /**
    * Virtual-clock offset applied to `Date.now()` for expiry checks.
    * Defaults to 0. Tests advance via {@link advanceTime} to fast-forward
@@ -1107,6 +1114,60 @@ export class B2Simulator {
       }
     }
     return null
+  }
+
+  private authorizeDownloadRequest(
+    authToken: string | undefined,
+    endpoint: 'b2_download_file_by_id' | 'b2_download_file_by_name',
+    scope: RequestScope,
+  ): SimulatorJsonResponse | null {
+    if (authToken === undefined || authToken === '') {
+      return this.error(401, 'bad_auth_token', 'missing Authorization header')
+    }
+
+    const downloadAuth = this.downloadAuthorizationTokens.get(authToken)
+    if (downloadAuth === undefined) {
+      return this.authorizeRequest(authToken, endpoint, scope)
+    }
+    if (this.now() > downloadAuth.expiresAt) {
+      return this.error(401, 'expired_auth_token', 'download authorization token has expired')
+    }
+    if (scope.bucketIds.length === 0 && scope.requiresBucketScope) {
+      return this.error(
+        403,
+        'unauthorized',
+        `download authorization is scoped to bucket ${downloadAuth.bucketId}; bucket scope is required`,
+      )
+    }
+    for (const bucketId of scope.bucketIds) {
+      if (bucketId === downloadAuth.bucketId) continue
+      return this.error(
+        403,
+        'unauthorized',
+        `download authorization is scoped to bucket ${downloadAuth.bucketId}; cannot access ${bucketId}`,
+      )
+    }
+    for (const fileName of scope.fileNames ?? []) {
+      if (fileName.startsWith(downloadAuth.fileNamePrefix)) continue
+      return this.error(
+        403,
+        'unauthorized',
+        `download authorization is scoped to prefix "${downloadAuth.fileNamePrefix}"; "${fileName}" is outside scope`,
+      )
+    }
+    return null
+  }
+
+  private downloadAuthorizationFromRequest(
+    headers: Record<string, string>,
+    url: URL,
+  ): string | undefined {
+    return (
+      headers['authorization'] ??
+      url.searchParams.get('Authorization') ??
+      url.searchParams.get('authorization') ??
+      undefined
+    )
   }
 
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
@@ -1790,14 +1851,14 @@ export class B2Simulator {
     method: 'GET' | 'HEAD' = 'GET',
   ): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {
+      const url = new URL(`http://localhost${path}`)
       // Strict-mode auth gate for download-by-id. Mirrors the gate in
       // `handleRequest`. Returns a synthetic JSON error body in the
       // download response shape so the transport renders the right
       // status code.
       if (this.strictAuth) {
-        const url = new URL(`http://localhost${path}`)
-        const authError = this.authorizeRequest(
-          headers['authorization'],
+        const authError = this.authorizeDownloadRequest(
+          this.downloadAuthorizationFromRequest(headers, url),
           'b2_download_file_by_id',
           this.fileIdScope(url.searchParams.get('fileId') ?? undefined) ?? {
             bucketIds: [],
@@ -1806,7 +1867,6 @@ export class B2Simulator {
         )
         if (authError !== null) return this.errorAsDownload(authError)
       }
-      const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
       return this.finalizeDownload(
         this.downloadById(fileId, headers, headers['range']),
@@ -1819,10 +1879,11 @@ export class B2Simulator {
     if (fileMatch) {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
+      const url = new URL(`http://localhost${path}`)
       if (this.strictAuth) {
         const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
-        const authError = this.authorizeRequest(
-          headers['authorization'],
+        const authError = this.authorizeDownloadRequest(
+          this.downloadAuthorizationFromRequest(headers, url),
           'b2_download_file_by_name',
           {
             bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
@@ -1832,7 +1893,6 @@ export class B2Simulator {
         )
         if (authError !== null) return this.errorAsDownload(authError)
       }
-      const url = new URL(`http://localhost${path}`)
       return this.finalizeDownload(
         this.downloadByName(bucketName, fileName, headers, headers['range']),
         url,
@@ -3161,12 +3221,29 @@ export class B2Simulator {
     validDurationInSeconds: number
   }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    if (
+      !Number.isInteger(req.validDurationInSeconds) ||
+      req.validDurationInSeconds < 1 ||
+      req.validDurationInSeconds > 604_800
+    ) {
+      return this.error(
+        400,
+        'bad_request',
+        'validDurationInSeconds must be an integer from 1 through 604800',
+      )
+    }
+    const authorizationToken = `sim_dl_auth_${this.genId('tok')}`
+    this.downloadAuthorizationTokens.set(authorizationToken, {
+      bucketId: req.bucketId,
+      fileNamePrefix: req.fileNamePrefix,
+      expiresAt: this.now() + req.validDurationInSeconds * 1000,
+    })
     return {
       status: 200,
       body: {
         bucketId: req.bucketId,
         fileNamePrefix: req.fileNamePrefix,
-        authorizationToken: `sim_dl_auth_${this.genId('tok')}`,
+        authorizationToken,
       },
     }
   }
