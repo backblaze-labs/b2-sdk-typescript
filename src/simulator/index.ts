@@ -652,7 +652,7 @@ function isRetentionMode(value: unknown): value is RetentionMode {
   return value === RetentionMode.Compliance || value === RetentionMode.Governance
 }
 
-function parseFileRetentionValue(value: unknown): FileRetentionValue | null {
+function parseFileRetentionValue(value: unknown, now: number): FileRetentionValue | null {
   if (typeof value !== 'object' || value === null) return null
   const candidate = value as Record<string, unknown>
   const mode = candidate['mode']
@@ -663,6 +663,7 @@ function parseFileRetentionValue(value: unknown): FileRetentionValue | null {
   }
   if (isRetentionMode(mode) && typeof retainUntilTimestamp === 'number') {
     if (!Number.isFinite(retainUntilTimestamp)) return null
+    if (retainUntilTimestamp <= now) return null
     return { mode, retainUntilTimestamp }
   }
   return null
@@ -681,6 +682,15 @@ function isRetentionWeakened(
   if (current.retainUntilTimestamp === null) return next.mode !== current.mode
   if (next.retainUntilTimestamp === null) return true
   return next.retainUntilTimestamp < current.retainUntilTimestamp
+}
+
+function requiresGovernanceBypass(
+  current: FileRetentionValue | null | undefined,
+  next: FileRetentionValue,
+): boolean {
+  if (current?.mode !== RetentionMode.Governance) return false
+  if (next.mode === RetentionMode.Compliance) return true
+  return isRetentionWeakened(current, next)
 }
 
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
@@ -1383,6 +1393,29 @@ export class B2Simulator {
     return this.issuedTokens.get(authToken)?.capabilities.includes(capability) === true
   }
 
+  private requireFileLockEnabled(bucket: StoredBucket): SimulatorJsonResponse | null {
+    if (bucket.info.fileLockConfiguration.value?.isFileLockEnabled === true) return null
+    return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
+  }
+
+  private requireGovernanceBypass(
+    req: { bypassGovernance?: boolean },
+    authToken: string | undefined,
+    message: string,
+  ): SimulatorJsonResponse | null {
+    if (req.bypassGovernance !== true) {
+      return this.error(400, 'file_lock_governance_protected', message)
+    }
+    if (!this.requestHasCapability(authToken, Capability.BypassGovernance)) {
+      return this.error(
+        403,
+        'unauthorized',
+        `application key lacks required capabilities: ${Capability.BypassGovernance}`,
+      )
+    }
+    return null
+  }
+
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
     const directBucketId = requestStringField(body, 'bucketId')
     const directFileName = requestStringField(body, 'fileName')
@@ -1903,6 +1936,7 @@ export class B2Simulator {
       case 'b2_delete_file_version':
         return this.deleteFileVersion(
           body as { fileId: string; fileName: string; bypassGovernance?: boolean },
+          headers['authorization'],
         )
       case 'b2_copy_file':
         return await this.copyFile(
@@ -2897,11 +2931,14 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private deleteFileVersion(req: {
-    fileId: string
-    fileName: string
-    bypassGovernance?: boolean
-  }): {
+  private deleteFileVersion(
+    req: {
+      fileId: string
+      fileName: string
+      bypassGovernance?: boolean
+    },
+    authToken?: string,
+  ): {
     status: number
     body: unknown
   } {
@@ -2940,14 +2977,14 @@ export class B2Simulator {
     if (
       retention?.mode === 'governance' &&
       retention.retainUntilTimestamp !== null &&
-      retention.retainUntilTimestamp > now &&
-      req.bypassGovernance !== true
+      retention.retainUntilTimestamp > now
     ) {
-      return this.error(
-        400,
-        'file_lock_governance_protected',
+      const bypassError = this.requireGovernanceBypass(
+        req,
+        authToken,
         'File is under governance-mode retention; pass bypassGovernance: true to delete',
       )
+      if (bypassError !== null) return bypassError
     }
 
     found.versions.splice(found.index, 1)
@@ -3611,10 +3648,10 @@ export class B2Simulator {
     if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
       return this.error(404, 'file_not_present', 'File not found')
     }
-    if (found.bucket.info.fileLockConfiguration.value?.isFileLockEnabled !== true) {
-      return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
-    }
-    const fileRetention = parseFileRetentionValue(req.fileRetention)
+    const fileLockError = this.requireFileLockEnabled(found.bucket)
+    if (fileLockError !== null) return fileLockError
+
+    const fileRetention = parseFileRetentionValue(req.fileRetention, this.now())
     if (fileRetention === null) {
       return this.error(
         400,
@@ -3635,21 +3672,13 @@ export class B2Simulator {
         'Compliance-mode retention cannot be shortened or removed',
       )
     }
-    if (current?.mode === RetentionMode.Governance && isRetentionWeakened(current, fileRetention)) {
-      if (req.bypassGovernance !== true) {
-        return this.error(
-          400,
-          'file_lock_governance_protected',
-          'Governance-mode retention cannot be shortened or removed without bypassGovernance',
-        )
-      }
-      if (!this.requestHasCapability(authToken, Capability.BypassGovernance)) {
-        return this.error(
-          403,
-          'unauthorized',
-          `application key lacks required capabilities: ${Capability.BypassGovernance}`,
-        )
-      }
+    if (requiresGovernanceBypass(current, fileRetention)) {
+      const bypassError = this.requireGovernanceBypass(
+        req,
+        authToken,
+        'Governance-mode retention cannot be shortened, removed, or converted without bypassGovernance',
+      )
+      if (bypassError !== null) return bypassError
     }
 
     found.versions[found.index] = {
@@ -3679,9 +3708,9 @@ export class B2Simulator {
     if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
       return this.error(404, 'file_not_present', 'File not found')
     }
-    if (found.bucket.info.fileLockConfiguration.value?.isFileLockEnabled !== true) {
-      return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
-    }
+    const fileLockError = this.requireFileLockEnabled(found.bucket)
+    if (fileLockError !== null) return fileLockError
+
     if (req.legalHold !== LegalHoldValue.On && req.legalHold !== LegalHoldValue.Off) {
       return this.error(400, 'bad_request', 'legalHold must be "on" or "off"')
     }
