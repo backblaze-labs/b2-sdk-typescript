@@ -562,7 +562,7 @@ const client = new B2Client({
 Every request the SDK issues carries a User-Agent header that Backblaze can grep server logs by:
 
 ```
-b2-sdk-typescript/0.1.0 (typescript; @backblaze-labs/b2-sdk; node/24.14.1; linux; x64)
+b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)
 ```
 
 Both `b2-sdk-typescript/` (stable product token) and `@backblaze-labs/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
@@ -577,7 +577,7 @@ const client = new B2Client({
   applicationKey,
   userAgent: 'my-app/1.0',
 })
-// → "my-app/1.0 b2-sdk-typescript/0.1.0 (typescript; @backblaze-labs/b2-sdk; node/24.14.1; linux; x64)"
+// → "my-app/1.0 b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)"
 ```
 
 ## SSRF guard
