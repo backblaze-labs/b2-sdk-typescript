@@ -4,6 +4,7 @@ import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
 import { daysFromNow } from './test-utils/index.ts'
+import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
@@ -15,8 +16,12 @@ import { LegalHoldValue, RetentionMode } from './types/lock.ts'
  * documented as "the way to set retention on a file" so we lock them in.
  */
 
-async function setup(): Promise<{ bucket: Bucket; client: B2Client }> {
-  const sim = new B2Simulator()
+async function setup(options: { fileLockEnabled?: boolean; strictAuth?: boolean } = {}): Promise<{
+  bucket: Bucket
+  client: B2Client
+  sim: B2Simulator
+}> {
+  const sim = new B2Simulator(options.strictAuth === true ? { strictAuth: true } : {})
   const client = new B2Client({
     applicationKeyId: 'test-key-id',
     applicationKey: 'test-key',
@@ -26,8 +31,22 @@ async function setup(): Promise<{ bucket: Bucket; client: B2Client }> {
   const bucket = await client.createBucket({
     bucketName: 'lock-bucket',
     bucketType: BucketType.AllPrivate,
+    fileLockEnabled: options.fileLockEnabled ?? true,
   })
-  return { bucket, client }
+  return { bucket, client, sim }
+}
+
+async function authorizeWithKey(
+  sim: B2Simulator,
+  key: { applicationKeyId: string; applicationKey: string },
+): Promise<B2Client> {
+  const client = new B2Client({
+    applicationKeyId: key.applicationKeyId,
+    applicationKey: key.applicationKey,
+    transport: sim.transport(),
+  })
+  await client.authorize()
+  return client
 }
 
 describe('B2Object.setRetention', () => {
@@ -66,8 +85,7 @@ describe('B2Object.setRetention', () => {
     })
 
     // Shorten the period: requires bypassGovernance: true with a key that has
-    // the matching capability. Simulator accepts the flag without enforcing
-    // capability so we test the option-forwarding path.
+    // the matching capability in strict-auth mode.
     const earlier = daysFromNow(1)
     const shortened = await bucket
       .file('gov.bin')
@@ -139,6 +157,163 @@ describe('B2Object.setLegalHold', () => {
     // Retention should still be unset on this file version.
     const info = await bucket.file('hold-only.bin').getFileInfo(uploaded.fileId)
     expect(info.fileRetention?.value).toBeNull()
+  })
+})
+
+describe('B2Simulator: update retention and legal hold enforce Object Lock', () => {
+  it('rejects retention and legal-hold updates on a lock-disabled bucket', async () => {
+    const { bucket } = await setup({ fileLockEnabled: false })
+    const uploaded = await bucket.upload({
+      fileName: 'plain.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+
+    await expect(
+      bucket.file('plain.bin').setRetention(uploaded.fileId, {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: daysFromNow(1),
+      }),
+    ).rejects.toThrow(/file lock enabled/)
+    await expect(
+      bucket.file('plain.bin').setLegalHold(uploaded.fileId, LegalHoldValue.On),
+    ).rejects.toThrow(/file lock enabled/)
+  })
+
+  it('does not allow compliance-mode retention to be shortened or removed', async () => {
+    const { bucket } = await setup()
+    const uploaded = await bucket.upload({
+      fileName: 'compliance-update.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await bucket.file('compliance-update.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Compliance,
+      retainUntilTimestamp: daysFromNow(30),
+    })
+
+    await expect(
+      bucket.file('compliance-update.bin').setRetention(uploaded.fileId, {
+        mode: RetentionMode.Compliance,
+        retainUntilTimestamp: daysFromNow(1),
+      }),
+    ).rejects.toThrow(/Compliance-mode/)
+    await expect(
+      bucket.file('compliance-update.bin').setRetention(
+        uploaded.fileId,
+        {
+          mode: null,
+          retainUntilTimestamp: null,
+        },
+        { bypassGovernance: true },
+      ),
+    ).rejects.toThrow(/Compliance-mode/)
+  })
+
+  it('requires bypassGovernance to shorten governance-mode retention', async () => {
+    const { bucket } = await setup()
+    const uploaded = await bucket.upload({
+      fileName: 'governance-update.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await bucket.file('governance-update.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: daysFromNow(30),
+    })
+
+    await expect(
+      bucket.file('governance-update.bin').setRetention(uploaded.fileId, {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: daysFromNow(1),
+      }),
+    ).rejects.toThrow(/bypassGovernance/)
+
+    const shortened = await bucket.file('governance-update.bin').setRetention(
+      uploaded.fileId,
+      {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: daysFromNow(1),
+      },
+      { bypassGovernance: true },
+    )
+    expect(shortened.fileRetention.mode).toBe(RetentionMode.Governance)
+  })
+
+  it('requires the bypassGovernance capability in strict-auth mode', async () => {
+    const { bucket, client, sim } = await setup({ strictAuth: true })
+    const uploaded = await bucket.upload({
+      fileName: 'strict-governance.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+
+    const withoutBypass = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.WriteFileRetentions],
+      keyName: 'retention-no-bypass',
+      bucketId: bucket.id,
+    })
+    const noBypassClient = await authorizeWithKey(sim, withoutBypass)
+    const noBypassBucket = (await noBypassClient.listBuckets({ bucketId: bucket.id }))[0]
+    if (noBypassBucket === undefined) throw new Error('scoped bucket not found')
+
+    await noBypassBucket.file('strict-governance.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: daysFromNow(30),
+    })
+
+    await expect(
+      noBypassBucket.file('strict-governance.bin').setRetention(
+        uploaded.fileId,
+        {
+          mode: RetentionMode.Governance,
+          retainUntilTimestamp: daysFromNow(1),
+        },
+        { bypassGovernance: true },
+      ),
+    ).rejects.toThrow(/bypassGovernance/)
+
+    const withBypass = await client.createKey({
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.WriteFileRetentions,
+        Capability.BypassGovernance,
+      ],
+      keyName: 'retention-with-bypass',
+      bucketId: bucket.id,
+    })
+    const bypassClient = await authorizeWithKey(sim, withBypass)
+    const bypassBucket = (await bypassClient.listBuckets({ bucketId: bucket.id }))[0]
+    if (bypassBucket === undefined) throw new Error('scoped bucket not found')
+
+    await expect(
+      bypassBucket.file('strict-governance.bin').setRetention(
+        uploaded.fileId,
+        {
+          mode: RetentionMode.Governance,
+          retainUntilTimestamp: daysFromNow(1),
+        },
+        { bypassGovernance: true },
+      ),
+    ).resolves.toMatchObject({
+      fileRetention: { mode: RetentionMode.Governance },
+    })
+  })
+
+  it('validates legalHold values', async () => {
+    const { bucket, client } = await setup()
+    const uploaded = await bucket.upload({
+      fileName: 'invalid-hold.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+
+    await expect(
+      client.raw.updateFileLegalHold(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          fileName: 'invalid-hold.bin',
+          fileId: uploaded.fileId,
+          legalHold: 'invalid' as LegalHoldValue,
+        },
+      ),
+    ).rejects.toThrow(/legalHold/)
   })
 })
 
