@@ -1054,17 +1054,19 @@ describe('deleteLocalFileInsideRoot', () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'b2sdk-local-file-delete-leaf-')))
     try {
       const scannedPath = await makeScannedPath(root, 'victim.txt', 'original')
+      localFileIoTestHooks.platform = 'win32'
 
       localFileIoTestHooks.beforeLocalDeleteUnlink = async () => {
         await rename(join(root, 'victim.txt'), join(root, 'victim.old'))
-        await writeFile(join(root, 'victim.txt'), 'replace!')
+        await writeFile(join(root, 'victim.txt'), 'replacement')
       }
 
       await expect(deleteLocalFileInsideRoot(root, scannedPath)).rejects.toThrow(
         'local file changed before delete',
       )
-      await expect(readFile(join(root, 'victim.txt'), 'utf8')).resolves.toBe('replace!')
+      await expect(readFile(join(root, 'victim.txt'), 'utf8')).resolves.toBe('replacement')
     } finally {
+      delete localFileIoTestHooks.platform
       delete localFileIoTestHooks.beforeLocalDeleteUnlink
       await rm(root, { recursive: true, force: true })
     }
