@@ -6,7 +6,7 @@ import { BufferSource } from './streams/source.ts'
 import { daysFromNow } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
-import { LegalHoldValue, RetentionMode } from './types/lock.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from './types/lock.ts'
 
 /**
  * Tests for the per-file Object Lock convenience methods added to
@@ -225,6 +225,15 @@ describe('B2Simulator: update retention and legal hold enforce Object Lock', () 
         retainUntilTimestamp: daysFromNow(1),
       }),
     ).rejects.toThrow(/bypassGovernance/)
+    await expect(
+      bucket.file('governance-update.bin').setRetention(uploaded.fileId, {
+        mode: null,
+        retainUntilTimestamp: null,
+      }),
+    ).rejects.toThrow(/bypassGovernance/)
+    await expect(
+      bucket.deleteFileVersion('governance-update.bin', uploaded.fileId),
+    ).rejects.toThrow(/governance/)
 
     const shortened = await bucket.file('governance-update.bin').setRetention(
       uploaded.fileId,
@@ -235,6 +244,54 @@ describe('B2Simulator: update retention and legal hold enforce Object Lock', () 
       { bypassGovernance: true },
     )
     expect(shortened.fileRetention.mode).toBe(RetentionMode.Governance)
+  })
+
+  it('rejects malformed governance retention updates and keeps delete protected', async () => {
+    const { bucket, client } = await setup()
+    const scenarios = [
+      {
+        fileName: 'raw-null-omitted.bin',
+        fileRetention: { mode: null },
+      },
+      {
+        fileName: 'raw-null-later.bin',
+        fileRetention: { mode: null, retainUntilTimestamp: daysFromNow(60) },
+      },
+      {
+        fileName: 'raw-unknown-mode.bin',
+        fileRetention: { mode: 'retain-forever', retainUntilTimestamp: daysFromNow(60) },
+      },
+    ]
+
+    for (const scenario of scenarios) {
+      const uploaded = await bucket.upload({
+        fileName: scenario.fileName,
+        source: new BufferSource(new Uint8Array([1])),
+      })
+      const retention = {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: daysFromNow(30),
+      }
+      await bucket.file(scenario.fileName).setRetention(uploaded.fileId, retention)
+
+      await expect(
+        client.raw.updateFileRetention(
+          client.accountInfo.getApiUrl(),
+          client.accountInfo.getAuthToken(),
+          {
+            fileName: scenario.fileName,
+            fileId: uploaded.fileId,
+            fileRetention: scenario.fileRetention as FileRetentionValue,
+          },
+        ),
+      ).rejects.toThrow(/fileRetention/)
+
+      const info = await bucket.file(scenario.fileName).getFileInfo(uploaded.fileId)
+      expect(info.fileRetention.value).toEqual(retention)
+      await expect(bucket.deleteFileVersion(scenario.fileName, uploaded.fileId)).rejects.toThrow(
+        /governance/,
+      )
+    }
   })
 
   it('requires the bypassGovernance capability in strict-auth mode', async () => {
