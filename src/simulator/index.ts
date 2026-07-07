@@ -3651,7 +3651,7 @@ export class B2Simulator {
     const fileLockError = this.requireFileLockEnabled(found.bucket)
     if (fileLockError !== null) return fileLockError
 
-    const fileRetention = parseFileRetentionValue(req.fileRetention, this.now())
+    const fileRetention = parseFileRetentionValue(req.fileRetention, Date.now())
     if (fileRetention === null) {
       return this.error(
         400,
