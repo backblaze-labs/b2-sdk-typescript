@@ -859,7 +859,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     ).rejects.toThrow(/scoped to buckets/)
     await expect(
       scopedClient.raw.downloadFileById(downloadUrl, authToken, blockedFile.fileId),
-    ).rejects.toThrow(/HTTP 403/)
+    ).rejects.toThrow(/scoped to buckets/)
     await expect(
       scopedClient.raw.downloadFileByName(
         downloadUrl,
@@ -867,7 +867,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         blocked.name,
         blockedFile.fileName,
       ),
-    ).rejects.toThrow(/HTTP 403/)
+    ).rejects.toThrow(/scoped to buckets/)
   })
 
   it('enforces namePrefix on list and download authorization prefixes', async () => {
@@ -2302,7 +2302,10 @@ describe('B2Simulator server-side encryption fidelity', () => {
     expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKey')
     expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
 
-    await expect(bucket.download('sse-c-download.txt')).rejects.toMatchObject({ status: 400 })
+    await expect(bucket.download('sse-c-download.txt')).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
     await expect(
       bucket.download('sse-c-download.txt', {
         serverSideEncryption: wrongEncryption,

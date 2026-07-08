@@ -3666,15 +3666,12 @@ class SimulatorTransport implements HttpTransport {
         headers: responseHeaders,
         body,
         json: <T>() => {
-          if (isJson) {
-            try {
-              const parsed = JSON.parse(text()) as { code?: unknown }
-              if (parsed.code === 'access_denied') return Promise.resolve(parsed as T)
-            } catch {
-              // Fall through to the historical non-JSON download error below.
-            }
+          if (!isJson) return Promise.reject(new Error('Download response is not JSON'))
+          try {
+            return Promise.resolve(JSON.parse(text()) as T)
+          } catch {
+            return Promise.reject(new Error('Download response is not JSON'))
           }
-          return Promise.reject(new Error('Download response is not JSON'))
         },
         text: () => Promise.resolve(text()),
         arrayBuffer: () =>
