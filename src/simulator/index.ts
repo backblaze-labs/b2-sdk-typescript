@@ -2149,12 +2149,10 @@ export class B2Simulator {
   }
 
   private async resolveCopyDestinationEncryption(
-    source: StoredFile,
     destinationBucket: StoredBucket,
     requested: EncryptionSetting | undefined,
   ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
     if (requested !== undefined) return await storedServerSideEncryption(requested)
-    if (source.serverSideEncryption.mode !== EncryptionMode.None) return source.serverSideEncryption
     return await storedServerSideEncryption(destinationBucket.info.defaultServerSideEncryption)
   }
 
@@ -2710,7 +2708,6 @@ export class B2Simulator {
     if (sourceEncryptionError !== null) return sourceEncryptionError
 
     const destinationEncryption = await this.resolveCopyDestinationEncryption(
-      sourceStored,
       destBucket,
       req.destinationServerSideEncryption,
     )
@@ -3643,7 +3640,6 @@ class SimulatorTransport implements HttpTransport {
         'Content-Type',
         result.headers['Content-Type'] ?? 'application/octet-stream',
       )
-      const isJson = responseHeaders.get('Content-Type')?.includes('application/json') === true
       let decodedText: string | null = null
       const text = () => {
         decodedText ??= utf8Decoder.decode(data)
@@ -3666,7 +3662,6 @@ class SimulatorTransport implements HttpTransport {
         headers: responseHeaders,
         body,
         json: <T>() => {
-          if (!isJson) return Promise.reject(new Error('Download response is not JSON'))
           try {
             return Promise.resolve(JSON.parse(text()) as T)
           } catch {

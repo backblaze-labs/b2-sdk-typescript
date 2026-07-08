@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **B2Simulator SSE-C fidelity.** Simulator uploads, large-file parts, downloads, copyFile, and copyPart now validate SSE-C customer-key headers more closely to B2, preserve destination encryption semantics, and keep customer keys out of public response metadata.
+
 ## [0.2.0] - 2026-07-08
 
 ### Added

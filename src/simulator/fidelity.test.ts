@@ -2308,6 +2308,20 @@ describe('B2Simulator server-side encryption fidelity', () => {
     })
     await expect(
       bucket.download('sse-c-download.txt', {
+        b2ContentType: 'text/plain',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+    await expect(
+      bucket.download('sse-c-download.txt', {
+        serverSideEncryption: wrongEncryption,
+      }),
+    ).rejects.toMatchObject({ status: 403, code: 'access_denied' })
+    await expect(
+      bucket.download('sse-c-download.txt', {
+        b2ContentType: 'text/plain',
         serverSideEncryption: wrongEncryption,
       }),
     ).rejects.toMatchObject({ status: 403, code: 'access_denied' })
@@ -2333,11 +2347,16 @@ describe('B2Simulator server-side encryption fidelity', () => {
     expect(JSON.stringify([uploaded, info, listed])).not.toContain(encryption.customerKeyMd5)
   })
 
-  it('requires SSE-C source keys for copyFile and preserves destination encryption', async () => {
+  it('requires SSE-C source keys for copyFile and uses destination encryption', async () => {
     const data = new TextEncoder().encode('copyFile source key boundary')
     const sourceEncryption = await validSseCustomerSetting(13)
     const wrongSourceEncryption = await validSseCustomerSetting(14)
     const destinationEncryption = await validSseCustomerSetting(15)
+    const sseB2Bucket = await client.createBucket({
+      bucketName: 'encryption-fidelity-sse-b2',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
     const normalizedSourceEncryption = sseCustomer(
       sourceEncryption.customerKey.replace(/=+$/, ''),
       sourceEncryption.customerKeyMd5.replace(/=+$/, ''),
@@ -2363,23 +2382,25 @@ describe('B2Simulator server-side encryption fidelity', () => {
       }),
     ).rejects.toMatchObject({ status: 400 })
 
-    const retained = await bucket.copyFile({
+    const defaultNoneCopy = await bucket.copyFile({
       sourceFileId: source.fileId,
-      fileName: 'copy-retains-source-key.txt',
+      fileName: 'copy-uses-default-none.txt',
       sourceServerSideEncryption: normalizedSourceEncryption,
     })
-    expect(retained.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
-    await expect(bucket.download('copy-retains-source-key.txt')).rejects.toMatchObject({
-      status: 400,
+    expect(defaultNoneCopy.serverSideEncryption).toEqual({ mode: null, algorithm: null })
+    expect(await readStream((await bucket.download('copy-uses-default-none.txt')).body)).toEqual(
+      data,
+    )
+
+    const defaultSseB2Copy = await bucket.copyFile({
+      sourceFileId: source.fileId,
+      fileName: 'copy-uses-default-sse-b2.txt',
+      destinationBucketId: sseB2Bucket.id,
+      sourceServerSideEncryption: sourceEncryption,
     })
+    expect(defaultSseB2Copy.serverSideEncryption).toEqual(SSE_B2)
     expect(
-      await readStream(
-        (
-          await bucket.download('copy-retains-source-key.txt', {
-            serverSideEncryption: sourceEncryption,
-          })
-        ).body,
-      ),
+      await readStream((await sseB2Bucket.download('copy-uses-default-sse-b2.txt')).body),
     ).toEqual(data)
 
     const reEncrypted = await bucket.copyFile({
@@ -2404,7 +2425,7 @@ describe('B2Simulator server-side encryption fidelity', () => {
       ),
     ).toEqual(data)
 
-    const publicJson = JSON.stringify([source, retained, reEncrypted])
+    const publicJson = JSON.stringify([source, defaultNoneCopy, defaultSseB2Copy, reEncrypted])
     expect(publicJson).not.toContain(sourceEncryption.customerKey)
     expect(publicJson).not.toContain(normalizedSourceEncryption.customerKey)
     expect(publicJson).not.toContain(destinationEncryption.customerKey)
