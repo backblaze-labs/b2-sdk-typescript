@@ -3,21 +3,27 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { md5Base64Sync } from './md5.ts'
 
-const originalGetBuiltinModule = process.getBuiltinModule
-const originalBuffer = globalThis.Buffer
+const originalGetBuiltinModuleDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  'getBuiltinModule',
+)
+const originalBufferDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Buffer')
+
+function restoreProperty(
+  target: object,
+  property: PropertyKey,
+  descriptor: PropertyDescriptor | undefined,
+) {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(target, property)
+    return
+  }
+  Object.defineProperty(target, property, descriptor)
+}
 
 function restoreGlobals() {
-  Object.defineProperty(process, 'getBuiltinModule', {
-    configurable: true,
-    enumerable: true,
-    value: originalGetBuiltinModule,
-    writable: true,
-  })
-  Object.defineProperty(globalThis, 'Buffer', {
-    configurable: true,
-    value: originalBuffer,
-    writable: true,
-  })
+  restoreProperty(process, 'getBuiltinModule', originalGetBuiltinModuleDescriptor)
+  restoreProperty(globalThis, 'Buffer', originalBufferDescriptor)
 }
 
 describe('md5Base64Sync', () => {

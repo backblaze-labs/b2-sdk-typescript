@@ -2264,6 +2264,31 @@ describe('B2Simulator server-side encryption fidelity', () => {
       ).resolves.toMatchObject({ status: 400 })
     }
 
+    const unencryptedStarted = await rawStartLargeFile('plain-parts-with-sse-c-headers.bin')
+    const unencryptedPartUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: unencryptedStarted.fileId,
+    })
+    await expect(
+      directSimulatorUploadPart(
+        unencryptedPartUrl.uploadUrl,
+        unencryptedPartUrl.authorizationToken,
+        1,
+        part,
+        {
+          'x-bz-server-side-encryption-customer-algorithm': 'AES256',
+          'x-bz-server-side-encryption-customer-key': encryption.customerKey,
+          'x-bz-server-side-encryption-customer-key-md5': encryption.customerKeyMd5,
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { message: 'SSE-C upload part headers require an SSE-C large file' },
+    })
+    const unencryptedParts = await client.raw.listParts(apiUrl, authToken, {
+      fileId: unencryptedStarted.fileId,
+    })
+    expect(unencryptedParts.parts).toEqual([])
+
     const beforeMatch = await client.raw.listParts(apiUrl, authToken, { fileId: started.fileId })
     expect(beforeMatch.parts).toEqual([])
 

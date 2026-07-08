@@ -436,6 +436,14 @@ function hasCustomerEncryptionFields(encryption: Record<string, unknown>): boole
   )
 }
 
+function hasCustomerEncryptionHeaders(headers: Record<string, string>): boolean {
+  return (
+    headers['x-bz-server-side-encryption-customer-algorithm'] !== undefined ||
+    headers['x-bz-server-side-encryption-customer-key'] !== undefined ||
+    headers['x-bz-server-side-encryption-customer-key-md5'] !== undefined
+  )
+}
+
 async function storedServerSideEncryption(
   encryption: EncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
@@ -507,11 +515,7 @@ async function uploadServerSideEncryption(
   const customerKey = headers['x-bz-server-side-encryption-customer-key']
   const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
   const managedEncryption = headers['x-bz-server-side-encryption']
-  if (
-    customerAlgorithm !== undefined ||
-    customerKey !== undefined ||
-    customerKeyMd5 !== undefined
-  ) {
+  if (hasCustomerEncryptionHeaders(headers)) {
     if (managedEncryption !== undefined) {
       return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
     }
@@ -2001,7 +2005,10 @@ export class B2Simulator {
     large: LargeFileInProgress,
     headers: Record<string, string>,
   ): Promise<SimulatorJsonResponse | null> {
-    if (large.serverSideEncryption.mode !== EncryptionMode.SseC) return null
+    if (large.serverSideEncryption.mode !== EncryptionMode.SseC) {
+      if (!hasCustomerEncryptionHeaders(headers)) return null
+      return this.error(400, 'bad_request', 'SSE-C upload part headers require an SSE-C large file')
+    }
 
     const supplied = await storedServerSideEncryption({
       mode: EncryptionMode.SseC,
