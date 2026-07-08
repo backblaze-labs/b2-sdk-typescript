@@ -18,7 +18,6 @@ import {
   EncryptionAlgorithm,
   EncryptionMode,
   type EncryptionSetting,
-  md5Base64,
   type PublicEncryptionSetting,
 } from '../types/encryption.ts'
 import { FileAction, type FileVersion } from '../types/file.ts'
@@ -32,6 +31,7 @@ import {
 import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { hmacSha256 } from '../util/crypto.ts'
+import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
@@ -369,9 +369,34 @@ function customerKeyDigest(customerKey: Uint8Array): string {
   return `${first.toString(16).padStart(8, '0')}${second.toString(16).padStart(8, '0')}`
 }
 
-function base64ToBytes(value: string): Uint8Array | null {
+const BASE64_ALPHABET = /^[A-Za-z0-9+/]+$/
+
+function normalizeSizedBase64(value: string, decodedByteLength: number): string | null {
+  const paddedLength = Math.ceil(decodedByteLength / 3) * 4
+  const noPaddingLength = Math.ceil((decodedByteLength * 8) / 6)
+  const padding = '='.repeat(paddedLength - noPaddingLength)
+
+  if (value.length === noPaddingLength && BASE64_ALPHABET.test(value)) {
+    return value.padEnd(paddedLength, '=')
+  }
+
+  if (
+    value.length === paddedLength &&
+    value.endsWith(padding) &&
+    BASE64_ALPHABET.test(value.slice(0, noPaddingLength))
+  ) {
+    return value
+  }
+
+  return null
+}
+
+function base64ToBytes(value: string, decodedByteLength: number): Uint8Array | null {
+  const normalized = normalizeSizedBase64(value, decodedByteLength)
+  if (normalized === null) return null
   try {
-    const decoded = atob(value)
+    const decoded = atob(normalized)
+    if (decoded.length !== decodedByteLength) return null
     const bytes = new Uint8Array(decoded.length)
     for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i)
     return bytes
@@ -403,9 +428,18 @@ function sameStoredServerSideEncryption(
   return false
 }
 
+function hasCustomerEncryptionFields(encryption: Record<string, unknown>): boolean {
+  return (
+    encryption['customerKey'] !== undefined ||
+    encryption['customerKeyMd5'] !== undefined ||
+    encryption['customerAlgorithm'] !== undefined
+  )
+}
+
 async function storedServerSideEncryption(
   encryption: EncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
+  const runtimeEncryption = encryption as unknown as Record<string, unknown>
   if (encryption.mode === EncryptionMode.SseC) {
     if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-C customer algorithm must be AES256')
@@ -418,28 +452,48 @@ async function storedServerSideEncryption(
     if (typeof customerKeyMd5 !== 'string' || customerKeyMd5 === '') {
       return encryptionValidationError('SSE-C customer key MD5 is required')
     }
-    const customerKeyBytes = base64ToBytes(customerKey)
-    if (customerKeyBytes === null || customerKeyBytes.byteLength !== 32) {
+    const customerKeyBytes = base64ToBytes(customerKey, 32)
+    if (customerKeyBytes === null) {
       return encryptionValidationError('SSE-C customer key must be a base64-encoded 256-bit key')
     }
+    const normalizedCustomerKeyMd5 = normalizeSizedBase64(customerKeyMd5, 16)
+    if (normalizedCustomerKeyMd5 === null) {
+      return encryptionValidationError(
+        'SSE-C customer key MD5 must be a base64-encoded 128-bit digest',
+      )
+    }
     const actualMd5 = await md5Base64(customerKeyBytes)
-    if (actualMd5 !== customerKeyMd5) {
+    if (actualMd5 !== normalizedCustomerKeyMd5) {
       return encryptionValidationError('SSE-C customer key MD5 does not match the key')
     }
     return {
       mode: encryption.mode,
       algorithm: encryption.algorithm,
       customerKeyDigest: customerKeyDigest(customerKeyBytes),
-      customerKeyMd5,
+      customerKeyMd5: normalizedCustomerKeyMd5,
     }
   }
   if (encryption.mode === EncryptionMode.SseB2) {
+    if (hasCustomerEncryptionFields(runtimeEncryption)) {
+      return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
+    }
     if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-B2 algorithm must be AES256')
     }
     return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
-  return { mode: EncryptionMode.None }
+  if (encryption.mode === EncryptionMode.None) {
+    if (hasCustomerEncryptionFields(runtimeEncryption)) {
+      return encryptionValidationError(
+        'No-encryption settings must not include SSE-C customer keys',
+      )
+    }
+    return { mode: EncryptionMode.None }
+  }
+
+  return encryptionValidationError(
+    `Unsupported server-side encryption mode: ${String(runtimeEncryption['mode'])}`,
+  )
 }
 
 async function uploadServerSideEncryption(
@@ -449,11 +503,15 @@ async function uploadServerSideEncryption(
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
   const customerKey = headers['x-bz-server-side-encryption-customer-key']
   const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+  const managedEncryption = headers['x-bz-server-side-encryption']
   if (
     customerAlgorithm !== undefined ||
     customerKey !== undefined ||
     customerKeyMd5 !== undefined
   ) {
+    if (managedEncryption !== undefined) {
+      return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
+    }
     if (customerAlgorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-C customer algorithm must be AES256')
     }
@@ -468,7 +526,10 @@ async function uploadServerSideEncryption(
     })
   }
 
-  if (headers['x-bz-server-side-encryption'] === EncryptionAlgorithm.Aes256) {
+  if (managedEncryption !== undefined) {
+    if (managedEncryption !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-B2 algorithm must be AES256')
+    }
     return { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 }
   }
 
@@ -1930,6 +1991,30 @@ export class B2Simulator {
     return { sha1: expected, data }
   }
 
+  private async validateUploadPartEncryption(
+    large: LargeFileInProgress,
+    headers: Record<string, string>,
+  ): Promise<SimulatorJsonResponse | null> {
+    if (large.serverSideEncryption.mode !== EncryptionMode.SseC) return null
+
+    const supplied = await storedServerSideEncryption({
+      mode: EncryptionMode.SseC,
+      algorithm: headers['x-bz-server-side-encryption-customer-algorithm'] as EncryptionAlgorithm,
+      customerKey: headers['x-bz-server-side-encryption-customer-key'] as string,
+      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] as string,
+    })
+    if ('status' in supplied) return supplied
+    if (!sameStoredServerSideEncryption(large.serverSideEncryption, supplied)) {
+      return this.error(
+        400,
+        'bad_request',
+        'SSE-C upload parts require matching customer encryption headers',
+      )
+    }
+
+    return null
+  }
+
   private async handleUploadPart(
     url: string,
     headers: Record<string, string>,
@@ -1942,6 +2027,9 @@ export class B2Simulator {
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
     const partNumber = Number.parseInt(headers['x-bz-part-number'] ?? '0', 10)
+
+    const encryptionError = await this.validateUploadPartEncryption(large, headers)
+    if (encryptionError !== null) return encryptionError
 
     // Verify the part bytes against X-Bz-Content-Sha1, same as b2_upload_file.
     // Parts are always sent with a real (or unverified:) sha1 by the SDK.
@@ -2003,19 +2091,32 @@ export class B2Simulator {
     const algorithm = headers['x-bz-server-side-encryption-customer-algorithm']
     const customerKey = headers['x-bz-server-side-encryption-customer-key']
     const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
-    const customerKeyBytes = customerKey === undefined ? null : base64ToBytes(customerKey)
+    const customerKeyBytes = customerKey === undefined ? null : base64ToBytes(customerKey, 32)
+    const normalizedCustomerKeyMd5 =
+      customerKeyMd5 === undefined ? null : normalizeSizedBase64(customerKeyMd5, 16)
     if (
       algorithm !== encryption.algorithm ||
       customerKeyBytes === null ||
-      customerKeyBytes.byteLength !== 32 ||
-      customerKeyMd5 !== encryption.customerKeyMd5 ||
-      customerKeyDigest(customerKeyBytes) !== encryption.customerKeyDigest
+      normalizedCustomerKeyMd5 === null ||
+      md5Base64Sync(customerKeyBytes) !== normalizedCustomerKeyMd5
     ) {
       return this.errorAsDownload(
         this.error(
           400,
           'bad_request',
           'SSE-C downloads require matching customer encryption headers',
+        ),
+      )
+    }
+    if (
+      normalizedCustomerKeyMd5 !== encryption.customerKeyMd5 ||
+      customerKeyDigest(customerKeyBytes) !== encryption.customerKeyDigest
+    ) {
+      return this.errorAsDownload(
+        this.error(
+          403,
+          'access_denied',
+          'SSE-C customer encryption key does not match the stored file',
         ),
       )
     }
@@ -3536,6 +3637,8 @@ class SimulatorTransport implements HttpTransport {
         'Content-Type',
         result.headers['Content-Type'] ?? 'application/octet-stream',
       )
+      const isJson = responseHeaders.get('Content-Type')?.includes('application/json') === true
+      const text = utf8Decoder.decode(data)
 
       // HEAD responses have no body but keep all headers (matches HTTP semantics).
       const body =
@@ -3552,8 +3655,18 @@ class SimulatorTransport implements HttpTransport {
         status: result.status,
         headers: responseHeaders,
         body,
-        json: () => Promise.reject(new Error('Download response is not JSON')),
-        text: () => Promise.resolve(utf8Decoder.decode(data)),
+        json: <T>() => {
+          if (isJson) {
+            try {
+              const parsed = JSON.parse(text) as { code?: unknown }
+              if (parsed.code === 'access_denied') return Promise.resolve(parsed as T)
+            } catch {
+              // Fall through to the historical non-JSON download error below.
+            }
+          }
+          return Promise.reject(new Error('Download response is not JSON'))
+        },
+        text: () => Promise.resolve(text),
         arrayBuffer: () =>
           Promise.resolve(
             data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,

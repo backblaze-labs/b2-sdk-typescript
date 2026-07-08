@@ -1766,22 +1766,20 @@ describe('B2Simulator upload authorization tokens', () => {
 // bytes) and fileInfo round-trip.
 // ---------------------------------------------------------------------------
 
-describe('B2Simulator upload SHA-1 verification', () => {
+describe('B2Simulator server-side encryption fidelity', () => {
   let sim: B2Simulator
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
 
   beforeEach(async () => {
-    // maxRetries: 0 so a deliberate 400 surfaces immediately, no backoff.
     ;({ client, sim } = makeClient({ client: { retry: { maxRetries: 0 } } }))
     await client.authorize()
     bucket = await client.createBucket({
-      bucketName: 'sha1-fidelity',
+      bucketName: 'encryption-fidelity',
       bucketType: BucketType.AllPrivate,
     })
   })
 
-  /** Upload `data` straight through the raw client with an explicit sha1 header. */
   async function rawUpload(
     fileName: string,
     data: Uint8Array,
@@ -1831,7 +1829,29 @@ describe('B2Simulator upload SHA-1 verification', () => {
     )
   }
 
-  async function customerSetting(fill: number): Promise<EncryptionSetting & { mode: 'SSE-C' }> {
+  async function directSimulatorUploadPart(
+    uploadUrl: string,
+    authorizationToken: string,
+    partNumber: number,
+    data: Uint8Array,
+    extraHeaders: Record<string, string>,
+  ) {
+    return await sim.handleUpload(
+      uploadUrl,
+      {
+        authorization: authorizationToken,
+        'x-bz-part-number': String(partNumber),
+        'content-length': String(data.byteLength),
+        'x-bz-content-sha1': await sha1Hex(data),
+        ...extraHeaders,
+      },
+      data,
+    )
+  }
+
+  async function validSseCustomerSetting(
+    fill: number,
+  ): Promise<EncryptionSetting & { mode: 'SSE-C' }> {
     const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(fill))
     return sseCustomer(key.customerKey, key.customerKeyMd5)
   }
@@ -1846,20 +1866,6 @@ describe('B2Simulator upload SHA-1 verification', () => {
       ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
     })
   }
-
-  it('rejects an upload whose X-Bz-Content-Sha1 does not match the bytes', async () => {
-    const data = new TextEncoder().encode('hello world')
-    await expect(rawUpload('mismatch.txt', data, '0'.repeat(40))).rejects.toThrow(
-      /Sha1 did not match/i,
-    )
-  })
-
-  it('accepts an upload whose sha1 matches and stores it', async () => {
-    const data = new TextEncoder().encode('verified content')
-    const hash = await sha1Hex(data)
-    const fv = await rawUpload('match.txt', data, hash)
-    expect(fv.contentSha1).toBe(hash)
-  })
 
   it('returns B2 null no-encryption shapes from public upload responses', async () => {
     const apiUrl = client.accountInfo.getApiUrl()
@@ -1919,22 +1925,13 @@ describe('B2Simulator upload SHA-1 verification', () => {
     expect(sseB2.serverSideEncryption).toEqual(SSE_B2)
 
     const sseCData = new TextEncoder().encode('customer key')
-    const sseCKey = await customerSetting(1)
+    const sseCKey = await validSseCustomerSetting(1)
     const sseC = await rawUpload('sse-c-small.txt', sseCData, await sha1Hex(sseCData), sseCKey)
     expect(sseC.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
   })
 
-  it('preserves the synchronous handleDownload API for direct callers', async () => {
-    const data = new TextEncoder().encode('direct simulator download')
-    await rawUpload('direct-download.txt', data, await sha1Hex(data))
-
-    const result = sim.handleDownload(`/file/${bucket.name}/direct-download.txt`, {})
-    expect(result.status).toBe(200)
-    expect(result.data).toEqual(data)
-  })
-
   it('rejects incomplete SSE-C upload headers', async () => {
-    const valid = await customerSetting(2)
+    const valid = await validSseCustomerSetting(2)
     const data = new TextEncoder().encode('bad sse-c upload')
     const incomplete: readonly [string, EncryptionSetting][] = [
       [
@@ -2016,9 +2013,33 @@ describe('B2Simulator upload SHA-1 verification', () => {
     }
   })
 
+  it('rejects oversized SSE-C key and MD5 inputs without decoding them', async () => {
+    const valid = await validSseCustomerSetting(3)
+    const oversized = 'A'.repeat(65_536)
+    const data = new TextEncoder().encode('oversized sse-c input')
+
+    await expect(
+      rawUpload('oversized-key.txt', data, await sha1Hex(data), {
+        mode: 'SSE-C',
+        algorithm: 'AES256',
+        customerKey: oversized,
+        customerKeyMd5: valid.customerKeyMd5,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+
+    await expect(
+      rawStartLargeFile('oversized-md5.bin', {
+        mode: 'SSE-C',
+        algorithm: 'AES256',
+        customerKey: valid.customerKey,
+        customerKeyMd5: oversized,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
   it('rejects SSE-C upload headers with mismatched MD5', async () => {
-    const valid = await customerSetting(3)
-    const other = await customerSetting(4)
+    const valid = await validSseCustomerSetting(4)
+    const other = await validSseCustomerSetting(5)
     const data = new TextEncoder().encode('bad sse-c upload md5')
 
     await expect(
@@ -2032,8 +2053,8 @@ describe('B2Simulator upload SHA-1 verification', () => {
   })
 
   it('rejects malformed SSE-C start-large-file settings', async () => {
-    const valid = await customerSetting(5)
-    const other = await customerSetting(6)
+    const valid = await validSseCustomerSetting(6)
+    const other = await validSseCustomerSetting(7)
     const malformed: readonly [string, EncryptionSetting][] = [
       [
         'missing-key',
@@ -2096,13 +2117,165 @@ describe('B2Simulator upload SHA-1 verification', () => {
     }
   })
 
+  it('rejects unsupported encryption modes and invalid customer-key fields', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const valid = await validSseCustomerSetting(8)
+    const data = new TextEncoder().encode('unsupported encryption modes')
+    const source = await rawUpload('unsupported-source.txt', data, await sha1Hex(data))
+    const unsupported = {
+      mode: 'SSE-CUSTOM',
+      algorithm: 'AES256',
+    } as unknown as EncryptionSetting
+
+    await expect(
+      directSimulatorUpload('unsupported-upload.txt', data, {
+        'x-bz-server-side-encryption': 'SSE-CUSTOM',
+      }),
+    ).resolves.toMatchObject({ status: 400 })
+    await expect(
+      directSimulatorUpload('sse-b2-upload-extra-key.txt', data, {
+        'x-bz-server-side-encryption': 'AES256',
+        'x-bz-server-side-encryption-customer-algorithm': 'AES256',
+        'x-bz-server-side-encryption-customer-key': valid.customerKey,
+        'x-bz-server-side-encryption-customer-key-md5': valid.customerKeyMd5,
+      }),
+    ).resolves.toMatchObject({ status: 400 })
+    await expect(rawStartLargeFile('unsupported-start.bin', unsupported)).rejects.toMatchObject({
+      status: 400,
+    })
+    await expect(
+      bucket.copyFile({
+        sourceFileId: source.fileId,
+        fileName: 'unsupported-copy.txt',
+        destinationServerSideEncryption: unsupported,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+
+    const started = await rawStartLargeFile('unsupported-copy-part.bin')
+    await expect(
+      client.raw.copyPart(apiUrl, authToken, {
+        sourceFileId: source.fileId,
+        largeFileId: fileIdOf(started.fileId),
+        partNumber: 1,
+        destinationServerSideEncryption: unsupported,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+
+    const sseB2WithCustomerKey = {
+      ...SSE_B2,
+      customerKey: valid.customerKey,
+      customerKeyMd5: valid.customerKeyMd5,
+    } as unknown as EncryptionSetting
+    const noneWithCustomerKey = {
+      mode: 'none',
+      customerKey: valid.customerKey,
+      customerKeyMd5: valid.customerKeyMd5,
+    } as unknown as EncryptionSetting
+    await expect(
+      rawStartLargeFile('sse-b2-extra-key.bin', sseB2WithCustomerKey),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      rawStartLargeFile('none-extra-key.bin', noneWithCustomerKey),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('requires matching SSE-C customer headers to upload large-file parts', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const encryption = await validSseCustomerSetting(9)
+    const wrongEncryption = await validSseCustomerSetting(10)
+    const started = await rawStartLargeFile('sse-c-parts.bin', encryption)
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: started.fileId,
+    })
+    const part = new Uint8Array(1024).fill(9)
+    const basePartHeaders = {
+      authorization: partUrl.authorizationToken,
+      partNumber: 1,
+      contentLength: part.byteLength,
+      contentSha1: await sha1Hex(part),
+    }
+
+    await expect(
+      client.raw.uploadPart(partUrl.uploadUrl, basePartHeaders, part as BodyInit),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      client.raw.uploadPart(
+        partUrl.uploadUrl,
+        { ...basePartHeaders, serverSideEncryption: wrongEncryption },
+        part as BodyInit,
+      ),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      client.raw.uploadPart(
+        partUrl.uploadUrl,
+        { ...basePartHeaders, serverSideEncryption: SSE_B2 },
+        part as BodyInit,
+      ),
+    ).rejects.toMatchObject({ status: 400 })
+
+    const malformedHeaders: readonly [string, Record<string, string>][] = [
+      [
+        'incomplete',
+        {
+          'x-bz-server-side-encryption-customer-algorithm': 'AES256',
+        },
+      ],
+      [
+        'malformed-key',
+        {
+          'x-bz-server-side-encryption-customer-algorithm': 'AES256',
+          'x-bz-server-side-encryption-customer-key': 'not-base64%%%',
+          'x-bz-server-side-encryption-customer-key-md5': encryption.customerKeyMd5,
+        },
+      ],
+      [
+        'unsupported-algorithm',
+        {
+          'x-bz-server-side-encryption-customer-algorithm': 'AES512',
+          'x-bz-server-side-encryption-customer-key': encryption.customerKey,
+          'x-bz-server-side-encryption-customer-key-md5': encryption.customerKeyMd5,
+        },
+      ],
+    ]
+    for (const [, headers] of malformedHeaders) {
+      await expect(
+        directSimulatorUploadPart(partUrl.uploadUrl, partUrl.authorizationToken, 1, part, headers),
+      ).resolves.toMatchObject({ status: 400 })
+    }
+
+    const beforeMatch = await client.raw.listParts(apiUrl, authToken, { fileId: started.fileId })
+    expect(beforeMatch.parts).toEqual([])
+
+    const uploadedPart = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      { ...basePartHeaders, serverSideEncryption: encryption },
+      part as BodyInit,
+    )
+    expect(uploadedPart.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+
+    const listed = await client.raw.listParts(apiUrl, authToken, { fileId: started.fileId })
+    expect(listed.parts).toHaveLength(1)
+
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: started.fileId,
+      partSha1Array: [uploadedPart.contentSha1],
+    })
+    expect(finished.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    const downloaded = await bucket.download('sse-c-parts.bin', {
+      serverSideEncryption: encryption,
+    })
+    expect(await readStream(downloaded.body)).toEqual(part)
+  })
+
   it('requires matching SSE-C customer headers to download', async () => {
     const data = new TextEncoder().encode('customer-key protected content')
-    const encryption = await customerSetting(7)
-    const wrongEncryption = await customerSetting(8)
+    const encryption = await validSseCustomerSetting(11)
+    const wrongEncryption = await validSseCustomerSetting(12)
     const normalizedEncryption = sseCustomer(
       encryption.customerKey.replace(/=+$/, ''),
-      encryption.customerKeyMd5,
+      encryption.customerKeyMd5.replace(/=+$/, ''),
     )
     const uploaded = await rawUpload('sse-c-download.txt', data, await sha1Hex(data), encryption)
 
@@ -2115,7 +2288,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       bucket.download('sse-c-download.txt', {
         serverSideEncryption: wrongEncryption,
       }),
-    ).rejects.toMatchObject({ status: 400 })
+    ).rejects.toMatchObject({ status: 403, code: 'access_denied' })
 
     const downloaded = await bucket.download('sse-c-download.txt', {
       serverSideEncryption: encryption,
@@ -2140,12 +2313,12 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
   it('requires SSE-C source keys for copyFile and preserves destination encryption', async () => {
     const data = new TextEncoder().encode('copyFile source key boundary')
-    const sourceEncryption = await customerSetting(9)
-    const wrongSourceEncryption = await customerSetting(10)
-    const destinationEncryption = await customerSetting(11)
+    const sourceEncryption = await validSseCustomerSetting(13)
+    const wrongSourceEncryption = await validSseCustomerSetting(14)
+    const destinationEncryption = await validSseCustomerSetting(15)
     const normalizedSourceEncryption = sseCustomer(
       sourceEncryption.customerKey.replace(/=+$/, ''),
-      sourceEncryption.customerKeyMd5,
+      sourceEncryption.customerKeyMd5.replace(/=+$/, ''),
     )
     const source = await rawUpload(
       'copy-sse-c-source.txt',
@@ -2198,7 +2371,7 @@ describe('B2Simulator upload SHA-1 verification', () => {
       bucket.download('copy-uses-destination-key.txt', {
         serverSideEncryption: sourceEncryption,
       }),
-    ).rejects.toMatchObject({ status: 400 })
+    ).rejects.toMatchObject({ status: 403, code: 'access_denied' })
     expect(
       await readStream(
         (
@@ -2217,9 +2390,9 @@ describe('B2Simulator upload SHA-1 verification', () => {
 
   it('requires SSE-C source keys for copyPart into encrypted large files', async () => {
     const data = new TextEncoder().encode('copyPart source key boundary')
-    const sourceEncryption = await customerSetting(12)
-    const wrongSourceEncryption = await customerSetting(13)
-    const destinationEncryption = await customerSetting(14)
+    const sourceEncryption = await validSseCustomerSetting(16)
+    const wrongSourceEncryption = await validSseCustomerSetting(17)
+    const destinationEncryption = await validSseCustomerSetting(18)
     const source = await rawUpload(
       'copy-part-sse-c-source.txt',
       data,
@@ -2275,6 +2448,71 @@ describe('B2Simulator upload SHA-1 verification', () => {
     ).toEqual(data)
     expect(JSON.stringify([source, finished])).not.toContain(sourceEncryption.customerKey)
     expect(JSON.stringify([source, finished])).not.toContain(destinationEncryption.customerKey)
+  })
+})
+
+describe('B2Simulator upload SHA-1 verification', () => {
+  let sim: B2Simulator
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+
+  beforeEach(async () => {
+    // maxRetries: 0 so a deliberate 400 surfaces immediately, no backoff.
+    ;({ client, sim } = makeClient({ client: { retry: { maxRetries: 0 } } }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'sha1-fidelity',
+      bucketType: BucketType.AllPrivate,
+    })
+  })
+
+  /** Upload `data` straight through the raw client with an explicit sha1 header. */
+  async function rawUpload(
+    fileName: string,
+    data: Uint8Array,
+    contentSha1: string,
+    serverSideEncryption?: EncryptionSetting,
+  ) {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const { uploadUrl, authorizationToken } = await client.raw.getUploadUrl(apiUrl, authToken, {
+      bucketId: bucket.id,
+    })
+    return client.raw.uploadFile(
+      uploadUrl,
+      {
+        authorization: authorizationToken,
+        fileName,
+        contentType: 'text/plain',
+        contentLength: data.byteLength,
+        contentSha1,
+        ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+      },
+      data as BodyInit,
+    )
+  }
+
+  it('rejects an upload whose X-Bz-Content-Sha1 does not match the bytes', async () => {
+    const data = new TextEncoder().encode('hello world')
+    await expect(rawUpload('mismatch.txt', data, '0'.repeat(40))).rejects.toThrow(
+      /Sha1 did not match/i,
+    )
+  })
+
+  it('accepts an upload whose sha1 matches and stores it', async () => {
+    const data = new TextEncoder().encode('verified content')
+    const hash = await sha1Hex(data)
+    const fv = await rawUpload('match.txt', data, hash)
+    expect(fv.contentSha1).toBe(hash)
+  })
+
+  it('preserves the synchronous handleDownload API for direct callers', async () => {
+    const data = new TextEncoder().encode('direct simulator download')
+    await rawUpload('direct-download.txt', data, await sha1Hex(data))
+
+    const result = sim.handleDownload(`/file/${bucket.name}/direct-download.txt`, {})
+    expect(result.status).toBe(200)
+    expect(result.data).toEqual(data)
   })
 
   it('skips verification for the do_not_verify sentinel (no stored sha1)', async () => {
