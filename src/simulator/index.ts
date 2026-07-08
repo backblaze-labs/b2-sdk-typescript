@@ -441,6 +441,9 @@ async function storedServerSideEncryption(
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const runtimeEncryption = encryption as unknown as Record<string, unknown>
   if (encryption.mode === EncryptionMode.SseC) {
+    if (runtimeEncryption['algorithm'] === undefined) {
+      return encryptionValidationError('SSE-C customer algorithm is required')
+    }
     if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-C customer algorithm must be AES256')
     }
@@ -511,6 +514,9 @@ async function uploadServerSideEncryption(
   ) {
     if (managedEncryption !== undefined) {
       return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
+    }
+    if (customerAlgorithm === undefined) {
+      return encryptionValidationError('SSE-C customer algorithm is required')
     }
     if (customerAlgorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-C customer algorithm must be AES256')

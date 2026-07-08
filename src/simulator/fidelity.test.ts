@@ -2011,6 +2011,15 @@ describe('B2Simulator server-side encryption fidelity', () => {
         status: 400,
       })
     }
+
+    await expect(
+      directSimulatorUpload('missing-algorithm-message.txt', data, {
+        'x-bz-server-side-encryption-customer-key': valid.customerKey,
+      }),
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { message: 'SSE-C customer algorithm is required' },
+    })
   })
 
   it('rejects oversized SSE-C key and MD5 inputs without decoding them', async () => {
