@@ -166,6 +166,12 @@ function rejectUnsealedArtifactHazards(jobName, body, errors) {
   const artifactSealIndex = body.indexOf('actions/upload-artifact@')
   if (artifactSealIndex === -1) return
 
+  if (body.includes('path: .release/*') && !/include-hidden-files:\s*true/.test(body)) {
+    errors.push(
+      `release.yml ${jobName} job uploads from hidden .release/ and must set include-hidden-files: true.`,
+    )
+  }
+
   const beforeSeal = body.slice(0, artifactSealIndex)
   if (dynamicPackageExecution.test(beforeSeal)) {
     errors.push(
