@@ -291,6 +291,11 @@ if (publishJob !== '') {
   if (/pnpm\s+(install|build|test|lint)|npm\s+install/.test(publishJob)) {
     errors.push('release.yml publish job must not install dependencies, build, test, or lint.')
   }
+  if (!/node-version:\s*24\b/.test(publishJob)) {
+    errors.push(
+      'release.yml publish job must use Node 24 so npm trusted publishing has npm >= 11.5.1.',
+    )
+  }
   for (const requiredSnippet of [
     'LOCAL_INTEGRITY=',
     'PUBLISHED_INTEGRITY=',

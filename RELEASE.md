@@ -65,9 +65,9 @@ Now wire up OIDC so every future release publishes from CI with zero secrets:
    - **Allowed actions**: `npm publish`
 2. (Recommended) flip the package to **Require two-factor authentication and disallow tokens**. OIDC keeps working; classic/automation tokens stop, closing off the most common supply-chain leak.
 
-There is **no `NPM_TOKEN` secret to create or rotate.** The `id-token: write` permission in `release.yml` is what lets pnpm mint a short-lived, single-use credential at publish time.
+There is **no `NPM_TOKEN` secret to create or rotate.** The `id-token: write` permission in `release.yml` is what lets the npm CLI mint a short-lived, single-use credential at publish time.
 
-> **Requirements for the OIDC path:** Node ≥ 22.14.0 (the artifact build job pins Node 22.18.0; publish-only jobs use GitHub's current Node 22 line) and pnpm ≥ 11.0 for native OIDC publish (pinned via `packageManager`).
+> **Requirements for the OIDC path:** npm CLI ≥ 11.5.1 and Node ≥ 22.14.0. The artifact build job pins Node 22.18.0, while the publish-only job uses Node 24 so the GitHub-hosted runner carries npm 11 for trusted publishing. pnpm remains pinned via `packageManager` for install/build/test steps.
 
 <details>
 <summary>Fallback: token-based publishing (only if you can't use OIDC)</summary>
@@ -165,7 +165,7 @@ Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/releas
 
 1. Checks out the tag and verifies the tag matches `package.json` version.
 2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
-3. `pnpm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
+3. `npm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
 
 Then confirm:
