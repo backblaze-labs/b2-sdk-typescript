@@ -31,7 +31,12 @@ import {
   readStream,
 } from '../test-utils/index.ts'
 import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
-import { EncryptionAlgorithm, EncryptionMode, sseCustomer } from '../types/encryption.ts'
+import {
+  EncryptionAlgorithm,
+  EncryptionKey,
+  EncryptionMode,
+  sseCustomer,
+} from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import {
@@ -96,6 +101,11 @@ const perCallRetry = {
   maxRetries: 1,
   maxRetryDelayMs: 0,
 } as const
+
+async function validSseCustomer(fill: number) {
+  const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(fill))
+  return sseCustomer(key.customerKey, key.customerKeyMd5)
+}
 
 async function waitForExpectation(assertion: () => void): Promise<void> {
   const maybeWaitFor = (
@@ -3729,6 +3739,9 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
     const contentType = 'application/octet-stream'
+    const keyA = await validSseCustomer(1)
+    const keyB = await validSseCustomer(2)
+    const keyC = await validSseCustomer(3)
     const first = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -3736,7 +3749,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         bucketId: bucketId as never,
         fileName: 'sse-c.bin',
         contentType,
-        serverSideEncryption: sseCustomer('key-a', 'md5-a'),
+        serverSideEncryption: keyA,
       },
     )
     const second = await client.raw.startLargeFile(
@@ -3746,15 +3759,15 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         bucketId: bucketId as never,
         fileName: 'sse-c.bin',
         contentType,
-        serverSideEncryption: sseCustomer('key-b', 'md5-b'),
+        serverSideEncryption: keyB,
       },
     )
     expect(first.serverSideEncryption).not.toHaveProperty('customerKey')
     expect(first.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
-    expect(JSON.stringify(first)).not.toContain('key-a')
-    expect(JSON.stringify(first)).not.toContain('md5-a')
-    expect(JSON.stringify(second)).not.toContain('key-b')
-    expect(JSON.stringify(second)).not.toContain('md5-b')
+    expect(JSON.stringify(first)).not.toContain(keyA.customerKey)
+    expect(JSON.stringify(first)).not.toContain(keyA.customerKeyMd5)
+    expect(JSON.stringify(second)).not.toContain(keyB.customerKey)
+    expect(JSON.stringify(second)).not.toContain(keyB.customerKeyMd5)
 
     const partUrl = await client.raw.getUploadPartUrl(
       client.accountInfo.getApiUrl(),
@@ -3769,14 +3782,14 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         partNumber: 1,
         contentLength: part.byteLength,
         contentSha1: await sha1Hex(part),
-        serverSideEncryption: sseCustomer('key-a', 'md5-a'),
+        serverSideEncryption: keyA,
       },
       part,
     )
     expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKey')
     expect(uploaded.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
-    expect(JSON.stringify(uploaded)).not.toContain('key-a')
-    expect(JSON.stringify(uploaded)).not.toContain('md5-a')
+    expect(JSON.stringify(uploaded)).not.toContain(keyA.customerKey)
+    expect(JSON.stringify(uploaded)).not.toContain(keyA.customerKeyMd5)
 
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucketId as never,
@@ -3786,15 +3799,15 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       partSize,
       concurrency: 1,
       resume: true,
-      serverSideEncryption: sseCustomer('key-c', 'md5-c'),
+      serverSideEncryption: keyC,
       onResumeCandidateRejected: () => {},
     })
 
     expect(result.fileName).toBe('sse-c.bin')
     expect(result.serverSideEncryption).not.toHaveProperty('customerKey')
     expect(result.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
-    expect(JSON.stringify(result)).not.toContain('key-c')
-    expect(JSON.stringify(result)).not.toContain('md5-c')
+    expect(JSON.stringify(result)).not.toContain(keyC.customerKey)
+    expect(JSON.stringify(result)).not.toContain(keyC.customerKeyMd5)
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -3805,17 +3818,18 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(unfinishedIds).toContain(second.fileId)
     expect(unfinished.files[0]?.serverSideEncryption).not.toHaveProperty('customerKey')
     expect(unfinished.files[0]?.serverSideEncryption).not.toHaveProperty('customerKeyMd5')
-    expect(JSON.stringify(unfinished)).not.toContain('key-a')
-    expect(JSON.stringify(unfinished)).not.toContain('md5-a')
-    expect(JSON.stringify(unfinished)).not.toContain('key-b')
-    expect(JSON.stringify(unfinished)).not.toContain('md5-b')
+    expect(JSON.stringify(unfinished)).not.toContain(keyA.customerKey)
+    expect(JSON.stringify(unfinished)).not.toContain(keyA.customerKeyMd5)
+    expect(JSON.stringify(unfinished)).not.toContain(keyB.customerKey)
+    expect(JSON.stringify(unfinished)).not.toContain(keyB.customerKeyMd5)
   })
 
   it('rejects SSE-C resumeFileId even when all parts are present', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
     const contentType = 'application/octet-stream'
-    const startEncryption = sseCustomer('key-a', 'md5-a')
+    const startEncryption = await validSseCustomer(4)
+    const requestedEncryption = await validSseCustomer(5)
     const start = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -3857,7 +3871,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         partSize,
         concurrency: 1,
         resumeFileId: start.fileId,
-        serverSideEncryption: sseCustomer('key-b', 'md5-b'),
+        serverSideEncryption: requestedEncryption,
       }),
     ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
 

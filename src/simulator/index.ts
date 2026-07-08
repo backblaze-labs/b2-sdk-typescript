@@ -31,6 +31,7 @@ import {
 import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { hmacSha256 } from '../util/crypto.ts'
+import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
@@ -201,7 +202,18 @@ export {
 interface StoredFile {
   readonly fileVersion: FileVersion
   readonly data: Uint8Array
+  readonly serverSideEncryption: StoredServerSideEncryption
 }
+
+type StoredServerSideEncryption =
+  | { readonly mode: 'none' }
+  | { readonly mode: 'SSE-B2'; readonly algorithm: EncryptionAlgorithm }
+  | {
+      readonly mode: 'SSE-C'
+      readonly algorithm: EncryptionAlgorithm
+      readonly customerKeyDigest: string
+      readonly customerKeyMd5: string
+    }
 
 interface StoredBucket {
   readonly info: BucketInfo
@@ -216,7 +228,7 @@ interface LargeFileInProgress {
   readonly fileInfo: Record<string, string>
   readonly fileRetention: FileRetentionValue | null
   readonly legalHold: LegalHoldValue | null
-  readonly serverSideEncryption: EncryptionSetting
+  readonly serverSideEncryption: StoredServerSideEncryption
   readonly uploadTimestamp: number
   readonly parts: Map<number, { data: Uint8Array; sha1: string }>
 }
@@ -335,7 +347,9 @@ function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
   )
 }
 
-function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryptionSetting {
+function publicServerSideEncryption(
+  encryption: EncryptionSetting | StoredServerSideEncryption,
+): PublicEncryptionSetting {
   if (encryption.mode === EncryptionMode.SseC) {
     return { mode: encryption.mode, algorithm: encryption.algorithm }
   }
@@ -345,25 +359,191 @@ function publicServerSideEncryption(encryption: EncryptionSetting): PublicEncryp
   return encryption
 }
 
-function uploadServerSideEncryption(
-  headers: Record<string, string>,
-  fallback: EncryptionSetting,
-): EncryptionSetting {
-  const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
-  if (customerAlgorithm === EncryptionAlgorithm.Aes256) {
-    return {
-      mode: EncryptionMode.SseC,
-      algorithm: EncryptionAlgorithm.Aes256,
-      customerKey: headers['x-bz-server-side-encryption-customer-key'] ?? '',
-      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] ?? '',
-    }
+function customerKeyDigest(customerKey: Uint8Array): string {
+  let first = 0x811c9dc5
+  let second = 0x27d4eb2d
+  for (const byte of customerKey) {
+    first = Math.imul(first ^ byte, 0x01000193) >>> 0
+    second = Math.imul(second ^ byte, 0x85ebca6b) >>> 0
+  }
+  return `${first.toString(16).padStart(8, '0')}${second.toString(16).padStart(8, '0')}`
+}
+
+const BASE64_ALPHABET = /^[A-Za-z0-9+/]+$/
+
+function normalizeSizedBase64(value: string, decodedByteLength: number): string | null {
+  const paddedLength = Math.ceil(decodedByteLength / 3) * 4
+  const noPaddingLength = Math.ceil((decodedByteLength * 8) / 6)
+  const padding = '='.repeat(paddedLength - noPaddingLength)
+
+  if (value.length === noPaddingLength && BASE64_ALPHABET.test(value)) {
+    return value.padEnd(paddedLength, '=')
   }
 
-  if (headers['x-bz-server-side-encryption'] === EncryptionAlgorithm.Aes256) {
+  if (
+    value.length === paddedLength &&
+    value.endsWith(padding) &&
+    BASE64_ALPHABET.test(value.slice(0, noPaddingLength))
+  ) {
+    return value
+  }
+
+  return null
+}
+
+function base64ToBytes(value: string, decodedByteLength: number): Uint8Array | null {
+  const normalized = normalizeSizedBase64(value, decodedByteLength)
+  if (normalized === null) return null
+  try {
+    const decoded = atob(normalized)
+    if (decoded.length !== decodedByteLength) return null
+    const bytes = new Uint8Array(decoded.length)
+    for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+function encryptionValidationError(message: string): SimulatorJsonResponse {
+  return { status: 400, body: { status: 400, code: 'bad_request', message } }
+}
+
+function sameStoredServerSideEncryption(
+  a: StoredServerSideEncryption,
+  b: StoredServerSideEncryption,
+): boolean {
+  if (a.mode !== b.mode) return false
+  if (a.mode === EncryptionMode.None) return true
+  if (a.mode === EncryptionMode.SseB2 && b.mode === EncryptionMode.SseB2) {
+    return a.algorithm === b.algorithm
+  }
+  if (a.mode === EncryptionMode.SseC && b.mode === EncryptionMode.SseC) {
+    return (
+      a.algorithm === b.algorithm &&
+      a.customerKeyDigest === b.customerKeyDigest &&
+      a.customerKeyMd5 === b.customerKeyMd5
+    )
+  }
+  return false
+}
+
+function hasCustomerEncryptionFields(encryption: Record<string, unknown>): boolean {
+  return (
+    encryption['customerKey'] !== undefined ||
+    encryption['customerKeyMd5'] !== undefined ||
+    encryption['customerAlgorithm'] !== undefined
+  )
+}
+
+function hasCustomerEncryptionHeaders(headers: Record<string, string>): boolean {
+  return (
+    headers['x-bz-server-side-encryption-customer-algorithm'] !== undefined ||
+    headers['x-bz-server-side-encryption-customer-key'] !== undefined ||
+    headers['x-bz-server-side-encryption-customer-key-md5'] !== undefined
+  )
+}
+
+async function storedServerSideEncryption(
+  encryption: EncryptionSetting,
+): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
+  const runtimeEncryption = encryption as unknown as Record<string, unknown>
+  if (encryption.mode === EncryptionMode.SseC) {
+    if (runtimeEncryption['algorithm'] === undefined) {
+      return encryptionValidationError('SSE-C customer algorithm is required')
+    }
+    if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-C customer algorithm must be AES256')
+    }
+    const customerKey = encryption.customerKey
+    const customerKeyMd5 = encryption.customerKeyMd5
+    if (typeof customerKey !== 'string' || customerKey === '') {
+      return encryptionValidationError('SSE-C customer key is required')
+    }
+    if (typeof customerKeyMd5 !== 'string' || customerKeyMd5 === '') {
+      return encryptionValidationError('SSE-C customer key MD5 is required')
+    }
+    const customerKeyBytes = base64ToBytes(customerKey, 32)
+    if (customerKeyBytes === null) {
+      return encryptionValidationError('SSE-C customer key must be a base64-encoded 256-bit key')
+    }
+    const normalizedCustomerKeyMd5 = normalizeSizedBase64(customerKeyMd5, 16)
+    if (normalizedCustomerKeyMd5 === null) {
+      return encryptionValidationError(
+        'SSE-C customer key MD5 must be a base64-encoded 128-bit digest',
+      )
+    }
+    const actualMd5 = await md5Base64(customerKeyBytes)
+    if (actualMd5 !== normalizedCustomerKeyMd5) {
+      return encryptionValidationError('SSE-C customer key MD5 does not match the key')
+    }
+    return {
+      mode: encryption.mode,
+      algorithm: encryption.algorithm,
+      customerKeyDigest: customerKeyDigest(customerKeyBytes),
+      customerKeyMd5: normalizedCustomerKeyMd5,
+    }
+  }
+  if (encryption.mode === EncryptionMode.SseB2) {
+    if (hasCustomerEncryptionFields(runtimeEncryption)) {
+      return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
+    }
+    if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-B2 algorithm must be AES256')
+    }
+    return { mode: encryption.mode, algorithm: encryption.algorithm }
+  }
+  if (encryption.mode === EncryptionMode.None) {
+    if (hasCustomerEncryptionFields(runtimeEncryption)) {
+      return encryptionValidationError(
+        'No-encryption settings must not include SSE-C customer keys',
+      )
+    }
+    return { mode: EncryptionMode.None }
+  }
+
+  return encryptionValidationError(
+    `Unsupported server-side encryption mode: ${String(runtimeEncryption['mode'])}`,
+  )
+}
+
+async function uploadServerSideEncryption(
+  headers: Record<string, string>,
+  fallback: EncryptionSetting,
+): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
+  const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
+  const customerKey = headers['x-bz-server-side-encryption-customer-key']
+  const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+  const managedEncryption = headers['x-bz-server-side-encryption']
+  if (hasCustomerEncryptionHeaders(headers)) {
+    if (managedEncryption !== undefined) {
+      return encryptionValidationError('SSE-B2 settings must not include SSE-C customer keys')
+    }
+    if (customerAlgorithm === undefined) {
+      return encryptionValidationError('SSE-C customer algorithm is required')
+    }
+    if (customerAlgorithm !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-C customer algorithm must be AES256')
+    }
+    if (!customerKey || !customerKeyMd5) {
+      return encryptionValidationError('SSE-C customer key and MD5 are required')
+    }
+    return await storedServerSideEncryption({
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey,
+      customerKeyMd5,
+    })
+  }
+
+  if (managedEncryption !== undefined) {
+    if (managedEncryption !== EncryptionAlgorithm.Aes256) {
+      return encryptionValidationError('SSE-B2 algorithm must be AES256')
+    }
     return { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 }
   }
 
-  return fallback
+  return await storedServerSideEncryption(fallback)
 }
 
 function defaultFileRetention(
@@ -1460,10 +1640,12 @@ export class B2Simulator {
             metadataDirective?: string
             contentType?: string
             fileInfo?: Record<string, string>
+            sourceServerSideEncryption?: EncryptionSetting
+            destinationServerSideEncryption?: EncryptionSetting
           },
         )
       case 'b2_start_large_file':
-        return this.startLargeFile(
+        return await this.startLargeFile(
           body as {
             bucketId: string
             fileName: string
@@ -1500,6 +1682,8 @@ export class B2Simulator {
             largeFileId: string
             partNumber: number
             range?: string
+            sourceServerSideEncryption?: EncryptionSetting
+            destinationServerSideEncryption?: EncryptionSetting
           },
         )
       case 'b2_get_download_authorization':
@@ -1624,7 +1808,11 @@ export class B2Simulator {
       }
       const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
-      return this.finalizeDownload(this.downloadById(fileId, headers['range']), url, method)
+      return this.finalizeDownload(
+        this.downloadById(fileId, headers, headers['range']),
+        url,
+        method,
+      )
     }
 
     const fileMatch = path.match(/^([^?]+)/)?.[1]?.match(/\/file\/([^/]+)\/(.+)/)
@@ -1646,7 +1834,7 @@ export class B2Simulator {
       }
       const url = new URL(`http://localhost${path}`)
       return this.finalizeDownload(
-        this.downloadByName(bucketName, fileName, headers['range']),
+        this.downloadByName(bucketName, fileName, headers, headers['range']),
         url,
         method,
       )
@@ -1742,6 +1930,11 @@ export class B2Simulator {
     if ('status' in resolved) return resolved
     const { sha1: contentSha1, data: storedData } = resolved
 
+    const serverSideEncryption = await uploadServerSideEncryption(
+      headers,
+      bucket.info.defaultServerSideEncryption,
+    )
+    if ('status' in serverSideEncryption) return serverSideEncryption
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -1750,12 +1943,9 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
-      serverSideEncryption: uploadServerSideEncryption(
-        headers,
-        bucket.info.defaultServerSideEncryption,
-      ),
+      serverSideEncryption,
     })
-    const stored: StoredFile = { fileVersion, data: storedData }
+    const stored: StoredFile = { fileVersion, data: storedData, serverSideEncryption }
     const existing = bucket.files.get(fileName)
     if (existing) {
       existing.push(stored)
@@ -1811,6 +2001,33 @@ export class B2Simulator {
     return { sha1: expected, data }
   }
 
+  private async validateUploadPartEncryption(
+    large: LargeFileInProgress,
+    headers: Record<string, string>,
+  ): Promise<SimulatorJsonResponse | null> {
+    if (large.serverSideEncryption.mode !== EncryptionMode.SseC) {
+      if (!hasCustomerEncryptionHeaders(headers)) return null
+      return this.error(400, 'bad_request', 'SSE-C upload part headers require an SSE-C large file')
+    }
+
+    const supplied = await storedServerSideEncryption({
+      mode: EncryptionMode.SseC,
+      algorithm: headers['x-bz-server-side-encryption-customer-algorithm'] as EncryptionAlgorithm,
+      customerKey: headers['x-bz-server-side-encryption-customer-key'] as string,
+      customerKeyMd5: headers['x-bz-server-side-encryption-customer-key-md5'] as string,
+    })
+    if ('status' in supplied) return supplied
+    if (!sameStoredServerSideEncryption(large.serverSideEncryption, supplied)) {
+      return this.error(
+        400,
+        'bad_request',
+        'SSE-C upload parts require matching customer encryption headers',
+      )
+    }
+
+    return null
+  }
+
   private async handleUploadPart(
     url: string,
     headers: Record<string, string>,
@@ -1823,6 +2040,9 @@ export class B2Simulator {
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
     const partNumber = Number.parseInt(headers['x-bz-part-number'] ?? '0', 10)
+
+    const encryptionError = await this.validateUploadPartEncryption(large, headers)
+    if (encryptionError !== null) return encryptionError
 
     // Verify the part bytes against X-Bz-Content-Sha1, same as b2_upload_file.
     // Parts are always sent with a real (or unverified:) sha1 by the SDK.
@@ -1845,15 +2065,20 @@ export class B2Simulator {
     }
   }
 
-  private downloadById(fileId: string, range?: string): SimulatorDownloadResponse {
+  private downloadById(
+    fileId: string,
+    headers: Record<string, string>,
+    range?: string,
+  ): SimulatorDownloadResponse {
     const found = this.findFile(fileId)
     if (found === null) return { status: 404, headers: {}, data: null }
-    return this.serveFile(found.stored, range)
+    return this.serveFile(found.stored, headers, range)
   }
 
   private downloadByName(
     bucketName: string,
     fileName: string,
+    headers: Record<string, string>,
     range?: string,
   ): SimulatorDownloadResponse {
     for (const bucket of this.buckets.values()) {
@@ -1864,15 +2089,106 @@ export class B2Simulator {
       if (!latest || latest.fileVersion.action === FileAction.Hide) {
         return { status: 404, headers: {}, data: null }
       }
-      return this.serveFile(latest, range)
+      return this.serveFile(latest, headers, range)
     }
     return { status: 404, headers: {}, data: null }
   }
 
+  private validateDownloadEncryption(
+    stored: StoredFile,
+    headers: Record<string, string>,
+  ): SimulatorDownloadResponse | null {
+    const encryption = stored.serverSideEncryption
+    if (encryption.mode !== EncryptionMode.SseC) return null
+
+    const algorithm = headers['x-bz-server-side-encryption-customer-algorithm']
+    const customerKey = headers['x-bz-server-side-encryption-customer-key']
+    const customerKeyMd5 = headers['x-bz-server-side-encryption-customer-key-md5']
+    const customerKeyBytes = customerKey === undefined ? null : base64ToBytes(customerKey, 32)
+    const normalizedCustomerKeyMd5 =
+      customerKeyMd5 === undefined ? null : normalizeSizedBase64(customerKeyMd5, 16)
+    if (
+      algorithm !== encryption.algorithm ||
+      customerKeyBytes === null ||
+      normalizedCustomerKeyMd5 === null ||
+      md5Base64Sync(customerKeyBytes) !== normalizedCustomerKeyMd5
+    ) {
+      return this.errorAsDownload(
+        this.error(
+          400,
+          'bad_request',
+          'SSE-C downloads require matching customer encryption headers',
+        ),
+      )
+    }
+    if (
+      normalizedCustomerKeyMd5 !== encryption.customerKeyMd5 ||
+      customerKeyDigest(customerKeyBytes) !== encryption.customerKeyDigest
+    ) {
+      return this.errorAsDownload(
+        this.error(
+          403,
+          'access_denied',
+          'SSE-C customer encryption key does not match the stored file',
+        ),
+      )
+    }
+
+    return null
+  }
+
+  private async validateSourceServerSideEncryption(
+    stored: StoredFile,
+    encryption: EncryptionSetting | undefined,
+  ): Promise<SimulatorJsonResponse | null> {
+    const expected = stored.serverSideEncryption
+    if (expected.mode !== EncryptionMode.SseC) return null
+    if (encryption?.mode !== EncryptionMode.SseC) {
+      return this.error(400, 'bad_request', 'SSE-C source copies require customer encryption')
+    }
+
+    const supplied = await storedServerSideEncryption(encryption)
+    if ('status' in supplied) return supplied
+    if (!sameStoredServerSideEncryption(expected, supplied)) {
+      return this.error(400, 'bad_request', 'SSE-C source customer encryption does not match')
+    }
+    return null
+  }
+
+  private async resolveCopyDestinationEncryption(
+    destinationBucket: StoredBucket,
+    requested: EncryptionSetting | undefined,
+  ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
+    if (requested !== undefined) return await storedServerSideEncryption(requested)
+    return await storedServerSideEncryption(destinationBucket.info.defaultServerSideEncryption)
+  }
+
+  private async validateCopyPartDestinationEncryption(
+    large: LargeFileInProgress,
+    encryption: EncryptionSetting | undefined,
+  ): Promise<SimulatorJsonResponse | null> {
+    if (encryption === undefined) {
+      return large.serverSideEncryption.mode === EncryptionMode.SseC
+        ? this.error(400, 'bad_request', 'SSE-C destination copies require customer encryption')
+        : null
+    }
+
+    const supplied = await storedServerSideEncryption(encryption)
+    if ('status' in supplied) return supplied
+    if (!sameStoredServerSideEncryption(large.serverSideEncryption, supplied)) {
+      return this.error(400, 'bad_request', 'Destination server-side encryption does not match')
+    }
+    return null
+  }
+
   private serveFile(
     stored: StoredFile,
+    requestHeaders: Record<string, string>,
     range?: string,
-  ): { status: number; headers: Record<string, string>; data: Uint8Array } {
+  ): SimulatorDownloadResponse {
+    const encryptionError = this.validateDownloadEncryption(stored, requestHeaders)
+    if (encryptionError !== null) return encryptionError
+
     const fullData = stored.data
     let data = fullData
     let status = 200
@@ -2301,7 +2617,11 @@ export class B2Simulator {
       action: FileAction.Hide,
     })
     const existing = bucket.files.get(req.fileName)
-    const stored: StoredFile = { fileVersion, data: new Uint8Array(0) }
+    const stored: StoredFile = {
+      fileVersion,
+      data: new Uint8Array(0),
+      serverSideEncryption: { mode: EncryptionMode.None },
+    }
     if (existing) {
       existing.push(stored)
     } else {
@@ -2376,6 +2696,8 @@ export class B2Simulator {
     metadataDirective?: string
     contentType?: string
     fileInfo?: Record<string, string>
+    sourceServerSideEncryption?: EncryptionSetting
+    destinationServerSideEncryption?: EncryptionSetting
   }): Promise<{ status: number; body: unknown }> {
     const nameError = validateFileName(req.fileName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
@@ -2385,6 +2707,18 @@ export class B2Simulator {
     const destBucketId = req.destinationBucketId ?? found.bucketId
     const destBucket = this.buckets.get(destBucketId)
     if (!destBucket) return this.error(400, 'bad_bucket_id', 'Destination bucket not found')
+
+    const sourceEncryptionError = await this.validateSourceServerSideEncryption(
+      sourceStored,
+      req.sourceServerSideEncryption,
+    )
+    if (sourceEncryptionError !== null) return sourceEncryptionError
+
+    const destinationEncryption = await this.resolveCopyDestinationEncryption(
+      destBucket,
+      req.destinationServerSideEncryption,
+    )
+    if ('status' in destinationEncryption) return destinationEncryption
 
     // Honor an optional byte range: copy only the requested slice. The copied
     // content differs from the source, so its SHA-1 is recomputed; a full copy
@@ -2448,8 +2782,13 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Copy,
+      serverSideEncryption: destinationEncryption,
     })
-    const copied: StoredFile = { fileVersion, data: new Uint8Array(data) }
+    const copied: StoredFile = {
+      fileVersion,
+      data: new Uint8Array(data),
+      serverSideEncryption: destinationEncryption,
+    }
     const existing = destBucket.files.get(req.fileName)
     if (existing) {
       existing.push(copied)
@@ -2461,7 +2800,7 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private startLargeFile(req: {
+  private async startLargeFile(req: {
     bucketId: string
     fileName: string
     contentType: string
@@ -2469,7 +2808,7 @@ export class B2Simulator {
     fileRetention?: FileRetentionValue
     legalHold?: LegalHoldValue
     serverSideEncryption?: EncryptionSetting
-  }): SimulatorJsonResponse {
+  }): Promise<SimulatorJsonResponse> {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -2482,6 +2821,10 @@ export class B2Simulator {
 
     const fid = this.genId('4_z')
     const uploadTimestamp = this.monotonicTimestamp()
+    const serverSideEncryption = await storedServerSideEncryption(
+      req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+    )
+    if ('status' in serverSideEncryption) return serverSideEncryption
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
@@ -2491,7 +2834,7 @@ export class B2Simulator {
       fileRetention:
         req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
       legalHold: req.legalHold ?? null,
-      serverSideEncryption: req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+      serverSideEncryption,
       uploadTimestamp,
       parts: new Map(),
     }
@@ -2642,7 +2985,11 @@ export class B2Simulator {
       legalHold: large.legalHold,
       serverSideEncryption: large.serverSideEncryption,
     })
-    const stored: StoredFile = { fileVersion, data: combined }
+    const stored: StoredFile = {
+      fileVersion,
+      data: combined,
+      serverSideEncryption: large.serverSideEncryption,
+    }
     const existing = bucket.files.get(large.fileName)
     if (existing) {
       existing.push(stored)
@@ -2759,6 +3106,8 @@ export class B2Simulator {
     largeFileId: string
     partNumber: number
     range?: string
+    sourceServerSideEncryption?: EncryptionSetting
+    destinationServerSideEncryption?: EncryptionSetting
   }): Promise<SimulatorJsonResponse> {
     const large = this.largeFiles.get(req.largeFileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
@@ -2766,6 +3115,18 @@ export class B2Simulator {
     const found = this.findFile(req.sourceFileId)
     if (found === null) return this.error(404, 'file_not_present', 'Source file not found')
     const sourceStored = found.stored
+
+    const sourceEncryptionError = await this.validateSourceServerSideEncryption(
+      sourceStored,
+      req.sourceServerSideEncryption,
+    )
+    if (sourceEncryptionError !== null) return sourceEncryptionError
+
+    const destinationEncryptionError = await this.validateCopyPartDestinationEncryption(
+      large,
+      req.destinationServerSideEncryption,
+    )
+    if (destinationEncryptionError !== null) return destinationEncryptionError
 
     let partData = sourceStored.data
     if (req.range) {
@@ -2970,6 +3331,7 @@ export class B2Simulator {
         fileRetention: { isClientAuthorizedToRead: true, value: req.fileRetention },
       },
       data: found.stored.data,
+      serverSideEncryption: found.stored.serverSideEncryption,
     }
     return {
       status: 200,
@@ -2999,6 +3361,7 @@ export class B2Simulator {
         },
       },
       data: found.stored.data,
+      serverSideEncryption: found.stored.serverSideEncryption,
     }
     return {
       status: 200,
@@ -3080,7 +3443,7 @@ export class B2Simulator {
     readonly fileInfo?: Record<string, string>
     readonly fileRetention?: FileRetentionValue | null
     readonly legalHold?: LegalHoldValue | null
-    readonly serverSideEncryption?: EncryptionSetting
+    readonly serverSideEncryption?: EncryptionSetting | StoredServerSideEncryption
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -3273,13 +3636,22 @@ class SimulatorTransport implements HttpTransport {
 
     if (isDownload) {
       const method = request.method === 'HEAD' ? 'HEAD' : 'GET'
-      const result = this.sim.handleDownload(parsedUrl.pathname + parsedUrl.search, headers, method)
+      const result = await this.sim.handleDownload(
+        parsedUrl.pathname + parsedUrl.search,
+        headers,
+        method,
+      )
       const data = result.data ?? new Uint8Array(0)
       const responseHeaders = new Headers(result.headers)
       responseHeaders.set(
         'Content-Type',
         result.headers['Content-Type'] ?? 'application/octet-stream',
       )
+      let decodedText: string | null = null
+      const text = () => {
+        decodedText ??= utf8Decoder.decode(data)
+        return decodedText
+      }
 
       // HEAD responses have no body but keep all headers (matches HTTP semantics).
       const body =
@@ -3296,8 +3668,14 @@ class SimulatorTransport implements HttpTransport {
         status: result.status,
         headers: responseHeaders,
         body,
-        json: () => Promise.reject(new Error('Download response is not JSON')),
-        text: () => Promise.resolve(utf8Decoder.decode(data)),
+        json: <T>() => {
+          try {
+            return Promise.resolve(JSON.parse(text()) as T)
+          } catch {
+            return Promise.reject(new Error('Download response is not JSON'))
+          }
+        },
+        text: () => Promise.resolve(text()),
         arrayBuffer: () =>
           Promise.resolve(
             data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
