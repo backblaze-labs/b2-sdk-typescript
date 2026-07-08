@@ -120,7 +120,7 @@ import { B2Error } from './errors/index.js'          // used with instanceof
 ```
 src/
   types/         Pure type definitions (no runtime code) + EncryptionKey class
-  errors/        Error hierarchy: B2Error base + 13 subclasses + classifyError() + B2InsufficientCapabilityError
+  errors/        Error hierarchy: B2Error base + 30 subclasses + classifyError() + B2InsufficientCapabilityError
   http/          Transport layer: HttpTransport, FetchTransport, RetryTransport (with injectable sleepImpl)
   raw/           RawClient: 1:1 bindings for the 31 B2 native API endpoints the SDK uses
   auth/          AccountInfo (in-memory + JSON-file backends), upload URL pool, realm URLs

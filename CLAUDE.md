@@ -12,7 +12,7 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 pnpm build           # Vite library mode: ESM + CJS + DTS for all 9 subpath exports
 pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator (Node)
 pnpm test:watch      # Vitest in watch mode
-pnpm test:coverage   # Vitest with v8 coverage (target: ≥ 95% statements)
+pnpm test:coverage   # Vitest with v8 coverage (gates: 97% statements, 98% lines, 97% functions, 91% branches)
 pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
 pnpm lint            # Biome: lint + format check
 pnpm lint:fix        # Biome: auto-fix
@@ -23,7 +23,7 @@ pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs
 ```
 
-CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and a coverage gate that fails if statements drop below 95% (configured in `vite.config.ts`'s `coverage.thresholds`).
+CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and the coverage gate configured in `vitest.coverage.config.ts` (97% statements, 98% lines, 97% functions, 91% branches).
 
 ## Test file naming convention
 
@@ -42,7 +42,7 @@ Single npm package with subpath exports:
 |---|---|---|
 | `@backblaze-labs/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
 | `@backblaze-labs/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for the 31 B2 native API endpoints the SDK exposes |
-| `@backblaze-labs/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 13 subclasses + classifyError() |
+| `@backblaze-labs/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 30 subclasses + classifyError() |
 | `@backblaze-labs/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
 | `@backblaze-labs/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
 | `@backblaze-labs/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
@@ -85,7 +85,7 @@ src/
 - **Web Streams everywhere.** Downloads return `ReadableStream<Uint8Array>`. `B2Object.createWriteStream` returns a `WritableStream<Uint8Array>` for pipeTo-style uploads. The simulator wraps responses in ReadableStream.
 - **Upload URL pool** with checkout/checkin/evict pattern (mirrors Python SDK). URLs are recycled across requests, evicted on error.
 - **RetryTransport** wraps any HttpTransport. Handles 401 reauth, 503/408/429 backoff with jitter, Retry-After header, network errors. The `sleepImpl` option lets tests inject a no-op sleep for portability across vitest and Bun's vitest-compat (which doesn't support `vi.mock`'s `importOriginal` / `vi.importActual`).
-- **Resume support** for multipart uploads: pass an explicit `resumeFileId` to `uploadLargeFile` / `Bucket.upload`. Automatic same-name `resume: true` discovery is disabled; resumed sliceable uploads list that specific large file's parts, locally recompute each part SHA-1, and skip only matching parts. See `src/upload/resume.ts`.
+- **Resume support** for multipart uploads: pass `resume: true` to enable bounded same-name discovery, or pass an explicit `resumeFileId` to target a known unfinished large file. Automatic discovery reuploads planned parts into a compatible unfinished upload; explicit `resumeFileId` locally recomputes each part SHA-1 and skips only matching server parts. See `src/upload/resume.ts`.
 - **Per-range retry** for parallel downloads. `createParallelDownloadStream` retries each range independently with exponential backoff (default 5 attempts) so a single transient 503 doesn't kill the whole transfer.
 - **SSE-C key safety.** `EncryptionKey.fromBytes(rawKey)` computes MD5 internally and **redacts itself** in `toJSON()`, `toString()`, and Node's `util.inspect` custom symbol so the key never lands in logs.
 - **Simulator monotonic timestamps.** The simulator generates strictly-increasing `uploadTimestamp` values so version ordering is deterministic in tests (Date.now() ties broke version selection).
