@@ -33,6 +33,7 @@ export const localFileIoTestHooks: {
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
   beforeStagingMarkerWrite?: (path: string) => Promise<void> | void
   disableProcFdAnchoring?: boolean
+  downloadStagingActivityEntryLimit?: number
   platform?: string
   statForDeviceCheck?: DeviceStatFn
 } = {}
@@ -256,6 +257,7 @@ export async function writeLocalStreamInsideRoot(
       randomUUID,
       statForDeviceCheck,
       localFileIoTestHooks.beforeStagingMarkerWrite,
+      localFileIoTestHooks.downloadStagingActivityEntryLimit,
     )
   } catch (err) {
     /* v8 ignore next -- best-effort close during setup failure */

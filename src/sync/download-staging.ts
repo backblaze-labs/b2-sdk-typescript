@@ -52,6 +52,7 @@ export function isDownloadStagingDirectorySegment(segment: string | undefined): 
  * @param randomUUID - UUID provider used to create unique staging entries.
  * @param statForDeviceCheck - Stat function used to verify filesystem devices.
  * @param beforeStagingMarkerWrite - Test hook called before marker creation.
+ * @param activityEntryLimit - Maximum entry count inspected for stale staging activity.
  *
  * @returns The resolved staging directory path.
  *
@@ -63,6 +64,7 @@ export async function createDownloadStagingDirectory(
   randomUUID: () => string,
   statForDeviceCheck: DeviceStatFn,
   beforeStagingMarkerWrite?: (directory: string) => Promise<void> | void,
+  activityEntryLimit = DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
 ): Promise<string> {
   const { chmod, lstat, mkdir, readdir, realpath, rm } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
@@ -98,7 +100,12 @@ export async function createDownloadStagingDirectory(
   await writeStagingMarker(realManagedDirectory, path)
   /* v8 ignore next -- best-effort chmod */
   await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  await reapStaleDownloadStagingDirectoriesOnce(realManagedDirectory, path, Date.now())
+  await reapStaleDownloadStagingDirectoriesOnce(
+    realManagedDirectory,
+    path,
+    Date.now(),
+    activityEntryLimit,
+  )
 
   const stagingDirectory = path.join(
     realManagedDirectory,
@@ -224,6 +231,7 @@ async function reapStaleDownloadStagingDirectoriesOnce(
   managedDirectory: string,
   path: typeof import('node:path'),
   nowMillis: number,
+  activityEntryLimit: number,
 ): Promise<void> {
   const previous = reapedManagedDirectories.get(managedDirectory)
   if (previous !== undefined) {
@@ -231,13 +239,16 @@ async function reapStaleDownloadStagingDirectoriesOnce(
     return
   }
 
-  const next = reapStaleDownloadStagingDirectories(managedDirectory, path, nowMillis).finally(
-    () => {
-      if (reapedManagedDirectories.get(managedDirectory) === next) {
-        reapedManagedDirectories.delete(managedDirectory)
-      }
-    },
-  )
+  const next = reapStaleDownloadStagingDirectories(
+    managedDirectory,
+    path,
+    nowMillis,
+    activityEntryLimit,
+  ).finally(() => {
+    if (reapedManagedDirectories.get(managedDirectory) === next) {
+      reapedManagedDirectories.delete(managedDirectory)
+    }
+  })
   reapedManagedDirectories.set(managedDirectory, next)
   await next
 }
@@ -246,6 +257,7 @@ async function reapStaleDownloadStagingDirectories(
   managedDirectory: string,
   path: typeof import('node:path'),
   nowMillis: number,
+  activityEntryLimit: number,
 ): Promise<void> {
   const { readdir, realpath, rm } = await import('node:fs/promises')
   let entries: import('node:fs').Dirent[]
@@ -261,7 +273,7 @@ async function reapStaleDownloadStagingDirectories(
   await forEachWithConcurrency(entries, MAX_STAGING_CLEANUP_CONCURRENCY, async (entry) => {
     if (!entry.isDirectory() || !entry.name.endsWith(DOWNLOAD_STAGING_ENTRY_SUFFIX)) return
     const candidate = path.join(managedDirectory, entry.name)
-    const activity = await readManagedStagingEntryActivity(candidate, path)
+    const activity = await readManagedStagingEntryActivity(candidate, path, activityEntryLimit)
     if (activity === undefined || !stagingActivityIsStale(activity, nowMillis)) return
     const realCandidate = await realpath(candidate).catch(() => {
       cleanupErrors.push({ entryName: entry.name, operation: 'inspect' })
@@ -270,7 +282,11 @@ async function reapStaleDownloadStagingDirectories(
     if (realCandidate === undefined) return
     try {
       assertPathInsideRoot(managedDirectory, realCandidate, path)
-      const latestActivity = await readManagedStagingEntryActivity(candidate, path)
+      const latestActivity = await readManagedStagingEntryActivity(
+        candidate,
+        path,
+        activityEntryLimit,
+      )
       if (
         latestActivity === undefined ||
         latestActivity.signature !== activity.signature ||
@@ -298,6 +314,7 @@ async function reapStaleDownloadStagingDirectories(
 async function readManagedStagingEntryActivity(
   candidate: string,
   path: typeof import('node:path'),
+  activityEntryLimit: number,
 ): Promise<StagingActivitySnapshot | undefined> {
   const { lstat, readdir } = await import('node:fs/promises')
 
@@ -309,7 +326,7 @@ async function readManagedStagingEntryActivity(
     if (!directoryStats.isDirectory() || !markerStats.isFile()) return undefined
 
     const entries = await readdir(candidate, { withFileTypes: true })
-    if (entries.length > DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT) return undefined
+    if (entries.length > activityEntryLimit) return undefined
 
     const statsParts = [
       `.:${stagingStatsSignature(directoryStats)}`,
