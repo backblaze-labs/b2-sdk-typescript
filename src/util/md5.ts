@@ -16,6 +16,25 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+type SyncNodeHash = {
+  update(bytes: Uint8Array): SyncNodeHash
+  digest(encoding: 'base64'): string
+}
+
+function syncNodeCreateHash(): ((algorithm: string) => SyncNodeHash) | null {
+  const g = globalThis as {
+    process?: {
+      getBuiltinModule?: (name: string) => unknown
+    }
+  }
+  const crypto = g.process?.getBuiltinModule?.('node:crypto')
+  if (!crypto || typeof crypto !== 'object') return null
+  const { createHash } = crypto as { createHash?: unknown }
+  return typeof createHash === 'function'
+    ? (createHash as (algorithm: string) => SyncNodeHash)
+    : null
+}
+
 /**
  * Computes the MD5 digest of the given bytes as a base64 string. Prefers
  * `node:crypto` for native speed when available; falls back to a pure-JS
@@ -55,6 +74,9 @@ export async function md5Base64(bytes: Uint8Array): Promise<string> {
  * @internal
  */
 export function md5Base64Sync(bytes: Uint8Array): string {
+  const createHash = syncNodeCreateHash()
+  if (createHash) return createHash('md5').update(bytes).digest('base64')
+
   return bytesToBase64(md5Bytes(bytes))
 }
 
