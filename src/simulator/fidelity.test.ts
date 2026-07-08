@@ -2124,6 +2124,16 @@ describe('B2Simulator server-side encryption fidelity', () => {
         status: 400,
       })
     }
+    await expect(
+      rawStartLargeFile('missing-algorithm-message.bin', {
+        mode: 'SSE-C',
+        customerKey: valid.customerKey,
+        customerKeyMd5: valid.customerKeyMd5,
+      } as unknown as EncryptionSetting),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'SSE-C customer algorithm is required',
+    })
   })
 
   it('rejects unsupported encryption modes and invalid customer-key fields', async () => {

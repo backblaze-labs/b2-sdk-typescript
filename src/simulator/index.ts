@@ -3644,7 +3644,11 @@ class SimulatorTransport implements HttpTransport {
         result.headers['Content-Type'] ?? 'application/octet-stream',
       )
       const isJson = responseHeaders.get('Content-Type')?.includes('application/json') === true
-      const text = utf8Decoder.decode(data)
+      let decodedText: string | null = null
+      const text = () => {
+        decodedText ??= utf8Decoder.decode(data)
+        return decodedText
+      }
 
       // HEAD responses have no body but keep all headers (matches HTTP semantics).
       const body =
@@ -3664,7 +3668,7 @@ class SimulatorTransport implements HttpTransport {
         json: <T>() => {
           if (isJson) {
             try {
-              const parsed = JSON.parse(text) as { code?: unknown }
+              const parsed = JSON.parse(text()) as { code?: unknown }
               if (parsed.code === 'access_denied') return Promise.resolve(parsed as T)
             } catch {
               // Fall through to the historical non-JSON download error below.
@@ -3672,7 +3676,7 @@ class SimulatorTransport implements HttpTransport {
           }
           return Promise.reject(new Error('Download response is not JSON'))
         },
-        text: () => Promise.resolve(text),
+        text: () => Promise.resolve(text()),
         arrayBuffer: () =>
           Promise.resolve(
             data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
