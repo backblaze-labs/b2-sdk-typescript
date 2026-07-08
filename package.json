@@ -1,6 +1,6 @@
 {
   "name": "@backblaze-labs/b2-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript",
   "license": "MIT",
   "type": "module",

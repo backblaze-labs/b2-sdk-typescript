@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-08
+
 ### Added
 
 - **New `sha1` sync compare mode.** `CompareMode` now accepts `'sha1'`, and `SyncPath` exposes an optional `contentSha1` field plus `contentSha1State` for custom scanners that can supply explicit trust state. The synchronizer hashes local files only when cheaper metadata cannot already prove drift and compares against B2 SHA-1 metadata. B2's verified single-part `contentSha1` can prove equality; multipart `fileInfo.large_file_sha1` and `unverified:<hex>` values are untrusted hints and are verified by hashing the selected B2 version before they can suppress a transfer. Files whose SHA-1 is genuinely unavailable, or whose untrusted B2 bytes cannot be verified before the configured deadline or byte ceiling, are skipped with a surfaced event rather than failing the whole run. SHA-1 comparison uses bounded workers, dry-runs still hash matching-size local files but do not download B2 bytes for untrusted metadata, and `compare` events report local hash reads in `bytesHashed` plus B2 verification reads in `bytesVerified`. Local hashing rejects non-regular files and bounds reads to the scanned size; local and B2 SHA-1 reads use `sha1ReadTimeoutMillis` as an idle/no-progress timeout with a bounded default. Untrusted B2 verification is also bounded by selected-version byte length and `sha1VerificationTimeoutMillis`, with `sha1VerificationMaxBytes` available as a lower per-file byte ceiling. The SDK does not cache untrusted B2 verification results across runs, so unchanged multipart objects can incur full-object B2 download reads every `sha1` sync. Custom scanners can use the exported `selectB2ComparableSha1()`, `parseSyncContentSha1()`, `syncSha1StateOf()`, `untrustedSha1()`, `isUntrustedSha1()`, and `untrustedSha1Prefix` helpers to mark or inspect SHA-1 metadata without duplicating sentinel strings. This is an accidental drift detector, not a cryptographic tamper guarantee. Closes #29.
@@ -219,5 +221,6 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
 
-[Unreleased]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/backblaze-labs/b2-sdk-typescript/releases/tag/v0.1.0
