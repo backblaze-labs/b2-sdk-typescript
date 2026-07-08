@@ -176,6 +176,81 @@ describe('B2Simulator input validation: maxFileCount caps', () => {
   })
 })
 
+describe('B2Simulator input validation: notification rules', () => {
+  let client: B2Client
+  let bucket: Awaited<ReturnType<B2Client['createBucket']>>
+  let validRule: EventNotificationRule
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'notif-validation',
+      bucketType: BucketType.AllPrivate,
+    })
+    validRule = {
+      eventTypes: [EventType.ObjectCreatedAll],
+      isEnabled: true,
+      isSuspended: false,
+      name: 'upload-webhook',
+      objectNamePrefix: '',
+      suspensionReason: '',
+      targetConfiguration: {
+        targetType: 'webhook',
+        url: 'https://example.com/webhook',
+      },
+    }
+  })
+
+  it('rejects empty and duplicate rule names', async () => {
+    await expect(bucket.setNotificationRules([{ ...validRule, name: '' }])).rejects.toThrow(
+      /non-empty string/,
+    )
+    await expect(bucket.setNotificationRules([validRule, { ...validRule }])).rejects.toThrow(
+      /unique/,
+    )
+  })
+
+  it('rejects unknown event types', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, eventTypes: ['b2:ObjectCreated:Bogus'] as unknown as EventType[] },
+      ]),
+    ).rejects.toThrow(/unknown event type/)
+  })
+
+  it('rejects non-webhook targets and non-https URLs', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+        },
+      ]),
+    ).rejects.toThrow(/targetType/)
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'webhook', url: 'http://example.com/webhook' },
+        },
+      ]),
+    ).rejects.toThrow(/https URL/)
+  })
+
+  it('rejects unknown rule fields', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, unexpected: true } as unknown as EventNotificationRule,
+      ]),
+    ).rejects.toThrow(/not a supported field/)
+    await expect(bucket.getNotificationRules()).resolves.toMatchObject({
+      bucketId: bucket.id,
+      eventNotificationRules: [],
+    })
+  })
+})
+
 describe('B2Simulator listing order', () => {
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>
@@ -1512,7 +1587,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       name: 'allowed-rule',
       objectNamePrefix: 'allowed/',
       suspensionReason: '',
-      targetConfiguration: { targetType: 'url', url: 'https://example.com/allowed' },
+      targetConfiguration: { targetType: 'webhook', url: 'https://example.com/allowed' },
     }
     const blockedRule = {
       ...allowedRule,

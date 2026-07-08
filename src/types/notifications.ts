@@ -16,7 +16,7 @@ import type { BucketId } from './ids.ts'
  *     isSuspended: false,
  *     objectNamePrefix: '',
  *     suspensionReason: '',
- *     targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+ *     targetConfiguration: { targetType: 'webhook', url: 'https://example.com/webhook' },
  *   },
  * ])
  * ```
@@ -63,7 +63,7 @@ export interface EventNotificationRule {
   readonly suspensionReason: string
   /** Webhook target configuration. */
   readonly targetConfiguration: {
-    /** Target type (e.g., `'url'` for webhook delivery). */
+    /** Target type (`'webhook'` for webhook delivery). */
     readonly targetType: string
     /** Webhook URL that receives the event notifications. */
     readonly url: string
