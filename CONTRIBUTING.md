@@ -53,8 +53,8 @@ offline. The GitHub `Integration (real B2)` workflow is stricter for same-repo
 pushes, same-repo PRs, weekly scheduled runs, and `workflow_dispatch`: missing
 secrets fail the job, while fork PRs skip before secrets are read. The integration
 setup logs each live setup step (`authorize`, `list buckets`, stale bucket
-cleanup, and test bucket creation) with timings so credential, permission,
-cleanup, and network-timeout failures are diagnosable.
+cleanup, and test bucket creation) with timings and step-specific timeouts so
+credential, permission, cleanup, and network failures are diagnosable.
 
 Release workflow success alone does not prove live B2 integration passed. Before
 cutting or trusting a release, confirm that the relevant commit also has a green

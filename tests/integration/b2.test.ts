@@ -24,6 +24,7 @@ const skip = !keyId || !appKey
 const currentBucketPrefix = 'sdk-it-'
 const legacyBucketPrefix = 'sdk-test-'
 const staleBucketAgeMs = 60 * 60 * 1000
+const setupStepTimeoutMs = 60 * 1000
 
 if (skip && requireCredentials) {
   throw new Error(
@@ -92,15 +93,36 @@ function logSetup(message: string): void {
 
 async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
   const start = performance.now()
+  let timedOut = false
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const operation = Promise.resolve().then(fn)
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true
+      reject(
+        new Error(`B2 integration setup step "${name}" timed out after ${setupStepTimeoutMs}ms`),
+      )
+    }, setupStepTimeoutMs)
+  })
+
   logSetup(`${name}: start`)
   try {
-    const result = await fn()
+    const result = await Promise.race([operation, timeoutPromise])
     logSetup(`${name}: ok (${Math.round(performance.now() - start)}ms)`)
     return result
   } catch (err) {
     logSetup(`${name}: failed after ${Math.round(performance.now() - start)}ms`)
     console.error(`[b2 integration setup] ${name}: ${setupErrorMessage(err)}`)
     throw err
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+    if (timedOut) {
+      void operation.catch((err) => {
+        console.warn(
+          `[b2 integration setup] ${name}: underlying operation rejected after timeout (${setupErrorMessage(err)})`,
+        )
+      })
+    }
   }
 }
 
