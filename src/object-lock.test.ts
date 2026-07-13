@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
@@ -573,6 +573,28 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
         bypassGovernance: true,
       }),
     ).resolves.toBeUndefined()
+  })
+
+  it('allows delete of an expired governance-mode retained version without bypass', async () => {
+    const uploaded = await bucket.upload({
+      fileName: 'gov-expired.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    const expiresAt = Date.now() + 1_000
+    await bucket.file('gov-expired.bin').setRetention(uploaded.fileId, {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: expiresAt,
+    })
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(expiresAt + 1)
+      await expect(
+        bucket.deleteFileVersion('gov-expired.bin', uploaded.fileId),
+      ).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects delete of a legal-hold-protected version (bypass does not help)', async () => {

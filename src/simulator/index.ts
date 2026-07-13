@@ -2956,7 +2956,7 @@ export class B2Simulator {
     const legalHold = fv.legalHold?.value
     const now = Date.now()
 
-    if (legalHold === 'on') {
+    if (legalHold === LegalHoldValue.On) {
       return this.error(
         400,
         'file_lock_legal_hold_protected',
@@ -2964,7 +2964,7 @@ export class B2Simulator {
       )
     }
     if (
-      retention?.mode === 'compliance' &&
+      retention?.mode === RetentionMode.Compliance &&
       retention.retainUntilTimestamp !== null &&
       retention.retainUntilTimestamp > now
     ) {
@@ -2975,7 +2975,7 @@ export class B2Simulator {
       )
     }
     if (
-      retention?.mode === 'governance' &&
+      retention?.mode === RetentionMode.Governance &&
       retention.retainUntilTimestamp !== null &&
       retention.retainUntilTimestamp > now
     ) {
