@@ -1,8 +1,11 @@
-# Quality Keeper — Monday demo: run safe existing checks, then one PR comment.
+# Quality Keeper — advisory PR runs: run safe existing checks, then one comment.
 #
-# TEMPLATE. Copy this into a TARGET repository's .github/workflows/ (e.g.
-# backblaze-labs/b2-sdk-typescript). It runs in the target repo's own CI, so it
-# has the target's toolchain (Node/pnpm) and posts on the target's own PR. When
+# SDK pilot (#146): runs automatically on same-repo pull requests, ADVISORY and
+# NON-BLOCKING. It is not a required check, creates no blocking status, and never
+# prevents merge — it posts one informational comment and uploads artifacts.
+#
+# Runs in the target repo's own CI, so it has the target's toolchain (Node/pnpm)
+# and posts on the target's own PR. When
 # the QK App secrets (QK_APP_ID + QK_APP_PRIVATE_KEY) are present, the comment is
 # authored by the dedicated Quality Keeper App identity (`quality-keeper[bot]`)
 # via a short-lived installation token minted at run time; otherwise it falls
@@ -32,17 +35,21 @@
 # the minimal app-authored-comment path — no webhooks, no /qk commands, no issue
 # creation, no contents:write / actions:write / checks:write.
 
-name: Quality Keeper — Quality Run (demo)
+name: Quality Keeper — Quality Run (advisory)
 
 on:
-  # Demo/pilot: manual so it never comments before the wording is trusted, and
-  # so `issue_url` is REQUIRED — a dispatch run has no PR context to fall back on.
-  #
-  # Adding a `pull_request:` trigger later is NOT a drop-in change. A PR event can
-  # carry untrusted code from a fork; automating on it safely requires a
-  # security-reviewed design so untrusted code never runs in a job that holds
-  # PR-write authority (see the two-job split below and the pull_request_target /
-  # workflow_run risks in context-layer/concepts/github-app-identity.md, #134).
+  # Automatic on same-repo pull requests. This uses `pull_request` (NOT the
+  # secret-exposing `pull_request_target`). Fork PRs are handled safely by the
+  # per-job `if:` guard below (same-repo only), so untrusted fork code never runs
+  # in a job that can reach secrets or PR-write authority. See the two-job split
+  # and the pull_request_target / workflow_run risks in
+  # context-layer/concepts/github-app-identity.md (#134).
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Manual demo/debug is retained; `issue_url` is REQUIRED for dispatch because a
+  # manual run has no PR context to fall back on. On pull_request runs the target
+  # comes from the event payload instead.
   workflow_dispatch:
     inputs:
       issue_url:
@@ -58,14 +65,22 @@ permissions: {}
 env:
   QK_APP_ID: ${{ secrets.QK_APP_ID }}
 
+# One advisory run per PR (or per manual ref); supersede stale in-progress runs so
+# rapid pushes never stack or double-comment.
 concurrency:
-  group: quality-keeper-demo-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: quality-keeper-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality-run:
     name: Run safe existing checks
     runs-on: ubuntu-latest
+    # SAME-REPO ONLY. Skip fork PRs entirely: their untrusted code must never run
+    # in a job that can reach secrets (QK_INSTALL_TOKEN). Manual dispatch always
+    # runs. Because `comment` needs this job, skipping here also skips the comment.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
     # READ ONLY. This job installs dependencies and runs the target repository's
     # own checks, so it must never hold PR-write (or any outward) authority.
     permissions:
@@ -100,14 +115,25 @@ jobs:
       - name: Assess and run SAFE existing checks
         run: |
           mkdir -p artifacts
-          # 1) Assess the source.
+          # 1) Assess the source. A genuine QK error here fails the job (red).
           quality-keeper assess --repo . --run-inventory --json artifacts/assessment.json
           # 2) Run the SAFE existing checks automatically — NO --include-expensive,
           #    so integration/live-B2/system checks are gated (reported, not run).
+          #    ADVISORY: `run-found-checks` exits non-zero when a safe check FAILS.
+          #    A failing SDK check is advisory evidence, NOT a workflow failure, so
+          #    this pilot must not turn it into a red/blocking check. Capture the
+          #    exit code (execution.json is always written first) and continue; the
+          #    comment + post-execute summary carry the detail. A hard crash that
+          #    leaves no execution.json still fails step 3 below (a real QK error).
+          set +e
           quality-keeper act run-found-checks \
             --assessment artifacts/assessment.json --repo . \
             --execute --all --execution-dir artifacts/exec --timeout-seconds 900
-          # 3) Reconcile pre-Execute assessment with what actually ran.
+          rc=$?
+          set -e
+          echo "run-found-checks exit=${rc} (non-zero = some safe checks failed; advisory only)"
+          # 3) Reconcile pre-Execute assessment with what actually ran. A genuine
+          #    QK error here (e.g. missing execution.json) fails the job.
           quality-keeper post-execute-report \
             --assessment artifacts/assessment.json \
             --execution artifacts/exec/execution.json \
@@ -130,6 +156,11 @@ jobs:
     name: Post Quality Keeper comment
     needs: quality-run
     runs-on: ubuntu-latest
+    # Same-repo/fork guard mirrored here (defense in depth). Since it `needs`
+    # quality-run, a skipped quality-run (fork PR) already skips this job.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || github.event.pull_request.head.repo.full_name == github.repository }}
     # The ONLY job with PR-write authority. It runs NO target code — it renders
     # the proof artifacts produced by `quality-run` and posts one comment.
     permissions:
@@ -186,7 +217,11 @@ jobs:
           # Prefer the App installation token; fall back to the workflow
           # GITHUB_TOKEN. This is the ONLY step that receives the App token.
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          ISSUE_URL: ${{ inputs.issue_url }}
+          # Manual runs supply issue_url; automatic pull_request runs take the PR
+          # URL from the event payload. Both are GitHub-generated / operator-typed
+          # values, passed through env and quoted below — never expanded inline —
+          # so PR-controlled text cannot inject into the shell.
+          ISSUE_URL: ${{ inputs.issue_url || github.event.pull_request.html_url }}
           EXPECTED_REPO: ${{ github.repository }}
           EXPECTED_AUTHOR: ${{ steps.identity.outputs.author }}
         run: |
