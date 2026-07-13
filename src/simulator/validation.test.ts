@@ -4,12 +4,16 @@ import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   BUCKET_INFO_MAX_KEYS,
   BUCKET_INFO_VALUE_MAX,
+  DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
+  DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
+  validateDownloadAuthorizationDuration,
+  validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
   validateMaxCount,
@@ -124,6 +128,39 @@ describe('validateMaxCount', () => {
   it('rejects values over the cap', () => {
     const cap = LIST_ENDPOINT_CAPS.b2_list_unfinished_large_files
     expect(validateMaxCount(cap + 1, 'b2_list_unfinished_large_files')?.code).toBe('bad_request')
+  })
+})
+
+describe('validateDownloadAuthorizationDuration', () => {
+  it('returns null at the documented inclusive bounds', () => {
+    expect(validateDownloadAuthorizationDuration(DOWNLOAD_AUTH_DURATION_MIN_SECONDS)).toBeNull()
+    expect(validateDownloadAuthorizationDuration(DOWNLOAD_AUTH_DURATION_MAX_SECONDS)).toBeNull()
+  })
+
+  it('rejects values outside the documented range', () => {
+    expect(
+      validateDownloadAuthorizationDuration(DOWNLOAD_AUTH_DURATION_MIN_SECONDS - 1)?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDownloadAuthorizationDuration(DOWNLOAD_AUTH_DURATION_MAX_SECONDS + 1)?.code,
+    ).toBe('bad_request')
+  })
+
+  it('rejects non-integer and non-number values', () => {
+    expect(validateDownloadAuthorizationDuration(1.5)?.code).toBe('bad_request')
+    expect(validateDownloadAuthorizationDuration('60')?.code).toBe('bad_request')
+  })
+})
+
+describe('validateDownloadAuthorizationPrefix', () => {
+  it('accepts empty and non-empty string prefixes', () => {
+    expect(validateDownloadAuthorizationPrefix('')).toBeNull()
+    expect(validateDownloadAuthorizationPrefix('allowed/')).toBeNull()
+  })
+
+  it('rejects missing and non-string prefixes', () => {
+    expect(validateDownloadAuthorizationPrefix(undefined)?.code).toBe('bad_request')
+    expect(validateDownloadAuthorizationPrefix(42)?.code).toBe('bad_request')
   })
 })
 

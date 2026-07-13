@@ -30,7 +30,7 @@ import {
 } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
-import { hmacSha256 } from '../util/crypto.ts'
+import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
@@ -178,8 +178,11 @@ function compareB2FileNames(a: string, b: string): number {
 
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
+  type ValidationError,
   validateBucketInfo,
   validateBucketName,
+  validateDownloadAuthorizationDuration,
+  validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
   validateMaxCount,
@@ -193,11 +196,76 @@ export {
   BUCKET_INFO_VALUE_MAX,
   BUCKET_NAME_MAX,
   BUCKET_NAME_MIN,
+  DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
+  DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
   LIST_ENDPOINT_CAPS,
 } from './validation.ts'
+
+const DOWNLOAD_AUTH_TOKEN_BYTES = 32
+const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
+const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
+
+const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
+  'b2ContentDisposition',
+  'b2ContentLanguage',
+  'b2ContentEncoding',
+  'b2ContentType',
+  'b2CacheControl',
+  'b2Expires',
+] as const
+
+type DownloadResponseOverrideParam = (typeof DOWNLOAD_RESPONSE_OVERRIDE_PARAMS)[number]
+type DownloadResponseOverrides = Partial<Record<DownloadResponseOverrideParam, string>>
+
+const DOWNLOAD_RESPONSE_OVERRIDE_HEADERS: Record<DownloadResponseOverrideParam, string> = {
+  b2ContentDisposition: 'Content-Disposition',
+  b2ContentLanguage: 'Content-Language',
+  b2ContentEncoding: 'Content-Encoding',
+  b2ContentType: 'Content-Type',
+  b2CacheControl: 'Cache-Control',
+  b2Expires: 'Expires',
+}
+
+type DownloadAuthorizationRequestBody = {
+  bucketId: string
+  fileNamePrefix: string
+  validDurationInSeconds: number
+} & Partial<Record<DownloadResponseOverrideParam, unknown>>
+
+function randomDownloadAuthorizationToken(): string {
+  const crypto = globalThis.crypto
+  if (typeof crypto?.getRandomValues !== 'function') {
+    throw new Error('Download authorization tokens require globalThis.crypto.getRandomValues')
+  }
+  const bytes = new Uint8Array(DOWNLOAD_AUTH_TOKEN_BYTES)
+  crypto.getRandomValues(bytes)
+  return `${DOWNLOAD_AUTH_TOKEN_PREFIX}${hexEncode(bytes)}`
+}
+
+function pickDownloadResponseOverrides(
+  req: Partial<Record<DownloadResponseOverrideParam, unknown>>,
+): DownloadResponseOverrides {
+  const overrides: DownloadResponseOverrides = {}
+  for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
+    const value = req[param]
+    if (typeof value === 'string') overrides[param] = value
+  }
+  return overrides
+}
+
+function validateDownloadResponseOverrides(
+  req: Partial<Record<DownloadResponseOverrideParam, unknown>>,
+): ValidationError | null {
+  for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
+    const value = req[param]
+    if (value === undefined || typeof value === 'string') continue
+    return { code: 'bad_request', message: `${param} must be a string` }
+  }
+  return null
+}
 
 interface StoredFile {
   readonly fileVersion: FileVersion
@@ -282,6 +350,18 @@ interface StoredUploadToken {
   invalidated: boolean
 }
 
+interface DownloadAuthorizationToken {
+  readonly bucketId: string
+  readonly fileNamePrefix: string
+  readonly expiresAt: number
+  readonly responseHeaderOverrides: DownloadResponseOverrides
+}
+
+interface DownloadAuthorizationExpiry {
+  readonly token: string
+  readonly expiresAt: number
+}
+
 interface RequestScope {
   readonly bucketIds: readonly string[]
   readonly fileNames?: readonly string[]
@@ -312,6 +392,16 @@ function requestStringField(body: unknown, field: string): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const value = (body as Record<string, unknown>)[field]
   return typeof value === 'string' ? value : undefined
+}
+
+function requestHeaderValue(headers: Record<string, string>, name: string): string | undefined {
+  const exact = headers[name]
+  if (exact !== undefined) return exact
+  const lowerName = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName) return value
+  }
+  return undefined
 }
 
 function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
@@ -781,6 +871,8 @@ export class B2Simulator {
    * state for tests.
    */
   private readonly uploadTokens = new Map<string, StoredUploadToken>()
+  private readonly downloadAuthorizationTokens = new Map<string, DownloadAuthorizationToken>()
+  private readonly downloadAuthorizationExpiryHeap: DownloadAuthorizationExpiry[] = []
   /**
    * Virtual-clock offset applied to `Date.now()` for expiry checks.
    * Defaults to 0. Tests advance via {@link advanceTime} to fast-forward
@@ -1078,35 +1170,176 @@ export class B2Simulator {
         `application key lacks required capabilities: ${missing.join(', ')}`,
       )
     }
-    if (token.bucketIds !== null) {
+    return this.authorizeScopeGrant(scope, {
+      bucketIds: token.bucketIds,
+      namePrefix: token.namePrefix,
+      bucketScopeRequiredMessage: () =>
+        `application key is scoped to buckets ${token.bucketIds?.join(', ')}; bucket scope is required`,
+      bucketMismatchMessage: (bucketId) =>
+        `application key is scoped to buckets ${token.bucketIds?.join(', ')}; cannot access ${bucketId}`,
+      prefixMismatchMessage: (fileName) =>
+        `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
+    })
+  }
+
+  private authorizeScopeGrant(
+    scope: RequestScope | undefined,
+    grant: {
+      readonly bucketIds: readonly string[] | null
+      readonly namePrefix: string | null
+      readonly bucketScopeRequiredMessage: () => string
+      readonly bucketMismatchMessage: (bucketId: string) => string
+      readonly prefixMismatchMessage: (fileName: string) => string
+    },
+  ): SimulatorJsonResponse | null {
+    if (grant.bucketIds !== null) {
       if ((scope?.bucketIds.length ?? 0) === 0 && scope?.requiresBucketScope === true) {
-        return this.error(
-          403,
-          'unauthorized',
-          `application key is scoped to buckets ${token.bucketIds.join(', ')}; bucket scope is required`,
-        )
+        return this.error(403, 'unauthorized', grant.bucketScopeRequiredMessage())
       }
       for (const bucketId of scope?.bucketIds ?? []) {
-        if (!token.bucketIds.includes(bucketId)) {
-          return this.error(
-            403,
-            'unauthorized',
-            `application key is scoped to buckets ${token.bucketIds.join(', ')}; cannot access ${bucketId}`,
-          )
-        }
+        if (grant.bucketIds.includes(bucketId)) continue
+        return this.error(403, 'unauthorized', grant.bucketMismatchMessage(bucketId))
       }
     }
-    if (token.namePrefix !== null) {
+    if (grant.namePrefix !== null) {
       for (const fileName of scope?.fileNames ?? []) {
-        if (fileName.startsWith(token.namePrefix)) continue
-        return this.error(
-          403,
-          'unauthorized',
-          `application key is scoped to prefix "${token.namePrefix}"; "${fileName}" is outside scope`,
-        )
+        if (fileName.startsWith(grant.namePrefix)) continue
+        return this.error(403, 'unauthorized', grant.prefixMismatchMessage(fileName))
       }
     }
     return null
+  }
+
+  private authorizeDownloadRequest(
+    authToken: string | undefined,
+    endpoint: 'b2_download_file_by_id' | 'b2_download_file_by_name',
+    scope: RequestScope,
+    url: URL,
+  ): SimulatorJsonResponse | null {
+    if (authToken === undefined || authToken === '') {
+      return this.error(401, 'bad_auth_token', 'missing authorization token')
+    }
+
+    const downloadAuth = this.downloadAuthorizationTokens.get(authToken)
+    if (downloadAuth === undefined) {
+      this.purgeExpiredDownloadAuthorizationTokens()
+      return this.authorizeRequest(authToken, endpoint, scope)
+    }
+    if (this.isExpiredDownloadAuthorizationToken(downloadAuth)) {
+      this.downloadAuthorizationTokens.delete(authToken)
+      this.purgeExpiredDownloadAuthorizationTokens()
+      return this.error(401, 'expired_auth_token', 'download authorization token has expired')
+    }
+    if (endpoint === 'b2_download_file_by_id') {
+      return this.error(
+        403,
+        'unauthorized',
+        'download authorization tokens cannot be used with b2_download_file_by_id',
+      )
+    }
+    const overrideError = this.authorizeDownloadResponseOverrides(downloadAuth, url)
+    if (overrideError !== null) return overrideError
+    return this.authorizeScopeGrant(scope, {
+      bucketIds: [downloadAuth.bucketId],
+      namePrefix: downloadAuth.fileNamePrefix,
+      bucketScopeRequiredMessage: () =>
+        `download authorization is scoped to bucket ${downloadAuth.bucketId}; bucket scope is required`,
+      bucketMismatchMessage: (bucketId) =>
+        `download authorization is scoped to bucket ${downloadAuth.bucketId}; cannot access ${bucketId}`,
+      prefixMismatchMessage: (fileName) =>
+        `download authorization is scoped to prefix "${downloadAuth.fileNamePrefix}"; "${fileName}" is outside scope`,
+    })
+  }
+
+  private isExpiredDownloadAuthorizationToken(
+    token: DownloadAuthorizationToken,
+    now = this.now(),
+  ): boolean {
+    return now >= token.expiresAt
+  }
+
+  private purgeExpiredDownloadAuthorizationTokens(): void {
+    const now = this.now()
+    for (let i = 0; i < DOWNLOAD_AUTH_PURGE_BATCH_SIZE; i++) {
+      const next = this.downloadAuthorizationExpiryHeap[0]
+      if (next === undefined || next.expiresAt > now) return
+      this.popDownloadAuthorizationExpiry()
+      const current = this.downloadAuthorizationTokens.get(next.token)
+      if (current?.expiresAt === next.expiresAt) {
+        this.downloadAuthorizationTokens.delete(next.token)
+      }
+    }
+  }
+
+  private pushDownloadAuthorizationExpiry(entry: DownloadAuthorizationExpiry): void {
+    const heap = this.downloadAuthorizationExpiryHeap
+    heap.push(entry)
+    let idx = heap.length - 1
+    while (idx > 0) {
+      const parentIdx = Math.floor((idx - 1) / 2)
+      const parent = heap[parentIdx] as DownloadAuthorizationExpiry
+      if (parent.expiresAt <= entry.expiresAt) break
+      heap[idx] = parent
+      idx = parentIdx
+    }
+    heap[idx] = entry
+  }
+
+  private popDownloadAuthorizationExpiry(): DownloadAuthorizationExpiry | undefined {
+    const heap = this.downloadAuthorizationExpiryHeap
+    const root = heap[0]
+    const last = heap.pop()
+    if (root === undefined || last === undefined || heap.length === 0) return root
+
+    let idx = 0
+    while (true) {
+      const leftIdx = idx * 2 + 1
+      const rightIdx = leftIdx + 1
+      const left = heap[leftIdx]
+      const right = heap[rightIdx]
+      if (left === undefined) break
+
+      const childIdx = right !== undefined && right.expiresAt < left.expiresAt ? rightIdx : leftIdx
+      const child = heap[childIdx] as DownloadAuthorizationExpiry
+      if (child.expiresAt >= last.expiresAt) break
+      heap[idx] = child
+      idx = childIdx
+    }
+    heap[idx] = last
+    return root
+  }
+
+  private authorizeDownloadResponseOverrides(
+    downloadAuth: DownloadAuthorizationToken,
+    url: URL,
+  ): SimulatorJsonResponse | null {
+    for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
+      const expected = downloadAuth.responseHeaderOverrides[param]
+      if (expected === undefined) continue
+      const actual = url.searchParams.get(param)
+      if (actual === expected) continue
+      const expectedText = JSON.stringify(expected)
+      const actualText = actual === null ? 'absent' : JSON.stringify(actual)
+      return this.error(
+        403,
+        'unauthorized',
+        `download authorization requires ${param}=${expectedText}; got ${actualText}`,
+      )
+    }
+    return null
+  }
+
+  private downloadAuthorizationFromRequest(
+    headers: Record<string, string>,
+    url: URL,
+    options: { readonly allowQueryAuthorization?: boolean } = {},
+  ): string | undefined {
+    const headerToken = requestHeaderValue(headers, 'authorization')
+    if (headerToken !== undefined) return headerToken
+    if (options.allowQueryAuthorization !== true) return undefined
+    const queryToken =
+      url.searchParams.get('Authorization') ?? url.searchParams.get('authorization')
+    return queryToken?.startsWith(DOWNLOAD_AUTH_TOKEN_PREFIX) ? queryToken : undefined
   }
 
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
@@ -1687,9 +1920,7 @@ export class B2Simulator {
           },
         )
       case 'b2_get_download_authorization':
-        return this.getDownloadAuthorization(
-          body as { bucketId: string; fileNamePrefix: string; validDurationInSeconds: number },
-        )
+        return this.getDownloadAuthorization(body as DownloadAuthorizationRequestBody)
       case 'b2_create_key':
         return this.createKey(
           body as {
@@ -1790,26 +2021,26 @@ export class B2Simulator {
     method: 'GET' | 'HEAD' = 'GET',
   ): SimulatorDownloadResponse {
     if (path.includes('b2_download_file_by_id')) {
+      const url = new URL(`http://localhost${path}`)
       // Strict-mode auth gate for download-by-id. Mirrors the gate in
       // `handleRequest`. Returns a synthetic JSON error body in the
       // download response shape so the transport renders the right
       // status code.
       if (this.strictAuth) {
-        const url = new URL(`http://localhost${path}`)
-        const authError = this.authorizeRequest(
-          headers['authorization'],
+        const authError = this.authorizeDownloadRequest(
+          this.downloadAuthorizationFromRequest(headers, url, { allowQueryAuthorization: false }),
           'b2_download_file_by_id',
           this.fileIdScope(url.searchParams.get('fileId') ?? undefined) ?? {
             bucketIds: [],
             requiresBucketScope: true,
           },
+          url,
         )
         if (authError !== null) return this.errorAsDownload(authError)
       }
-      const url = new URL(`http://localhost${path}`)
       const fileId = url.searchParams.get('fileId') ?? ''
       return this.finalizeDownload(
-        this.downloadById(fileId, headers, headers['range']),
+        this.downloadById(fileId, headers, requestHeaderValue(headers, 'range')),
         url,
         method,
       )
@@ -1819,22 +2050,23 @@ export class B2Simulator {
     if (fileMatch) {
       const bucketName = decodeURIComponent(fileMatch[1] ?? '')
       const fileName = decodeURIComponent(fileMatch[2] ?? '')
+      const url = new URL(`http://localhost${path}`)
       if (this.strictAuth) {
         const bucket = [...this.buckets.values()].find((b) => b.info.bucketName === bucketName)
-        const authError = this.authorizeRequest(
-          headers['authorization'],
+        const authError = this.authorizeDownloadRequest(
+          this.downloadAuthorizationFromRequest(headers, url, { allowQueryAuthorization: true }),
           'b2_download_file_by_name',
           {
             bucketIds: bucket === undefined ? [] : [bucket.info.bucketId as string],
             fileNames: [fileName],
             requiresBucketScope: true,
           },
+          url,
         )
         if (authError !== null) return this.errorAsDownload(authError)
       }
-      const url = new URL(`http://localhost${path}`)
       return this.finalizeDownload(
-        this.downloadByName(bucketName, fileName, headers, headers['range']),
+        this.downloadByName(bucketName, fileName, headers, requestHeaderValue(headers, 'range')),
         url,
         method,
       )
@@ -1877,16 +2109,8 @@ export class B2Simulator {
     url: URL,
     method: 'GET' | 'HEAD',
   ): SimulatorDownloadResponse {
-    const overrideMap: Record<string, string> = {
-      b2ContentDisposition: 'Content-Disposition',
-      b2ContentLanguage: 'Content-Language',
-      b2ContentEncoding: 'Content-Encoding',
-      b2ContentType: 'Content-Type',
-      b2CacheControl: 'Cache-Control',
-      b2Expires: 'Expires',
-    }
     const newHeaders = { ...response.headers }
-    for (const [param, header] of Object.entries(overrideMap)) {
+    for (const [param, header] of Object.entries(DOWNLOAD_RESPONSE_OVERRIDE_HEADERS)) {
       const value = url.searchParams.get(param)
       if (value !== null) newHeaders[header] = value
     }
@@ -3155,18 +3379,33 @@ export class B2Simulator {
     }
   }
 
-  private getDownloadAuthorization(req: {
-    bucketId: string
-    fileNamePrefix: string
-    validDurationInSeconds: number
-  }): SimulatorJsonResponse {
+  private getDownloadAuthorization(req: DownloadAuthorizationRequestBody): SimulatorJsonResponse {
+    this.purgeExpiredDownloadAuthorizationTokens()
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const prefixError = validateDownloadAuthorizationPrefix(req.fileNamePrefix)
+    if (prefixError) return this.error(400, prefixError.code, prefixError.message)
+    const durationError = validateDownloadAuthorizationDuration(req.validDurationInSeconds)
+    if (durationError) return this.error(400, durationError.code, durationError.message)
+    const overrideError = validateDownloadResponseOverrides(req)
+    if (overrideError) return this.error(400, overrideError.code, overrideError.message)
+    let authorizationToken = randomDownloadAuthorizationToken()
+    while (this.downloadAuthorizationTokens.has(authorizationToken)) {
+      authorizationToken = randomDownloadAuthorizationToken()
+    }
+    const expiresAt = this.now() + req.validDurationInSeconds * 1000
+    this.downloadAuthorizationTokens.set(authorizationToken, {
+      bucketId: req.bucketId,
+      fileNamePrefix: req.fileNamePrefix,
+      expiresAt,
+      responseHeaderOverrides: pickDownloadResponseOverrides(req),
+    })
+    this.pushDownloadAuthorizationExpiry({ token: authorizationToken, expiresAt })
     return {
       status: 200,
       body: {
         bucketId: req.bucketId,
         fileNamePrefix: req.fileNamePrefix,
-        authorizationToken: `sim_dl_auth_${this.genId('tok')}`,
+        authorizationToken,
       },
     }
   }
