@@ -55,6 +55,8 @@ export interface EventNotificationRule {
   readonly isEnabled: boolean
   /** Whether B2 has suspended this rule due to delivery failures. */
   readonly isSuspended: boolean
+  /** Maximum number of events B2 may include in a single webhook request. */
+  readonly maxEventsPerBatch?: number
   /** Unique name identifying this rule within the bucket. */
   readonly name: string
   /** Only events for objects with this name prefix trigger the rule. Empty string matches all objects. */
@@ -64,7 +66,7 @@ export interface EventNotificationRule {
   /** Webhook target configuration. */
   readonly targetConfiguration: {
     /** Target type (`'webhook'` for webhook delivery). */
-    readonly targetType: string
+    readonly targetType: 'webhook'
     /** Webhook URL that receives the event notifications. */
     readonly url: string
     /** Optional HMAC-SHA256 secret used to sign notification payloads for verification. */

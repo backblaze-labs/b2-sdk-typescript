@@ -196,6 +196,28 @@ describe('validateNotificationRules', () => {
     ).toMatch(/unknown event type/)
   })
 
+  it('rejects non-boolean isEnabled values', () => {
+    expect(validateNotificationRules([{ ...validRule, isEnabled: 'false' }])?.message).toMatch(
+      /isEnabled/,
+    )
+    expect(validateNotificationRules([{ ...validRule, isEnabled: undefined }])?.message).toMatch(
+      /isEnabled/,
+    )
+  })
+
+  it('accepts positive integer maxEventsPerBatch values', () => {
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: 5 }])).toBeNull()
+  })
+
+  it('rejects invalid maxEventsPerBatch values', () => {
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: '5' }])?.message).toMatch(
+      /maxEventsPerBatch/,
+    )
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: 0 }])?.message).toMatch(
+      /maxEventsPerBatch/,
+    )
+  })
+
   it('rejects non-webhook targets and non-https URLs', () => {
     expect(
       validateNotificationRules([

@@ -14,7 +14,7 @@ import {
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import type { LargeFileId } from './types/ids.ts'
-import { EventType } from './types/notifications.ts'
+import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
 describe('B2Client with simulator', () => {
   let client: B2Client
@@ -1287,7 +1287,7 @@ describe('notification rules', () => {
       bucketType: BucketType.AllPrivate,
     })
 
-    const rule = {
+    const rule: EventNotificationRule = {
       eventTypes: [EventType.ObjectCreatedAll] as const,
       isEnabled: true,
       isSuspended: false,

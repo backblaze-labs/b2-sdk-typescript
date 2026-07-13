@@ -402,6 +402,26 @@ export function validateNotificationRules(rules: unknown): ValidationError | nul
     const fieldError = validateKnownFields(ruleValue, NOTIFICATION_RULE_FIELDS, rulePath)
     if (fieldError) return fieldError
 
+    if (typeof ruleValue['isEnabled'] !== 'boolean') {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.isEnabled must be a boolean`,
+      }
+    }
+
+    const maxEventsPerBatch = ruleValue['maxEventsPerBatch']
+    if (
+      maxEventsPerBatch !== undefined &&
+      (typeof maxEventsPerBatch !== 'number' ||
+        !Number.isInteger(maxEventsPerBatch) ||
+        maxEventsPerBatch < 1)
+    ) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.maxEventsPerBatch must be a positive integer`,
+      }
+    }
+
     const name = ruleValue['name']
     if (typeof name !== 'string' || name.length === 0) {
       return {

@@ -219,12 +219,48 @@ describe('B2Simulator input validation: notification rules', () => {
     ).rejects.toThrow(/unknown event type/)
   })
 
+  it('rejects non-boolean isEnabled values', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, isEnabled: 'false' } as unknown as EventNotificationRule,
+      ]),
+    ).rejects.toThrow(/isEnabled/)
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, isEnabled: undefined } as unknown as EventNotificationRule,
+      ]),
+    ).rejects.toThrow(/isEnabled/)
+  })
+
+  it('accepts positive integer maxEventsPerBatch values', async () => {
+    await bucket.setNotificationRules([{ ...validRule, maxEventsPerBatch: 5 }])
+    await expect(bucket.getNotificationRules()).resolves.toMatchObject({
+      eventNotificationRules: [{ maxEventsPerBatch: 5 }],
+    })
+  })
+
+  it('rejects invalid maxEventsPerBatch values', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, maxEventsPerBatch: '5' } as unknown as EventNotificationRule,
+      ]),
+    ).rejects.toThrow(/maxEventsPerBatch/)
+    await expect(
+      bucket.setNotificationRules([
+        { ...validRule, maxEventsPerBatch: 0 } as unknown as EventNotificationRule,
+      ]),
+    ).rejects.toThrow(/maxEventsPerBatch/)
+  })
+
   it('rejects non-webhook targets and non-https URLs', async () => {
     await expect(
       bucket.setNotificationRules([
         {
           ...validRule,
-          targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+          targetConfiguration: {
+            targetType: 'url',
+            url: 'https://example.com/webhook',
+          } as unknown as EventNotificationRule['targetConfiguration'],
         },
       ]),
     ).rejects.toThrow(/targetType/)
@@ -1580,7 +1616,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const scopedClient = await authorizeWithKey(sim, key)
     const apiUrl = scopedClient.accountInfo.getApiUrl()
     const authToken = scopedClient.accountInfo.getAuthToken()
-    const allowedRule = {
+    const allowedRule: EventNotificationRule = {
       eventTypes: [EventType.ObjectCreatedAll],
       isEnabled: true,
       isSuspended: false,
