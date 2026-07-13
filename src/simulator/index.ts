@@ -186,6 +186,7 @@ import {
   validateFileInfo,
   validateFileName,
   validateMaxCount,
+  validateNotificationRules,
 } from './validation.ts'
 
 // Re-export the documented B2 spec limit constants so callers of
@@ -3751,6 +3752,8 @@ export class B2Simulator {
     eventNotificationRules: EventNotificationRule[]
   }): SimulatorJsonResponse {
     if (!this.buckets.has(req.bucketId)) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const rulesError = validateNotificationRules(req.eventNotificationRules)
+    if (rulesError) return this.error(400, rulesError.code, rulesError.message)
     this.notificationRules.set(req.bucketId, req.eventNotificationRules)
     return {
       status: 200,

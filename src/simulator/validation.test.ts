@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Capability } from '../types/auth.ts'
+import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   BUCKET_INFO_MAX_KEYS,
@@ -17,6 +18,7 @@ import {
   validateFileInfo,
   validateFileName,
   validateMaxCount,
+  validateNotificationRules,
 } from './validation.ts'
 
 /**
@@ -161,6 +163,96 @@ describe('validateDownloadAuthorizationPrefix', () => {
   it('rejects missing and non-string prefixes', () => {
     expect(validateDownloadAuthorizationPrefix(undefined)?.code).toBe('bad_request')
     expect(validateDownloadAuthorizationPrefix(42)?.code).toBe('bad_request')
+  })
+})
+
+describe('validateNotificationRules', () => {
+  const validRule = {
+    eventTypes: [EventType.ObjectCreatedAll],
+    isEnabled: true,
+    name: 'upload-webhook',
+    objectNamePrefix: '',
+    targetConfiguration: {
+      targetType: 'webhook',
+      url: 'https://example.com/webhook',
+    },
+  }
+
+  it('returns null for an empty rule list and valid rules', () => {
+    expect(validateNotificationRules([])).toBeNull()
+    expect(validateNotificationRules([validRule])).toBeNull()
+  })
+
+  it('rejects empty and duplicate names', () => {
+    expect(validateNotificationRules([{ ...validRule, name: '' }])?.message).toMatch(
+      /non-empty string/,
+    )
+    expect(validateNotificationRules([validRule, { ...validRule }])?.message).toMatch(/unique/)
+  })
+
+  it('rejects unknown event types', () => {
+    expect(
+      validateNotificationRules([{ ...validRule, eventTypes: ['b2:ObjectCreated:Typo'] }])?.message,
+    ).toMatch(/unknown event type/)
+  })
+
+  it('rejects non-boolean isEnabled values', () => {
+    expect(validateNotificationRules([{ ...validRule, isEnabled: 'false' }])?.message).toMatch(
+      /isEnabled/,
+    )
+    expect(validateNotificationRules([{ ...validRule, isEnabled: undefined }])?.message).toMatch(
+      /isEnabled/,
+    )
+  })
+
+  it('accepts positive integer maxEventsPerBatch values', () => {
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: 5 }])).toBeNull()
+  })
+
+  it('rejects invalid maxEventsPerBatch values', () => {
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: '5' }])?.message).toMatch(
+      /maxEventsPerBatch/,
+    )
+    expect(validateNotificationRules([{ ...validRule, maxEventsPerBatch: 0 }])?.message).toMatch(
+      /maxEventsPerBatch/,
+    )
+  })
+
+  it('rejects non-webhook targets and non-https URLs', () => {
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+        },
+      ])?.message,
+    ).toMatch(/targetType/)
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'webhook', url: 'http://example.com/webhook' },
+        },
+      ])?.message,
+    ).toMatch(/https URL/)
+  })
+
+  it('rejects unknown rule and target fields', () => {
+    expect(validateNotificationRules([{ ...validRule, extra: true }])?.message).toMatch(
+      /not a supported field/,
+    )
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            targetType: 'webhook',
+            url: 'https://example.com/webhook',
+            extra: true,
+          },
+        },
+      ])?.message,
+    ).toMatch(/not a supported field/)
   })
 })
 

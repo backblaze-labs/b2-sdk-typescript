@@ -24,6 +24,7 @@ import {
   hasValidB2BucketNameShape,
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
+import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
 /** Shape returned by validation functions when input is rejected. */
@@ -327,5 +328,174 @@ export function validateDownloadAuthorizationPrefix(requested: unknown): Validat
   if (typeof requested !== 'string') {
     return { code: 'bad_request', message: 'fileNamePrefix must be a string' }
   }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Event notification rules (`b2_set_bucket_notification_rules`)
+// ---------------------------------------------------------------------------
+
+const NOTIFICATION_RULE_FIELDS = new Set([
+  'eventTypes',
+  'isEnabled',
+  'isSuspended',
+  'maxEventsPerBatch',
+  'name',
+  'objectNamePrefix',
+  'suspensionReason',
+  'targetConfiguration',
+])
+
+const NOTIFICATION_TARGET_FIELDS = new Set([
+  'customHeaders',
+  'hmacSha256SigningSecret',
+  'targetType',
+  'url',
+])
+
+const KNOWN_NOTIFICATION_EVENT_TYPES = new Set<string>(Object.values(EventType))
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function validateKnownFields(
+  value: Record<string, unknown>,
+  allowedFields: ReadonlySet<string>,
+  path: string,
+): ValidationError | null {
+  for (const field of Object.keys(value)) {
+    if (!allowedFields.has(field)) {
+      return {
+        code: 'bad_request',
+        message: `${path}.${field} is not a supported field`,
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Validates event notification rules for `b2_set_bucket_notification_rules`.
+ *
+ * @param rules - Caller-supplied event notification rules.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-set-bucket-notification-rules
+ */
+export function validateNotificationRules(rules: unknown): ValidationError | null {
+  if (!Array.isArray(rules)) {
+    return {
+      code: 'bad_request',
+      message: 'eventNotificationRules must be an array',
+    }
+  }
+
+  const names = new Set<string>()
+  for (const [index, ruleValue] of rules.entries()) {
+    const rulePath = `eventNotificationRules[${index}]`
+    if (!isRecord(ruleValue)) {
+      return { code: 'bad_request', message: `${rulePath} must be an object` }
+    }
+
+    const fieldError = validateKnownFields(ruleValue, NOTIFICATION_RULE_FIELDS, rulePath)
+    if (fieldError) return fieldError
+
+    if (typeof ruleValue['isEnabled'] !== 'boolean') {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.isEnabled must be a boolean`,
+      }
+    }
+
+    const maxEventsPerBatch = ruleValue['maxEventsPerBatch']
+    if (
+      maxEventsPerBatch !== undefined &&
+      (typeof maxEventsPerBatch !== 'number' ||
+        !Number.isInteger(maxEventsPerBatch) ||
+        maxEventsPerBatch < 1)
+    ) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.maxEventsPerBatch must be a positive integer`,
+      }
+    }
+
+    const name = ruleValue['name']
+    if (typeof name !== 'string' || name.length === 0) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.name must be a non-empty string`,
+      }
+    }
+    if (names.has(name)) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.name must be unique within eventNotificationRules`,
+      }
+    }
+    names.add(name)
+
+    const eventTypes = ruleValue['eventTypes']
+    if (!Array.isArray(eventTypes) || eventTypes.length === 0) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.eventTypes must be a non-empty array`,
+      }
+    }
+    for (const eventType of eventTypes) {
+      if (typeof eventType !== 'string' || !KNOWN_NOTIFICATION_EVENT_TYPES.has(eventType)) {
+        return {
+          code: 'bad_request',
+          message: `${rulePath}.eventTypes contains an unknown event type`,
+        }
+      }
+    }
+
+    const targetConfiguration = ruleValue['targetConfiguration']
+    if (!isRecord(targetConfiguration)) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.targetConfiguration must be an object`,
+      }
+    }
+
+    const targetFieldError = validateKnownFields(
+      targetConfiguration,
+      NOTIFICATION_TARGET_FIELDS,
+      `${rulePath}.targetConfiguration`,
+    )
+    if (targetFieldError) return targetFieldError
+
+    if (targetConfiguration['targetType'] !== 'webhook') {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.targetConfiguration.targetType must be "webhook"`,
+      }
+    }
+
+    const url = targetConfiguration['url']
+    if (typeof url !== 'string') {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.targetConfiguration.url must be a valid https URL`,
+      }
+    }
+    try {
+      if (new URL(url).protocol !== 'https:') {
+        return {
+          code: 'bad_request',
+          message: `${rulePath}.targetConfiguration.url must be a valid https URL`,
+        }
+      }
+    } catch {
+      return {
+        code: 'bad_request',
+        message: `${rulePath}.targetConfiguration.url must be a valid https URL`,
+      }
+    }
+  }
+
   return null
 }

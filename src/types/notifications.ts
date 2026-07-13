@@ -16,7 +16,7 @@ import type { BucketId } from './ids.ts'
  *     isSuspended: false,
  *     objectNamePrefix: '',
  *     suspensionReason: '',
- *     targetConfiguration: { targetType: 'url', url: 'https://example.com/webhook' },
+ *     targetConfiguration: { targetType: 'webhook', url: 'https://example.com/webhook' },
  *   },
  * ])
  * ```
@@ -55,6 +55,8 @@ export interface EventNotificationRule {
   readonly isEnabled: boolean
   /** Whether B2 has suspended this rule due to delivery failures. */
   readonly isSuspended: boolean
+  /** Maximum number of events B2 may include in a single webhook request. */
+  readonly maxEventsPerBatch?: number
   /** Unique name identifying this rule within the bucket. */
   readonly name: string
   /** Only events for objects with this name prefix trigger the rule. Empty string matches all objects. */
@@ -63,8 +65,8 @@ export interface EventNotificationRule {
   readonly suspensionReason: string
   /** Webhook target configuration. */
   readonly targetConfiguration: {
-    /** Target type (e.g., `'url'` for webhook delivery). */
-    readonly targetType: string
+    /** Target type (`'webhook'` for webhook delivery). */
+    readonly targetType: 'webhook'
     /** Webhook URL that receives the event notifications. */
     readonly url: string
     /** Optional HMAC-SHA256 secret used to sign notification payloads for verification. */
