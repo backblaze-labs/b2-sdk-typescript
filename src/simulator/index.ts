@@ -1315,10 +1315,10 @@ export class B2Simulator {
   ): SimulatorJsonResponse | null {
     for (const param of DOWNLOAD_RESPONSE_OVERRIDE_PARAMS) {
       const expected = downloadAuth.responseHeaderOverrides[param]
+      if (expected === undefined) continue
       const actual = url.searchParams.get(param)
-      if (expected === undefined && actual === null) continue
-      if (expected !== undefined && actual === expected) continue
-      const expectedText = expected === undefined ? 'absent' : JSON.stringify(expected)
+      if (actual === expected) continue
+      const expectedText = JSON.stringify(expected)
       const actualText = actual === null ? 'absent' : JSON.stringify(actual)
       return this.error(
         403,

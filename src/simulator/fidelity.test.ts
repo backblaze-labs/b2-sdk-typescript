@@ -1328,11 +1328,9 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       method: 'GET',
       url: `http://localhost:0/file/${bucket.name}/allowed/visible.txt?${unexpectedParams}`,
     })
-    expect(unexpected.status).toBe(403)
-    expect(JSON.parse(await unexpected.text())).toMatchObject({
-      code: 'unauthorized',
-      message: expect.stringContaining('b2ContentType'),
-    })
+    expect(unexpected.status).toBe(200)
+    expect(unexpected.headers.get('Content-Type')).toBe('text/plain')
+    await expect(unexpected.text()).resolves.toBe('visible')
   })
 
   it('rejects download authorization durations outside the B2 range', async () => {
