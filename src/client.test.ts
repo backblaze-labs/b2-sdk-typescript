@@ -1361,6 +1361,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'retention-test',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('retain me')
     const uploaded = await bucket.upload({
@@ -1381,6 +1382,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'legal-hold-test',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('hold me')
     const uploaded = await bucket.upload({
@@ -1399,6 +1401,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'legal-hold-off',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('release me')
     const uploaded = await bucket.upload({
@@ -1416,6 +1419,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'retention-info',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('check info')
     const uploaded = await bucket.upload({
@@ -1435,6 +1439,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'legalhold-info',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('check hold')
     const uploaded = await bucket.upload({
@@ -1453,6 +1458,7 @@ describe('file retention and legal hold', () => {
     const bucket = await client.createBucket({
       bucketName: 'bypass-test',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const data = new TextEncoder().encode('bypass me')
     const uploaded = await bucket.upload({

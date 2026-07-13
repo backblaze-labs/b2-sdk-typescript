@@ -28,7 +28,7 @@ import {
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
-import type { FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
@@ -646,6 +646,51 @@ function defaultFileRetention(
     mode: policy.mode as RetentionMode,
     retainUntilTimestamp: uploadTimestamp + days * 24 * 60 * 60 * 1000,
   }
+}
+
+function isRetentionMode(value: unknown): value is RetentionMode {
+  return value === RetentionMode.Compliance || value === RetentionMode.Governance
+}
+
+function parseFileRetentionValue(value: unknown, now: number): FileRetentionValue | null {
+  if (typeof value !== 'object' || value === null) return null
+  const candidate = value as Record<string, unknown>
+  const mode = candidate['mode']
+  const retainUntilTimestamp = candidate['retainUntilTimestamp']
+
+  if (mode === null && retainUntilTimestamp === null) {
+    return { mode, retainUntilTimestamp }
+  }
+  if (isRetentionMode(mode) && typeof retainUntilTimestamp === 'number') {
+    if (!Number.isFinite(retainUntilTimestamp)) return null
+    if (retainUntilTimestamp <= now) return null
+    return { mode, retainUntilTimestamp }
+  }
+  return null
+}
+
+function isRetentionWeakened(
+  current: FileRetentionValue | null | undefined,
+  next: FileRetentionValue,
+): boolean {
+  if (current === null || current === undefined) return false
+  if (current.mode === null) return false
+  if (next.mode === null) return true
+  if (current.mode === RetentionMode.Compliance && next.mode !== RetentionMode.Compliance) {
+    return true
+  }
+  if (current.retainUntilTimestamp === null) return next.mode !== current.mode
+  if (next.retainUntilTimestamp === null) return true
+  return next.retainUntilTimestamp < current.retainUntilTimestamp
+}
+
+function requiresGovernanceBypass(
+  current: FileRetentionValue | null | undefined,
+  next: FileRetentionValue,
+): boolean {
+  if (current?.mode !== RetentionMode.Governance) return false
+  if (next.mode === RetentionMode.Compliance) return true
+  return isRetentionWeakened(current, next)
 }
 
 /** JSON response returned by {@link B2Simulator.handleRequest} and {@link B2Simulator.handleUpload}. */
@@ -1342,6 +1387,35 @@ export class B2Simulator {
     return queryToken?.startsWith(DOWNLOAD_AUTH_TOKEN_PREFIX) ? queryToken : undefined
   }
 
+  private requestHasCapability(authToken: string | undefined, capability: Capability): boolean {
+    if (!this.strictAuth) return true
+    if (authToken === undefined) return false
+    return this.issuedTokens.get(authToken)?.capabilities.includes(capability) === true
+  }
+
+  private requireFileLockEnabled(bucket: StoredBucket): SimulatorJsonResponse | null {
+    if (bucket.info.fileLockConfiguration.value?.isFileLockEnabled === true) return null
+    return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
+  }
+
+  private requireGovernanceBypass(
+    req: { bypassGovernance?: boolean },
+    authToken: string | undefined,
+    message: string,
+  ): SimulatorJsonResponse | null {
+    if (req.bypassGovernance !== true) {
+      return this.error(400, 'file_lock_governance_protected', message)
+    }
+    if (!this.requestHasCapability(authToken, Capability.BypassGovernance)) {
+      return this.error(
+        403,
+        'unauthorized',
+        `application key lacks required capabilities: ${Capability.BypassGovernance}`,
+      )
+    }
+    return null
+  }
+
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
     const directBucketId = requestStringField(body, 'bucketId')
     const directFileName = requestStringField(body, 'fileName')
@@ -1862,6 +1936,7 @@ export class B2Simulator {
       case 'b2_delete_file_version':
         return this.deleteFileVersion(
           body as { fileId: string; fileName: string; bypassGovernance?: boolean },
+          headers['authorization'],
         )
       case 'b2_copy_file':
         return await this.copyFile(
@@ -1946,10 +2021,12 @@ export class B2Simulator {
             fileName: string
             fileId: string
             fileRetention: {
-              mode: RetentionMode | null
-              retainUntilTimestamp: number | null
+              mode?: unknown
+              retainUntilTimestamp?: unknown
             }
+            bypassGovernance?: boolean
           },
+          headers['authorization'],
         )
       case 'b2_update_file_legal_hold':
         return this.updateFileLegalHold(
@@ -2854,11 +2931,14 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private deleteFileVersion(req: {
-    fileId: string
-    fileName: string
-    bypassGovernance?: boolean
-  }): {
+  private deleteFileVersion(
+    req: {
+      fileId: string
+      fileName: string
+      bypassGovernance?: boolean
+    },
+    authToken?: string,
+  ): {
     status: number
     body: unknown
   } {
@@ -2876,7 +2956,7 @@ export class B2Simulator {
     const legalHold = fv.legalHold?.value
     const now = Date.now()
 
-    if (legalHold === 'on') {
+    if (legalHold === LegalHoldValue.On) {
       return this.error(
         400,
         'file_lock_legal_hold_protected',
@@ -2884,7 +2964,7 @@ export class B2Simulator {
       )
     }
     if (
-      retention?.mode === 'compliance' &&
+      retention?.mode === RetentionMode.Compliance &&
       retention.retainUntilTimestamp !== null &&
       retention.retainUntilTimestamp > now
     ) {
@@ -2895,16 +2975,16 @@ export class B2Simulator {
       )
     }
     if (
-      retention?.mode === 'governance' &&
+      retention?.mode === RetentionMode.Governance &&
       retention.retainUntilTimestamp !== null &&
-      retention.retainUntilTimestamp > now &&
-      req.bypassGovernance !== true
+      retention.retainUntilTimestamp > now
     ) {
-      return this.error(
-        400,
-        'file_lock_governance_protected',
+      const bypassError = this.requireGovernanceBypass(
+        req,
+        authToken,
         'File is under governance-mode retention; pass bypassGovernance: true to delete',
       )
+      if (bypassError !== null) return bypassError
     }
 
     found.versions.splice(found.index, 1)
@@ -3555,19 +3635,56 @@ export class B2Simulator {
 
   // --- File lock ---
 
-  private updateFileRetention(req: {
-    fileName: string
-    fileId: string
-    fileRetention: { mode: RetentionMode | null; retainUntilTimestamp: number | null }
-  }): SimulatorJsonResponse {
+  private updateFileRetention(
+    req: {
+      fileName: string
+      fileId: string
+      fileRetention: unknown
+      bypassGovernance?: boolean
+    },
+    authToken?: string,
+  ): SimulatorJsonResponse {
     const found = this.findFile(req.fileId)
     if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
       return this.error(404, 'file_not_present', 'File not found')
     }
+    const fileLockError = this.requireFileLockEnabled(found.bucket)
+    if (fileLockError !== null) return fileLockError
+
+    const fileRetention = parseFileRetentionValue(req.fileRetention, Date.now())
+    if (fileRetention === null) {
+      return this.error(
+        400,
+        'bad_request',
+        'fileRetention must use a valid mode and retainUntilTimestamp pair',
+      )
+    }
+
+    const current = found.stored.fileVersion.fileRetention?.value
+    if (
+      current?.mode === RetentionMode.Compliance &&
+      (fileRetention.mode !== RetentionMode.Compliance ||
+        isRetentionWeakened(current, fileRetention))
+    ) {
+      return this.error(
+        400,
+        'file_lock_compliance_protected',
+        'Compliance-mode retention cannot be shortened or removed',
+      )
+    }
+    if (requiresGovernanceBypass(current, fileRetention)) {
+      const bypassError = this.requireGovernanceBypass(
+        req,
+        authToken,
+        'Governance-mode retention cannot be shortened, removed, or converted without bypassGovernance',
+      )
+      if (bypassError !== null) return bypassError
+    }
+
     found.versions[found.index] = {
       fileVersion: {
         ...found.stored.fileVersion,
-        fileRetention: { isClientAuthorizedToRead: true, value: req.fileRetention },
+        fileRetention: { isClientAuthorizedToRead: true, value: fileRetention },
       },
       data: found.stored.data,
       serverSideEncryption: found.stored.serverSideEncryption,
@@ -3577,7 +3694,7 @@ export class B2Simulator {
       body: {
         fileName: req.fileName,
         fileId: req.fileId,
-        fileRetention: req.fileRetention,
+        fileRetention,
       },
     }
   }
@@ -3591,12 +3708,18 @@ export class B2Simulator {
     if (found === null || found.stored.fileVersion.fileName !== req.fileName) {
       return this.error(404, 'file_not_present', 'File not found')
     }
+    const fileLockError = this.requireFileLockEnabled(found.bucket)
+    if (fileLockError !== null) return fileLockError
+
+    if (req.legalHold !== LegalHoldValue.On && req.legalHold !== LegalHoldValue.Off) {
+      return this.error(400, 'bad_request', 'legalHold must be "on" or "off"')
+    }
     found.versions[found.index] = {
       fileVersion: {
         ...found.stored.fileVersion,
         legalHold: {
           isClientAuthorizedToRead: true,
-          value: req.legalHold as 'on' | 'off',
+          value: req.legalHold,
         },
       },
       data: found.stored.data,

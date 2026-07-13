@@ -1613,10 +1613,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const allowed = await client.createBucket({
       bucketName: 'lock-scope-a',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const blocked = await client.createBucket({
       bucketName: 'lock-scope-b',
       bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
     })
     const allowedFile = await allowed.upload({
       fileName: 'allowed/legal.txt',
