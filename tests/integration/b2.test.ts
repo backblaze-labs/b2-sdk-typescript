@@ -18,11 +18,19 @@ import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
+const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
 
 const skip = !keyId || !appKey
 const currentBucketPrefix = 'sdk-it-'
 const legacyBucketPrefix = 'sdk-test-'
 const staleBucketAgeMs = 60 * 60 * 1000
+const setupStepTimeoutMs = 60 * 1000
+
+if (skip && requireCredentials) {
+  throw new Error(
+    'B2 integration credentials are required when B2_INTEGRATION_REQUIRE_CREDENTIALS=1',
+  )
+}
 
 function makeBucketName(): string {
   const runId = process.env.GITHUB_RUN_ID
@@ -74,6 +82,79 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
   }
 }
 
+function setupErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  return String(err)
+}
+
+function logSetup(message: string): void {
+  console.info(`[b2 integration setup] ${message}`)
+}
+
+async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const start = performance.now()
+  let timedOut = false
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  const operation = Promise.resolve().then(fn)
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true
+      reject(
+        new Error(`B2 integration setup step "${name}" timed out after ${setupStepTimeoutMs}ms`),
+      )
+    }, setupStepTimeoutMs)
+  })
+
+  logSetup(`${name}: start`)
+  try {
+    const result = await Promise.race([operation, timeoutPromise])
+    logSetup(`${name}: ok (${Math.round(performance.now() - start)}ms)`)
+    return result
+  } catch (err) {
+    logSetup(`${name}: failed after ${Math.round(performance.now() - start)}ms`)
+    console.error(`[b2 integration setup] ${name}: ${setupErrorMessage(err)}`)
+    throw err
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout)
+    if (timedOut) {
+      void operation.catch((err) => {
+        console.warn(
+          `[b2 integration setup] ${name}: underlying operation rejected after timeout (${setupErrorMessage(err)})`,
+        )
+      })
+    }
+  }
+}
+
+async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]): Promise<void> {
+  const now = Date.now()
+  const staleBuckets = existing.filter((bucket) => isStaleIntegrationBucket(bucket.name, now))
+  let deletedCount = 0
+  let skippedCount = 0
+
+  logSetup(`stale bucket sweep: ${staleBuckets.length} candidate(s) among ${existing.length}`)
+
+  for (const bucket of staleBuckets) {
+    const start = performance.now()
+    try {
+      await deleteBucketIfPresent(bucket)
+      deletedCount += 1
+      logSetup(
+        `delete stale bucket ${bucket.name}: ok (${Math.round(performance.now() - start)}ms)`,
+      )
+    } catch (err) {
+      skippedCount += 1
+      console.warn(
+        `[b2 integration setup] delete stale bucket ${bucket.name}: skipped after ${Math.round(
+          performance.now() - start,
+        )}ms (${setupErrorMessage(err)})`,
+      )
+    }
+  }
+
+  logSetup(`stale bucket sweep: deleted ${deletedCount}, skipped ${skippedCount}`)
+}
+
 describe.skipIf(skip)('B2 integration', () => {
   let client: B2Client
   let bucket: Bucket
@@ -84,28 +165,20 @@ describe.skipIf(skip)('B2 integration', () => {
       applicationKeyId: keyId,
       applicationKey: appKey,
     })
-    await client.authorize()
+    await setupStep('authorize', () => client.authorize())
 
     // Defensive: sweep stale integration buckets from prior runs that crashed
     // before their afterAll cleanup. Keep this age-gated so another branch's
     // live integration run cannot have its bucket removed mid-test.
-    const existing = await client.listBuckets()
-    const now = Date.now()
-    for (const b of existing) {
-      if (!isStaleIntegrationBucket(b.name, now)) continue
-      try {
-        await deleteBucketIfPresent(b)
-      } catch {
-        // Skip buckets we can't clean up (permissions, in-flight uploads).
-        // They'll surface as a hard bucket-limit error later, which is the
-        // right place to fix it.
-      }
-    }
+    const existing = await setupStep('list buckets', () => client.listBuckets())
+    await setupStep('sweep stale integration buckets', () => sweepStaleIntegrationBuckets(existing))
 
-    bucket = await client.createBucket({
-      bucketName,
-      bucketType: 'allPrivate',
-    })
+    bucket = await setupStep(`create bucket ${bucketName}`, () =>
+      client.createBucket({
+        bucketName,
+        bucketType: 'allPrivate',
+      }),
+    )
   })
 
   afterAll(async () => {

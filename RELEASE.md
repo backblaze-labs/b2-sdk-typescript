@@ -140,6 +140,12 @@ pnpm test:browser   # real Chromium + Firefox + WebKit via Playwright
 pnpm pack --pack-destination /tmp && tar -tzf /tmp/backblaze-labs-b2-sdk-*.tgz | sort
 ```
 
+For live Backblaze B2 confidence, also verify that the relevant commit has a
+green `Integration (real B2)` workflow run, or manually dispatch that workflow
+before tagging. The release workflow does not run `pnpm test:integration`, so a
+successful publish gate alone does not prove the SDK has just passed against the
+real B2 service.
+
 The tarball should contain `dist/` (`.js` / `.cjs` / `.d.ts` / `.d.cts` per entry), `README.md`, `LICENSE`, `CHANGELOG.md`, and **nothing** from `src/`, `coverage/`, or `node_modules/`. `pnpm run verify:exports` already asserts the dual-format type resolution.
 
 ---
@@ -167,6 +173,10 @@ Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/releas
 2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
 3. `npm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
+
+The release workflow intentionally stays packaging-focused. Treat the separate
+`Integration (real B2)` workflow as the live-service signal for PR, scheduled,
+manual, and release-readiness checks.
 
 Then confirm:
 
