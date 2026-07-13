@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
@@ -586,14 +586,14 @@ describe('B2Simulator: deleteFileVersion respects Object Lock', () => {
       retainUntilTimestamp: expiresAt,
     })
 
-    vi.useFakeTimers()
+    const realDateNow = Date.now
+    Date.now = () => expiresAt + 1
     try {
-      vi.setSystemTime(expiresAt + 1)
       await expect(
         bucket.deleteFileVersion('gov-expired.bin', uploaded.fileId),
       ).resolves.toBeUndefined()
     } finally {
-      vi.useRealTimers()
+      Date.now = realDateNow
     }
   })
 
