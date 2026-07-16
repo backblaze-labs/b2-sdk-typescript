@@ -695,6 +695,18 @@ describe('B2Simulator capability enforcement', () => {
         message: 'non-empty array',
       },
       {
+        body: {
+          capabilities: [Capability.ReadFiles],
+          keyName: 'bad-bucketids-key',
+          bucketIds: 'x',
+        },
+        message: 'bucketIds',
+      },
+      {
+        body: { capabilities: [Capability.ReadFiles], keyName: 'bad-prefix-key', namePrefix: 1 },
+        message: 'namePrefix',
+      },
+      {
         body: { capabilities: [Capability.ListBuckets], keyName: '' },
         message: 'keyName',
       },

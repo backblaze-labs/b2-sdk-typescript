@@ -375,12 +375,33 @@ interface RequestScope {
   readonly requiresBucketScope: boolean
 }
 
+function isValidationError(value: unknown): value is ValidationError {
+  return typeof value === 'object' && value !== null && 'code' in value && 'message' in value
+}
+
 function normalizeKeyBucketIds(req: {
-  bucketIds?: readonly string[] | null
-}): readonly string[] | null {
-  return req.bucketIds === undefined || req.bucketIds === null
-    ? null
-    : Object.freeze([...req.bucketIds])
+  bucketIds?: unknown
+}): readonly string[] | null | ValidationError {
+  if (req.bucketIds === undefined || req.bucketIds === null) return null
+  if (!Array.isArray(req.bucketIds)) {
+    return { code: 'bad_request', message: 'bucketIds must be an array or null' }
+  }
+  const bucketIds: string[] = []
+  for (const bucketId of req.bucketIds) {
+    if (typeof bucketId !== 'string') {
+      return { code: 'bad_request', message: 'bucketIds must contain only strings' }
+    }
+    bucketIds.push(bucketId)
+  }
+  return Object.freeze(bucketIds)
+}
+
+function normalizeKeyNamePrefix(namePrefix: unknown): string | null | ValidationError {
+  if (namePrefix === undefined || namePrefix === '') return null
+  if (typeof namePrefix !== 'string') {
+    return { code: 'bad_request', message: 'namePrefix must be a string' }
+  }
+  return namePrefix
 }
 
 function singleBucketId(bucketIds: readonly string[] | null | undefined): string | null {
@@ -3547,9 +3568,9 @@ export class B2Simulator {
       capabilities: unknown
       keyName: unknown
       validDurationInSeconds?: number
-      bucketIds?: readonly string[] | null
-      bucketId?: string
-      namePrefix?: string
+      bucketIds?: unknown
+      bucketId?: unknown
+      namePrefix?: unknown
     },
     apiVersion: string,
     authToken?: string,
@@ -3569,14 +3590,28 @@ export class B2Simulator {
         'bucketId is not accepted by v4 b2_create_key; use bucketIds',
       )
     }
-    if (apiVersion !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
+    const bucketId = req.bucketId
+    if (apiVersion !== 'v4' && bucketId !== undefined && req.bucketIds !== undefined) {
       return this.error(400, 'bad_request', 'b2_create_key accepts either bucketIds or bucketId')
     }
-    const bucketIds =
-      apiVersion !== 'v4' && req.bucketId !== undefined
-        ? Object.freeze([req.bucketId])
-        : normalizeKeyBucketIds(req)
-    const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
+    let bucketIdsResult: readonly string[] | null | ValidationError
+    if (apiVersion !== 'v4' && bucketId !== undefined) {
+      if (typeof bucketId !== 'string') {
+        return this.error(400, 'bad_request', 'bucketId must be a string')
+      }
+      bucketIdsResult = Object.freeze([bucketId])
+    } else {
+      bucketIdsResult = normalizeKeyBucketIds(req)
+    }
+    if (isValidationError(bucketIdsResult)) {
+      return this.error(400, bucketIdsResult.code, bucketIdsResult.message)
+    }
+    const namePrefixResult = normalizeKeyNamePrefix(req.namePrefix)
+    if (isValidationError(namePrefixResult)) {
+      return this.error(400, namePrefixResult.code, namePrefixResult.message)
+    }
+    const bucketIds = bucketIdsResult
+    const namePrefix = namePrefixResult
     if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
       return this.error(
         400,
