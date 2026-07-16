@@ -707,6 +707,14 @@ describe('B2Simulator capability enforcement', () => {
         message: 'namePrefix',
       },
       {
+        body: {
+          capabilities: [Capability.ListBuckets],
+          keyName: 'bad-duration-key',
+          validDurationInSeconds: '60',
+        },
+        message: 'validDurationInSeconds',
+      },
+      {
         body: { capabilities: [Capability.ListBuckets], keyName: '' },
         message: 'keyName',
       },

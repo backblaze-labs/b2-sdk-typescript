@@ -404,6 +404,21 @@ function normalizeKeyNamePrefix(namePrefix: unknown): string | null | Validation
   return namePrefix
 }
 
+function normalizeKeyValidDurationInSeconds(
+  validDurationInSeconds: unknown,
+): number | null | ValidationError {
+  if (validDurationInSeconds === undefined) return null
+  if (
+    typeof validDurationInSeconds !== 'number' ||
+    !Number.isFinite(validDurationInSeconds) ||
+    !Number.isInteger(validDurationInSeconds) ||
+    validDurationInSeconds <= 0
+  ) {
+    return { code: 'bad_request', message: 'validDurationInSeconds must be a positive integer' }
+  }
+  return validDurationInSeconds
+}
+
 function singleBucketId(bucketIds: readonly string[] | null | undefined): string | null {
   return bucketIds?.length === 1 ? (bucketIds[0] ?? null) : null
 }
@@ -2032,7 +2047,7 @@ export class B2Simulator {
             accountId: unknown
             capabilities: unknown
             keyName: unknown
-            validDurationInSeconds?: number
+            validDurationInSeconds?: unknown
             bucketIds?: unknown
             bucketId?: unknown
             namePrefix?: unknown
@@ -3567,7 +3582,7 @@ export class B2Simulator {
       accountId: unknown
       capabilities: unknown
       keyName: unknown
-      validDurationInSeconds?: number
+      validDurationInSeconds?: unknown
       bucketIds?: unknown
       bucketId?: unknown
       namePrefix?: unknown
@@ -3610,6 +3625,10 @@ export class B2Simulator {
     if (isValidationError(namePrefixResult)) {
       return this.error(400, namePrefixResult.code, namePrefixResult.message)
     }
+    const validDurationInSeconds = normalizeKeyValidDurationInSeconds(req.validDurationInSeconds)
+    if (isValidationError(validDurationInSeconds)) {
+      return this.error(400, validDurationInSeconds.code, validDurationInSeconds.message)
+    }
     const bucketIds = bucketIdsResult
     const namePrefix = namePrefixResult
     if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
@@ -3636,9 +3655,7 @@ export class B2Simulator {
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
-      req.validDurationInSeconds !== undefined
-        ? this.now() + req.validDurationInSeconds * 1000
-        : null
+      validDurationInSeconds === null ? null : this.now() + validDurationInSeconds * 1000
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName,
