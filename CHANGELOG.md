@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejects unknown or empty capability lists, key names outside B2's 1..100
   letters/digits/hyphen grammar, child keys that exceed the creator token's
   capabilities, bucket scope, or name prefix, and mismatched request `accountId`
-  values instead of storing over-broad simulator keys.
+  values instead of storing over-broad simulator keys. The implicit master
+  credential now advertises the full `Capability` enum so create-key grant
+  checks use the same ceiling clients see in `allowed.capabilities`.
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo
   integration workflow runs now fail when required B2 secrets are missing instead
   of silently accepting an all-skipped suite, integration setup logs per-step

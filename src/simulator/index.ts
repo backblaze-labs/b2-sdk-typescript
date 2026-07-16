@@ -2033,9 +2033,9 @@ export class B2Simulator {
             capabilities: unknown
             keyName: unknown
             validDurationInSeconds?: number
-            bucketIds?: readonly string[] | null
-            bucketId?: string
-            namePrefix?: string
+            bucketIds?: unknown
+            bucketId?: unknown
+            namePrefix?: unknown
           },
           apiVersion,
           headers['authorization'],
