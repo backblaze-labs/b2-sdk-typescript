@@ -24,6 +24,7 @@ import {
   hasValidB2BucketNameShape,
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
+import { Capability } from '../types/auth.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
@@ -31,6 +32,77 @@ import { utf8Encoder } from '../util/text-codec.ts'
 export interface ValidationError {
   readonly code: string
   readonly message: string
+}
+
+// ---------------------------------------------------------------------------
+// Application keys (`b2_create_key`)
+// ---------------------------------------------------------------------------
+
+/** Minimum `b2_create_key.keyName` length. */
+export const KEY_NAME_MIN = 1
+/** Maximum `b2_create_key.keyName` length. */
+export const KEY_NAME_MAX = 100
+const KEY_NAME_REGEX = /^[A-Za-z0-9-]+$/
+const KNOWN_CAPABILITY_SET: ReadonlySet<string> = new Set(Object.values(Capability))
+
+function isCapability(value: string): value is Capability {
+  return KNOWN_CAPABILITY_SET.has(value)
+}
+
+/**
+ * Validates an application key name against B2's documented rules.
+ *
+ * @param keyName - Caller-supplied key name.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function validateKeyName(keyName: unknown): ValidationError | null {
+  if (
+    typeof keyName !== 'string' ||
+    keyName.length < KEY_NAME_MIN ||
+    keyName.length > KEY_NAME_MAX
+  ) {
+    return {
+      code: 'bad_request',
+      message: `keyName must be ${KEY_NAME_MIN}..${KEY_NAME_MAX} characters`,
+    }
+  }
+  if (!KEY_NAME_REGEX.test(keyName)) {
+    return {
+      code: 'bad_request',
+      message: 'keyName must contain only letters, digits, and hyphens',
+    }
+  }
+  return null
+}
+
+/**
+ * Validates an application key capability list against the supported
+ * B2 capability enum.
+ *
+ * @param capabilities - Caller-supplied capability list.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function validateKeyCapabilities(capabilities: unknown): ValidationError | null {
+  if (!Array.isArray(capabilities)) {
+    return { code: 'bad_request', message: 'capabilities must be an array' }
+  }
+  if (capabilities.length === 0) {
+    return { code: 'bad_request', message: 'capabilities must be a non-empty array' }
+  }
+  for (const capability of capabilities) {
+    if (typeof capability === 'string' && isCapability(capability)) continue
+    return {
+      code: 'bad_request',
+      message: `unknown capability: ${String(capability)}`,
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------

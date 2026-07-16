@@ -36,10 +36,7 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
-const ALL_CAPABILITIES = Object.freeze(Object.values(Capability) as Capability[])
-const ALL_CAPABILITY_VALUES: ReadonlySet<string> = new Set(ALL_CAPABILITIES)
-const KEY_NAME_MIN_LENGTH = 1
-const KEY_NAME_MAX_LENGTH = 100
+const MASTER_CAPABILITY_GRANT = Object.freeze(Object.values(Capability) as Capability[])
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
@@ -189,6 +186,8 @@ import {
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
+  validateKeyCapabilities,
+  validateKeyName,
   validateMaxCount,
   validateNotificationRules,
 } from './validation.ts'
@@ -206,6 +205,8 @@ export {
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
+  KEY_NAME_MAX,
+  KEY_NAME_MIN,
   LIST_ENDPOINT_CAPS,
 } from './validation.ts'
 
@@ -431,38 +432,6 @@ function storedNotificationRulePrefixes(
   return (rules ?? []).map((rule) =>
     typeof rule.objectNamePrefix === 'string' ? rule.objectNamePrefix : '',
   )
-}
-
-function isCapability(value: string): value is Capability {
-  return ALL_CAPABILITY_VALUES.has(value)
-}
-
-function validateKeyName(keyName: unknown): ValidationError | null {
-  if (
-    typeof keyName !== 'string' ||
-    keyName.length < KEY_NAME_MIN_LENGTH ||
-    keyName.length > KEY_NAME_MAX_LENGTH
-  ) {
-    return {
-      code: 'bad_request',
-      message: `keyName must be ${KEY_NAME_MIN_LENGTH}..${KEY_NAME_MAX_LENGTH} characters`,
-    }
-  }
-  return null
-}
-
-function validateKeyCapabilities(capabilities: unknown): ValidationError | null {
-  if (!Array.isArray(capabilities)) {
-    return { code: 'bad_request', message: 'capabilities must be an array' }
-  }
-  for (const capability of capabilities) {
-    if (typeof capability === 'string' && isCapability(capability)) continue
-    return {
-      code: 'bad_request',
-      message: `unknown capability: ${String(capability)}`,
-    }
-  }
-  return null
 }
 
 function hasKeyManagementCapability(capabilities: readonly Capability[]): boolean {
@@ -3533,26 +3502,24 @@ export class B2Simulator {
   private validateCreateKeyCapabilityGrant(
     capabilities: readonly Capability[],
     authToken: string | undefined,
-  ): SimulatorJsonResponse | null {
-    if (!this.strictAuth) return null
-
+  ): ValidationError | null {
     const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
-    if (creator === undefined) {
-      return this.error(401, 'bad_auth_token', 'unknown auth token')
-    }
+    // In strictAuth mode, handleRequest already validates this token
+    // before dispatch. In default mode, a missing or unknown token stays
+    // permissive and cannot supply a narrower creator grant.
+    if (creator === undefined) return null
 
     // The implicit account credential is the simulator's root key; only
     // application keys minted via b2_create_key are constrained here.
-    const grant = creator.applicationKeyId === null ? ALL_CAPABILITIES : creator.capabilities
+    const grant = creator.applicationKeyId === null ? MASTER_CAPABILITY_GRANT : creator.capabilities
     const grantSet = new Set(grant)
     const missing = capabilities.filter((capability) => !grantSet.has(capability))
     if (missing.length === 0) return null
 
-    return this.error(
-      400,
-      'bad_request',
-      `requested capabilities exceed creator grant: ${missing.join(', ')}`,
-    )
+    return {
+      code: 'bad_request',
+      message: `requested capabilities exceed creator grant: ${missing.join(', ')}`,
+    }
   }
 
   private createKey(
@@ -3577,7 +3544,9 @@ export class B2Simulator {
     const keyName = req.keyName as string
     const capabilities = Object.freeze([...(req.capabilities as Capability[])])
     const capabilityGrantError = this.validateCreateKeyCapabilityGrant(capabilities, authToken)
-    if (capabilityGrantError !== null) return capabilityGrantError
+    if (capabilityGrantError !== null) {
+      return this.error(400, capabilityGrantError.code, capabilityGrantError.message)
+    }
     if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
         400,

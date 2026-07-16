@@ -15,6 +15,7 @@ import {
   type B2Simulator,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
   DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
+  KEY_NAME_MAX,
 } from './index.ts'
 
 /**
@@ -531,7 +532,7 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 // Strict-auth mode
 // ---------------------------------------------------------------------------
 
-describe('B2Simulator strictAuth: capability enforcement', () => {
+describe('B2Simulator capability enforcement', () => {
   async function authorizeWithKey(
     sim: B2Simulator,
     key: { applicationKeyId: string; applicationKey: string },
@@ -556,6 +557,22 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         readonly downloadAuthorizationTokens: Map<string, unknown>
       }
     ).downloadAuthorizationTokens.size
+  }
+
+  async function sendCreateKey(
+    sim: B2Simulator,
+    authToken: string,
+    body: Record<string, unknown>,
+  ): Promise<HttpResponse> {
+    return await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ accountId: 'sim_account_0001', ...body }),
+    })
   }
 
   it('grants the master credential the documented capability set by default', async () => {
@@ -613,67 +630,76 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredBody.code).toBe('expired_auth_token')
   })
 
-  it('rejects unknown create-key capabilities', async () => {
-    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+  it('rejects malformed create-key inputs in default mode', async () => {
+    const { client, sim } = makeClient()
     await client.authorize()
-    const resp = await sim.transport().send({
-      method: 'POST',
-      url: 'http://localhost:0/b2api/v4/b2_create_key',
-      headers: {
-        Authorization: client.accountInfo.getAuthToken(),
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        accountId: 'sim_account_0001',
-        capabilities: [Capability.ListBuckets, 'notARealCapability'],
-        keyName: 'unknown-capability-key',
-      }),
-    })
+    const authToken = client.accountInfo.getAuthToken()
+    const maxLengthName = 'a'.repeat(KEY_NAME_MAX)
 
-    expect(resp.status).toBe(400)
-    await expect(resp.json()).resolves.toMatchObject({
-      code: 'bad_request',
-      message: expect.stringContaining('unknown capability'),
-    })
+    for (const { body, message } of [
+      {
+        body: {
+          capabilities: [Capability.ListBuckets, 'notARealCapability'],
+          keyName: 'unknown-capability-key',
+        },
+        message: 'unknown capability',
+      },
+      {
+        body: { capabilities: [], keyName: 'empty-capability-key' },
+        message: 'non-empty array',
+      },
+      {
+        body: { capabilities: [Capability.ListBuckets], keyName: 'bad\nname' },
+        message: 'letters, digits, and hyphens',
+      },
+      {
+        body: { capabilities: [Capability.ListBuckets], keyName: '' },
+        message: 'keyName',
+      },
+      {
+        body: { capabilities: [Capability.ListBuckets], keyName: `${maxLengthName}a` },
+        message: 'keyName',
+      },
+    ]) {
+      const resp = await sendCreateKey(sim, authToken, body)
+      expect(resp.status).toBe(400)
+      await expect(resp.json()).resolves.toMatchObject({
+        code: 'bad_request',
+        message: expect.stringContaining(message),
+      })
+    }
+
+    await expect(
+      client.createKey({ capabilities: [Capability.ListBuckets], keyName: maxLengthName }),
+    ).resolves.toMatchObject({ keyName: maxLengthName })
   })
 
-  it('rejects create-key capabilities outside the creator grant', async () => {
-    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+  it.each([
+    false,
+    true,
+  ])('rejects create-key capabilities outside the creator grant (strictAuth=%s)', async (strictAuth) => {
+    const { client, sim } = strictAuth ? makeClient({ sim: { strictAuth: true } }) : makeClient()
     await client.authorize()
     const creatorKey = await client.createKey({
-      capabilities: [Capability.WriteKeys, Capability.ListBuckets],
-      keyName: 'limited-key-admin',
+      capabilities: [Capability.WriteKeys],
+      keyName: strictAuth ? 'limited-key-admin-strict' : 'limited-key-admin-default',
     })
     const creatorClient = await authorizeWithKey(sim, creatorKey)
 
     await expect(
       creatorClient.createKey({
-        capabilities: [Capability.ListBuckets, Capability.ReadFiles],
-        keyName: 'too-wide-child',
+        capabilities: [Capability.ReadFiles],
+        keyName: strictAuth ? 'too-wide-child-strict' : 'too-wide-child-default',
       }),
     ).rejects.toThrow(/exceed creator grant/)
     await expect(
       creatorClient.createKey({
-        capabilities: [Capability.ListBuckets],
-        keyName: 'allowed-child',
+        capabilities: [Capability.WriteKeys],
+        keyName: strictAuth ? 'allowed-child-strict' : 'allowed-child-default',
       }),
-    ).resolves.toMatchObject({ keyName: 'allowed-child' })
-  })
-
-  it('enforces create-key keyName length bounds', async () => {
-    const { client } = makeClient({ sim: { strictAuth: true } })
-    await client.authorize()
-    const maxLengthName = 'a'.repeat(100)
-
-    await expect(
-      client.createKey({ capabilities: [Capability.ListBuckets], keyName: '' }),
-    ).rejects.toThrow(/keyName/)
-    await expect(
-      client.createKey({ capabilities: [Capability.ListBuckets], keyName: `${maxLengthName}a` }),
-    ).rejects.toThrow(/keyName/)
-    await expect(
-      client.createKey({ capabilities: [Capability.ListBuckets], keyName: maxLengthName }),
-    ).resolves.toMatchObject({ keyName: maxLengthName })
+    ).resolves.toMatchObject({
+      keyName: strictAuth ? 'allowed-child-strict' : 'allowed-child-default',
+    })
   })
 
   it('enforces single-bucket application key scope from the bucketId alias', async () => {

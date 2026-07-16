@@ -10,6 +10,7 @@ import {
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
+  KEY_NAME_MAX,
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
@@ -17,6 +18,8 @@ import {
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
+  validateKeyCapabilities,
+  validateKeyName,
   validateMaxCount,
   validateNotificationRules,
 } from './validation.ts'
@@ -31,6 +34,37 @@ import {
  * human-readable `.message`, so wording changes don't ripple through
  * these tests.
  */
+
+describe('validateKeyName', () => {
+  it('returns null for a valid key name at the documented max length', () => {
+    expect(validateKeyName('valid-key-1')).toBeNull()
+    expect(validateKeyName('a'.repeat(KEY_NAME_MAX))).toBeNull()
+  })
+
+  it('rejects empty and oversized key names', () => {
+    expect(validateKeyName('')?.code).toBe('bad_request')
+    expect(validateKeyName('a'.repeat(KEY_NAME_MAX + 1))?.code).toBe('bad_request')
+  })
+
+  it('rejects key names outside the documented character set', () => {
+    expect(validateKeyName('bad_name')?.code).toBe('bad_request')
+    expect(validateKeyName('bad\nname')?.code).toBe('bad_request')
+  })
+})
+
+describe('validateKeyCapabilities', () => {
+  it('returns null for a non-empty list of known capabilities', () => {
+    expect(validateKeyCapabilities([Capability.ListBuckets])).toBeNull()
+  })
+
+  it('rejects an empty capability list', () => {
+    expect(validateKeyCapabilities([])?.code).toBe('bad_request')
+  })
+
+  it('rejects unknown capabilities', () => {
+    expect(validateKeyCapabilities(['notARealCapability'])?.code).toBe('bad_request')
+  })
+})
 
 describe('validateBucketName', () => {
   it('returns null for a valid name', () => {
