@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **B2Simulator create-key validation now matches more B2 constraints.** `b2_create_key`
+  rejects unknown capabilities, key names outside B2's 1..100
+  letters/digits/hyphen grammar, child keys that exceed the creator token's
+  capabilities, bucket scope, or name prefix, and mismatched request `accountId`
+  values instead of storing over-broad simulator keys.
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo
   integration workflow runs now fail when required B2 secrets are missing instead
   of silently accepting an all-skipped suite, integration setup logs per-step

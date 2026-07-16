@@ -559,6 +559,49 @@ describe('B2Simulator capability enforcement', () => {
     ).downloadAuthorizationTokens.size
   }
 
+  let seededKeyCounter = 0
+
+  function seedApplicationKey(
+    sim: B2Simulator,
+    options: {
+      capabilities: readonly Capability[]
+      bucketIds?: readonly string[] | null
+      namePrefix?: string | null
+    },
+  ): { applicationKeyId: string; applicationKey: string } {
+    seededKeyCounter += 1
+    const applicationKeyId = `seed-key-${seededKeyCounter}`
+    const applicationKey = `seed-secret-${seededKeyCounter}`
+    const keys = (
+      sim as unknown as {
+        readonly keys: Map<
+          string,
+          {
+            readonly applicationKeyId: string
+            readonly keyName: string
+            readonly capabilities: readonly Capability[]
+            readonly accountId: string
+            readonly applicationKey: string
+            readonly bucketIds: readonly string[] | null
+            readonly namePrefix: string | null
+            readonly expirationTimestamp: number | null
+          }
+        >
+      }
+    ).keys
+    keys.set(applicationKeyId, {
+      applicationKeyId,
+      keyName: `seed-key-${seededKeyCounter}`,
+      capabilities: options.capabilities,
+      accountId: 'sim_account_0001',
+      applicationKey,
+      bucketIds: options.bucketIds ?? null,
+      namePrefix: options.namePrefix ?? null,
+      expirationTimestamp: null,
+    })
+    return { applicationKeyId, applicationKey }
+  }
+
   async function sendCreateKey(
     sim: B2Simulator,
     authToken: string,
@@ -583,9 +626,8 @@ describe('B2Simulator capability enforcement', () => {
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
     expect(allowed?.buckets).toBeNull()
-    // Master does NOT have BypassGovernance — tests that need it must
-    // mint a key with that cap explicitly.
-    expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
+    expect(allowed?.capabilities).toContain(Capability.BypassGovernance)
+    expect(allowed?.capabilities).toContain(Capability.WriteFileRetentions)
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
@@ -645,10 +687,6 @@ describe('B2Simulator capability enforcement', () => {
         message: 'unknown capability',
       },
       {
-        body: { capabilities: [], keyName: 'empty-capability-key' },
-        message: 'non-empty array',
-      },
-      {
         body: { capabilities: [Capability.ListBuckets], keyName: 'bad\nname' },
         message: 'letters, digits, and hyphens',
       },
@@ -672,6 +710,42 @@ describe('B2Simulator capability enforcement', () => {
     await expect(
       client.createKey({ capabilities: [Capability.ListBuckets], keyName: maxLengthName }),
     ).resolves.toMatchObject({ keyName: maxLengthName })
+  })
+
+  it('uses the advertised master capabilities as the create-key grant ceiling', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities
+
+    expect(allowed).toContain(Capability.BypassGovernance)
+    expect(allowed).toContain(Capability.WriteFileRetentions)
+    await expect(
+      client.createKey({
+        capabilities: [Capability.BypassGovernance, Capability.WriteFileRetentions],
+        keyName: 'master-lock-grant',
+      }),
+    ).resolves.toMatchObject({
+      capabilities: expect.arrayContaining([
+        Capability.BypassGovernance,
+        Capability.WriteFileRetentions,
+      ]),
+    })
+  })
+
+  it('rejects create-key accountId values outside the authenticated account', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const resp = await sendCreateKey(sim, client.accountInfo.getAuthToken(), {
+      accountId: 'sim_account_9999',
+      capabilities: [Capability.ListBuckets],
+      keyName: 'wrong-account-key',
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('accountId'),
+    })
   })
 
   it.each([
@@ -699,6 +773,65 @@ describe('B2Simulator capability enforcement', () => {
       }),
     ).resolves.toMatchObject({
       keyName: strictAuth ? 'allowed-child-strict' : 'allowed-child-default',
+    })
+  })
+
+  it.each([
+    false,
+    true,
+  ])('rejects create-key scope outside the creator grant (strictAuth=%s)', async (strictAuth) => {
+    const { client, sim } = strictAuth ? makeClient({ sim: { strictAuth: true } }) : makeClient()
+    await client.authorize()
+    const allowedBucket = await client.createBucket({
+      bucketName: strictAuth ? 'scope-allowed-strict' : 'scope-allowed-default',
+      bucketType: BucketType.AllPrivate,
+    })
+    const blockedBucket = await client.createBucket({
+      bucketName: strictAuth ? 'scope-blocked-strict' : 'scope-blocked-default',
+      bucketType: BucketType.AllPrivate,
+    })
+    const creatorKey = seedApplicationKey(sim, {
+      capabilities: [Capability.WriteKeys, Capability.ReadFiles],
+      bucketIds: [allowedBucket.id],
+      namePrefix: 'tenant/',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+    const keyNamePrefix = strictAuth ? 'strict' : 'default'
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: `${keyNamePrefix}-all-buckets-child`,
+        bucketIds: null,
+        namePrefix: 'tenant/',
+      }),
+    ).rejects.toThrow(/bucket scope/)
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: `${keyNamePrefix}-blocked-bucket-child`,
+        bucketIds: [blockedBucket.id],
+        namePrefix: 'tenant/',
+      }),
+    ).rejects.toThrow(/bucket scope/)
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: `${keyNamePrefix}-wide-prefix-child`,
+        bucketIds: [allowedBucket.id],
+        namePrefix: 'other/',
+      }),
+    ).rejects.toThrow(/namePrefix/)
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ReadFiles],
+        keyName: `${keyNamePrefix}-narrow-prefix-child`,
+        bucketIds: [allowedBucket.id],
+        namePrefix: 'tenant/narrow/',
+      }),
+    ).resolves.toMatchObject({
+      bucketIds: [allowedBucket.id],
+      namePrefix: 'tenant/narrow/',
     })
   })
 

@@ -59,6 +59,21 @@ function isCapability(value: string): value is Capability {
  * @see https://www.backblaze.com/apidocs/b2-create-key
  */
 export function validateKeyName(keyName: unknown): ValidationError | null {
+  const parsed = parseKeyName(keyName)
+  return typeof parsed === 'string' ? null : parsed
+}
+
+/**
+ * Parses and validates an application key name against B2's documented
+ * `^[A-Za-z0-9-]+$` grammar.
+ *
+ * @param keyName - Caller-supplied key name.
+ *
+ * @returns The validated key name, or a `{ code, message }` pair on failure.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function parseKeyName(keyName: unknown): string | ValidationError {
   if (
     typeof keyName !== 'string' ||
     keyName.length < KEY_NAME_MIN ||
@@ -75,7 +90,7 @@ export function validateKeyName(keyName: unknown): ValidationError | null {
       message: 'keyName must contain only letters, digits, and hyphens',
     }
   }
-  return null
+  return keyName
 }
 
 /**
@@ -89,20 +104,38 @@ export function validateKeyName(keyName: unknown): ValidationError | null {
  * @see https://www.backblaze.com/apidocs/b2-create-key
  */
 export function validateKeyCapabilities(capabilities: unknown): ValidationError | null {
+  const parsed = parseKeyCapabilities(capabilities)
+  return 'code' in parsed ? parsed : null
+}
+
+/**
+ * Parses and validates an application key capability list against the
+ * supported B2 capability enum.
+ *
+ * @param capabilities - Caller-supplied capability list.
+ *
+ * @returns A frozen `Capability[]`, or a `{ code, message }` pair on failure.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function parseKeyCapabilities(
+  capabilities: unknown,
+): readonly Capability[] | ValidationError {
   if (!Array.isArray(capabilities)) {
     return { code: 'bad_request', message: 'capabilities must be an array' }
   }
-  if (capabilities.length === 0) {
-    return { code: 'bad_request', message: 'capabilities must be a non-empty array' }
-  }
+  const parsed: Capability[] = []
   for (const capability of capabilities) {
-    if (typeof capability === 'string' && isCapability(capability)) continue
+    if (typeof capability === 'string' && isCapability(capability)) {
+      parsed.push(capability)
+      continue
+    }
     return {
       code: 'bad_request',
       message: `unknown capability: ${String(capability)}`,
     }
   }
-  return null
+  return Object.freeze(parsed)
 }
 
 // ---------------------------------------------------------------------------

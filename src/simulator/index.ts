@@ -36,7 +36,7 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
-const MASTER_CAPABILITY_GRANT = Object.freeze(Object.values(Capability) as Capability[])
+const MASTER_CAPABILITIES = Object.freeze(Object.values(Capability) as Capability[])
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
@@ -179,6 +179,8 @@ function compareB2FileNames(a: string, b: string): number {
 
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
+  parseKeyCapabilities,
+  parseKeyName,
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
@@ -186,8 +188,6 @@ import {
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
-  validateKeyCapabilities,
-  validateKeyName,
   validateMaxCount,
   validateNotificationRules,
 } from './validation.ts'
@@ -320,6 +320,7 @@ interface StoredKey {
 
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
+  readonly accountId: string
   readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
   readonly expiresAt: number
@@ -1735,6 +1736,7 @@ export class B2Simulator {
    */
   private findKeyForAuthHeader(authzHeader: string | undefined): {
     capabilities: readonly Capability[]
+    accountId: string
     bucketIds: readonly string[] | null
     namePrefix: string | null
     applicationKeyId: string
@@ -1757,7 +1759,8 @@ export class B2Simulator {
     const stored = this.keys.get(applicationKeyId)
     if (!stored || stored.applicationKey !== applicationKey) return null
     return {
-      capabilities: stored.capabilities as readonly Capability[],
+      capabilities: stored.capabilities,
+      accountId: stored.accountId,
       bucketIds: stored.bucketIds,
       namePrefix: stored.namePrefix,
       applicationKeyId,
@@ -2005,7 +2008,7 @@ export class B2Simulator {
       case 'b2_create_key':
         return this.createKey(
           body as {
-            accountId: string
+            accountId: unknown
             capabilities: unknown
             keyName: unknown
             validDurationInSeconds?: number
@@ -2561,49 +2564,22 @@ export class B2Simulator {
     authzHeader?: string,
     origin = 'http://localhost:0',
   ): { status: number; body: AuthorizeAccountResponse } {
-    // Master capabilities granted to the implicit "test" credential.
-    // Real B2 derives the capability list from the application key the
-    // caller authorized with; in permissive mode every auth call gets
-    // the full set so existing tests don't have to construct keys
-    // first. Strict-mode tests that need a restricted scope authorize
-    // with a specific app-key first via b2_create_key, then call
-    // authorize-with-that-key (today's simulator returns this full
-    // set regardless — strict-mode test seam is in `authorizeRequest`
-    // which consults the issued-token map, not the response body).
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
-    const capabilities: readonly Capability[] = [
-      Capability.ListBuckets,
-      Capability.ReadBuckets,
-      Capability.WriteBuckets,
-      Capability.DeleteBuckets,
-      Capability.ListFiles,
-      Capability.ReadFiles,
-      Capability.WriteFiles,
-      Capability.DeleteFiles,
-      Capability.ListKeys,
-      Capability.WriteKeys,
-      Capability.DeleteKeys,
-      Capability.ShareFiles,
-      Capability.ReadBucketNotifications,
-      Capability.WriteBucketNotifications,
-    ]
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-    // If a key was previously authorized via `authorizeAsKey` (test
-    // seam, see `authorizeAsKey` below), the auth header identifies
-    // it and the issued token inherits that key's scope.
+    // If the auth header identifies a key minted via b2_create_key, the
+    // issued token inherits that key's capability and scope grant.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    // Master capabilities granted to the implicit "test" credential.
+    // Keep this shared with create-key grant enforcement so the token's
+    // advertised capabilities are the only ceiling for child keys.
+    const capabilities: readonly Capability[] = keyForAuth?.capabilities ?? MASTER_CAPABILITIES
     const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
     const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
-      capabilities: keyForAuth?.capabilities ?? capabilities,
+      capabilities,
+      accountId: keyForAuth?.accountId ?? this.accountId,
       bucketIds: keyForAuth?.bucketIds ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
@@ -3500,19 +3476,12 @@ export class B2Simulator {
   // --- Keys ---
 
   private validateCreateKeyCapabilityGrant(
+    creator: IssuedToken | undefined,
     capabilities: readonly Capability[],
-    authToken: string | undefined,
   ): ValidationError | null {
-    const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
-    // In strictAuth mode, handleRequest already validates this token
-    // before dispatch. In default mode, a missing or unknown token stays
-    // permissive and cannot supply a narrower creator grant.
     if (creator === undefined) return null
 
-    // The implicit account credential is the simulator's root key; only
-    // application keys minted via b2_create_key are constrained here.
-    const grant = creator.applicationKeyId === null ? MASTER_CAPABILITY_GRANT : creator.capabilities
-    const grantSet = new Set(grant)
+    const grantSet = new Set(creator.capabilities)
     const missing = capabilities.filter((capability) => !grantSet.has(capability))
     if (missing.length === 0) return null
 
@@ -3522,9 +3491,59 @@ export class B2Simulator {
     }
   }
 
+  private validateCreateKeyScopeGrant(
+    creator: IssuedToken | undefined,
+    bucketIds: readonly string[] | null,
+    namePrefix: string | null,
+  ): ValidationError | null {
+    if (creator === undefined) return null
+
+    if (creator.bucketIds !== null) {
+      if (bucketIds === null) {
+        return {
+          code: 'bad_request',
+          message: 'requested bucketIds exceed creator bucket scope',
+        }
+      }
+      const creatorBucketIds = new Set(creator.bucketIds)
+      const outOfScopeBucketIds = bucketIds.filter((bucketId) => !creatorBucketIds.has(bucketId))
+      if (outOfScopeBucketIds.length > 0) {
+        return {
+          code: 'bad_request',
+          message: `requested bucketIds exceed creator bucket scope: ${outOfScopeBucketIds.join(', ')}`,
+        }
+      }
+    }
+
+    if (creator.namePrefix !== null) {
+      if (namePrefix === null || !namePrefix.startsWith(creator.namePrefix)) {
+        return {
+          code: 'bad_request',
+          message: `requested namePrefix must start with creator prefix "${creator.namePrefix}"`,
+        }
+      }
+    }
+
+    return null
+  }
+
+  private createKeyAccountId(
+    requestedAccountId: unknown,
+    creator: IssuedToken | undefined,
+  ): string | ValidationError {
+    const accountId = creator?.accountId ?? this.accountId
+    if (requestedAccountId !== accountId) {
+      return {
+        code: 'bad_request',
+        message: 'accountId must match the authenticated account',
+      }
+    }
+    return accountId
+  }
+
   private createKey(
     req: {
-      accountId: string
+      accountId: unknown
       capabilities: unknown
       keyName: unknown
       validDurationInSeconds?: number
@@ -3535,17 +3554,13 @@ export class B2Simulator {
     apiVersion: string,
     authToken?: string,
   ): SimulatorJsonResponse {
-    const keyNameError = validateKeyName(req.keyName)
-    if (keyNameError) return this.error(400, keyNameError.code, keyNameError.message)
-    const capabilitiesError = validateKeyCapabilities(req.capabilities)
-    if (capabilitiesError) {
-      return this.error(400, capabilitiesError.code, capabilitiesError.message)
+    const keyName = parseKeyName(req.keyName)
+    if (typeof keyName !== 'string') {
+      return this.error(400, keyName.code, keyName.message)
     }
-    const keyName = req.keyName as string
-    const capabilities = Object.freeze([...(req.capabilities as Capability[])])
-    const capabilityGrantError = this.validateCreateKeyCapabilityGrant(capabilities, authToken)
-    if (capabilityGrantError !== null) {
-      return this.error(400, capabilityGrantError.code, capabilityGrantError.message)
+    const capabilities = parseKeyCapabilities(req.capabilities)
+    if ('code' in capabilities) {
+      return this.error(400, capabilities.code, capabilities.message)
     }
     if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
@@ -3569,6 +3584,20 @@ export class B2Simulator {
         'key-management capabilities are account-level and cannot be bucket or name-prefix scoped',
       )
     }
+    // In strictAuth mode, handleRequest already validates this token
+    // before dispatch. In default mode, a missing or unknown token stays
+    // permissive and cannot supply a narrower creator grant.
+    const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
+    const accountId = this.createKeyAccountId(req.accountId, creator)
+    if (typeof accountId !== 'string') {
+      return this.error(400, accountId.code, accountId.message)
+    }
+    for (const grantError of [
+      this.validateCreateKeyCapabilityGrant(creator, capabilities),
+      this.validateCreateKeyScopeGrant(creator, bucketIds, namePrefix),
+    ]) {
+      if (grantError) return this.error(400, grantError.code, grantError.message)
+    }
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -3579,7 +3608,7 @@ export class B2Simulator {
       applicationKeyId: kid,
       keyName,
       capabilities,
-      accountId: req.accountId,
+      accountId,
       applicationKey: appKey,
       bucketIds,
       namePrefix,

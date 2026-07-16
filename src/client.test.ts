@@ -1493,6 +1493,12 @@ describe('B2Client.hasCapabilities', () => {
   })
 
   it('returns ok: false with the missing list when capabilities are absent', () => {
+    const auth = client.accountInfo.getAuth()
+    if (auth === null) throw new Error('expected authorized client')
+    ;(auth.apiInfo.storageApi.allowed as { capabilities: readonly Capability[] }).capabilities = [
+      Capability.ListBuckets,
+    ]
+
     const result = client.hasCapabilities([Capability.ListBuckets, Capability.BypassGovernance])
     expect(result.ok).toBe(false)
     expect(result.missing).toEqual([Capability.BypassGovernance])
