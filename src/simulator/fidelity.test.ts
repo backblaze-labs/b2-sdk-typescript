@@ -613,6 +613,69 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredBody.code).toBe('expired_auth_token')
   })
 
+  it('rejects unknown create-key capabilities', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets, 'notARealCapability'],
+        keyName: 'unknown-capability-key',
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('unknown capability'),
+    })
+  })
+
+  it('rejects create-key capabilities outside the creator grant', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+      keyName: 'limited-key-admin',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ListBuckets, Capability.ReadFiles],
+        keyName: 'too-wide-child',
+      }),
+    ).rejects.toThrow(/exceed creator grant/)
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.ListBuckets],
+        keyName: 'allowed-child',
+      }),
+    ).resolves.toMatchObject({ keyName: 'allowed-child' })
+  })
+
+  it('enforces create-key keyName length bounds', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const maxLengthName = 'a'.repeat(100)
+
+    await expect(
+      client.createKey({ capabilities: [Capability.ListBuckets], keyName: '' }),
+    ).rejects.toThrow(/keyName/)
+    await expect(
+      client.createKey({ capabilities: [Capability.ListBuckets], keyName: `${maxLengthName}a` }),
+    ).rejects.toThrow(/keyName/)
+    await expect(
+      client.createKey({ capabilities: [Capability.ListBuckets], keyName: maxLengthName }),
+    ).resolves.toMatchObject({ keyName: maxLengthName })
+  })
+
   it('enforces single-bucket application key scope from the bucketId alias', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

@@ -36,6 +36,10 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+const ALL_CAPABILITIES = Object.freeze(Object.values(Capability) as Capability[])
+const ALL_CAPABILITY_VALUES: ReadonlySet<string> = new Set(ALL_CAPABILITIES)
+const KEY_NAME_MIN_LENGTH = 1
+const KEY_NAME_MAX_LENGTH = 100
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
@@ -305,7 +309,7 @@ interface LargeFileInProgress {
 interface StoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
-  readonly capabilities: readonly string[]
+  readonly capabilities: readonly Capability[]
   readonly accountId: string
   readonly applicationKey: string
   readonly bucketIds: readonly string[] | null
@@ -429,7 +433,39 @@ function storedNotificationRulePrefixes(
   )
 }
 
-function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
+function isCapability(value: string): value is Capability {
+  return ALL_CAPABILITY_VALUES.has(value)
+}
+
+function validateKeyName(keyName: unknown): ValidationError | null {
+  if (
+    typeof keyName !== 'string' ||
+    keyName.length < KEY_NAME_MIN_LENGTH ||
+    keyName.length > KEY_NAME_MAX_LENGTH
+  ) {
+    return {
+      code: 'bad_request',
+      message: `keyName must be ${KEY_NAME_MIN_LENGTH}..${KEY_NAME_MAX_LENGTH} characters`,
+    }
+  }
+  return null
+}
+
+function validateKeyCapabilities(capabilities: unknown): ValidationError | null {
+  if (!Array.isArray(capabilities)) {
+    return { code: 'bad_request', message: 'capabilities must be an array' }
+  }
+  for (const capability of capabilities) {
+    if (typeof capability === 'string' && isCapability(capability)) continue
+    return {
+      code: 'bad_request',
+      message: `unknown capability: ${String(capability)}`,
+    }
+  }
+  return null
+}
+
+function hasKeyManagementCapability(capabilities: readonly Capability[]): boolean {
   return capabilities.some(
     (capability) =>
       capability === Capability.ListKeys ||
@@ -2001,14 +2037,15 @@ export class B2Simulator {
         return this.createKey(
           body as {
             accountId: string
-            capabilities: string[]
-            keyName: string
+            capabilities: unknown
+            keyName: unknown
             validDurationInSeconds?: number
             bucketIds?: readonly string[] | null
             bucketId?: string
             namePrefix?: string
           },
           apiVersion,
+          headers['authorization'],
         )
       case 'b2_list_keys':
         return this.listKeys(
@@ -3493,18 +3530,54 @@ export class B2Simulator {
 
   // --- Keys ---
 
+  private validateCreateKeyCapabilityGrant(
+    capabilities: readonly Capability[],
+    authToken: string | undefined,
+  ): SimulatorJsonResponse | null {
+    if (!this.strictAuth) return null
+
+    const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
+    if (creator === undefined) {
+      return this.error(401, 'bad_auth_token', 'unknown auth token')
+    }
+
+    // The implicit account credential is the simulator's root key; only
+    // application keys minted via b2_create_key are constrained here.
+    const grant = creator.applicationKeyId === null ? ALL_CAPABILITIES : creator.capabilities
+    const grantSet = new Set(grant)
+    const missing = capabilities.filter((capability) => !grantSet.has(capability))
+    if (missing.length === 0) return null
+
+    return this.error(
+      400,
+      'bad_request',
+      `requested capabilities exceed creator grant: ${missing.join(', ')}`,
+    )
+  }
+
   private createKey(
     req: {
       accountId: string
-      capabilities: string[]
-      keyName: string
+      capabilities: unknown
+      keyName: unknown
       validDurationInSeconds?: number
       bucketIds?: readonly string[] | null
       bucketId?: string
       namePrefix?: string
     },
     apiVersion: string,
+    authToken?: string,
   ): SimulatorJsonResponse {
+    const keyNameError = validateKeyName(req.keyName)
+    if (keyNameError) return this.error(400, keyNameError.code, keyNameError.message)
+    const capabilitiesError = validateKeyCapabilities(req.capabilities)
+    if (capabilitiesError) {
+      return this.error(400, capabilitiesError.code, capabilitiesError.message)
+    }
+    const keyName = req.keyName as string
+    const capabilities = Object.freeze([...(req.capabilities as Capability[])])
+    const capabilityGrantError = this.validateCreateKeyCapabilityGrant(capabilities, authToken)
+    if (capabilityGrantError !== null) return capabilityGrantError
     if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
         400,
@@ -3520,10 +3593,7 @@ export class B2Simulator {
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
-    if (
-      hasKeyManagementCapability(req.capabilities) &&
-      (bucketIds !== null || namePrefix !== null)
-    ) {
+    if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
       return this.error(
         400,
         'bad_request',
@@ -3538,8 +3608,8 @@ export class B2Simulator {
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
-      keyName: req.keyName,
-      capabilities: req.capabilities,
+      keyName,
+      capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,
