@@ -764,6 +764,24 @@ describe('B2Simulator capability enforcement', () => {
     })
   })
 
+  it('uses the simulator clock for create-key expiration timestamps', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const beforeAdvance = Date.now()
+    sim.advanceTime(60_000)
+
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'clock-expiring-key',
+      validDurationInSeconds: 60,
+    })
+
+    if (key.expirationTimestamp === null) {
+      throw new Error('expected an expiring application key')
+    }
+    expect(key.expirationTimestamp).toBeGreaterThanOrEqual(beforeAdvance + 120_000)
+  })
+
   it.each([
     false,
     true,
