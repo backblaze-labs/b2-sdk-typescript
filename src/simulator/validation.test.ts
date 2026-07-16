@@ -57,8 +57,8 @@ describe('validateKeyCapabilities', () => {
     expect(validateKeyCapabilities([Capability.ListBuckets])).toBeNull()
   })
 
-  it('accepts an empty capability list', () => {
-    expect(validateKeyCapabilities([])).toBeNull()
+  it('rejects an empty capability list', () => {
+    expect(validateKeyCapabilities([])?.code).toBe('bad_request')
   })
 
   it('rejects unknown capabilities', () => {

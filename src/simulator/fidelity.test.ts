@@ -691,6 +691,10 @@ describe('B2Simulator capability enforcement', () => {
         message: 'letters, digits, and hyphens',
       },
       {
+        body: { capabilities: [], keyName: 'empty-capability-key' },
+        message: 'non-empty array',
+      },
+      {
         body: { capabilities: [Capability.ListBuckets], keyName: '' },
         message: 'keyName',
       },

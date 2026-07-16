@@ -124,6 +124,9 @@ export function parseKeyCapabilities(
   if (!Array.isArray(capabilities)) {
     return { code: 'bad_request', message: 'capabilities must be an array' }
   }
+  if (capabilities.length === 0) {
+    return { code: 'bad_request', message: 'capabilities must be a non-empty array' }
+  }
   const parsed: Capability[] = []
   for (const capability of capabilities) {
     if (typeof capability === 'string' && isCapability(capability)) {
