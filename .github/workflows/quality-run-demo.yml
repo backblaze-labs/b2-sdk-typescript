@@ -1,9 +1,12 @@
-# Quality Keeper — Monday demo: run safe existing checks, then one PR comment.
+# Quality Keeper — advisory PR runs: run safe existing checks, then one comment.
 #
-# TEMPLATE. Copy this into a TARGET repository's .github/workflows/ (e.g.
-# backblaze-labs/b2-sdk-typescript). It runs in the target repo's own CI, so it
-# has the target's toolchain (Node/pnpm) and posts on the target's own PR. When
-# the QK App secrets (QK_APP_ID + QK_APP_PRIVATE_KEY) are present, the comment is
+# SDK pilot (#146): runs automatically on same-repo pull requests, ADVISORY and
+# NON-BLOCKING. It is not a required check, creates no blocking status, and never
+# prevents merge — it posts one informational comment and uploads artifacts.
+#
+# Runs in the target repo's own CI, so it has the target's toolchain (Node/pnpm)
+# and posts on the target's own PR. When
+# the QK App identity (public client id + QK_APP_PRIVATE_KEY) is present, the comment is
 # authored by the dedicated Quality Keeper App identity (`quality-keeper[bot]`)
 # via a short-lived installation token minted at run time; otherwise it falls
 # back to github-actions[bot] (the fallback #135 permits).
@@ -26,23 +29,27 @@
 # PREREQUISITE (tracked in #134): quality-keeper is a PRIVATE repo, so installing
 # it needs a credential (a fine-grained PAT / deploy key as the QK_INSTALL_TOKEN
 # secret). That INSTALL credential is SEPARATE from the App COMMENT identity:
-# QK_INSTALL_TOKEN only pip-installs quality-keeper; QK_APP_ID + QK_APP_PRIVATE_KEY
+# QK_INSTALL_TOKEN only pip-installs quality-keeper; QK_APP_CLIENT_ID + QK_APP_PRIVATE_KEY
 # only mint the short-lived token that authors the one PR comment as
 # quality-keeper[bot] (#134/#140). Do NOT weaken either to a broad token. This is
 # the minimal app-authored-comment path — no webhooks, no /qk commands, no issue
 # creation, no contents:write / actions:write / checks:write.
 
-name: Quality Keeper — Quality Run (demo)
+name: Quality Keeper — Quality Run (advisory)
 
 on:
-  # Demo/pilot: manual so it never comments before the wording is trusted, and
-  # so `issue_url` is REQUIRED — a dispatch run has no PR context to fall back on.
-  #
-  # Adding a `pull_request:` trigger later is NOT a drop-in change. A PR event can
-  # carry untrusted code from a fork; automating on it safely requires a
-  # security-reviewed design so untrusted code never runs in a job that holds
-  # PR-write authority (see the two-job split below and the pull_request_target /
-  # workflow_run risks in context-layer/concepts/github-app-identity.md, #134).
+  # Automatic on same-repo pull requests. This uses `pull_request` (NOT the
+  # secret-exposing `pull_request_target`). Fork PRs are handled safely by the
+  # per-job `if:` guard below (same-repo only), so untrusted fork code never runs
+  # in a job that can reach secrets or PR-write authority. See the two-job split
+  # and the pull_request_target / workflow_run risks in
+  # context-layer/concepts/github-app-identity.md (#134).
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  # Manual demo/debug is retained; `issue_url` is REQUIRED for dispatch because a
+  # manual run has no PR context to fall back on. On pull_request runs the target
+  # comes from the event payload instead.
   workflow_dispatch:
     inputs:
       issue_url:
@@ -53,39 +60,54 @@ on:
 # needs (see the two-job security split in the header).
 permissions: {}
 
-# Surface the App id so a step `if:` can branch on its presence without embedding
-# a secret in the expression.
+# Surface the public App client id and whether the private key secret exists so a
+# step `if:` can branch without embedding secret values in the expression.
 env:
-  QK_APP_ID: ${{ secrets.QK_APP_ID }}
+  QK_APP_CLIENT_ID: Iv23li5rGH3xKaNknGmc
+  QK_APP_PRIVATE_KEY_SET: ${{ secrets.QK_APP_PRIVATE_KEY != '' }}
 
+# One advisory run per PR (or per manual ref); supersede stale in-progress runs so
+# rapid pushes never stack or double-comment. Trade-off: an intermediate commit
+# whose run is superseded may not get its own comment — the latest SHA's run wins,
+# which is the right behavior for an advisory signal.
 concurrency:
-  group: quality-keeper-demo-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: quality-keeper-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality-run:
     name: Run safe existing checks
     runs-on: ubuntu-latest
+    # SAME-REPO, NON-DRAFT ONLY. Skip fork PRs entirely: their untrusted code
+    # must never run in a job that can reach secrets (QK_INSTALL_TOKEN). Skip
+    # drafts too, so the advisory comment appears only once the author marks the
+    # PR ready (the `ready_for_review` event re-triggers with draft == false).
+    # Manual dispatch always runs. Because `comment` needs this job, skipping here
+    # also skips the comment.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || (github.event.pull_request.head.repo.full_name == github.repository
+              && github.event.pull_request.draft == false) }}
     # READ ONLY. This job installs dependencies and runs the target repository's
     # own checks, so it must never hold PR-write (or any outward) authority.
     permissions:
       contents: read
     steps:
       - name: Checkout target
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
       # The target's own toolchain, so the safe checks (build/test/lint/typecheck)
       # actually run and pass here rather than erroring for environment reasons.
       - name: Set up Node + pnpm
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
       - run: corepack enable && pnpm install --frozen-lockfile
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
@@ -100,14 +122,26 @@ jobs:
       - name: Assess and run SAFE existing checks
         run: |
           mkdir -p artifacts
-          # 1) Assess the source.
+          # 1) Assess the source. A genuine QK error here fails the job (red).
           quality-keeper assess --repo . --run-inventory --json artifacts/assessment.json
           # 2) Run the SAFE existing checks automatically — NO --include-expensive,
           #    so integration/live-B2/system checks are gated (reported, not run).
+          #    ADVISORY: `run-found-checks` exits non-zero when a safe check FAILS.
+          #    A failing SDK check is advisory evidence, NOT a workflow failure, so
+          #    this pilot must not turn it into a red/blocking check. Capture the
+          #    exit code and continue: check FINDINGS do not fail the job, but a
+          #    genuine QK error still does — if the run wrote no execution.json
+          #    (e.g. it errored during planning, or crashed), step 3 below fails on
+          #    the missing file and the job goes red, as it should for a real error.
+          set +e
           quality-keeper act run-found-checks \
             --assessment artifacts/assessment.json --repo . \
             --execute --all --execution-dir artifacts/exec --timeout-seconds 900
-          # 3) Reconcile pre-Execute assessment with what actually ran.
+          rc=$?
+          set -e
+          echo "run-found-checks exit=${rc} (non-zero = some safe checks failed; advisory only)"
+          # 3) Reconcile pre-Execute assessment with what actually ran. A genuine
+          #    QK error here (e.g. missing execution.json) fails the job.
           quality-keeper post-execute-report \
             --assessment artifacts/assessment.json \
             --execution artifacts/exec/execution.json \
@@ -116,7 +150,7 @@ jobs:
 
       - name: Upload proof artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: quality-run
           if-no-files-found: warn
@@ -130,6 +164,14 @@ jobs:
     name: Post Quality Keeper comment
     needs: quality-run
     runs-on: ubuntu-latest
+    # Same-repo/non-draft guard mirrored here (defense in depth). It is redundant
+    # today because `needs: quality-run` already skips this job when quality-run
+    # is skipped — but it is kept deliberately: this is the ONLY write-capable job,
+    # so a future refactor that drops `needs` must not silently expose it.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || (github.event.pull_request.head.repo.full_name == github.repository
+              && github.event.pull_request.draft == false) }}
     # The ONLY job with PR-write authority. It runs NO target code — it renders
     # the proof artifacts produced by `quality-run` and posts one comment.
     permissions:
@@ -137,7 +179,7 @@ jobs:
       actions: read          # download-artifact reads this run's artifacts
     steps:
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
@@ -149,17 +191,17 @@ jobs:
           pip install "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
 
       - name: Download proof artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: quality-run
           path: artifacts
 
       - name: Mint short-lived Quality Keeper App installation token
         id: app-token
-        if: ${{ env.QK_APP_ID != '' }}
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        if: ${{ env.QK_APP_CLIENT_ID != '' && env.QK_APP_PRIVATE_KEY_SET == 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.QK_APP_ID }}
+          client-id: ${{ env.QK_APP_CLIENT_ID }}
           private-key: ${{ secrets.QK_APP_PRIVATE_KEY }}
           # Downscope the minted token to the ONLY permission the comment needs:
           # post a PR comment. No contents:write, issues:write, actions, or
@@ -186,7 +228,11 @@ jobs:
           # Prefer the App installation token; fall back to the workflow
           # GITHUB_TOKEN. This is the ONLY step that receives the App token.
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
-          ISSUE_URL: ${{ inputs.issue_url }}
+          # Manual runs supply issue_url; automatic pull_request runs take the PR
+          # URL from the event payload. Both are GitHub-generated / operator-typed
+          # values, passed through env and quoted below — never expanded inline —
+          # so PR-controlled text cannot inject into the shell.
+          ISSUE_URL: ${{ inputs.issue_url || github.event.pull_request.html_url }}
           EXPECTED_REPO: ${{ github.repository }}
           EXPECTED_AUTHOR: ${{ steps.identity.outputs.author }}
         run: |
