@@ -26,24 +26,41 @@
 #     App installation token (when present) lives only here.
 # This keeps write authority isolated from untrusted code execution.
 #
-# PREREQUISITE (tracked in #134): quality-keeper is a PRIVATE repo, so installing
-# it needs a credential (a fine-grained PAT / deploy key as the QK_INSTALL_TOKEN
+# INSTALL CREDENTIAL (#134): quality-keeper is a PRIVATE repo, so installing it
+# needs a credential (a fine-grained PAT / deploy key as the QK_INSTALL_TOKEN
 # secret). That INSTALL credential is SEPARATE from the App COMMENT identity:
 # QK_INSTALL_TOKEN only pip-installs quality-keeper; QK_APP_CLIENT_ID + QK_APP_PRIVATE_KEY
 # only mint the short-lived token that authors the one PR comment as
 # quality-keeper[bot] (#134/#140). Do NOT weaken either to a broad token. This is
 # the minimal app-authored-comment path — no webhooks, no /qk commands, no issue
 # creation, no contents:write / actions:write / checks:write.
+#
+# FAIL-CLOSED + TRUST BOUNDARY (#250): the `preflight` step runs BEFORE any
+# checkout/pip/git and decides two INDEPENDENT things:
+#   * TRUST — may the target's own code run here? A fork PR, an unknown/empty PR
+#     head repo, or a Dependabot PR is NEVER trusted (fork/head detected from the
+#     PR head repo vs. this repo, not the event name); a same-repo PR or a manual
+#     dispatch is. Checkout and `pnpm install` (target code) are gated on trust,
+#     so untrusted code is never checked out or executed — independent of the
+#     token, so a future token-free install cannot open that door. (The job-level
+#     `if:` below is an additional outer guard that skips fork/draft entirely.)
+#   * TOKEN — can QK be installed (QK_INSTALL_TOKEN present)? GitHub withholds
+#     secrets from Dependabot and fork PRs. When the token is missing, QK reports
+#     a clear SETUP-BLOCKED state (annotation + step summary + uploaded artifact)
+#     instead of dying on an opaque git auth error, and never reports the SDK's
+#     quality as failing because QK could not install. A same-repo run with no
+#     token is classified as a config mistake (missing_token), distinct from a
+#     fork (expected).
 
 name: Quality Keeper — Quality Run (advisory)
 
 on:
   # Automatic on same-repo pull requests. This uses `pull_request` (NOT the
   # secret-exposing `pull_request_target`). Fork PRs are handled safely by the
-  # per-job `if:` guard below (same-repo only), so untrusted fork code never runs
-  # in a job that can reach secrets or PR-write authority. See the two-job split
-  # and the pull_request_target / workflow_run risks in
-  # context-layer/concepts/github-app-identity.md (#134).
+  # per-job `if:` guard below (same-repo only) AND the preflight trust gate, so
+  # untrusted fork code never runs in a job that can reach secrets or PR-write
+  # authority. See the two-job split and the pull_request_target / workflow_run
+  # risks in context-layer/concepts/github-app-identity.md (#134).
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -78,12 +95,13 @@ jobs:
   quality-run:
     name: Run safe existing checks
     runs-on: ubuntu-latest
-    # SAME-REPO, NON-DRAFT ONLY. Skip fork PRs entirely: their untrusted code
-    # must never run in a job that can reach secrets (QK_INSTALL_TOKEN). Skip
-    # drafts too, so the advisory comment appears only once the author marks the
-    # PR ready (the `ready_for_review` event re-triggers with draft == false).
-    # Manual dispatch always runs. Because `comment` needs this job, skipping here
-    # also skips the comment.
+    # SAME-REPO, NON-DRAFT ONLY (outer guard). Skip fork PRs entirely: their
+    # untrusted code must never run in a job that can reach secrets
+    # (QK_INSTALL_TOKEN). Skip drafts too, so the advisory comment appears only
+    # once the author marks the PR ready (the `ready_for_review` event re-triggers
+    # with draft == false). Manual dispatch always runs. Because `comment` needs
+    # this job, skipping here also skips the comment. The preflight step below is
+    # the inner fail-closed trust+token gate (also excludes Dependabot).
     if: >-
       ${{ github.event_name == 'workflow_dispatch'
           || (github.event.pull_request.head.repo.full_name == github.repository
@@ -92,8 +110,138 @@ jobs:
     # own checks, so it must never hold PR-write (or any outward) authority.
     permissions:
       contents: read
+    outputs:
+      # Consumed by the `comment` job and the step-level `if:` gates below.
+      #   trusted       — may we run the target's OWN code here? (same-repo /
+      #                   non-fork, non-Dependabot PR, or a manual dispatch).
+      #   install_ready — is the QK install token present? (token dimension).
+      #   run_quality   — trusted AND install_ready: the full quality path ran.
+      trusted: ${{ steps.preflight.outputs.trusted }}
+      install_ready: ${{ steps.preflight.outputs.install_ready }}
+      run_quality: ${{ steps.preflight.outputs.run_quality }}
+      blocked_reason: ${{ steps.preflight.outputs.blocked_reason }}
     steps:
+      - name: Preflight — classify trust + install readiness (fail-closed, #250)
+        id: preflight
+        # Runs FIRST, before any checkout/toolchain/pip. It decides TWO independent
+        # things and never conflates them:
+        #   * TRUST (may target code run here) — a fork PR, an unknown/empty head
+        #     repo, or a Dependabot PR is never trusted; a same-repo PR or a manual
+        #     dispatch is. Fork/head detected from the PR head repo vs. this repo,
+        #     NOT from the event name alone.
+        #   * TOKEN (can QK be installed) — is QK_INSTALL_TOKEN present.
+        # Target-code steps require `trusted` so untrusted code can never be checked
+        # out or executed even if a future token-free install makes the token
+        # dimension irrelevant; install/assess additionally require the token. A
+        # missing token therefore never reaches pip/git as an opaque auth error.
+        env:
+          QK_INSTALL_TOKEN: ${{ secrets.QK_INSTALL_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # --- Head-repo classification for a pull_request (NOT event_name). ----
+          # Three mutually exclusive outcomes; an empty/null head repo (deleted
+          # fork, missing PR head, malformed payload) is its OWN case and is never
+          # treated as same-repo.
+          is_fork=false
+          is_same_repo=false
+          is_unknown_head=false
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if [ -z "${HEAD_REPO:-}" ]; then
+              is_unknown_head=true                 # cannot confirm the head repo
+            elif [ "$HEAD_REPO" = "$BASE_REPO" ]; then
+              is_same_repo=true                    # affirmatively this repo
+            else
+              is_fork=true                         # a real fork
+            fi
+          fi
+
+          # --- Dependabot detection: multiple signals, not just github.actor. ----
+          # The actor is not dependabot[bot] on every dependabot-related event
+          # (e.g. a human pushing to a Dependabot branch triggers synchronize), so
+          # also check the PR author and the head branch shape. The head-ref match
+          # is anchored to Dependabot's real convention — `dependabot/<ecosystem>/…`
+          # (at least two segments) — so a human-named branch like
+          # `dependabot/manual-audit` is NOT misclassified; the actor/author signals
+          # still catch a real Dependabot PR regardless of branch name.
+          is_dependabot=false
+          if [ "$ACTOR" = "dependabot[bot]" ] || [ "${PR_USER:-}" = "dependabot[bot]" ]; then
+            is_dependabot=true
+          fi
+          case "${HEAD_REF:-}" in
+            dependabot/*/*) is_dependabot=true ;;
+          esac
+
+          # --- Trust: may target code run here? AFFIRMATIVE, fail-closed. --------
+          # Trust is granted ONLY to a manual dispatch (maintainer-initiated) or a
+          # pull_request whose head repo is AFFIRMATIVELY this repo AND is not a
+          # Dependabot PR. A fork, an unknown/empty head repo, a Dependabot PR, or
+          # anything unrecognized is NOT trusted. Dependabot PRs are excluded even
+          # though they are same-repo: their dependency bumps run install/lifecycle
+          # scripts (`pnpm install`) that are not trusted just because the branch
+          # lives in this repo — and this job later holds the private QK install
+          # token.
+          trusted=false
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            trusted=true
+          elif [ "$is_same_repo" = "true" ] && [ "$is_dependabot" = "false" ]; then
+            trusted=true
+          fi
+
+          # --- Token: can QK be installed? --------------------------------------
+          install_ready=false
+          if [ -n "${QK_INSTALL_TOKEN:-}" ]; then
+            install_ready=true
+          fi
+
+          # --- Full quality path runs only when trusted AND installable. --------
+          run_quality=false
+          if [ "$trusted" = "true" ] && [ "$install_ready" = "true" ]; then
+            run_quality=true
+          fi
+
+          {
+            echo "trusted=${trusted}"
+            echo "install_ready=${install_ready}"
+            echo "run_quality=${run_quality}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$run_quality" = "true" ]; then
+            echo "blocked_reason=" >> "$GITHUB_OUTPUT"
+            echo "Trusted context with an install token present; running the full quality path."
+            exit 0
+          fi
+
+          # Classify WHY the quality path did not run, so the operator message is
+          # accurate. Order matters — trust/security cases first (fork, then an
+          # unknown/unconfirmed head repo QK refused to trust), then Dependabot,
+          # then a trusted same-repo run whose token was simply never configured.
+          if [ "$is_fork" = "true" ]; then
+            reason="fork"
+          elif [ "$is_unknown_head" = "true" ]; then
+            reason="untrusted_unknown_head"
+          elif [ "$is_dependabot" = "true" ]; then
+            reason="dependabot"
+          elif [ "$install_ready" != "true" ]; then
+            reason="missing_token"
+          else
+            reason="untrusted"
+          fi
+          echo "blocked_reason=${reason}" >> "$GITHUB_OUTPUT"
+          echo "::warning title=Quality Keeper setup-blocked::Quality Keeper did not run (${reason}). This is a Quality Keeper setup/configuration or trust state, NOT a repository quality failure; see the run summary and the qk-setup-blocked artifact for how to fix it."
+
       - name: Checkout target
+        # TRUST GATE: `trusted` must be true (same-repo/non-fork, non-Dependabot PR
+        # or dispatch) before any target code is checked out — a fork, unknown-head,
+        # or Dependabot PR is never checked out or executed, independent of the token.
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
@@ -101,25 +249,43 @@ jobs:
       # The target's own toolchain, so the safe checks (build/test/lint/typecheck)
       # actually run and pass here rather than erroring for environment reasons.
       - name: Set up Node + pnpm
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
-      - run: corepack enable && pnpm install --frozen-lockfile
+      - name: Install target dependencies
+        # TRUST GATE: `pnpm install` runs the target's own lifecycle scripts, so it
+        # must never run for an untrusted PR — gated on `trusted`, not only on the token.
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
+        run: corepack enable && pnpm install --frozen-lockfile
 
       - name: Set up Python
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
       - name: Install Quality Keeper
-        # Requires QK_INSTALL_TOKEN (see #134) because quality-keeper is private.
-        # This install credential is SEPARATE from the App comment token.
+        # Gated by preflight: runs only in a trusted context AND when
+        # QK_INSTALL_TOKEN is present. This install credential is SEPARATE from
+        # the App comment token.
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         env:
           QK_INSTALL_TOKEN: ${{ secrets.QK_INSTALL_TOKEN }}
         run: |
-          pip install "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
+          set -euo pipefail
+          # Belt-and-braces: the preflight already gates this step. Re-check here so
+          # a future edit that loosens the `if:` still cannot feed an empty token
+          # into an opaque `git ... Authentication failed` error. --quiet keeps the
+          # tokenized URL out of the target's logs.
+          if [ -z "${QK_INSTALL_TOKEN:-}" ]; then
+            echo "::error title=Quality Keeper install::QK_INSTALL_TOKEN is empty at install time; the preflight step should have skipped this. Not invoking git/pip with an empty credential." >&2
+            exit 1
+          fi
+          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
 
       - name: Assess and run SAFE existing checks
+        if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
         run: |
           mkdir -p artifacts
           # 1) Assess the source. A genuine QK error here fails the job (red).
@@ -148,6 +314,41 @@ jobs:
             --summary-json artifacts/post-execute-summary.json \
             --html artifacts/post-execute-report.html
 
+      - name: Report SETUP-BLOCKED (Quality Keeper did not run)
+        # The fail-closed branch: QK was not trusted here or could not install, so
+        # it produced no assessment. Emit an operator-facing, actionable
+        # setup-blocked notice as a run summary + uploaded artifact. This is a QK
+        # setup/configuration or trust state, NOT a repository quality failure, and
+        # it never fails the run.
+        if: steps.preflight.outputs.run_quality != 'true'
+        env:
+          REASON: ${{ steps.preflight.outputs.blocked_reason }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          case "$REASON" in
+            fork)                  detail="This is a fork pull request (its head repo is not ${REPO}). Fork PRs never receive secrets and Quality Keeper does NOT check out or run fork code here, so it stayed setup-blocked. This is expected and correct — untrusted fork code must not receive credentials or execute in this workflow. Quality Keeper stays advisory-only for forks." ;;
+            untrusted_unknown_head) detail="Quality Keeper could not confirm this pull request's head repository (it was empty or missing — e.g. a deleted fork or a malformed event payload), so it refused to trust the event and did NOT check out or run any code. This is a deliberate fail-closed decision, not a missing-token config issue. If this is a legitimate same-repo PR, re-run it once the head repository is resolvable." ;;
+            dependabot)            detail="This is a Dependabot PR. Quality Keeper does NOT treat it as trusted to execute here — a dependency bump runs install/lifecycle scripts (pnpm install) that are not trusted just because the branch is in this repo, and this job later holds the private QK install token. Assess these changes from a trusted follow-up run on the target branch, or via a future safer/token-free install path. Do NOT add a Dependabot-accessible install token to force this workflow — it would execute the bumped dependencies." ;;
+            missing_token)         detail="This is a trusted same-repo run, but QK_INSTALL_TOKEN is not configured, so Quality Keeper could not install. Add the QK_INSTALL_TOKEN secret (a read-only, install-only token that can pip install the private quality-keeper repo) to this repository." ;;
+            *)                     detail="Quality Keeper did not run in a trusted, installable context. See the Quality Keeper install-paths guidance for the public-repo token path and its requirements." ;;
+          esac
+          {
+            echo "## Quality Keeper — setup blocked (not a quality finding)"
+            echo ""
+            echo "Quality Keeper did **not** assess \`${REPO}\` this run because it was not in a trusted, installable context (reason: \`${REASON}\`). This is a **QK setup/configuration or trust** state, **not** a repository quality failure — no quality result should be inferred from it."
+            echo ""
+            echo "- **Reason:** \`${REASON}\` (event: \`${EVENT_NAME}\`)"
+            echo "- **What happened:** no target code was checked out or run, and the install step was skipped before any \`pip\`/\`git\` call — so there is no opaque git auth error."
+            echo "- **How to fix:** ${detail}"
+          } | tee artifacts/qk-setup-blocked.md >> "$GITHUB_STEP_SUMMARY"
+          # Machine-readable companion for tooling / durable proof.
+          printf '{"status":"setup_blocked","reason":"%s","event":"%s","repository":"%s","assessed":false,"is_quality_failure":false}\n' \
+            "$REASON" "$EVENT_NAME" "$REPO" > artifacts/qk-setup-blocked.json
+
       - name: Upload proof artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -159,19 +360,20 @@ jobs:
             artifacts/exec/execution.json
             artifacts/post-execute-summary.json
             artifacts/post-execute-report.html
+            artifacts/qk-setup-blocked.md
+            artifacts/qk-setup-blocked.json
 
   comment:
     name: Post Quality Keeper comment
     needs: quality-run
+    # Post the Advisory Review ONLY when the full quality path actually ran
+    # (trusted context AND install token present). On a setup-blocked or skipped
+    # run the operator-facing notice lives in the quality-run job's summary +
+    # uploaded artifact; this job is skipped. run_quality already implies a
+    # trusted, same-repo, non-Dependabot context, so it subsumes the old same-repo
+    # guard and keeps this write-capable job off untrusted events.
+    if: ${{ needs.quality-run.outputs.run_quality == 'true' }}
     runs-on: ubuntu-latest
-    # Same-repo/non-draft guard mirrored here (defense in depth). It is redundant
-    # today because `needs: quality-run` already skips this job when quality-run
-    # is skipped — but it is kept deliberately: this is the ONLY write-capable job,
-    # so a future refactor that drops `needs` must not silently expose it.
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch'
-          || (github.event.pull_request.head.repo.full_name == github.repository
-              && github.event.pull_request.draft == false) }}
     # The ONLY job with PR-write authority. It runs NO target code — it renders
     # the proof artifacts produced by `quality-run` and posts one comment.
     permissions:
@@ -184,11 +386,20 @@ jobs:
           python-version: "3.12"
 
       - name: Install Quality Keeper
-        # Same SEPARATE install credential; no target code runs in this job.
+        # Same SEPARATE install credential; no target code runs in this job. The
+        # comment job only runs when run_quality confirmed the token, so this
+        # cannot hit the empty-token failure — but keep the same defensive recheck
+        # as the quality-run install step so a future `if:` change can never feed
+        # an empty token into an opaque git error.
         env:
           QK_INSTALL_TOKEN: ${{ secrets.QK_INSTALL_TOKEN }}
         run: |
-          pip install "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
+          set -euo pipefail
+          if [ -z "${QK_INSTALL_TOKEN:-}" ]; then
+            echo "::error title=Quality Keeper install::QK_INSTALL_TOKEN is empty in the comment job; run_quality should have gated this. Not invoking git/pip with an empty credential." >&2
+            exit 1
+          fi
+          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
 
       - name: Download proof artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
