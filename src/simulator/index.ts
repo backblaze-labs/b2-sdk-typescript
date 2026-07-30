@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -1781,6 +1781,8 @@ export class B2Simulator {
    * Look up the grant matching an `authorize_account` request. Strict mode
    * rejects invalid credentials; permissive mode keeps the historical
    * simulator behavior of treating them as the implicit master credential.
+   * That permissive fallback is a test-only seam; do not expose a permissive
+   * simulator as a reachable auth server.
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
@@ -1815,7 +1817,11 @@ export class B2Simulator {
     if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
-    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
+    if (
+      this.strictAuth &&
+      stored.expirationTimestamp !== null &&
+      stored.expirationTimestamp <= this.now()
+    ) {
       return {
         ok: false,
         error: this.error(401, 'unauthorized', 'application key has expired'),
@@ -2640,44 +2646,49 @@ export class B2Simulator {
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
+    const expiresAt = Math.min(
+      this.now() + this.authTokenTtlMs,
+      grant.expirationTimestamp ?? Number.POSITIVE_INFINITY,
+    )
     this.issuedTokens.set(tokenStr, {
       capabilities: tokenCapabilities,
       bucketIds: grant.bucketIds,
       namePrefix: grant.namePrefix,
-      // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-      expiresAt: this.now() + this.authTokenTtlMs,
+      // Token validity: real B2 = 24h, capped by application-key expiry.
+      expiresAt,
       applicationKeyId: grant.applicationKeyId,
     })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.accountId),
-        // `AuthToken` has no public factory by design — auth tokens are
-        // minted by B2, not constructed by user code. The simulator is
-        // the only legitimate place that needs to forge one.
-        authorizationToken: tokenStr as unknown as AuthToken,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: origin,
+    const body = {
+      accountId: accountIdOf(this.accountId),
+      // `AuthToken` has no public factory by design — auth tokens are
+      // minted by B2, not constructed by user code. The simulator is
+      // the only legitimate place that needs to forge one.
+      authorizationToken: tokenStr as unknown as AuthToken,
+      apiInfo: {
+        storageApi: {
+          absoluteMinimumPartSize: this.minimumPartSize,
+          apiUrl: origin,
+          bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+          bucketName: legacyBucketName,
+          downloadUrl: origin,
+          infoType: 'storageApi',
+          namePrefix: grant.namePrefix,
+          recommendedPartSize: this.recommendedPartSize,
+          s3ApiUrl: origin,
+          allowed: {
+            capabilities: responseCapabilities,
+            buckets: allowedBuckets,
             bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
             bucketName: legacyBucketName,
-            downloadUrl: origin,
-            infoType: 'storageApi',
             namePrefix: grant.namePrefix,
-            recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: origin,
-            allowed: {
-              capabilities: responseCapabilities,
-              buckets: allowedBuckets,
-              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
-              bucketName: legacyBucketName,
-              namePrefix: grant.namePrefix,
-            },
           },
         },
-        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
+      applicationKeyExpirationTimestamp: grant.expirationTimestamp,
+    } satisfies AuthorizeAccountResponse
+    return {
+      status: 200,
+      body,
     }
   }
 

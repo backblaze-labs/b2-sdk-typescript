@@ -562,22 +562,13 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
   }
 
   function issuedAuthTokenCount(sim: B2Simulator): number {
+    // No public API exposes whether a rejected authorize request minted
+    // state, so this mirrors the existing download-token count test hook.
     return (
       sim as unknown as {
         readonly issuedTokens: Map<string, unknown>
       }
     ).issuedTokens.size
-  }
-
-  function issuedAuthTokenCapabilities(
-    sim: B2Simulator,
-    authorizationToken: string,
-  ): readonly Capability[] | undefined {
-    return (
-      sim as unknown as {
-        readonly issuedTokens: Map<string, { readonly capabilities: readonly Capability[] }>
-      }
-    ).issuedTokens.get(authorizationToken)?.capabilities
   }
 
   async function expectAuthorizeRejected(
@@ -676,7 +667,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
     const key = await client.createKey({
-      capabilities: [Capability.ListFiles],
+      capabilities: [Capability.ListBuckets],
       keyName: 'expiring-auth-key',
       validDurationInSeconds: 1,
     })
@@ -690,7 +681,26 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const activeAuth = await activeResponse.json<AuthorizeAccountResponse>()
     expect(activeAuth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
 
-    sim.advanceTime(1000)
+    await expect(
+      sim.transport().send({
+        method: 'POST',
+        url: 'http://localhost:0/b2api/v4/b2_list_buckets',
+        headers: { Authorization: activeAuth.authorizationToken },
+        body: JSON.stringify({ accountId: 'sim_account_0001' }),
+      }),
+    ).resolves.toMatchObject({ status: 200 })
+
+    sim.advanceTime(1001)
+    const expiredTokenResponse = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_list_buckets',
+      headers: { Authorization: activeAuth.authorizationToken },
+      body: JSON.stringify({ accountId: 'sim_account_0001' }),
+    })
+    expect(expiredTokenResponse.status).toBe(401)
+    await expect(expiredTokenResponse.json()).resolves.toMatchObject({
+      code: 'expired_auth_token',
+    })
     await expectAuthorizeRejected(
       sim,
       basicAuth(key.applicationKeyId, key.applicationKey),
@@ -703,13 +713,10 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await client.authorize()
     const masterAuth = client.accountInfo.getAuth()
     if (masterAuth === null) throw new Error('expected master authorization')
-    const masterToken = masterAuth.authorizationToken
 
     ;(masterAuth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(
       Capability.BypassGovernance,
     )
-    expect(issuedAuthTokenCapabilities(sim, masterToken)).not.toContain(Capability.BypassGovernance)
-
     const nextMasterClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
@@ -720,6 +727,18 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(
       nextMasterClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities,
     ).not.toContain(Capability.BypassGovernance)
+
+    const noCapabilityKey = await client.createKey({
+      capabilities: [],
+      keyName: 'mutable-auth-response-key',
+    })
+    const noCapabilityClient = await authorizeWithKey(sim, noCapabilityKey)
+    const noCapabilityAuth = noCapabilityClient.accountInfo.getAuth()
+    if (noCapabilityAuth === null) throw new Error('expected no-capability authorization')
+    ;(noCapabilityAuth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(
+      Capability.ListBuckets,
+    )
+    await expect(noCapabilityClient.listBuckets()).rejects.toThrow(/lacks required capabilities/)
 
     const key = await client.createKey({
       capabilities: [Capability.ListFiles],
