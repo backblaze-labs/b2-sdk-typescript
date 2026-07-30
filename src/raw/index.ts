@@ -1344,9 +1344,12 @@ function buildDownloadRequestHeaders(
   const headers: Record<string, string> = { Authorization: authToken }
   if (options?.range) headers['Range'] = options.range
   if (options?.serverSideEncryption) {
+    const encryption = options.serverSideEncryption
     applyEncryptionHeaders(headers, {
       mode: EncryptionMode.SseC,
-      ...options.serverSideEncryption,
+      algorithm: encryption.algorithm,
+      customerKey: encryption.customerKey,
+      customerKeyMd5: encryption.customerKeyMd5,
     })
   }
   return headers

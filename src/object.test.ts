@@ -9,6 +9,7 @@ import { BufferSource } from './streams/source.ts'
 import { makeClient, readStream } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
+import { EncryptionKey } from './types/encryption.ts'
 
 // ---------------------------------------------------------------------------
 // B2Object - coverage for downloadById, getFileInfo, hide, deleteVersion
@@ -609,6 +610,31 @@ describe('B2Object download and stream coverage', () => {
     const data = await readStream(stream)
 
     expect(new TextDecoder().decode(data)).toBe('parallel download stream content here')
+  })
+
+  it('createReadStream() downloads an SSE-C file via the public parallel path', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'obj-stream-sse-c',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(27))
+    const content = new TextEncoder().encode('parallel SSE-C stream content here')
+    const uploaded = await bucket.upload({
+      fileName: 'streamed-sse-c.dat',
+      source: new BufferSource(content),
+      contentType: 'application/octet-stream',
+      serverSideEncryption: key,
+    })
+
+    const obj = bucket.file('streamed-sse-c.dat')
+    const stream = obj.createReadStream(uploaded.fileId, content.byteLength, {
+      rangeSize: 10,
+      concurrency: 1,
+      serverSideEncryption: key,
+    })
+    const data = await readStream(stream)
+
+    expect(new TextDecoder().decode(data)).toBe('parallel SSE-C stream content here')
   })
 
   it('upload() routes to large file path when source exceeds recommended part size', async () => {

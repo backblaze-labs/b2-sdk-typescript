@@ -21,6 +21,9 @@
  */
 export const DEFAULT_TRANSFER_CONCURRENCY = 4
 
+/** Default byte size for each ranged request in a parallel download. */
+export const DEFAULT_DOWNLOAD_RANGE_SIZE = 10 * 1024 * 1024
+
 /**
  * Default parallel-task count for **bulk metadata** operations:
  * `Bucket.deleteMany` (per-version delete calls), and the action loop in

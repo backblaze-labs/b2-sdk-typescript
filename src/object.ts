@@ -258,7 +258,7 @@ export class B2Object {
     fileId: FileId,
     totalSize: number,
     options?: {
-      /** Size of each ranged GET request in bytes. Defaults to 8 MB. */
+      /** Size of each ranged GET request in bytes. Defaults to 10 MB. */
       rangeSize?: number
       /** Number of concurrent range requests. Defaults to 4. */
       concurrency?: number

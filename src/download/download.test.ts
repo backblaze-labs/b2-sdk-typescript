@@ -1,3 +1,4 @@
+import { inspect } from 'node:util'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
@@ -693,6 +694,69 @@ describe('createParallelDownloadStream', () => {
         serverSideEncryption.customerKeyMd5,
       )
     }
+  })
+
+  it('does not leak SSE-C keys in parallel download failure diagnostics', async () => {
+    const fakeFileId = 'parallel_sse_c_error'
+    const seenOptions: unknown[] = []
+    const serverSideEncryption = {
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'cGFyYWxsZWwtZG93bmxvYWQtc2VjcmV0LWtleQ==',
+      customerKeyMd5: 'cGFyYWxsZWwtZG93bmxvYWQtc2VjcmV0LW1kNQ==',
+    }
+    const raw = {
+      async downloadFileById(
+        _downloadUrl: string,
+        _authToken: string,
+        _fileId: string,
+        options?: unknown,
+      ): Promise<{
+        headers: Headers
+        body: ReadableStream<Uint8Array> | null
+        status: number
+      }> {
+        seenOptions.push(options)
+        return jsonResponse(503, {
+          status: 503,
+          code: 'service_unavailable',
+          message: 'temporary failure',
+        })
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 25,
+      rangeSize: 25,
+      concurrency: 1,
+      serverSideEncryption,
+      maxRetries: 0,
+    })
+
+    let thrown: unknown
+    try {
+      await readStream(stream)
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toBeDefined()
+    expect(seenOptions).toHaveLength(1)
+    const diagnostics = [
+      String(thrown),
+      thrown instanceof Error ? thrown.message : '',
+      JSON.stringify(thrown),
+      inspect(thrown),
+      ...seenOptions.map((options) => JSON.stringify(options)),
+      ...seenOptions.map((options) => inspect(options)),
+    ].join('\n')
+    expect(diagnostics).not.toContain(serverSideEncryption.customerKey)
+    expect(diagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
+    expect(diagnostics).toContain('[redacted SSE-C key]')
   })
 
   it('errors with ChecksumMismatchError when range SHA-1 headers disagree', async () => {

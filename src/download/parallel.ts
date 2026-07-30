@@ -6,7 +6,7 @@ import { collectStream } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import type { FileId } from '../types/ids.ts'
-import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { DEFAULT_DOWNLOAD_RANGE_SIZE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 import { normalizeVerifiableSha1 } from '../util/sha1.ts'
@@ -40,6 +40,21 @@ interface RangeDownloadResult {
   readonly contentSha1: string | null
 }
 
+interface FetchRangeWithRetryParams {
+  readonly raw: RawClient
+  readonly accountInfo: AccountInfo
+  readonly fileId: FileId
+  readonly start: number
+  readonly end: number
+  readonly totalSize: number
+  readonly serverSideEncryption: SseCDownloadKey | undefined
+  readonly retryOptions: RetryOptions
+  readonly signal: AbortSignal | undefined
+}
+
+const SSE_C_KEY_REDACTION = '[redacted SSE-C key]'
+const NODE_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
+
 /**
  * Creates a readable stream that downloads a file using parallel byte-range requests.
  *
@@ -67,9 +82,13 @@ export function createParallelDownloadStream(
   accountInfo: AccountInfo,
   options: ParallelDownloadOptions,
 ): ReadableStream<Uint8Array> {
-  const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
+  const rangeSize = options.rangeSize ?? DEFAULT_DOWNLOAD_RANGE_SIZE
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
+  const serverSideEncryption =
+    options.serverSideEncryption !== undefined
+      ? redactSseCDownloadKey(options.serverSideEncryption)
+      : undefined
   // The high-level B2Client already wraps the raw transport in RetryTransport.
   // Keep the parallel-download outer retry disabled by default so each range
   // has one retry budget unless callers explicitly opt into an extra raw-client
@@ -113,17 +132,17 @@ export function createParallelDownloadStream(
       nextToSchedule++
       const task = (async () => {
         try {
-          const result = await fetchRangeWithRetry(
+          const result = await fetchRangeWithRetry({
             raw,
             accountInfo,
-            options.fileId,
-            range.start,
-            range.end,
+            fileId: options.fileId,
+            start: range.start,
+            end: range.end,
             totalSize,
-            options.serverSideEncryption,
+            serverSideEncryption,
             retryOptions,
-            abort,
-          )
+            signal: abort,
+          })
           buffer.set(idx, result)
         } catch (err) {
           if (firstError === null) firstError = err
@@ -211,29 +230,24 @@ export function createParallelDownloadStream(
 
 /**
  * Fetches a single byte range with bounded retry on transient failures.
- * @param raw - Low-level B2 API client.
- * @param accountInfo - Authorized account state.
- * @param fileId - ID of the file being downloaded.
- * @param start - Inclusive byte offset where the range begins.
- * @param end - Inclusive byte offset where the range ends.
- * @param totalSize - Expected complete file size.
- * @param serverSideEncryption - Optional SSE-C decryption parameters for the file.
- * @param retryOptions - Retry settings controlling attempts and backoff.
- * @param signal - Optional abort signal that cancels the range and any pending retry.
+ * @param params - Range request parameters, retry settings, and cancellation.
  *
  * @returns The range's bytes, or throws after exhausting all retry attempts.
  */
 async function fetchRangeWithRetry(
-  raw: RawClient,
-  accountInfo: AccountInfo,
-  fileId: FileId,
-  start: number,
-  end: number,
-  totalSize: number,
-  serverSideEncryption: SseCDownloadKey | undefined,
-  retryOptions: RetryOptions,
-  signal: AbortSignal | undefined,
+  params: FetchRangeWithRetryParams,
 ): Promise<RangeDownloadResult> {
+  const {
+    raw,
+    accountInfo,
+    fileId,
+    start,
+    end,
+    totalSize,
+    serverSideEncryption,
+    retryOptions,
+    signal,
+  } = params
   let lastError: unknown
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     if (attempt > 0) {
@@ -277,6 +291,40 @@ async function fetchRangeWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
+}
+
+function redactSseCDownloadKey(key: SseCDownloadKey): SseCDownloadKey {
+  const redacted = {
+    algorithm: key.algorithm,
+  } as SseCDownloadKey & {
+    toJSON(): {
+      algorithm: SseCDownloadKey['algorithm']
+      customerKey: string
+      customerKeyMd5: string
+    }
+    toString(): string
+  }
+  const redactedJson = {
+    algorithm: key.algorithm,
+    customerKey: SSE_C_KEY_REDACTION,
+    customerKeyMd5: SSE_C_KEY_REDACTION,
+  }
+
+  Object.defineProperties(redacted, {
+    customerKey: { value: key.customerKey, enumerable: false },
+    customerKeyMd5: { value: key.customerKeyMd5, enumerable: false },
+    toJSON: { value: () => redactedJson, enumerable: false },
+    toString: {
+      value: () => `[SseCDownloadKey ${SSE_C_KEY_REDACTION}]`,
+      enumerable: false,
+    },
+  })
+  Object.defineProperty(redacted, NODE_INSPECT_CUSTOM, {
+    value: () => redactedJson,
+    enumerable: false,
+  })
+
+  return redacted
 }
 
 class RangeValidationError extends Error {
