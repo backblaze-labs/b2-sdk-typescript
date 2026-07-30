@@ -578,6 +578,27 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   }
 
+  async function sendCreateKey(
+    sim: B2Simulator,
+    authToken: string,
+    keyName: string,
+    capabilities: readonly string[] = [Capability.ListBuckets],
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities,
+        keyName,
+      }),
+    })
+  }
+
   async function expectAuthorizeFailure(
     sim: B2Simulator,
     authorization: string,
@@ -695,8 +716,45 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expectAuthorizeFailure(
       sim,
       basicHeader(key.applicationKeyId, key.applicationKey),
-      'expired_auth_token',
+      'bad_auth_token',
     )
+  })
+
+  it('rejects expired application keys through B2Client.authorize without reauth recursion', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'expired-client-auth-key',
+      validDurationInSeconds: 1,
+    })
+    sim.advanceTime(2000)
+
+    const expiredClient = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await expect(expiredClient.authorize()).rejects.toThrow(/application key has expired/)
+    expect(expiredClient.accountInfo.getAuth()).toBeNull()
+  })
+
+  it('keeps expired application-key authorization permissive when strictAuth is off', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'permissive-expired-key',
+      validDurationInSeconds: 1,
+    })
+    sim.advanceTime(2000)
+
+    const resp = await sendAuthorize(sim, basicHeader(key.applicationKeyId, key.applicationKey))
+
+    expect(resp.status).toBe(200)
+    const auth = await resp.json<AuthorizeAccountResponse>()
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toEqual([Capability.ListBuckets])
   })
 
   it('expires issued key tokens at the application key expiration', async () => {
@@ -733,19 +791,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const auth = await authResp.json<AuthorizeAccountResponse>()
     ;(auth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(Capability.WriteKeys)
 
-    const createKeyResp = await sim.transport().send({
-      method: 'POST',
-      url: 'http://localhost:0/b2api/v4/b2_create_key',
-      headers: {
-        Authorization: auth.authorizationToken,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        accountId: 'sim_account_0001',
-        capabilities: [Capability.ListBuckets],
-        keyName: 'leaked-capability-key',
-      }),
-    })
+    const createKeyResp = await sendCreateKey(sim, auth.authorizationToken, 'leaked-capability-key')
     expect(createKeyResp.status).toBe(403)
     await expect(createKeyResp.json()).resolves.toMatchObject({ code: 'unauthorized' })
 
@@ -758,6 +804,94 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(secondAuth.apiInfo.storageApi.allowed.capabilities).not.toBe(
       auth.apiInfo.storageApi.allowed.capabilities,
     )
+  })
+
+  it('does not let key response capabilities mutate stored grants', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'created-capability-copy',
+    })
+    ;(key.capabilities as Capability[]).push(Capability.WriteKeys)
+
+    const createdClient = await authorizeWithKey(sim, key)
+    expect(createdClient.hasCapabilities([Capability.WriteKeys])).toEqual({
+      ok: false,
+      missing: [Capability.WriteKeys],
+    })
+    await expect(
+      createdClient.createKey({
+        capabilities: [Capability.ListBuckets],
+        keyName: 'created-response-escalation',
+      }),
+    ).rejects.toThrow(/lacks required capabilities/)
+
+    const listed = (await client.listKeys()).keys.find(
+      (listedKey) => listedKey.applicationKeyId === key.applicationKeyId,
+    )
+    if (listed === undefined) throw new Error('created key was not listed')
+    ;(listed.capabilities as Capability[]).push(Capability.WriteKeys)
+
+    const listedClient = await authorizeWithKey(sim, key)
+    expect(listedClient.hasCapabilities([Capability.WriteKeys])).toEqual({
+      ok: false,
+      missing: [Capability.WriteKeys],
+    })
+
+    const deletedKey = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'deleted-capability-copy',
+    })
+    const deletedClient = await authorizeWithKey(sim, deletedKey)
+    const deletedToken = deletedClient.accountInfo.getAuthToken()
+    const deleted = await client.deleteKey(deletedKey.applicationKeyId)
+    ;(deleted.capabilities as Capability[]).push(Capability.WriteKeys)
+
+    await expectAuthorizeFailure(
+      sim,
+      basicHeader(deletedKey.applicationKeyId, deletedKey.applicationKey),
+    )
+    const revoked = await sendListBuckets(sim, deletedToken)
+    expect(revoked.status).toBe(401)
+  })
+
+  it('prevents restricted key admins from minting keys with missing capabilities', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const keyAdmin = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'restricted-key-admin',
+    })
+    const keyAdminClient = await authorizeWithKey(sim, keyAdmin)
+
+    await expect(
+      keyAdminClient.createKey({
+        capabilities: [Capability.BypassGovernance],
+        keyName: 'escalated-key-admin',
+      }),
+    ).rejects.toThrow(/cannot create keys with capabilities/)
+    await expect(
+      keyAdminClient.createKey({
+        capabilities: [Capability.WriteKeys],
+        keyName: 'delegated-key-admin',
+      }),
+    ).resolves.toMatchObject({ capabilities: [Capability.WriteKeys] })
+  })
+
+  it('rejects unknown createKey capabilities before storing them', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    const resp = await sendCreateKey(
+      sim,
+      client.accountInfo.getAuthToken(),
+      'unknown-capability-key',
+      ['definitelyNotACapability'],
+    )
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'bad_request' })
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
@@ -800,6 +934,19 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(expiredResp.status).toBe(401)
     const expiredBody = (await expiredResp.json()) as { code: string }
     expect(expiredBody.code).toBe('expired_auth_token')
+  })
+
+  it('rejects auth tokens at the exact expiry boundary', async () => {
+    const { sim } = makeClient({ sim: { strictAuth: true, authTokenTtlMs: 1000 } })
+    const authResp = await sendAuthorize(sim, basicHeader('test-key-id', 'test-key'))
+    expect(authResp.status).toBe(200)
+    const auth = await authResp.json<AuthorizeAccountResponse>()
+
+    sim.advanceTime(1000)
+
+    const expired = await sendListBuckets(sim, auth.authorizationToken)
+    expect(expired.status).toBe(401)
+    await expect(expired.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
   })
 
   it('enforces single-bucket application key scope from the bucketId alias', async () => {
