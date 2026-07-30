@@ -208,8 +208,10 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
-const MASTER_APPLICATION_KEY_ID = 'test-key-id'
-const MASTER_APPLICATION_KEY = 'test-key'
+/** Application-key ID accepted by {@link B2Simulator}'s implicit master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'test-key-id'
+/** Application-key secret accepted by {@link B2Simulator}'s implicit master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY = 'test-key'
 // The simulator master authorization response intentionally excludes
 // object-lock capabilities so tests must request those scopes explicitly.
 const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
@@ -229,6 +231,8 @@ const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.WriteBucketNotifications,
 ])
 const CAPABILITY_VALUES = new Set<string>(Object.values(Capability))
+const APPLICATION_KEY_DURATION_MIN_SECONDS = 1
+const APPLICATION_KEY_DURATION_MAX_SECONDS = 86_400_000
 
 const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
   'b2ContentDisposition',
@@ -883,6 +887,10 @@ export interface B2SimulatorOptions {
    *
    * In strict mode:
    *
+   * - `b2_authorize_account` accepts the simulator master credential or an existing,
+   *   unexpired application key with the correct secret.
+   * - Malformed authorize-account credentials, unknown or deleted key IDs, wrong
+   *   key secrets, and expired application keys return HTTP 401 with code `unauthorized`.
    * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
    * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
    * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
@@ -904,6 +912,23 @@ export interface B2SimulatorOptions {
   authTokenTtlMs?: number
 }
 
+function validateApplicationKeyDuration(requested: unknown): ValidationError | null {
+  if (requested === undefined) return null
+  if (
+    typeof requested !== 'number' ||
+    !Number.isFinite(requested) ||
+    !Number.isInteger(requested) ||
+    requested < APPLICATION_KEY_DURATION_MIN_SECONDS ||
+    requested > APPLICATION_KEY_DURATION_MAX_SECONDS
+  ) {
+    return {
+      code: 'bad_request',
+      message: `validDurationInSeconds must be a finite integer from ${APPLICATION_KEY_DURATION_MIN_SECONDS} through ${APPLICATION_KEY_DURATION_MAX_SECONDS}`,
+    }
+  }
+  return null
+}
+
 /**
  * In-memory B2 simulator for testing. Implements the B2 native API at the
  * request/response level without any network I/O. Supports 25+ operations
@@ -913,8 +938,8 @@ export interface B2SimulatorOptions {
  * ```ts
  * const sim = new B2Simulator()
  * const client = new B2Client({
- *   applicationKeyId: 'test-key-id',
- *   applicationKey: 'test-key',
+ *   applicationKeyId: SIMULATOR_MASTER_APPLICATION_KEY_ID,
+ *   applicationKey: SIMULATOR_MASTER_APPLICATION_KEY,
  *   transport: sim.transport(),
  * })
  * await client.authorize()
@@ -1238,7 +1263,7 @@ export class B2Simulator {
     if (!token) {
       return this.error(401, 'bad_auth_token', 'unknown auth token')
     }
-    if (this.now() > token.expiresAt) {
+    if (this.now() >= token.expiresAt) {
       return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
     }
     const missing = missingCapabilitiesFor(endpoint, token.capabilities)
@@ -1805,23 +1830,28 @@ export class B2Simulator {
 
     const { applicationKeyId, applicationKey } = credentials
     if (
-      applicationKeyId === MASTER_APPLICATION_KEY_ID &&
-      timingSafeStringEqual(applicationKey, MASTER_APPLICATION_KEY)
+      applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+      timingSafeStringEqual(applicationKey, SIMULATOR_MASTER_APPLICATION_KEY)
     ) {
       return { ok: true, grant: masterGrant }
     }
 
     const stored = this.keys.get(applicationKeyId)
-    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+    if (!stored) {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
-    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
-      return this.strictAuth
-        ? {
-            ok: false,
-            error: this.error(401, 'unauthorized', 'application key has expired'),
-          }
-        : { ok: true, grant: masterGrant }
+    if (!timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+      return invalidCredentials()
+    }
+    if (
+      this.strictAuth &&
+      stored.expirationTimestamp !== null &&
+      stored.expirationTimestamp <= this.now()
+    ) {
+      return {
+        ok: false,
+        error: this.error(401, 'unauthorized', 'application key has expired'),
+      }
     }
 
     return {
@@ -2080,7 +2110,7 @@ export class B2Simulator {
             accountId: string
             capabilities: string[]
             keyName: string
-            validDurationInSeconds?: number
+            validDurationInSeconds?: unknown
             bucketIds?: readonly string[] | null
             bucketId?: string
             namePrefix?: string
@@ -2635,6 +2665,12 @@ export class B2Simulator {
     const grantResult = this.authorizationGrantForAuthHeader(authzHeader)
     if (!grantResult.ok) return grantResult.error
     const grant = grantResult.grant
+    const expiresAt = Math.min(
+      this.now() + this.authTokenTtlMs,
+      grant.expirationTimestamp ?? Number.POSITIVE_INFINITY,
+    )
+    // Distinct copies preserve caller-mutation isolation: the returned
+    // response array must not alias the stored issued-token capabilities.
     const tokenCapabilities = [...grant.capabilities]
     const responseCapabilities = [...grant.capabilities]
     const allowedBuckets = this.allowedBuckets(grant.bucketIds)
@@ -2647,7 +2683,7 @@ export class B2Simulator {
       bucketIds: grant.bucketIds,
       namePrefix: grant.namePrefix,
       // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-      expiresAt: this.now() + this.authTokenTtlMs,
+      expiresAt,
       applicationKeyId: grant.applicationKeyId,
     })
     const body: AuthorizeAccountResponse = {
@@ -3546,7 +3582,7 @@ export class B2Simulator {
       accountId: string
       capabilities: string[]
       keyName: string
-      validDurationInSeconds?: number
+      validDurationInSeconds?: unknown
       bucketIds?: readonly string[] | null
       bucketId?: string
       namePrefix?: string
@@ -3588,15 +3624,19 @@ export class B2Simulator {
         `unknown capabilities: ${unknownCapabilities.join(', ')}`,
       )
     }
+    const durationError = validateApplicationKeyDuration(req.validDurationInSeconds)
+    if (durationError) return this.error(400, durationError.code, durationError.message)
+    // The simulator validates capability names but does not enforce B2's
+    // creator-subset rule yet. Object-lock fidelity tests rely on minting
+    // object-lock scopes from the implicit simulator master credential.
     const capabilities = Object.freeze(
       req.capabilities.map((capability) => capability as Capability),
     )
+    const validDurationInSeconds = req.validDurationInSeconds as number | undefined
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
-      req.validDurationInSeconds !== undefined
-        ? this.now() + req.validDurationInSeconds * 1000
-        : null
+      validDurationInSeconds !== undefined ? this.now() + validDurationInSeconds * 1000 : null
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
