@@ -11,6 +11,7 @@ import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../t
 import { MetadataDirective } from '../types/file.ts'
 import { fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
+import { ENDPOINT_CAPABILITIES } from './capabilities.ts'
 import {
   type B2Simulator,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
@@ -561,14 +562,27 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
   it('grants the master credential the documented capability set by default', async () => {
     const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
-    // Master credential has all the common file/bucket caps.
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
-    expect(allowed?.capabilities).toContain(Capability.WriteFiles)
-    expect(allowed?.capabilities).toContain(Capability.ListBuckets)
+
+    const masterCapabilities = new Set(allowed?.capabilities ?? [])
+    const explicitKeyOnlyCapabilities = new Set<Capability>([
+      Capability.BypassGovernance,
+      Capability.ReadBucketRetentions,
+      Capability.WriteBucketRetentions,
+      Capability.ReadFileLegalHolds,
+      Capability.WriteFileLegalHolds,
+      Capability.ReadFileRetentions,
+      Capability.WriteFileRetentions,
+    ])
+    const supportedEndpointCapabilities = new Set(Object.values(ENDPOINT_CAPABILITIES).flat())
+
+    for (const capability of supportedEndpointCapabilities) {
+      expect(masterCapabilities.has(capability)).toBe(!explicitKeyOnlyCapabilities.has(capability))
+    }
     expect(allowed?.buckets).toBeNull()
-    // Master does NOT have BypassGovernance — tests that need it must
-    // mint a key with that cap explicitly.
-    expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
+    for (const capability of explicitKeyOnlyCapabilities) {
+      expect(masterCapabilities.has(capability)).toBe(false)
+    }
   })
 
   it('reports restricted key capabilities and scope in authorize allowed info', async () => {
@@ -581,12 +595,14 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const key = await client.createKey({
       capabilities: [Capability.ListFiles],
       keyName: 'restricted-auth-allowed',
+      validDurationInSeconds: 60,
       bucketIds: [bucket.id],
       namePrefix: 'allowed/',
     })
 
     const restrictedClient = await authorizeWithKey(sim, key)
-    const allowed = restrictedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed
+    const auth = restrictedClient.accountInfo.getAuth()
+    const allowed = auth?.apiInfo.storageApi.allowed
 
     expect(allowed).toEqual({
       capabilities: [Capability.ListFiles],
@@ -595,6 +611,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       bucketName: bucket.name,
       namePrefix: 'allowed/',
     })
+    expect(auth?.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
     expect(restrictedClient.hasCapabilities([Capability.ListFiles])).toEqual({
       ok: true,
       missing: [],
@@ -603,6 +620,37 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ok: false,
       missing: [Capability.WriteFiles],
     })
+  })
+
+  it('rejects invalid Basic credentials during strict authorization', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'bad-basic-key',
+    })
+    const transport = sim.transport()
+    const cases: readonly [string, Record<string, string>][] = [
+      ['missing header', {}],
+      ['malformed Basic value', { Authorization: 'Basic not-base64' }],
+      ['unknown application key', { Authorization: `Basic ${btoa('nonexistent:wrong')}` }],
+      [
+        'wrong restricted-key secret',
+        { Authorization: `Basic ${btoa(`${key.applicationKeyId}:wrong-secret`)}` },
+      ],
+    ]
+
+    for (const [name, headers] of cases) {
+      const resp = await transport.send({
+        method: 'GET',
+        url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+        headers,
+      })
+      expect(resp.status, name).toBe(401)
+      await expect(resp.json(), name).resolves.toMatchObject({
+        code: 'bad_auth_token',
+      })
+    }
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {

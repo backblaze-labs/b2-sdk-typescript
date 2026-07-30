@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,6 +208,21 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
+const MASTER_APPLICATION_KEY_ID = 'test-key-id'
+const MASTER_APPLICATION_KEY = 'test-key'
+/**
+ * Capabilities granted to the simulator's implicit master credential.
+ *
+ * This is an intentional hand-maintained contract, not a mirror of every
+ * Capability enum member. Object-lock scopes (BypassGovernance,
+ * ReadBucketRetentions, WriteBucketRetentions, ReadFileLegalHolds,
+ * WriteFileLegalHolds, ReadFileRetentions, and WriteFileRetentions) are
+ * intentionally omitted because real B2 does not auto-grant them; tests that
+ * need those scopes must mint a key via createKey and reauthorize with it.
+ *
+ * Fidelity tests assert that every supported non-object-lock endpoint
+ * capability from ENDPOINT_CAPABILITIES is still included here.
+ */
 const MASTER_CAPABILITIES: readonly Capability[] = [
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -337,6 +352,11 @@ interface AuthorizationGrant {
   readonly expirationTimestamp: number | null
 }
 
+interface BasicAuthCredentials {
+  readonly applicationKeyId: string
+  readonly applicationKey: string
+}
+
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
   readonly bucketIds: readonly string[] | null
@@ -407,6 +427,26 @@ function singleBucketId(bucketIds: readonly string[] | null | undefined): string
 
 function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] | null {
   return bucketIds === null ? null : [...bucketIds]
+}
+
+function parseBasicAuthCredentials(authzHeader: string | undefined): BasicAuthCredentials | null {
+  if (!authzHeader?.startsWith('Basic ')) return null
+  // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
+  // Wrapped in a try because malformed base64 throws.
+  const decoded = (() => {
+    try {
+      return atob(authzHeader.slice(6))
+    } catch {
+      return null
+    }
+  })()
+  if (decoded === null) return null
+  const idx = decoded.indexOf(':')
+  if (idx === -1) return null
+  return {
+    applicationKeyId: decoded.slice(0, idx),
+    applicationKey: decoded.slice(idx + 1),
+  }
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -1739,37 +1779,27 @@ export class B2Simulator {
     }))
   }
 
-  /**
-   * Look up the application key matching the `Authorization` header on
-   * an `authorize_account` request. The header is in the form
-   * `Basic base64(applicationKeyId:applicationKey)`.
-   *
-   * Returns `null` for the implicit master credential (anything that
-   * does not match a key minted via `b2_create_key`); in that case
-   * `authorizationGrantForAuthHeader` grants the simulator's master scope.
-   *
-   * @param authzHeader - Raw HTTP `Authorization` header value.
-   *
-   * @returns The matching key's grant scope, or `null` for the master.
-   */
-  private findKeyForAuthHeader(authzHeader: string | undefined): AuthorizationGrant | null {
-    if (!authzHeader?.startsWith('Basic ')) return null
-    // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
-    // Wrapped in a try because malformed base64 throws.
-    const decoded = (() => {
-      try {
-        return atob(authzHeader.slice(6))
-      } catch {
-        return null
-      }
-    })()
-    if (decoded === null) return null
-    const idx = decoded.indexOf(':')
-    if (idx === -1) return null
-    const applicationKeyId = decoded.slice(0, idx)
-    const applicationKey = decoded.slice(idx + 1)
+  private masterAuthorizationGrant(): AuthorizationGrant {
+    return {
+      capabilities: [...MASTER_CAPABILITIES],
+      bucketIds: null,
+      namePrefix: null,
+      applicationKeyId: null,
+      expirationTimestamp: null,
+    }
+  }
+
+  private isMasterCredential(credentials: BasicAuthCredentials): boolean {
+    return (
+      timingSafeStringEqual(credentials.applicationKeyId, MASTER_APPLICATION_KEY_ID) &&
+      timingSafeStringEqual(credentials.applicationKey, MASTER_APPLICATION_KEY)
+    )
+  }
+
+  private keyGrantForAuthCredentials(credentials: BasicAuthCredentials): AuthorizationGrant | null {
+    const { applicationKeyId, applicationKey } = credentials
     const stored = this.keys.get(applicationKeyId)
-    if (!stored || stored.applicationKey !== applicationKey) return null
+    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) return null
     return {
       capabilities: stored.capabilities.map((capability) => capability as Capability),
       bucketIds: cloneBucketIds(stored.bucketIds),
@@ -1779,16 +1809,19 @@ export class B2Simulator {
     }
   }
 
-  private authorizationGrantForAuthHeader(authzHeader: string | undefined): AuthorizationGrant {
-    return (
-      this.findKeyForAuthHeader(authzHeader) ?? {
-        capabilities: [...MASTER_CAPABILITIES],
-        bucketIds: null,
-        namePrefix: null,
-        applicationKeyId: null,
-        expirationTimestamp: null,
-      }
-    )
+  private authorizationGrantForAuthHeader(
+    authzHeader: string | undefined,
+  ): AuthorizationGrant | null {
+    const credentials = parseBasicAuthCredentials(authzHeader)
+    if (credentials === null) {
+      return this.strictAuth ? null : this.masterAuthorizationGrant()
+    }
+    if (this.isMasterCredential(credentials)) return this.masterAuthorizationGrant()
+
+    const keyGrant = this.keyGrantForAuthCredentials(credentials)
+    if (keyGrant !== null) return keyGrant
+
+    return this.strictAuth ? null : this.masterAuthorizationGrant()
   }
 
   /**
@@ -2583,20 +2616,14 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(
-    authzHeader?: string,
-    origin = 'http://localhost:0',
-  ): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(authzHeader?: string, origin = 'http://localhost:0'): SimulatorJsonResponse {
     // The auth response and issued token must both be derived from the
     // same grant. B2Client.hasCapabilities reads the response body, while
     // strictAuth enforcement reads the issued-token map.
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
     const grant = this.authorizationGrantForAuthHeader(authzHeader)
+    if (grant === null) {
+      return this.error(401, 'bad_auth_token', 'invalid application key credentials')
+    }
     const capabilities = [...grant.capabilities]
     const bucketIds = cloneBucketIds(grant.bucketIds)
     const allowedBuckets = this.allowedBuckets(bucketIds)
