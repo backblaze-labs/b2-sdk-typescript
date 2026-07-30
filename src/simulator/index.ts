@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,6 +208,7 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
+const VALID_CAPABILITIES = new Set<string>(Object.values(Capability))
 const MASTER_APPLICATION_KEY_ID = 'test-key-id'
 const MASTER_APPLICATION_KEY = 'test-key'
 /**
@@ -336,7 +337,7 @@ interface LargeFileInProgress {
 interface StoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
-  readonly capabilities: readonly string[]
+  readonly capabilities: readonly Capability[]
   readonly accountId: string
   readonly applicationKey: string
   readonly bucketIds: readonly string[] | null
@@ -356,6 +357,10 @@ interface BasicAuthCredentials {
   readonly applicationKeyId: string
   readonly applicationKey: string
 }
+
+type KeyGrantLookup =
+  | { readonly kind: 'found'; readonly grant: AuthorizationGrant }
+  | { readonly kind: 'not-found' | 'bad-secret' | 'expired' }
 
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
@@ -449,6 +454,15 @@ function parseBasicAuthCredentials(authzHeader: string | undefined): BasicAuthCr
   }
 }
 
+function normalizeCapabilities(capabilities: readonly string[]): readonly Capability[] | null {
+  const normalized: Capability[] = []
+  for (const capability of capabilities) {
+    if (!VALID_CAPABILITIES.has(capability)) return null
+    normalized.push(capability as Capability)
+  }
+  return Object.freeze(normalized)
+}
+
 function hasOwnField(body: unknown, field: string): boolean {
   return typeof body === 'object' && body !== null && Object.hasOwn(body, field)
 }
@@ -493,7 +507,7 @@ function storedNotificationRulePrefixes(
   )
 }
 
-function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
+function hasKeyManagementCapability(capabilities: readonly Capability[]): boolean {
   return capabilities.some(
     (capability) =>
       capability === Capability.ListKeys ||
@@ -1269,7 +1283,7 @@ export class B2Simulator {
     if (!token) {
       return this.error(401, 'bad_auth_token', 'unknown auth token')
     }
-    if (this.now() > token.expiresAt) {
+    if (this.now() >= token.expiresAt) {
       return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
     }
     const missing = missingCapabilitiesFor(endpoint, token.capabilities)
@@ -1796,16 +1810,23 @@ export class B2Simulator {
     )
   }
 
-  private keyGrantForAuthCredentials(credentials: BasicAuthCredentials): AuthorizationGrant | null {
+  private keyGrantForAuthCredentials(credentials: BasicAuthCredentials): KeyGrantLookup {
     const { applicationKeyId, applicationKey } = credentials
     const stored = this.keys.get(applicationKeyId)
-    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) return null
+    if (!stored) return { kind: 'not-found' }
+    if (!timingSafeStringEqual(stored.applicationKey, applicationKey)) return { kind: 'bad-secret' }
+    if (stored.expirationTimestamp !== null && this.now() >= stored.expirationTimestamp) {
+      return { kind: 'expired' }
+    }
     return {
-      capabilities: stored.capabilities.map((capability) => capability as Capability),
-      bucketIds: cloneBucketIds(stored.bucketIds),
-      namePrefix: stored.namePrefix,
-      applicationKeyId,
-      expirationTimestamp: stored.expirationTimestamp,
+      kind: 'found',
+      grant: {
+        capabilities: [...stored.capabilities],
+        bucketIds: cloneBucketIds(stored.bucketIds),
+        namePrefix: stored.namePrefix,
+        applicationKeyId,
+        expirationTimestamp: stored.expirationTimestamp,
+      },
     }
   }
 
@@ -1814,13 +1835,19 @@ export class B2Simulator {
   ): AuthorizationGrant | null {
     const credentials = parseBasicAuthCredentials(authzHeader)
     if (credentials === null) {
+      // Default permissive mode intentionally treats missing or malformed
+      // credentials as the implicit master grant. Use strictAuth for
+      // capability-scoped negative tests.
       return this.strictAuth ? null : this.masterAuthorizationGrant()
     }
     if (this.isMasterCredential(credentials)) return this.masterAuthorizationGrant()
 
     const keyGrant = this.keyGrantForAuthCredentials(credentials)
-    if (keyGrant !== null) return keyGrant
+    if (keyGrant.kind === 'found') return keyGrant.grant
+    if (keyGrant.kind === 'expired') return null
 
+    // Default permissive mode historically treats unmatched credentials as the
+    // implicit master grant. Use strictAuth for capability-scoped negative tests.
     return this.strictAuth ? null : this.masterAuthorizationGrant()
   }
 
@@ -2624,50 +2651,59 @@ export class B2Simulator {
     if (grant === null) {
       return this.error(401, 'bad_auth_token', 'invalid application key credentials')
     }
-    const capabilities = [...grant.capabilities]
+    // Keep these arrays distinct: the response body is caller-visible and mutable,
+    // while the token capabilities are used for internal enforcement.
+    const tokenCapabilities = [...grant.capabilities]
+    const responseCapabilities = [...grant.capabilities]
     const bucketIds = cloneBucketIds(grant.bucketIds)
     const allowedBuckets = this.allowedBuckets(bucketIds)
     const legacyBucketId = singleBucketId(bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
+    const ttlExpiresAt = this.now() + this.authTokenTtlMs
+    const expiresAt =
+      grant.expirationTimestamp === null
+        ? ttlExpiresAt
+        : Math.min(ttlExpiresAt, grant.expirationTimestamp)
     this.issuedTokens.set(tokenStr, {
-      capabilities,
+      capabilities: tokenCapabilities,
       bucketIds,
       namePrefix: grant.namePrefix,
-      expiresAt: this.now() + this.authTokenTtlMs,
+      expiresAt,
       applicationKeyId: grant.applicationKeyId,
     })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.accountId),
-        // `AuthToken` has no public factory by design — auth tokens are
-        // minted by B2, not constructed by user code. The simulator is
-        // the only legitimate place that needs to forge one.
-        authorizationToken: tokenStr as unknown as AuthToken,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: origin,
+    const body: AuthorizeAccountResponse = {
+      accountId: accountIdOf(this.accountId),
+      // `AuthToken` has no public factory by design — auth tokens are
+      // minted by B2, not constructed by user code. The simulator is
+      // the only legitimate place that needs to forge one.
+      authorizationToken: tokenStr as unknown as AuthToken,
+      apiInfo: {
+        storageApi: {
+          absoluteMinimumPartSize: this.minimumPartSize,
+          apiUrl: origin,
+          bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+          bucketName: legacyBucketName,
+          downloadUrl: origin,
+          infoType: 'storageApi',
+          namePrefix: grant.namePrefix,
+          recommendedPartSize: this.recommendedPartSize,
+          s3ApiUrl: origin,
+          allowed: {
+            capabilities: responseCapabilities,
+            buckets: allowedBuckets,
             bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
             bucketName: legacyBucketName,
-            downloadUrl: origin,
-            infoType: 'storageApi',
             namePrefix: grant.namePrefix,
-            recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: origin,
-            allowed: {
-              capabilities: [...capabilities],
-              buckets: allowedBuckets,
-              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
-              bucketName: legacyBucketName,
-              namePrefix: grant.namePrefix,
-            },
           },
         },
-        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
+      applicationKeyExpirationTimestamp: grant.expirationTimestamp,
+    }
+    return {
+      status: 200,
+      body,
     }
   }
 
@@ -3555,10 +3591,11 @@ export class B2Simulator {
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
-    if (
-      hasKeyManagementCapability(req.capabilities) &&
-      (bucketIds !== null || namePrefix !== null)
-    ) {
+    const capabilities = normalizeCapabilities(req.capabilities)
+    if (capabilities === null) {
+      return this.error(400, 'bad_request', 'unknown application key capability')
+    }
+    if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
       return this.error(
         400,
         'bad_request',
@@ -3569,12 +3606,12 @@ export class B2Simulator {
     const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
-        ? Date.now() + req.validDurationInSeconds * 1000
+        ? this.now() + req.validDurationInSeconds * 1000
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: req.capabilities,
+      capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,

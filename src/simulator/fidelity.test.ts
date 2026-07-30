@@ -9,7 +9,7 @@ import { BucketType } from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
 import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import { fileId as fileIdOf } from '../types/ids.ts'
+import { accountId as accountIdOf, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import { ENDPOINT_CAPABILITIES } from './capabilities.ts'
 import {
@@ -651,6 +651,52 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         code: 'bad_auth_token',
       })
     }
+  })
+
+  it('expires issued auth tokens at the backing application key expiration', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-key-expiry',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'expiring-token-key',
+      validDurationInSeconds: 60,
+      bucketIds: [bucket.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const transport = sim.transport()
+    const request = {
+      method: 'POST' as const,
+      url: `${scopedClient.accountInfo.getApiUrl()}/b2api/v4/b2_list_file_names`,
+      headers: {
+        Authorization: scopedClient.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ bucketId: bucket.id }),
+    }
+
+    await expect((await transport.send(request)).json()).resolves.toMatchObject({ files: [] })
+    sim.advanceTime(60_000)
+    const expired = await transport.send(request)
+
+    expect(expired.status).toBe(401)
+    await expect(expired.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
+  })
+
+  it('rejects unknown application key capabilities', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.raw.createKey(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+        accountId: accountIdOf(client.accountInfo.getAccountId()),
+        capabilities: ['notARealCapability' as Capability],
+        keyName: 'unknown-capability',
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
