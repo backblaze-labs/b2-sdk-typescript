@@ -662,6 +662,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expectAuthorizeRejected(sim, undefined)
     await expectAuthorizeRejected(sim, 'Basic not-valid-base64')
     await expectAuthorizeRejected(sim, `Basic ${btoa('missing-colon')}`)
+    await expectAuthorizeRejected(sim, basicAuth(SIMULATOR_MASTER_APPLICATION_KEY_ID, 'wrong'))
     await expectAuthorizeRejected(sim, basicAuth('does-not-exist', 'anything'))
     await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
 
@@ -678,6 +679,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
 
     await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
+    await expectAuthorizeRejected(sim, basicAuth(SIMULATOR_MASTER_APPLICATION_KEY_ID, 'wrong'))
   })
 
   it('reports and enforces application key expiration during authorize', async () => {

@@ -1846,11 +1846,11 @@ export class B2Simulator {
     }
 
     const { applicationKeyId, applicationKey } = credentials
-    if (
-      applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
-      timingSafeStringEqual(applicationKey, SIMULATOR_MASTER_APPLICATION_KEY)
-    ) {
-      return { ok: true, grant: masterGrant }
+    if (applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID) {
+      if (timingSafeStringEqual(applicationKey, SIMULATOR_MASTER_APPLICATION_KEY)) {
+        return { ok: true, grant: masterGrant }
+      }
+      return invalidCredentials()
     }
 
     const stored = this.keys.get(applicationKeyId)
