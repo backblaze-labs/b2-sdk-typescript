@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import type { RawClient } from '../raw/index.ts'
 import { jsonResponse, readStream } from '../test-utils/index.ts'
-import { EncryptionAlgorithm } from '../types/encryption.ts'
+import { EncryptionAlgorithm, SSE_C_KEY_REDACTION } from '../types/encryption.ts'
 import type { FileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 
@@ -58,14 +58,14 @@ describe('createParallelDownloadStream Node diagnostics', () => {
     const diagnostics = inspect(seenOptions[0])
     expect(diagnostics).not.toContain(serverSideEncryption.customerKey)
     expect(diagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
-    expect(diagnostics).toContain('[redacted SSE-C key]')
+    expect(diagnostics).toContain(SSE_C_KEY_REDACTION)
 
     const jsonDiagnostics = JSON.stringify(seenOptions[0])
     expect(jsonDiagnostics).not.toContain(serverSideEncryption.customerKey)
     expect(jsonDiagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
 
     const seenDownloadOptions = seenOptions[0] as { serverSideEncryption?: unknown }
-    expect(String(seenDownloadOptions.serverSideEncryption)).toContain('[redacted SSE-C key]')
+    expect(String(seenDownloadOptions.serverSideEncryption)).toContain(SSE_C_KEY_REDACTION)
   })
 
   it('throws a fallback range error when no attempts are allowed', async () => {

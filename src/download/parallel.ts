@@ -4,6 +4,7 @@ import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from 
 import type { RawClient, SseCDownloadKey } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { redactSseCKeyMaterial } from '../types/encryption.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import type { FileId } from '../types/ids.ts'
 import { DEFAULT_DOWNLOAD_RANGE_SIZE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
@@ -23,7 +24,12 @@ export interface ParallelDownloadOptions {
   readonly rangeSize?: number
   /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
-  /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+  /**
+   * SSE-C decryption parameters, required if the file was uploaded with SSE-C.
+   * Internal diagnostics redact the copied options object, but the key is still
+   * sent in plaintext SSE-C HTTP headers. Custom transports should not log
+   * request headers that may contain customer-provided keys.
+   */
   readonly serverSideEncryption?: SseCDownloadKey
   /**
    * Extra retry attempts per range on transient failures. Defaults to 0 because
@@ -51,9 +57,6 @@ interface FetchRangeWithRetryParams {
   readonly retryOptions: RetryOptions
   readonly signal: AbortSignal | undefined
 }
-
-const SSE_C_KEY_REDACTION = '[redacted SSE-C key]'
-const NODE_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
 
 /**
  * Creates a readable stream that downloads a file using parallel byte-range requests.
@@ -87,7 +90,7 @@ export function createParallelDownloadStream(
   const totalSize = options.totalSize
   const serverSideEncryption =
     options.serverSideEncryption !== undefined
-      ? redactSseCDownloadKey(options.serverSideEncryption)
+      ? redactSseCKeyMaterial(options.serverSideEncryption, { label: 'SseCDownloadKey' })
       : undefined
   // The high-level B2Client already wraps the raw transport in RetryTransport.
   // Keep the parallel-download outer retry disabled by default so each range
@@ -97,7 +100,19 @@ export function createParallelDownloadStream(
     ...DEFAULT_RETRY_OPTIONS,
     maxRetries: options.maxRetries ?? 0,
   }
-  const abort = options.signal
+  const internalAbort = new AbortController()
+  const abort = internalAbort.signal
+  let removeCallerAbortListener: (() => void) | undefined
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      internalAbort.abort(options.signal.reason)
+    } else {
+      const callerSignal = options.signal
+      const abortFromCaller = () => internalAbort.abort(callerSignal.reason)
+      callerSignal.addEventListener('abort', abortFromCaller, { once: true })
+      removeCallerAbortListener = () => callerSignal.removeEventListener('abort', abortFromCaller)
+    }
+  }
 
   const ranges = planRanges(totalSize, rangeSize)
 
@@ -114,6 +129,15 @@ export function createParallelDownloadStream(
   let nextToEmit = 0
   let expectedSha1: string | null | undefined
   let firstError: unknown = null
+
+  function abortInflight(reason?: unknown): void {
+    if (!abort.aborted) internalAbort.abort(reason)
+  }
+
+  function cleanupCallerAbortListener(): void {
+    removeCallerAbortListener?.()
+    removeCallerAbortListener = undefined
+  }
 
   function scheduleNext(): void {
     while (
@@ -145,7 +169,10 @@ export function createParallelDownloadStream(
           })
           buffer.set(idx, result)
         } catch (err) {
-          if (firstError === null) firstError = err
+          if (firstError === null) {
+            firstError = err
+            abortInflight(err)
+          }
         } finally {
           inflight.delete(idx)
         }
@@ -164,6 +191,7 @@ export function createParallelDownloadStream(
         abort?.throwIfAborted()
         scheduleNext()
       } catch (err) {
+        cleanupCallerAbortListener()
         controller.error(err)
       }
     },
@@ -177,6 +205,7 @@ export function createParallelDownloadStream(
           // non-empty downloads, this guard prevents a future refactor from
           // stalling the stream if it leaves both maps empty mid-stream.
           if (inflight.size === 0) {
+            cleanupCallerAbortListener()
             controller.close()
             return
           }
@@ -214,13 +243,18 @@ export function createParallelDownloadStream(
           if (expectedSha1 !== undefined && expectedSha1 !== null && assembledSha1 !== null) {
             assertDownloadSha1(expectedSha1, await assembledSha1.digest())
           }
+          cleanupCallerAbortListener()
           controller.close()
         }
       } catch (err) {
+        abortInflight(err)
+        cleanupCallerAbortListener()
         controller.error(err)
       }
     },
-    cancel() {
+    cancel(reason) {
+      abortInflight(reason)
+      cleanupCallerAbortListener()
       // Abort propagation handles in-flight requests; just drop buffered
       // data so it can be GC'd promptly.
       buffer.clear()
@@ -291,40 +325,6 @@ async function fetchRangeWithRetry(
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
-}
-
-function redactSseCDownloadKey(key: SseCDownloadKey): SseCDownloadKey {
-  const redacted = {
-    algorithm: key.algorithm,
-  } as SseCDownloadKey & {
-    toJSON(): {
-      algorithm: SseCDownloadKey['algorithm']
-      customerKey: string
-      customerKeyMd5: string
-    }
-    toString(): string
-  }
-  const redactedJson = {
-    algorithm: key.algorithm,
-    customerKey: SSE_C_KEY_REDACTION,
-    customerKeyMd5: SSE_C_KEY_REDACTION,
-  }
-
-  Object.defineProperties(redacted, {
-    customerKey: { value: key.customerKey, enumerable: false },
-    customerKeyMd5: { value: key.customerKeyMd5, enumerable: false },
-    toJSON: { value: () => redactedJson, enumerable: false },
-    toString: {
-      value: () => `[SseCDownloadKey ${SSE_C_KEY_REDACTION}]`,
-      enumerable: false,
-    },
-  })
-  Object.defineProperty(redacted, NODE_INSPECT_CUSTOM, {
-    value: () => redactedJson,
-    enumerable: false,
-  })
-
-  return redacted
 }
 
 class RangeValidationError extends Error {

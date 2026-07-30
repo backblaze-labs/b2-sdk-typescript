@@ -695,10 +695,25 @@ describe('createParallelDownloadStream', () => {
     }
   })
 
-  it('allows canceling a parallel download stream before reads', async () => {
+  it('aborts in-flight ranged requests when canceled', async () => {
+    const seenSignals: AbortSignal[] = []
     const raw = {
-      async downloadFileById(): Promise<never> {
-        throw new Error('download should not start')
+      async downloadFileById(
+        _downloadUrl: string,
+        _authToken: string,
+        _fileId: string,
+        options?: unknown,
+      ): Promise<{
+        headers: Headers
+        body: ReadableStream<Uint8Array> | null
+        status: number
+      }> {
+        const signal = (options as { signal?: AbortSignal } | undefined)?.signal
+        if (signal === undefined) throw new Error('missing abort signal')
+        seenSignals.push(signal)
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
       },
     } as unknown as RawClient
     const accountInfo = {
@@ -707,11 +722,106 @@ describe('createParallelDownloadStream', () => {
     }
 
     const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
-      fileId: 'parallel_cancel_before_read' as FileId,
-      totalSize: 0,
+      fileId: 'parallel_cancel_inflight' as FileId,
+      totalSize: 100,
+      rangeSize: 25,
+      concurrency: 2,
     })
 
-    await expect(stream.cancel()).resolves.toBeUndefined()
+    expect(seenSignals).toHaveLength(4)
+    await expect(stream.cancel('caller stopped reading')).resolves.toBeUndefined()
+    expect(seenSignals.every((signal) => signal.aborted)).toBe(true)
+  })
+
+  it('aborts in-flight ranged requests when the caller signal aborts', async () => {
+    const controller = new AbortController()
+    const seenSignals: AbortSignal[] = []
+    const abortError = new Error('caller aborted')
+    const raw = {
+      async downloadFileById(
+        _downloadUrl: string,
+        _authToken: string,
+        _fileId: string,
+        options?: unknown,
+      ): Promise<{
+        headers: Headers
+        body: ReadableStream<Uint8Array> | null
+        status: number
+      }> {
+        const signal = (options as { signal?: AbortSignal } | undefined)?.signal
+        if (signal === undefined) throw new Error('missing abort signal')
+        seenSignals.push(signal)
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: 'parallel_caller_abort_inflight' as FileId,
+      totalSize: 100,
+      rangeSize: 25,
+      concurrency: 2,
+      signal: controller.signal,
+    })
+
+    expect(seenSignals).toHaveLength(4)
+    controller.abort(abortError)
+
+    await expect(readStream(stream)).rejects.toThrow(/caller aborted/)
+    expect(seenSignals.every((signal) => signal.aborted)).toBe(true)
+  })
+
+  it('aborts sibling ranged requests when one range fails', async () => {
+    const seenSignals: AbortSignal[] = []
+    let calls = 0
+    const raw = {
+      async downloadFileById(
+        _downloadUrl: string,
+        _authToken: string,
+        _fileId: string,
+        options?: unknown,
+      ): Promise<{
+        headers: Headers
+        body: ReadableStream<Uint8Array> | null
+        status: number
+      }> {
+        calls++
+        const signal = (options as { signal?: AbortSignal } | undefined)?.signal
+        if (signal === undefined) throw new Error('missing abort signal')
+        seenSignals.push(signal)
+        if (calls === 1) {
+          return jsonResponse(403, {
+            status: 403,
+            code: 'access_denied',
+            message: 'denied',
+          })
+        }
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: 'parallel_abort_siblings' as FileId,
+      totalSize: 100,
+      rangeSize: 25,
+      concurrency: 2,
+      maxRetries: 0,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/denied/)
+    expect(seenSignals).toHaveLength(4)
+    expect(seenSignals.slice(1).every((signal) => signal.aborted)).toBe(true)
   })
 
   it('does not leak SSE-C keys in parallel download failure diagnostics', async () => {

@@ -122,7 +122,84 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-const KEY_REDACTED = '[redacted SSE-C key]'
+export const SSE_C_KEY_REDACTION = '[redacted SSE-C key]'
+
+const NODE_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
+
+interface SseCKeyMaterial {
+  readonly algorithm: EncryptionAlgorithm
+  readonly customerKey: string
+  readonly customerKeyMd5: string
+}
+
+interface SseCKeyRedactionOptions {
+  readonly label: string
+  readonly mode?: 'SSE-C'
+}
+
+interface RedactedSseCKeyJson {
+  readonly mode?: 'SSE-C'
+  readonly algorithm: EncryptionAlgorithm
+  readonly customerKey: string
+  readonly customerKeyMd5: string
+}
+
+function sseCKeyRedactedJson(
+  key: SseCKeyMaterial,
+  options: SseCKeyRedactionOptions,
+): RedactedSseCKeyJson {
+  return {
+    ...(options.mode !== undefined ? { mode: options.mode } : {}),
+    algorithm: key.algorithm,
+    customerKey: SSE_C_KEY_REDACTION,
+    // The MD5 is not secret key material, but it is still derived from a
+    // customer-provided key. Keep logged key views fully opaque by default.
+    customerKeyMd5: SSE_C_KEY_REDACTION,
+  }
+}
+
+function sseCKeyRedactedString(options: SseCKeyRedactionOptions): string {
+  return `[${options.label} ${SSE_C_KEY_REDACTION}]`
+}
+
+/**
+ * Wraps SSE-C key material so diagnostic stringification redacts key fields.
+ *
+ * The returned object keeps `customerKey` and `customerKeyMd5` readable by
+ * property access for request header construction, but makes them
+ * non-enumerable so object spread and generic serializers do not copy them.
+ * Callers that need wire headers must read those fields directly.
+ *
+ * @param key - SSE-C key material to wrap.
+ * @param options - Redaction label and optional encryption mode discriminator.
+ *
+ * @returns A redacted view with the same readable key fields.
+ */
+export function redactSseCKeyMaterial<T extends SseCKeyMaterial>(
+  key: T,
+  options: SseCKeyRedactionOptions,
+): T {
+  const redacted = {
+    ...(options.mode !== undefined ? { mode: options.mode } : {}),
+    algorithm: key.algorithm,
+  } as T & {
+    toJSON(): RedactedSseCKeyJson
+    toString(): string
+  }
+
+  Object.defineProperties(redacted, {
+    customerKey: { value: key.customerKey, enumerable: false },
+    customerKeyMd5: { value: key.customerKeyMd5, enumerable: false },
+    toJSON: { value: () => sseCKeyRedactedJson(key, options), enumerable: false },
+    toString: { value: () => sseCKeyRedactedString(options), enumerable: false },
+  })
+  Object.defineProperty(redacted, NODE_INSPECT_CUSTOM, {
+    value: () => sseCKeyRedactedString(options),
+    enumerable: false,
+  })
+
+  return redacted
+}
 
 /**
  * Safe wrapper around an SSE-C customer key. Hides the key bytes from
@@ -201,11 +278,11 @@ export class EncryptionKey {
     /** Always the literal redaction placeholder; the real MD5 never leaves the instance. */
     customerKeyMd5: string
   } {
-    return {
-      mode: this.mode,
-      algorithm: this.algorithm,
-      customerKey: KEY_REDACTED,
-      customerKeyMd5: KEY_REDACTED,
+    return sseCKeyRedactedJson(this, { label: 'EncryptionKey SSE-C', mode: this.mode }) as {
+      mode: 'SSE-C'
+      algorithm: EncryptionAlgorithm
+      customerKey: string
+      customerKeyMd5: string
     }
   }
 
@@ -215,7 +292,7 @@ export class EncryptionKey {
    * @returns A short opaque label indicating this is an SSE-C key.
    */
   toString(): string {
-    return `[EncryptionKey SSE-C ${KEY_REDACTED}]`
+    return sseCKeyRedactedString({ label: 'EncryptionKey SSE-C' })
   }
 
   /**
@@ -223,7 +300,7 @@ export class EncryptionKey {
    *
    * @returns A short opaque label indicating this is an SSE-C key.
    */
-  [Symbol.for('nodejs.util.inspect.custom')](): string {
+  [NODE_INSPECT_CUSTOM](): string {
     return this.toString()
   }
 }

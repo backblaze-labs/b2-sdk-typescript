@@ -1284,7 +1284,11 @@ function applyEncryptionHeaders(
 export interface SseCDownloadKey {
   /** Encryption algorithm. Always `EncryptionAlgorithm.Aes256` (`'AES256'`). */
   readonly algorithm: EncryptionAlgorithm
-  /** Base64-encoded customer-provided decryption key. */
+  /**
+   * Base64-encoded customer-provided decryption key. This value must be sent as
+   * an HTTP request header for SSE-C downloads, so custom transports should not
+   * log request headers without redacting them first.
+   */
   readonly customerKey: string
   /** Base64-encoded MD5 digest of the decryption key. */
   readonly customerKeyMd5: string
@@ -1345,6 +1349,8 @@ function buildDownloadRequestHeaders(
   if (options?.range) headers['Range'] = options.range
   if (options?.serverSideEncryption) {
     const encryption = options.serverSideEncryption
+    // SSE-C keys may be redacted wrappers with non-enumerable key fields.
+    // Read fields directly; object spread would drop the wire header values.
     applyEncryptionHeaders(headers, {
       mode: EncryptionMode.SseC,
       algorithm: encryption.algorithm,
