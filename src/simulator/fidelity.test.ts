@@ -560,6 +560,30 @@ describe('B2Simulator bucket deletion fidelity', () => {
     await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
   })
 
+  it('rejects b2_delete_bucket while the bucket has unfinished large files', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unfinished-delete',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const unfinished = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'unfinished.bin',
+      contentType: 'application/octet-stream',
+    })
+
+    await expect(bucket.delete()).rejects.toMatchObject({
+      status: 400,
+      code: 'cannot_delete_non_empty_bucket',
+    })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
+
+    await client.raw.cancelLargeFile(apiUrl, authToken, { fileId: unfinished.fileId })
+    await expect(bucket.delete()).resolves.toMatchObject({ bucketId: bucket.id })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(0)
+  })
+
   it('deletes the bucket after deleteAll removes every file version', async () => {
     const bucket = await client.createBucket({
       bucketName: 'delete-after-delete-all',
