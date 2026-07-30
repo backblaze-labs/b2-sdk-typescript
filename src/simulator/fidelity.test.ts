@@ -546,6 +546,44 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     return client
   }
 
+  function basicAuth(applicationKeyId: string, applicationKey: string): string {
+    return `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`
+  }
+
+  async function authorizeWithHeader(
+    sim: B2Simulator,
+    authorization: string | undefined,
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+    })
+  }
+
+  function issuedAuthTokenCount(sim: B2Simulator): number {
+    return (
+      sim as unknown as {
+        readonly issuedTokens: Map<string, unknown>
+      }
+    ).issuedTokens.size
+  }
+
+  async function expectAuthorizeRejected(
+    sim: B2Simulator,
+    authorization: string | undefined,
+    message: RegExp = /invalid application key credentials/,
+  ): Promise<void> {
+    const tokenCount = issuedAuthTokenCount(sim)
+    const response = await authorizeWithHeader(sim, authorization)
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringMatching(message),
+    })
+    expect(issuedAuthTokenCount(sim)).toBe(tokenCount)
+  }
+
   function forgeAdjacentTokenValue(token: string): string {
     return `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`
   }
@@ -566,6 +604,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
     expect(allowed?.buckets).toBeNull()
+    expect(client.accountInfo.getAuth()?.applicationKeyExpirationTimestamp).toBeNull()
     // Master does NOT have BypassGovernance — tests that need it must
     // mint a key with that cap explicitly.
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
@@ -603,6 +642,53 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ok: false,
       missing: [Capability.WriteFiles],
     })
+  })
+
+  it('rejects invalid application key credentials in strict-auth mode', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'invalid-auth-key',
+    })
+
+    const masterResponse = await authorizeWithHeader(sim, basicAuth('test-key-id', 'test-key'))
+    expect(masterResponse.status).toBe(200)
+    await expectAuthorizeRejected(sim, undefined)
+    await expectAuthorizeRejected(sim, 'Basic not-valid-base64')
+    await expectAuthorizeRejected(sim, `Basic ${btoa('missing-colon')}`)
+    await expectAuthorizeRejected(sim, basicAuth('does-not-exist', 'anything'))
+    await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
+
+    await client.deleteKey(key.applicationKeyId)
+    await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+  })
+
+  it('reports and enforces application key expiration during authorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'expiring-auth-key',
+      validDurationInSeconds: 1,
+    })
+    expect(key.expirationTimestamp).not.toBeNull()
+    expect(key.expirationTimestamp).toBeGreaterThan(Date.now())
+
+    const activeResponse = await authorizeWithHeader(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+    )
+    expect(activeResponse.status).toBe(200)
+    const activeAuth = await activeResponse.json<AuthorizeAccountResponse>()
+    expect(activeAuth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
+
+    sim.advanceTime(2000)
+    await expectAuthorizeRejected(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+      /application key has expired/,
+    )
   })
 
   it('keeps authorize response capabilities isolated from stored key grants', async () => {
