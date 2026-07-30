@@ -72,6 +72,9 @@ function parseBasicAuthorizationHeader(authzHeader: string | undefined): BasicCr
   }
 }
 
+const B2_MIN_PART_NUMBER = 1
+const B2_MAX_PART_NUMBER = 10_000
+
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
   for (const byte of bytes) {
@@ -542,6 +545,28 @@ function requestHeaderValue(headers: Record<string, string>, name: string): stri
     if (key.toLowerCase() === lowerName) return value
   }
   return undefined
+}
+
+type ContentLengthHeader =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'ok'; readonly expectedLength: number }
+  | { readonly kind: 'error'; readonly message: string }
+
+function parseContentLengthHeader(headers: Record<string, string>): ContentLengthHeader {
+  const header = requestHeaderValue(headers, 'content-length')
+  if (header === undefined) return { kind: 'absent' }
+  if (!/^\d+$/.test(header)) {
+    return { kind: 'error', message: `Content-Length must be a byte count: ${header}` }
+  }
+  const expectedLength = Number(header)
+  if (!Number.isSafeInteger(expectedLength)) {
+    return { kind: 'error', message: `Content-Length is too large: ${header}` }
+  }
+  return { kind: 'ok', expectedLength }
+}
+
+function contentLengthMismatchMessage(expectedLength: number, actualLength: number): string {
+  return `Content-Length ${expectedLength} does not match request body length ${actualLength}`
 }
 
 function fileNames(...names: readonly (string | undefined)[]): readonly string[] | undefined {
@@ -2516,20 +2541,14 @@ export class B2Simulator {
     headers: Record<string, string>,
     actualLength: number,
   ): SimulatorJsonResponse | null {
-    const header = requestHeaderValue(headers, 'content-length')
-    if (header === undefined) return null
-    if (!/^\d+$/.test(header)) {
-      return this.error(400, 'bad_request', `Content-Length must be a byte count: ${header}`)
-    }
-    const expectedLength = Number(header)
-    if (!Number.isSafeInteger(expectedLength)) {
-      return this.error(400, 'bad_request', `Content-Length is too large: ${header}`)
-    }
-    if (expectedLength !== actualLength) {
+    const parsed = parseContentLengthHeader(headers)
+    if (parsed.kind === 'absent') return null
+    if (parsed.kind === 'error') return this.error(400, 'bad_request', parsed.message)
+    if (parsed.expectedLength !== actualLength) {
       return this.error(
         400,
         'bad_request',
-        `Content-Length ${expectedLength} does not match request body length ${actualLength}`,
+        contentLengthMismatchMessage(parsed.expectedLength, actualLength),
       )
     }
     return null
@@ -2792,13 +2811,8 @@ export class B2Simulator {
     const large = this.largeFiles.get(fileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
-    const partNumberHeader = headers['x-bz-part-number']
-    const partNumber =
-      partNumberHeader !== undefined && /^\d+$/.test(partNumberHeader)
-        ? Number(partNumberHeader)
-        : Number.NaN
-    const partNumberError = this.validatePartNumber(partNumber)
-    if (partNumberError !== null) return partNumberError
+    const partNumber = this.parsePartNumberHeader(requestHeaderValue(headers, 'x-bz-part-number'))
+    if (typeof partNumber !== 'number') return partNumber
 
     const encryptionError = await this.validateUploadPartEncryption(large, headers)
     if (encryptionError !== null) return encryptionError
@@ -2825,12 +2839,33 @@ export class B2Simulator {
     }
   }
 
+  private parsePartNumberHeader(header: string | undefined): number | SimulatorJsonResponse {
+    if (header === undefined) {
+      return this.error(400, 'bad_request', 'X-Bz-Part-Number header is required')
+    }
+    if (!/^\d+$/.test(header)) {
+      return this.error(
+        400,
+        'bad_request',
+        `X-Bz-Part-Number must be an integer between ${B2_MIN_PART_NUMBER} and ${B2_MAX_PART_NUMBER}; received ${header}`,
+      )
+    }
+    const partNumber = Number(header)
+    return this.validatePartNumber(partNumber) ?? partNumber
+  }
+
   private validatePartNumber(partNumber: number): SimulatorJsonResponse | null {
-    if (Number.isInteger(partNumber) && partNumber >= 1 && partNumber <= 10_000) return null
+    if (
+      Number.isInteger(partNumber) &&
+      partNumber >= B2_MIN_PART_NUMBER &&
+      partNumber <= B2_MAX_PART_NUMBER
+    ) {
+      return null
+    }
     return this.error(
       400,
       'bad_request',
-      `partNumber must be an integer between 1 and 10000; received ${String(partNumber)}`,
+      `partNumber must be an integer between ${B2_MIN_PART_NUMBER} and ${B2_MAX_PART_NUMBER}; received ${String(partNumber)}`,
     )
   }
 
@@ -3749,11 +3784,11 @@ export class B2Simulator {
     // B2 spec-compliance: hard cap of 10000 parts per multipart upload.
     // Real B2 rejects with `400 bad_request`; the simulator used to
     // accept any number of parts.
-    if (sortedParts.length > 10_000) {
+    if (sortedParts.length > B2_MAX_PART_NUMBER) {
       return this.error(
         400,
         'bad_request',
-        `multipart upload has ${sortedParts.length} parts; B2 caps at 10000`,
+        `multipart upload has ${sortedParts.length} parts; B2 caps at ${B2_MAX_PART_NUMBER}`,
       )
     }
     // B2 spec-compliance: every part number must be in [1, 10000].
@@ -3762,11 +3797,15 @@ export class B2Simulator {
     // a caller bypassed the upload-side validation or older simulator
     // state already contains invalid part numbers.
     for (const [partNumber] of sortedParts) {
-      if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
+      if (
+        !Number.isInteger(partNumber) ||
+        partNumber < B2_MIN_PART_NUMBER ||
+        partNumber > B2_MAX_PART_NUMBER
+      ) {
         return this.error(
           400,
           'bad_request',
-          `partNumber ${partNumber} is outside the [1, 10000] range B2 accepts`,
+          `partNumber ${partNumber} is outside the [${B2_MIN_PART_NUMBER}, ${B2_MAX_PART_NUMBER}] range B2 accepts`,
         )
       }
     }
@@ -4541,6 +4580,93 @@ function rawUrlPathContainsLiteralBackslash(rawUrl: string): boolean {
   return rawUrl.slice(pathStart, pathEnd).includes('\\')
 }
 
+function badRequestJson(message: string): SimulatorJsonResponse {
+  return { status: 400, body: { status: 400, code: 'bad_request', message } }
+}
+
+type UploadBodyReadResult =
+  | { readonly data: Uint8Array }
+  | { readonly error: SimulatorJsonResponse }
+
+function checkedUploadBody(data: Uint8Array, expectedLength: number | null): UploadBodyReadResult {
+  if (expectedLength !== null && data.byteLength !== expectedLength) {
+    return { error: badRequestJson(contentLengthMismatchMessage(expectedLength, data.byteLength)) }
+  }
+  return { data }
+}
+
+function copyBytes(bytes: Uint8Array): Uint8Array {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy
+}
+
+function concatenateChunks(chunks: readonly Uint8Array[], totalLength: number): Uint8Array {
+  if (chunks.length === 0) return new Uint8Array(0)
+  if (chunks.length === 1) return copyBytes(chunks[0] as Uint8Array)
+  const data = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    data.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return data
+}
+
+async function readStreamingUploadBody(
+  stream: ReadableStream<Uint8Array>,
+  expectedLength: number | null,
+): Promise<UploadBodyReadResult> {
+  const reader = stream.getReader()
+  const chunks: Uint8Array[] = []
+  let totalLength = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) continue
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value)
+      totalLength += chunk.byteLength
+      if (expectedLength !== null && totalLength > expectedLength) {
+        await reader.cancel().catch(() => undefined)
+        return {
+          error: badRequestJson(contentLengthMismatchMessage(expectedLength, totalLength)),
+        }
+      }
+      chunks.push(chunk)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  if (expectedLength !== null && totalLength !== expectedLength) {
+    return { error: badRequestJson(contentLengthMismatchMessage(expectedLength, totalLength)) }
+  }
+  return { data: concatenateChunks(chunks, totalLength) }
+}
+
+async function readUploadBody(
+  body: BodyInit,
+  expectedLength: number | null,
+): Promise<UploadBodyReadResult> {
+  if (body instanceof ReadableStream) return readStreamingUploadBody(body, expectedLength)
+  if (body instanceof ArrayBuffer) {
+    return checkedUploadBody(new Uint8Array(body), expectedLength)
+  }
+  if (ArrayBuffer.isView(body)) {
+    const view = body as ArrayBufferView
+    return checkedUploadBody(
+      copyBytes(new Uint8Array(view.buffer, view.byteOffset, view.byteLength)),
+      expectedLength,
+    )
+  }
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    if (expectedLength !== null && body.size !== expectedLength) {
+      return { error: badRequestJson(contentLengthMismatchMessage(expectedLength, body.size)) }
+    }
+  }
+  return checkedUploadBody(new Uint8Array(await new Response(body).arrayBuffer()), expectedLength)
+}
+
 class SimulatorTransport implements HttpTransport {
   constructor(private readonly sim: B2Simulator) {}
 
@@ -4630,18 +4756,20 @@ class SimulatorTransport implements HttpTransport {
 
     let result: { status: number; body: unknown }
 
-    if (isUpload && request.body) {
-      const data = new Uint8Array(
-        request.body instanceof ArrayBuffer
-          ? request.body
-          : request.body instanceof Uint8Array
-            ? request.body.buffer.slice(
-                request.body.byteOffset,
-                request.body.byteOffset + request.body.byteLength,
-              )
-            : await new Response(request.body).arrayBuffer(),
-      )
-      result = await this.sim.handleUpload(url, headers, data)
+    if (isUpload) {
+      const parsedContentLength = parseContentLengthHeader(headers)
+      if (parsedContentLength.kind === 'error') {
+        result = badRequestJson(parsedContentLength.message)
+      } else {
+        const uploadBody = await readUploadBody(
+          request.body ?? new Uint8Array(0),
+          parsedContentLength.kind === 'ok' ? parsedContentLength.expectedLength : null,
+        )
+        result =
+          'error' in uploadBody
+            ? uploadBody.error
+            : await this.sim.handleUpload(url, headers, uploadBody.data)
+      }
     } else {
       let body: unknown = null
       if (request.body) {

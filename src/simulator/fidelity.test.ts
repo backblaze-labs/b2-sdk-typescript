@@ -3246,7 +3246,7 @@ describe('B2Simulator upload write-path validation', () => {
       uploadUrl,
       {
         authorization: authorizationToken,
-        'x-bz-part-number': '1',
+        'X-Bz-Part-Number': '1',
         'Content-Length': contentLength,
         'x-bz-content-sha1': await sha1Hex(data),
       },
@@ -3316,6 +3316,80 @@ describe('B2Simulator upload write-path validation', () => {
     expect(listed.parts).toEqual([])
   })
 
+  it('rejects streaming upload bodies as soon as they violate Content-Length', async () => {
+    const uploadUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    let pullCount = 0
+    let canceled = false
+    const tooLongStream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          pullCount += 1
+          controller.enqueue(new Uint8Array([pullCount]))
+        },
+        cancel() {
+          canceled = true
+        },
+      },
+      { highWaterMark: 0 },
+    )
+
+    const tooLongResp = await sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'X-Bz-File-Name': 'too-long-stream.bin',
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': '1',
+        'X-Bz-Content-Sha1': 'do_not_verify',
+      },
+      body: tooLongStream as BodyInit,
+    })
+
+    expect(tooLongResp.status).toBe(400)
+    await expect(tooLongResp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'Content-Length 1 does not match request body length 2',
+    })
+    expect(canceled).toBe(true)
+    expect(pullCount).toBeLessThanOrEqual(2)
+
+    const { large, uploadUrl: partUploadUrl } = await startPartUpload('short-stream.bin')
+    const shortStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]))
+        controller.close()
+      },
+    })
+    const shortResp = await sim.transport().send({
+      method: 'POST',
+      url: partUploadUrl.uploadUrl,
+      headers: {
+        Authorization: partUploadUrl.authorizationToken,
+        'X-Bz-Part-Number': '1',
+        'Content-Length': '2',
+        'X-Bz-Content-Sha1': 'do_not_verify',
+      },
+      body: shortStream as BodyInit,
+    })
+
+    expect(shortResp.status).toBe(400)
+    await expect(shortResp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'Content-Length 2 does not match request body length 1',
+    })
+    const listed = await client.raw.listParts(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: large.fileId },
+    )
+    expect(listed.parts).toEqual([])
+  })
+
   it('rejects out-of-range upload and copy part numbers', async () => {
     const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('bad-part-number.bin')
     const partData = new Uint8Array([7, 8, 9])
@@ -3353,6 +3427,47 @@ describe('B2Simulator upload write-path validation', () => {
       code: 'bad_request',
       message: expect.stringContaining('partNumber must be an integer'),
     })
+    const listed = await client.raw.listParts(apiUrl, authToken, { fileId: large.fileId })
+    expect(listed.parts).toEqual([])
+  })
+
+  it('reports missing and malformed upload part-number headers clearly', async () => {
+    const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('part-number-header.bin')
+    const partData = new Uint8Array([1, 2, 3])
+
+    const missing = await sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'Content-Length': String(partData.byteLength),
+        'X-Bz-Content-Sha1': await sha1Hex(partData),
+      },
+      body: partData as BodyInit,
+    })
+    expect(missing.status).toBe(400)
+    await expect(missing.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'X-Bz-Part-Number header is required',
+    })
+
+    const malformed = await sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'X-Bz-Part-Number': 'not-a-number',
+        'Content-Length': String(partData.byteLength),
+        'X-Bz-Content-Sha1': await sha1Hex(partData),
+      },
+      body: partData as BodyInit,
+    })
+    expect(malformed.status).toBe(400)
+    await expect(malformed.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'X-Bz-Part-Number must be an integer between 1 and 10000; received not-a-number',
+    })
+
     const listed = await client.raw.listParts(apiUrl, authToken, { fileId: large.fileId })
     expect(listed.parts).toEqual([])
   })
