@@ -64,12 +64,35 @@ test('verify-package-metadata accepts a version-only metadata artifact', async (
   assert.match(result.stdout, /distArtifacts=1/)
 })
 
+test('verify-package-metadata documents a source-only run when dist is absent', async () => {
+  const repo = await writeFixture({})
+
+  const result = runVerify(repo)
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /distArtifacts=not-built/)
+})
+
 test('verify-package-metadata rejects a poisoned metadata artifact', async () => {
   const repo = await writeFixture({
     'dist/version.js':
       "import metadata from './chunks/version-metadata.js'\nexport const VERSION = metadata.version\n",
     'dist/chunks/version-metadata.js':
       "const name = '@example/pkg'\nexport default { version: '1.2.3', ['scripts']: {}, name }\n",
+  })
+
+  const result = runVerify(repo)
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /must export only \["version"\]/)
+})
+
+test('verify-package-metadata rejects string-built metadata artifact keys', async () => {
+  const repo = await writeFixture({
+    'dist/version.js':
+      "import metadata from './chunks/version-metadata.js'\nexport const VERSION = metadata.version\n",
+    'dist/chunks/version-metadata.js':
+      "const metadata = { version: '1.2.3' }\nmetadata['na' + 'me'] = '@example/pkg'\nexport default metadata\n",
   })
 
   const result = runVerify(repo)
@@ -87,6 +110,18 @@ test('verify-package-metadata fails closed when built dist has no metadata artif
 
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /no version-only metadata artifact was found/)
+})
+
+test('verify-package-metadata rejects a missing referenced metadata artifact', async () => {
+  const repo = await writeFixture({
+    'dist/version.js':
+      "import metadata from './chunks/missing-version-metadata.js'\nexport const VERSION = metadata.version\n",
+  })
+
+  const result = runVerify(repo)
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /is referenced by dist\/version\.\* but does not exist/)
 })
 
 test('verify-package-metadata scans non-metadata dist chunks for package manifest leaks', async () => {

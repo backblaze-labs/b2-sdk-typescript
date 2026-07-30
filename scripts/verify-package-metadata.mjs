@@ -15,6 +15,8 @@
 //   5. src/version.ts re-exports the version from package.json (no hardcode).
 //   6. Built package metadata artifacts expose only `version`, never the full
 //      package.json metadata.
+//      If dist/ is absent, only source metadata is checked and the output says
+//      `distArtifacts=not-built`; CI and prepublish run this after build.
 //
 // Exits 0 on success, prints a numbered list of mismatches on failure.
 
