@@ -3160,23 +3160,24 @@ describe('B2Simulator upload write-path validation', () => {
   async function uploadFileWithContentLength(
     data: Uint8Array,
     contentLength: string,
-  ): Promise<{ status: number; body: unknown }> {
+  ): Promise<HttpResponse> {
     const uploadUrl = await client.raw.getUploadUrl(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
       { bucketId: bucket.id },
     )
-    return sim.handleUpload(
-      uploadUrl.uploadUrl,
-      {
-        authorization: uploadUrl.authorizationToken,
-        'x-bz-file-name': 'length-mismatch.txt',
-        'content-type': 'application/octet-stream',
-        'content-length': contentLength,
-        'x-bz-content-sha1': await sha1Hex(data),
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'X-Bz-File-Name': 'length-mismatch.txt',
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': contentLength,
+        'X-Bz-Content-Sha1': await sha1Hex(data),
       },
-      data,
-    )
+      body: data as BodyInit,
+    })
   }
 
   async function startPartUpload(fileName: string) {
@@ -3193,19 +3194,60 @@ describe('B2Simulator upload write-path validation', () => {
     return { apiUrl, authToken, large, uploadUrl }
   }
 
-  async function uploadPartDirect(
+  async function uploadPartWithContentLength(
     uploadUrl: string,
     authorizationToken: string,
     partNumber: number,
     data: Uint8Array,
     contentLength = String(data.byteLength),
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl,
+      headers: {
+        Authorization: authorizationToken,
+        'X-Bz-Part-Number': String(partNumber),
+        'Content-Length': contentLength,
+        'X-Bz-Content-Sha1': await sha1Hex(data),
+      },
+      body: data as BodyInit,
+    })
+  }
+
+  async function handleUploadFileDirect(
+    data: Uint8Array,
+    contentLength: string,
+  ): Promise<{ status: number; body: unknown }> {
+    const uploadUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    return sim.handleUpload(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        'x-bz-file-name': 'direct-length-mismatch.txt',
+        'content-type': 'application/octet-stream',
+        'Content-Length': contentLength,
+        'x-bz-content-sha1': await sha1Hex(data),
+      },
+      data,
+    )
+  }
+
+  async function handleUploadPartDirect(
+    uploadUrl: string,
+    authorizationToken: string,
+    data: Uint8Array,
+    contentLength: string,
   ): Promise<{ status: number; body: unknown }> {
     return sim.handleUpload(
       uploadUrl,
       {
         authorization: authorizationToken,
-        'x-bz-part-number': String(partNumber),
-        'content-length': contentLength,
+        'x-bz-part-number': '1',
+        'Content-Length': contentLength,
         'x-bz-content-sha1': await sha1Hex(data),
       },
       data,
@@ -3214,7 +3256,39 @@ describe('B2Simulator upload write-path validation', () => {
 
   it('rejects upload_file and upload_part content-length mismatches', async () => {
     const fileData = new Uint8Array([1, 2, 3])
-    await expect(uploadFileWithContentLength(fileData, '4')).resolves.toMatchObject({
+    const fileResp = await uploadFileWithContentLength(fileData, '4')
+    expect(fileResp.status).toBe(400)
+    await expect(fileResp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('Content-Length 4 does not match'),
+    })
+
+    const { large, uploadUrl } = await startPartUpload('part-length-mismatch.bin')
+    const partData = new Uint8Array([4, 5, 6])
+    const partResp = await uploadPartWithContentLength(
+      uploadUrl.uploadUrl,
+      uploadUrl.authorizationToken,
+      1,
+      partData,
+      '2',
+    )
+    expect(partResp.status).toBe(400)
+    await expect(partResp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('Content-Length 2 does not match'),
+    })
+
+    const listed = await client.raw.listParts(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: large.fileId },
+    )
+    expect(listed.parts).toEqual([])
+  })
+
+  it('rejects canonical Content-Length mismatches passed directly to handleUpload', async () => {
+    const fileData = new Uint8Array([1, 2, 3])
+    await expect(handleUploadFileDirect(fileData, '4')).resolves.toMatchObject({
       status: 400,
       body: {
         code: 'bad_request',
@@ -3225,7 +3299,7 @@ describe('B2Simulator upload write-path validation', () => {
     const { large, uploadUrl } = await startPartUpload('part-length-mismatch.bin')
     const partData = new Uint8Array([4, 5, 6])
     await expect(
-      uploadPartDirect(uploadUrl.uploadUrl, uploadUrl.authorizationToken, 1, partData, '2'),
+      handleUploadPartDirect(uploadUrl.uploadUrl, uploadUrl.authorizationToken, partData, '2'),
     ).resolves.toMatchObject({
       status: 400,
       body: {
@@ -3246,14 +3320,16 @@ describe('B2Simulator upload write-path validation', () => {
     const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('bad-part-number.bin')
     const partData = new Uint8Array([7, 8, 9])
     for (const partNumber of [0, 10_001]) {
-      await expect(
-        uploadPartDirect(uploadUrl.uploadUrl, uploadUrl.authorizationToken, partNumber, partData),
-      ).resolves.toMatchObject({
-        status: 400,
-        body: {
-          code: 'bad_request',
-          message: expect.stringContaining('partNumber must be an integer'),
-        },
+      const resp = await uploadPartWithContentLength(
+        uploadUrl.uploadUrl,
+        uploadUrl.authorizationToken,
+        partNumber,
+        partData,
+      )
+      expect(resp.status).toBe(400)
+      await expect(resp.json()).resolves.toMatchObject({
+        code: 'bad_request',
+        message: expect.stringContaining('partNumber must be an integer'),
       })
     }
 
@@ -3281,14 +3357,14 @@ describe('B2Simulator upload write-path validation', () => {
     expect(listed.parts).toEqual([])
   })
 
-  it('returns 416 for malformed copyPart ranges', async () => {
+  it('classifies malformed and unsatisfiable copyPart ranges distinctly', async () => {
     const source = await bucket.upload({
       fileName: 'copy-part-range-source.bin',
       source: new BufferSource(new TextEncoder().encode('abcdefghij')),
     })
     const { large, apiUrl, authToken } = await startPartUpload('copy-part-range.bin')
 
-    const resp = await sim.transport().send({
+    const malformed = await sim.transport().send({
       method: 'POST',
       url: `${apiUrl}/b2api/v3/b2_copy_part`,
       headers: { Authorization: authToken, 'Content-Type': 'application/json' },
@@ -3300,8 +3376,29 @@ describe('B2Simulator upload write-path validation', () => {
       }),
     })
 
-    expect(resp.status).toBe(416)
-    await expect(resp.json()).resolves.toMatchObject({ code: 'range_not_satisfiable' })
+    expect(malformed.status).toBe(400)
+    await expect(malformed.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'Malformed copy range: bytes=abc',
+    })
+
+    const unsatisfiable = await sim.transport().send({
+      method: 'POST',
+      url: `${apiUrl}/b2api/v3/b2_copy_part`,
+      headers: { Authorization: authToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceFileId: source.fileId,
+        largeFileId: large.fileId,
+        partNumber: 1,
+        range: 'bytes=100-200',
+      }),
+    })
+
+    expect(unsatisfiable.status).toBe(416)
+    await expect(unsatisfiable.json()).resolves.toMatchObject({
+      code: 'range_not_satisfiable',
+      message: 'Unsatisfiable copy range: bytes=100-200',
+    })
     const listed = await client.raw.listParts(apiUrl, authToken, { fileId: large.fileId })
     expect(listed.parts).toEqual([])
   })

@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timings and timeout failures for authorization, bucket listing, stale cleanup,
   and bucket creation, and contributor/release docs now spell out
   simulator-vs-live-B2 expectations.
+- **B2Simulator upload write-path fidelity.** Simulator uploads now reject
+  Content-Length/body mismatches, reject upload_part and copy_part part numbers
+  outside B2's 1-10000 range, classify copy_part malformed ranges as 400 and
+  unsatisfiable ranges as 416, verify large-file finish part SHA-1 entries, and
+  report stored monotonic part timestamps from list_parts. Closes #21.
 - **B2Simulator SSE-C fidelity.** Simulator uploads, large-file parts, downloads, copyFile, and copyPart now validate SSE-C customer-key headers more closely to B2, preserve destination encryption semantics, and keep customer keys out of public response metadata.
 - **B2Simulator bucket-deletion fidelity.** `b2_delete_bucket` now rejects
   buckets that still contain file versions or unfinished large files with

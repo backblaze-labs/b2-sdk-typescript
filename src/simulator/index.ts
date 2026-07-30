@@ -2516,7 +2516,7 @@ export class B2Simulator {
     headers: Record<string, string>,
     actualLength: number,
   ): SimulatorJsonResponse | null {
-    const header = headers['content-length']
+    const header = requestHeaderValue(headers, 'content-length')
     if (header === undefined) return null
     if (!/^\d+$/.test(header)) {
       return this.error(400, 'bad_request', `Content-Length must be a byte count: ${header}`)
@@ -3783,8 +3783,7 @@ export class B2Simulator {
     // confirms the right parts were uploaded in the right order. Compare each
     // entry against the stored part's SHA-1; real B2 rejects a mismatch with
     // `bad_request`.
-    for (let i = 0; i < sortedParts.length; i++) {
-      const [partNumber, part] = sortedParts[i] as [number, { data: Uint8Array; sha1: string }]
+    for (const [i, [partNumber, part]] of sortedParts.entries()) {
       if (req.partSha1Array[i]?.toLowerCase() !== part.sha1) {
         return this.error(
           400,
@@ -3798,8 +3797,7 @@ export class B2Simulator {
     // may be smaller. We enforce here rather than at b2_upload_part
     // time because the simulator can't otherwise know which part is
     // the last until finish_large_file is called.
-    for (let i = 0; i < sortedParts.length - 1; i++) {
-      const [partNumber, part] = sortedParts[i] as [number, { data: Uint8Array; sha1: string }]
+    for (const [partNumber, part] of sortedParts.slice(0, -1)) {
       if (part.data.byteLength < this.minimumPartSize) {
         return this.error(
           400,
@@ -3978,7 +3976,10 @@ export class B2Simulator {
     let partData = sourceStored.data
     if (req.range !== undefined) {
       const parsed = parseRangeHeader(req.range, sourceStored.data.byteLength)
-      if (parsed.kind !== 'ok') {
+      if (parsed.kind === 'malformed') {
+        return this.error(400, 'bad_request', `Malformed copy range: ${req.range}`)
+      }
+      if (parsed.kind === 'unsatisfiable') {
         return this.error(416, 'range_not_satisfiable', `Unsatisfiable copy range: ${req.range}`)
       }
       partData = sourceStored.data.subarray(parsed.start, parsed.end + 1)
