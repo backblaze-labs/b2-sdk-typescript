@@ -18,12 +18,17 @@
 //
 // Exits 0 on success, prints a numbered list of mismatches on failure.
 
-import { promises as fs } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { existsSync, promises as fs } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, extname, join, relative, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import ts from 'typescript'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const repo = join(here, '..')
+const repo = process.env.B2_VERIFY_METADATA_REPO
+  ? resolve(process.env.B2_VERIFY_METADATA_REPO)
+  : join(here, '..')
+const require = createRequire(import.meta.url)
 
 async function read(rel) {
   return await fs.readFile(join(repo, rel), 'utf8')
@@ -42,6 +47,72 @@ async function readIfExists(rel) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+async function walkFiles(dir) {
+  /** @type {string[]} */
+  const files = []
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const abs = join(dir, entry.name)
+    if (entry.isDirectory()) {
+      files.push(...(await walkFiles(abs)))
+    } else if (entry.isFile()) {
+      files.push(abs)
+    }
+  }
+  return files
+}
+
+function repoRelative(abs) {
+  return relative(repo, abs)
+}
+
+function propertyKeyText(name) {
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text
+  }
+  if (ts.isComputedPropertyName(name)) {
+    const expression = name.expression
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+      return expression.text
+    }
+  }
+  return null
+}
+
+function extractRelativeModuleSpecifiers(file, contents) {
+  /** @type {string[]} */
+  const specifiers = []
+  const source = ts.createSourceFile(file, contents, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+
+  function visit(node) {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      specifiers.push(node.moduleSpecifier.text)
+    }
+
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require' &&
+      node.arguments.length === 1 &&
+      ts.isStringLiteral(node.arguments[0])
+    ) {
+      specifiers.push(node.arguments[0].text)
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(source)
+  return specifiers.filter((specifier) => specifier.startsWith('.'))
+}
+
+async function loadVersionMetadataArtifact(abs) {
+  const mod =
+    extname(abs) === '.cjs'
+      ? require(abs)
+      : await import(`${pathToFileURL(abs).href}?verifyMetadata=${Date.now()}`)
+  return mod.default ?? mod
 }
 
 const pkg = JSON.parse(await read('package.json'))
@@ -112,35 +183,104 @@ if (!/export const VERSION:\s*string\s*=\s*pkg\.version/.test(versionTs)) {
   errors.push('src/version.ts must export `VERSION` derived from `pkg.version`')
 }
 
-// --- generated package metadata artifacts must stay version-only
-const packageMetadataArtifacts = [
-  'dist/package.json.js',
-  'dist/package.json.cjs',
-  'dist/_virtual/_b2-sdk-version-json.js',
-  'dist/_virtual/_b2-sdk-version-json.cjs',
-]
-const unrelatedPackageMetadataKeys = Object.keys(pkg).filter((key) => key !== 'version')
-let checkedPackageMetadataArtifacts = 0
-for (const rel of packageMetadataArtifacts) {
-  const contents = await readIfExists(rel)
-  if (contents === null) continue
+// --- built dist must not ship full package metadata
+const dist = join(repo, 'dist')
+const packageManifestLeakKeys = new Set([
+  'dependencies',
+  'devDependencies',
+  'packageManager',
+  'peerDependencies',
+  'peerDependenciesMeta',
+  'publishConfig',
+  'scripts',
+])
+let checkedPackageMetadataArtifacts = null
+let checkedDistFiles = 0
 
-  checkedPackageMetadataArtifacts += 1
-  const versionKeyRe = /(?:["']version["']|\bversion\b)\s*:/
-  const versionValueRe = new RegExp(
-    `(?:["']version["']|\\bversion\\b)\\s*:\\s*["']${escapeRegExp(version)}["']`,
-  )
-  if (!versionKeyRe.test(contents) || !versionValueRe.test(contents)) {
-    errors.push(`${rel} must contain only the package version ${JSON.stringify(version)}`)
+if (existsSync(dist)) {
+  const distFiles = (await walkFiles(dist)).filter((file) => /\.(?:cjs|js)$/.test(file)).sort()
+  checkedDistFiles = distFiles.length
+
+  /** @type {Set<string>} */
+  const versionMetadataArtifacts = new Set()
+  for (const versionFile of [join(dist, 'version.js'), join(dist, 'version.cjs')]) {
+    const contents = await readIfExists(repoRelative(versionFile))
+    if (contents === null) continue
+
+    for (const specifier of extractRelativeModuleSpecifiers(versionFile, contents)) {
+      versionMetadataArtifacts.add(resolve(dirname(versionFile), specifier))
+    }
   }
 
-  for (const key of unrelatedPackageMetadataKeys) {
-    const keyRe = new RegExp(`(?:["']${escapeRegExp(key)}["']|\\b${escapeRegExp(key)}\\b)\\s*:`)
-    if (keyRe.test(contents)) {
+  checkedPackageMetadataArtifacts = versionMetadataArtifacts.size
+  if (checkedDistFiles === 0) {
+    errors.push('dist/ exists but contains no built JS/CJS files to inspect')
+  }
+  if (checkedPackageMetadataArtifacts === 0) {
+    errors.push(
+      'dist/ exists but no version-only metadata artifact was found from dist/version.* imports',
+    )
+  }
+
+  for (const artifact of versionMetadataArtifacts) {
+    if (!artifact.startsWith(dist)) {
       errors.push(
-        `${rel} includes package metadata key ${JSON.stringify(key)}; generated metadata artifacts must be version-only`,
+        `${repoRelative(artifact)} is outside dist/ and cannot be a version metadata artifact`,
+      )
+      continue
+    }
+    if (!existsSync(artifact)) {
+      errors.push(`${repoRelative(artifact)} is referenced by dist/version.* but does not exist`)
+      continue
+    }
+
+    const exported = await loadVersionMetadataArtifact(artifact)
+    if (exported === null || typeof exported !== 'object' || Array.isArray(exported)) {
+      errors.push(`${repoRelative(artifact)} must export a version-only object`)
+      continue
+    }
+
+    const keys = Object.keys(exported)
+    if (keys.length !== 1 || keys[0] !== 'version') {
+      errors.push(
+        `${repoRelative(artifact)} must export only ${JSON.stringify(['version'])} (found ${JSON.stringify(keys)})`,
       )
     }
+    if (exported.version !== version) {
+      errors.push(
+        `${repoRelative(artifact)} must export version ${JSON.stringify(version)} (found ${JSON.stringify(exported.version)})`,
+      )
+    }
+  }
+
+  for (const file of distFiles) {
+    const contents = await fs.readFile(file, 'utf8')
+    const source = ts.createSourceFile(
+      file,
+      contents,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    )
+
+    function visit(node) {
+      if (ts.isObjectLiteralExpression(node)) {
+        for (const property of node.properties) {
+          if (ts.isSpreadAssignment(property)) continue
+
+          const key = propertyKeyText(property.name)
+          if (key !== null && packageManifestLeakKeys.has(key)) {
+            errors.push(
+              `${repoRelative(file)} includes package manifest key ${JSON.stringify(key)}; dist chunks must not carry full package metadata`,
+            )
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit)
+    }
+
+    visit(source)
   }
 }
 
@@ -153,5 +293,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `verify-package-metadata: OK (name=${name}, version=${version}, tarball=${tarballPrefix}.tgz, distArtifacts=${checkedPackageMetadataArtifacts})`,
+  `verify-package-metadata: OK (name=${name}, version=${version}, tarball=${tarballPrefix}.tgz, distArtifacts=${checkedPackageMetadataArtifacts ?? 'not-built'}, distFiles=${checkedDistFiles})`,
 )
