@@ -660,6 +660,12 @@ export function validateDefaultRetention(policy: unknown): ValidationError | nul
     'defaultRetention.period.duration',
   )
   if (durationError) return durationError
+  if (!Number.isSafeInteger(period['duration'])) {
+    return {
+      code: 'bad_request',
+      message: 'defaultRetention.period.duration must be a safe integer',
+    }
+  }
 
   if (period['unit'] !== 'days' && period['unit'] !== 'years') {
     return {

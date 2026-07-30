@@ -330,6 +330,12 @@ describe('validateDefaultRetention', () => {
     expect(
       validateDefaultRetention({
         mode: BucketRetentionMode.Governance,
+        period: { duration: Number.MAX_SAFE_INTEGER + 1, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
         period: { duration: 3001, unit: 'days' },
       })?.code,
     ).toBe('bad_request')

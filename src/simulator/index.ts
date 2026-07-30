@@ -474,6 +474,7 @@ function normalizeReplicationConfiguration(
 }
 
 interface BucketConfigurationFields {
+  readonly bucketInfo?: unknown
   readonly corsRules?: unknown
   readonly defaultRetention?: unknown
   readonly lifecycleRules?: unknown
@@ -484,6 +485,10 @@ function validateBucketConfigurationFields(
   fields: BucketConfigurationFields,
   options: { readonly objectLockEnabled: boolean },
 ): ValidationError | null {
+  if (fields.bucketInfo !== undefined) {
+    const infoError = validateBucketInfo(fields.bucketInfo as Record<string, string>)
+    if (infoError) return infoError
+  }
   if (fields.corsRules !== undefined) {
     const corsError = validateCorsRules(fields.corsRules)
     if (corsError) return corsError
@@ -1675,26 +1680,56 @@ export class B2Simulator {
   ): SimulatorJsonResponse | null {
     const key = this.keys.get(applicationKeyId)
     if (key === undefined) {
-      return this.error(
-        400,
-        'bad_request',
-        `${options.role} application key ${applicationKeyId} does not exist`,
-      )
+      return this.invalidReplicationApplicationKey(options.role)
     }
     const missing = missingStoredKeyCapabilities(key, requiredCapabilities)
     if (missing.length > 0) {
-      return this.error(
-        400,
-        'bad_request',
-        `${options.role} application key ${applicationKeyId} lacks required capabilities: ${missing.join(', ')}`,
-      )
+      return this.invalidReplicationApplicationKey(options.role)
     }
     if (options.bucketId !== undefined && !storedKeyAllowsBucket(key, options.bucketId)) {
-      return this.error(
-        403,
-        'unauthorized',
-        `${options.role} application key ${applicationKeyId} is not scoped to bucket ${options.bucketId}`,
+      return this.invalidReplicationApplicationKey(options.role)
+    }
+    return null
+  }
+
+  private invalidReplicationApplicationKey(role: string): SimulatorJsonResponse {
+    return this.error(
+      400,
+      'bad_request',
+      `${role} application key is invalid or not authorized for this replication configuration`,
+    )
+  }
+
+  private invalidReplicationDestinationBucket(): SimulatorJsonResponse {
+    return this.error(
+      400,
+      'bad_request',
+      'replication destination bucket is invalid or not configured for this source application key',
+    )
+  }
+
+  private validateReplicationDestinationBuckets(
+    sourceApplicationKeyId: string,
+    rules: readonly unknown[],
+  ): SimulatorJsonResponse | null {
+    for (const rule of rules) {
+      const destinationBucketId = requestRecord(rule)?.['destinationBucketId']
+      if (typeof destinationBucketId !== 'string') continue
+
+      const destinationBucket = this.buckets.get(destinationBucketId)
+      const destinationApplicationKeyId =
+        destinationBucket?.info.replicationConfiguration.asReplicationDestination
+          ?.sourceToDestinationKeyMapping[sourceApplicationKeyId]
+      if (destinationApplicationKeyId === undefined) {
+        return this.invalidReplicationDestinationBucket()
+      }
+
+      const destinationKeyError = this.validateReplicationApplicationKey(
+        destinationApplicationKeyId,
+        [Capability.WriteFiles],
+        { bucketId: destinationBucketId, role: 'replication destination' },
       )
+      if (destinationKeyError !== null) return destinationKeyError
     }
     return null
   }
@@ -1716,6 +1751,14 @@ export class B2Simulator {
           { bucketId, role: 'replication source' },
         )
         if (sourceKeyError !== null) return sourceKeyError
+      }
+      const rules = source['replicationRules']
+      if (typeof sourceApplicationKeyId === 'string' && Array.isArray(rules)) {
+        const destinationError = this.validateReplicationDestinationBuckets(
+          sourceApplicationKeyId,
+          rules,
+        )
+        if (destinationError !== null) return destinationError
       }
     }
 
@@ -3033,10 +3076,6 @@ export class B2Simulator {
     // `400 invalid_bucket_name`; the simulator used to accept anything.
     const nameError = validateBucketName(req.bucketName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
-    if (req.bucketInfo !== undefined) {
-      const infoError = validateBucketInfo(req.bucketInfo)
-      if (infoError) return this.error(400, infoError.code, infoError.message)
-    }
     const objectLockEnabled = nextObjectLockEnabled(false, req.fileLockEnabled)
     if (typeof objectLockEnabled !== 'boolean') {
       return this.error(400, objectLockEnabled.code, objectLockEnabled.message)
@@ -3128,12 +3167,6 @@ export class B2Simulator {
         return this.error(409, 'conflict', 'ifRevisionIs test failed')
       }
     }
-    // Validate bucketInfo budget on update too — real B2 rejects
-    // oversized info maps on the update path, not just on create.
-    if (req['bucketInfo'] !== undefined) {
-      const infoError = validateBucketInfo(req['bucketInfo'] as Record<string, string>)
-      if (infoError) return this.error(400, infoError.code, infoError.message)
-    }
     const currentObjectLockEnabled =
       bucket.info.fileLockConfiguration.value?.isFileLockEnabled ?? false
     const objectLockEnabled = nextObjectLockEnabled(
@@ -3145,6 +3178,7 @@ export class B2Simulator {
     }
     const configError = validateBucketConfigurationFields(
       {
+        bucketInfo: req['bucketInfo'],
         corsRules: req['corsRules'],
         defaultRetention: req['defaultRetention'],
         lifecycleRules: req['lifecycleRules'],

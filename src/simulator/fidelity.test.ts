@@ -16,7 +16,7 @@ import {
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
 import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import { accountId, applicationKeyId, fileId as fileIdOf } from '../types/ids.ts'
+import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { ReplicationConfiguration } from '../types/replication.ts'
 import {
@@ -368,8 +368,16 @@ describe('B2Simulator bucket configuration validation', () => {
       mode: BucketRetentionMode.Compliance,
       period: { duration: 1e308, unit: 'years' },
     } as unknown as BucketRetentionPolicy
+    const hugeDaysRetention = {
+      mode: BucketRetentionMode.Compliance,
+      period: { duration: 1e308, unit: 'days' },
+    } as unknown as BucketRetentionPolicy
 
     await expect(locked.update({ defaultRetention: hugeRetention })).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+    await expect(locked.update({ defaultRetention: hugeDaysRetention })).rejects.toMatchObject({
       status: 400,
       code: 'bad_request',
     })
@@ -381,6 +389,29 @@ describe('B2Simulator bucket configuration validation', () => {
     await expect(
       locked.deleteFileVersion('after-rejected-retention.bin', uploaded.fileId),
     ).resolves.toBeUndefined()
+
+    const { client: largeClient } = makeClient({
+      sim: { minimumPartSize: 1024, recommendedPartSize: 1024 },
+    })
+    await largeClient.authorize()
+    const accepted = await largeClient.createBucket({
+      bucketName: 'ret-accepted-lock',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+    expect(accepted.info.defaultRetention.mode).toBe(BucketRetentionMode.Governance)
+
+    const retained = await accepted.upload({
+      fileName: 'accepted-retention.bin',
+      source: new BufferSource(new Uint8Array(2048)),
+    })
+    await expect(
+      accepted.deleteFileVersion('accepted-retention.bin', retained.fileId),
+    ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
   })
 
   it('accepts well-formed bucket configuration', async () => {
@@ -1208,6 +1239,21 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       keyName: 'repl-source-read',
       bucketId: source.id,
     })
+    const destinationKey = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'repl-destination-write',
+      bucketId: destination.id,
+    })
+    await destination.update({
+      replicationConfiguration: {
+        asReplicationDestination: {
+          sourceToDestinationKeyMapping: {
+            [sourceKey.applicationKeyId]: destinationKey.applicationKeyId,
+          },
+        },
+        asReplicationSource: null,
+      },
+    })
     const writerKey = await client.createKey({
       capabilities: [Capability.WriteBuckets],
       keyName: 'repl-source-only-writer',
@@ -1248,6 +1294,101 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
     await sim.flushHooks()
     expect(replicationEvents).toEqual([])
+  })
+
+  it('rejects replication rules for nonexistent or not configured destinations', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const source = await client.createBucket({
+      bucketName: 'repl-dest-src',
+      bucketType: BucketType.AllPrivate,
+    })
+    const destination = await client.createBucket({
+      bucketName: 'repl-dest-target',
+      bucketType: BucketType.AllPrivate,
+    })
+    const sourceKey = await client.createKey({
+      capabilities: [Capability.ReadFiles, Capability.ListFiles],
+      keyName: 'repl-dest-source-key',
+      bucketId: source.id,
+    })
+    const destinationKey = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'repl-dest-write-key',
+      bucketId: destination.id,
+    })
+    const writerKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'repl-dest-writer',
+      bucketIds: null,
+    })
+    const scopedClient = await authorizeWithKey(sim, writerKey)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const account = accountId(scopedClient.accountInfo.getAccountId())
+    const replicationConfiguration = (destinationBucketId: string) => ({
+      asReplicationDestination: null,
+      asReplicationSource: {
+        replicationRules: [
+          {
+            destinationBucketId: bucketId(destinationBucketId),
+            fileNamePrefix: '',
+            includeExistingFiles: false,
+            isEnabled: true,
+            priority: 1,
+            replicationRuleName: 'requires-destination',
+          },
+        ],
+        sourceApplicationKeyId: sourceKey.applicationKeyId,
+      },
+    })
+
+    await expect(
+      scopedClient.raw.updateBucket(apiUrl, authToken, {
+        accountId: account,
+        bucketId: source.id,
+        replicationConfiguration: replicationConfiguration('b2_bucket_missing_destination'),
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+    await expect(
+      scopedClient.createBucket({
+        bucketName: 'repl-create-missing-dest',
+        bucketType: BucketType.AllPrivate,
+        replicationConfiguration: replicationConfiguration('b2_bucket_create_missing_destination'),
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    await expect(
+      scopedClient.raw.updateBucket(apiUrl, authToken, {
+        accountId: account,
+        bucketId: source.id,
+        replicationConfiguration: replicationConfiguration(destination.id),
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    await destination.update({
+      replicationConfiguration: {
+        asReplicationDestination: {
+          sourceToDestinationKeyMapping: {
+            [sourceKey.applicationKeyId]: destinationKey.applicationKeyId,
+          },
+        },
+        asReplicationSource: null,
+      },
+    })
+    await expect(
+      scopedClient.raw.updateBucket(apiUrl, authToken, {
+        accountId: account,
+        bucketId: source.id,
+        replicationConfiguration: replicationConfiguration(destination.id),
+      }),
+    ).resolves.toMatchObject({
+      replicationConfiguration: {
+        asReplicationSource: expect.objectContaining({
+          sourceApplicationKeyId: sourceKey.applicationKeyId,
+        }),
+      },
+    })
   })
 
   it('rejects strictAuth replication configs that reference keys missing capabilities', async () => {
@@ -1323,6 +1464,78 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         },
       }),
     ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+  })
+
+  it('uses uniform strictAuth replication key validation errors', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const source = await client.createBucket({
+      bucketName: 'repl-oracle-src',
+      bucketType: BucketType.AllPrivate,
+    })
+    const other = await client.createBucket({
+      bucketName: 'repl-oracle-other',
+      bucketType: BucketType.AllPrivate,
+    })
+    const missingCapabilityKey = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'repl-oracle-missing-cap',
+      bucketId: source.id,
+    })
+    const wrongBucketKey = await client.createKey({
+      capabilities: [Capability.ReadFiles, Capability.ListFiles],
+      keyName: 'repl-oracle-wrong-bucket',
+      bucketId: other.id,
+    })
+    const writerKey = await client.createKey({
+      capabilities: [Capability.WriteBuckets],
+      keyName: 'repl-oracle-writer',
+      bucketIds: [source.id, other.id],
+    })
+    const scopedClient = await authorizeWithKey(sim, writerKey)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const account = accountId(scopedClient.accountInfo.getAccountId())
+    const rejectionFor = async (sourceApplicationKeyId: string): Promise<unknown> =>
+      scopedClient.raw
+        .updateBucket(apiUrl, authToken, {
+          accountId: account,
+          bucketId: source.id,
+          replicationConfiguration: {
+            asReplicationDestination: null,
+            asReplicationSource: {
+              replicationRules: [
+                {
+                  destinationBucketId: other.id,
+                  fileNamePrefix: '',
+                  includeExistingFiles: false,
+                  isEnabled: true,
+                  priority: 1,
+                  replicationRuleName: 'key-oracle',
+                },
+              ],
+              sourceApplicationKeyId: applicationKeyId(sourceApplicationKeyId),
+            },
+          },
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        )
+
+    const missingKeyError = await rejectionFor('missing-replication-key')
+    const missingCapabilityError = await rejectionFor(missingCapabilityKey.applicationKeyId)
+    const wrongBucketError = await rejectionFor(wrongBucketKey.applicationKeyId)
+    const expected = {
+      code: 'bad_request',
+      message:
+        'replication source application key is invalid or not authorized for this replication configuration',
+      status: 400,
+    }
+
+    expect(missingKeyError).toMatchObject(expected)
+    expect(missingCapabilityError).toMatchObject(expected)
+    expect(wrongBucketError).toMatchObject(expected)
   })
 
   it('rejects deprecated bucketId on direct v4 b2_create_key simulator requests', async () => {
