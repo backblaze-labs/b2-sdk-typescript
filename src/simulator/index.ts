@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -210,9 +210,8 @@ const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
 const MASTER_APPLICATION_KEY_ID = 'test-key-id'
 const MASTER_APPLICATION_KEY = 'test-key'
-// The simulator master credential intentionally excludes object-lock
-// capabilities. Grant BypassGovernance, WriteFileLegalHolds, and
-// WriteFileRetentions only through created application keys.
+// The simulator master authorization response intentionally excludes
+// object-lock capabilities so tests must request those scopes explicitly.
 const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -229,6 +228,7 @@ const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.ReadBucketNotifications,
   Capability.WriteBucketNotifications,
 ])
+const CAPABILITY_VALUES = new Set<string>(Object.values(Capability))
 
 const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
   'b2ContentDisposition',
@@ -1816,10 +1816,12 @@ export class B2Simulator {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
     if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
-      return {
-        ok: false,
-        error: this.error(401, 'unauthorized', 'application key has expired'),
-      }
+      return this.strictAuth
+        ? {
+            ok: false,
+            error: this.error(401, 'unauthorized', 'application key has expired'),
+          }
+        : { ok: true, grant: masterGrant }
     }
 
     return {
@@ -2648,36 +2650,37 @@ export class B2Simulator {
       expiresAt: this.now() + this.authTokenTtlMs,
       applicationKeyId: grant.applicationKeyId,
     })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.accountId),
-        // `AuthToken` has no public factory by design — auth tokens are
-        // minted by B2, not constructed by user code. The simulator is
-        // the only legitimate place that needs to forge one.
-        authorizationToken: tokenStr as unknown as AuthToken,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: origin,
+    const body: AuthorizeAccountResponse = {
+      accountId: accountIdOf(this.accountId),
+      // `AuthToken` has no public factory by design — auth tokens are
+      // minted by B2, not constructed by user code. The simulator is
+      // the only legitimate place that needs to forge one.
+      authorizationToken: tokenStr as unknown as AuthToken,
+      apiInfo: {
+        storageApi: {
+          absoluteMinimumPartSize: this.minimumPartSize,
+          apiUrl: origin,
+          bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+          bucketName: legacyBucketName,
+          downloadUrl: origin,
+          infoType: 'storageApi',
+          namePrefix: grant.namePrefix,
+          recommendedPartSize: this.recommendedPartSize,
+          s3ApiUrl: origin,
+          allowed: {
+            capabilities: responseCapabilities,
+            buckets: allowedBuckets,
             bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
             bucketName: legacyBucketName,
-            downloadUrl: origin,
-            infoType: 'storageApi',
             namePrefix: grant.namePrefix,
-            recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: origin,
-            allowed: {
-              capabilities: responseCapabilities,
-              buckets: allowedBuckets,
-              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
-              bucketName: legacyBucketName,
-              namePrefix: grant.namePrefix,
-            },
           },
         },
-        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
+      applicationKeyExpirationTimestamp: grant.expirationTimestamp,
+    }
+    return {
+      status: 200,
+      body,
     }
   }
 
@@ -3575,6 +3578,19 @@ export class B2Simulator {
         'key-management capabilities are account-level and cannot be bucket or name-prefix scoped',
       )
     }
+    const unknownCapabilities = req.capabilities.filter(
+      (capability) => !CAPABILITY_VALUES.has(capability),
+    )
+    if (unknownCapabilities.length > 0) {
+      return this.error(
+        400,
+        'bad_request',
+        `unknown capabilities: ${unknownCapabilities.join(', ')}`,
+      )
+    }
+    const capabilities = Object.freeze(
+      req.capabilities.map((capability) => capability as Capability),
+    )
     const kid = this.genId('sim_key')
     const appKey = this.genId('sim_secret')
     const expiration =
@@ -3584,7 +3600,7 @@ export class B2Simulator {
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: Object.freeze(req.capabilities.map((capability) => capability as Capability)),
+      capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,

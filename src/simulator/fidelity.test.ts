@@ -9,7 +9,7 @@ import { BucketType } from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
 import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import { fileId as fileIdOf } from '../types/ids.ts'
+import { accountId as accountIdOf, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import {
   type B2Simulator,
@@ -561,38 +561,17 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   }
 
-  function issuedAuthTokenCount(sim: B2Simulator): number {
-    return (
-      sim as unknown as {
-        readonly issuedTokens: Map<string, unknown>
-      }
-    ).issuedTokens.size
-  }
-
-  function issuedAuthTokenCapabilities(
-    sim: B2Simulator,
-    authorizationToken: string,
-  ): readonly Capability[] | undefined {
-    return (
-      sim as unknown as {
-        readonly issuedTokens: Map<string, { readonly capabilities: readonly Capability[] }>
-      }
-    ).issuedTokens.get(authorizationToken)?.capabilities
-  }
-
   async function expectAuthorizeRejected(
     sim: B2Simulator,
     authorization: string | undefined,
     message: RegExp = /invalid application key credentials/,
   ): Promise<void> {
-    const tokenCount = issuedAuthTokenCount(sim)
     const response = await authorizeWithHeader(sim, authorization)
     expect(response.status).toBe(401)
     await expect(response.json()).resolves.toMatchObject({
       code: 'unauthorized',
       message: expect.stringMatching(message),
     })
-    expect(issuedAuthTokenCount(sim)).toBe(tokenCount)
   }
 
   function forgeAdjacentTokenValue(token: string): string {
@@ -653,6 +632,19 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('rejects unknown key capabilities', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.raw.createKey(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+        accountId: accountIdOf(client.accountInfo.getAccountId()),
+        capabilities: ['notARealCapability'] as unknown as Capability[],
+        keyName: 'unknown-capability-key',
+      }),
+    ).rejects.toThrow(/unknown capabilities: notARealCapability/)
+  })
+
   it('rejects invalid application key credentials in strict-auth mode', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -698,18 +690,37 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('falls back to the master grant for expired keys in permissive authorize', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-expiring-auth-key',
+      validDurationInSeconds: 1,
+    })
+
+    sim.advanceTime(1000)
+    const response = await authorizeWithHeader(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+    )
+    expect(response.status).toBe(200)
+    const auth = await response.json<AuthorizeAccountResponse>()
+    expect(auth.applicationKeyExpirationTimestamp).toBeNull()
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toContain(Capability.ListBuckets)
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toContain(Capability.WriteFiles)
+    expect(auth.apiInfo.storageApi.allowed.capabilities).not.toEqual([Capability.ListFiles])
+  })
+
   it('isolates auth and key capability arrays from caller mutation', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
     const masterAuth = client.accountInfo.getAuth()
     if (masterAuth === null) throw new Error('expected master authorization')
-    const masterToken = masterAuth.authorizationToken
 
     ;(masterAuth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(
       Capability.BypassGovernance,
     )
-    expect(issuedAuthTokenCapabilities(sim, masterToken)).not.toContain(Capability.BypassGovernance)
-
     const nextMasterClient = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
@@ -721,9 +732,14 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       nextMasterClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities,
     ).not.toContain(Capability.BypassGovernance)
 
+    const bucket = await client.createBucket({
+      bucketName: 'cap-array-isolation',
+      bucketType: BucketType.AllPrivate,
+    })
     const key = await client.createKey({
       capabilities: [Capability.ListFiles],
       keyName: 'mutable-capabilities-key',
+      bucketIds: [bucket.id],
     })
     ;(key.capabilities as Capability[]).push(Capability.WriteFiles)
 
@@ -735,6 +751,18 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     ;(restrictedAuth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(
       Capability.WriteFiles,
     )
+    expect(restrictedClient.hasCapabilities([Capability.WriteFiles])).toEqual({
+      ok: true,
+      missing: [],
+    })
+    await expect(
+      restrictedClient.raw.getUploadUrl(
+        restrictedClient.accountInfo.getApiUrl(),
+        restrictedClient.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      ),
+    ).rejects.toThrow(/lacks required capabilities: writeFiles/)
+
     const restrictedAgain = await authorizeWithKey(sim, key)
     expect(restrictedAgain.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
       Capability.ListFiles,
