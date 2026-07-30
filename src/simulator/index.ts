@@ -327,7 +327,7 @@ interface LargeFileInProgress {
 interface StoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
-  readonly capabilities: readonly string[]
+  readonly capabilities: readonly Capability[]
   readonly accountId: string
   readonly applicationKey: string
   readonly bucketIds: readonly string[] | null
@@ -354,6 +354,7 @@ interface BaseAuthorizationGrant {
   readonly capabilities: readonly Capability[]
   readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
+  readonly expirationTimestamp: number | null
 }
 
 interface KeyAuthorizationGrant extends BaseAuthorizationGrant {
@@ -366,6 +367,7 @@ interface MasterAuthorizationGrant extends BaseAuthorizationGrant {
   readonly bucketIds: null
   readonly namePrefix: null
   readonly applicationKeyId: null
+  readonly expirationTimestamp: null
 }
 
 type AuthorizationGrant = KeyAuthorizationGrant | MasterAuthorizationGrant
@@ -429,6 +431,14 @@ function singleBucketId(bucketIds: readonly string[] | null | undefined): string
 
 function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] | null {
   return bucketIds === null ? null : [...bucketIds]
+}
+
+function normalizeKeyCapabilities(capabilities: readonly string[]): readonly Capability[] {
+  return Object.freeze(capabilities.map((capability) => capability as Capability))
+}
+
+function cloneCapabilities(capabilities: readonly Capability[]): readonly Capability[] {
+  return [...capabilities]
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -1768,6 +1778,7 @@ export class B2Simulator {
       bucketIds: null,
       namePrefix: null,
       applicationKeyId: null,
+      expirationTimestamp: null,
     }
   }
 
@@ -1776,6 +1787,12 @@ export class B2Simulator {
     code = 'bad_auth_token',
   ): AuthorizationGrantResult {
     return { kind: 'invalid', response: this.error(401, code, message) }
+  }
+
+  private rejectOrMaster(message: string, code = 'bad_auth_token'): AuthorizationGrantResult {
+    return this.strictAuth
+      ? this.invalidAuthorizeResponse(message, code)
+      : this.masterAuthorizationGrant()
   }
 
   /**
@@ -1796,9 +1813,7 @@ export class B2Simulator {
     authzHeader: string | undefined,
   ): AuthorizationGrantResult {
     if (!authzHeader?.startsWith('Basic ')) {
-      return this.strictAuth
-        ? this.invalidAuthorizeResponse('missing or malformed Basic Authorization header')
-        : this.masterAuthorizationGrant()
+      return this.rejectOrMaster('missing or malformed Basic Authorization header')
     }
     // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
     // Wrapped in a try because malformed base64 throws.
@@ -1810,15 +1825,11 @@ export class B2Simulator {
       }
     })()
     if (decoded === null) {
-      return this.strictAuth
-        ? this.invalidAuthorizeResponse('malformed Basic Authorization header')
-        : this.masterAuthorizationGrant()
+      return this.rejectOrMaster('malformed Basic Authorization header')
     }
     const idx = decoded.indexOf(':')
     if (idx === -1) {
-      return this.strictAuth
-        ? this.invalidAuthorizeResponse('malformed Basic Authorization header')
-        : this.masterAuthorizationGrant()
+      return this.rejectOrMaster('malformed Basic Authorization header')
     }
     const applicationKeyId = decoded.slice(0, idx)
     const applicationKey = decoded.slice(idx + 1)
@@ -1832,19 +1843,18 @@ export class B2Simulator {
 
     const stored = this.keys.get(applicationKeyId)
     if (!stored || stored.applicationKey !== applicationKey) {
-      return this.strictAuth
-        ? this.invalidAuthorizeResponse('unknown application key')
-        : this.masterAuthorizationGrant()
+      return this.rejectOrMaster('unknown application key')
     }
-    if (stored.expirationTimestamp !== null && this.now() > stored.expirationTimestamp) {
-      return this.invalidAuthorizeResponse('application key has expired', 'expired_auth_token')
+    if (stored.expirationTimestamp !== null && this.now() >= stored.expirationTimestamp) {
+      return this.rejectOrMaster('application key has expired', 'expired_auth_token')
     }
     return {
       kind: 'key',
-      capabilities: stored.capabilities as readonly Capability[],
-      bucketIds: stored.bucketIds,
+      capabilities: cloneCapabilities(stored.capabilities),
+      bucketIds: cloneBucketIds(stored.bucketIds),
       namePrefix: stored.namePrefix,
       applicationKeyId,
+      expirationTimestamp: stored.expirationTimestamp,
     }
   }
 
@@ -2690,7 +2700,7 @@ export class B2Simulator {
             },
           },
         },
-        applicationKeyExpirationTimestamp: null,
+        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
     }
   }
@@ -3598,7 +3608,7 @@ export class B2Simulator {
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: req.capabilities,
+      capabilities: normalizeKeyCapabilities(req.capabilities),
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,
@@ -3613,7 +3623,7 @@ export class B2Simulator {
         keyName: stored.keyName,
         applicationKeyId: stored.applicationKeyId,
         applicationKey: stored.applicationKey,
-        capabilities: stored.capabilities,
+        capabilities: cloneCapabilities(stored.capabilities),
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
         bucketIds: cloneBucketIds(stored.bucketIds),
@@ -3644,7 +3654,7 @@ export class B2Simulator {
     const keys = allKeys.slice(0, max).map((k) => ({
       keyName: k.keyName,
       applicationKeyId: k.applicationKeyId,
-      capabilities: k.capabilities,
+      capabilities: cloneCapabilities(k.capabilities),
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
       bucketIds: cloneBucketIds(k.bucketIds),
@@ -3682,7 +3692,7 @@ export class B2Simulator {
       body: {
         keyName: key.keyName,
         applicationKeyId: key.applicationKeyId,
-        capabilities: key.capabilities,
+        capabilities: cloneCapabilities(key.capabilities),
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
         bucketIds: cloneBucketIds(key.bucketIds),

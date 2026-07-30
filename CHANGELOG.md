@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and bucket creation, and contributor/release docs now spell out
   simulator-vs-live-B2 expectations.
 - **B2Simulator SSE-C fidelity.** Simulator uploads, large-file parts, downloads, copyFile, and copyPart now validate SSE-C customer-key headers more closely to B2, preserve destination encryption semantics, and keep customer keys out of public response metadata.
+- **B2Simulator strict-auth authorize fidelity.** `b2_authorize_account` now derives returned capabilities, bucket scope, name-prefix scope, and `applicationKeyExpirationTimestamp` from the authorizing key; strict-auth mode rejects missing, malformed, unknown, wrong-secret, deleted, and expired application-key credentials instead of falling back to the simulator master grant.
 
 ## [0.2.0] - 2026-07-08
 

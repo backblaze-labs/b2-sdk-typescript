@@ -554,8 +554,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   }
 
+  function basicHeader(value: string): string {
+    return `Basic ${btoa(value)}`
+  }
+
   function basicAuth(applicationKeyId: string, applicationKey: string): string {
-    return `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`
+    return basicHeader(`${applicationKeyId}:${applicationKey}`)
   }
 
   function forgeAdjacentTokenValue(token: string): string {
@@ -578,6 +582,7 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
     expect(allowed?.buckets).toBeNull()
+    expect(client.accountInfo.getAuth()?.applicationKeyExpirationTimestamp).toBeNull()
     // Master does NOT have BypassGovernance — tests that need it must
     // mint a key with that cap explicitly.
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
@@ -617,11 +622,62 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('reports application key expiration timestamps in authorize responses', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'expiring-auth-key',
+      validDurationInSeconds: 60,
+    })
+
+    const scopedClient = await authorizeWithKey(sim, key)
+
+    expect(scopedClient.accountInfo.getAuth()?.applicationKeyExpirationTimestamp).toBe(
+      key.expirationTimestamp,
+    )
+  })
+
+  it('keeps stored key capabilities immutable after createKey response mutation', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'immutable-capabilities-key',
+    })
+    ;(key.capabilities as Capability[]).push(Capability.WriteFiles)
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const allowed = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed
+
+    expect(allowed?.capabilities).toEqual([Capability.ListFiles])
+    expect(scopedClient.hasCapabilities([Capability.WriteFiles])).toEqual({
+      ok: false,
+      missing: [Capability.WriteFiles],
+    })
+
+    const listed = (await client.listKeys()).keys.find(
+      (candidate) => candidate.keyName === key.keyName,
+    )
+    expect(listed?.capabilities).toEqual([Capability.ListFiles])
+    if (listed === undefined) throw new Error('expected key in listKeys response')
+    ;(listed.capabilities as Capability[]).push(Capability.DeleteFiles)
+
+    const listedMutationClient = await authorizeWithKey(sim, key)
+    expect(
+      listedMutationClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities,
+    ).toEqual([Capability.ListFiles])
+    expect(listedMutationClient.hasCapabilities([Capability.DeleteFiles])).toEqual({
+      ok: false,
+      missing: [Capability.DeleteFiles],
+    })
+  })
+
   it.each([
     ['missing header', undefined],
     ['non-Basic header', 'Bearer not-basic'],
     ['malformed Basic value', 'Basic !!!'],
-    ['Basic value without a separator', `Basic ${btoa('not-a-key-pair')}`],
+    ['Basic value without a separator', basicHeader('not-a-key-pair')],
     ['unknown key id', basicAuth('bogus-key', 'bogus-secret')],
   ])('rejects %s on strict authorize', async (_name, authorization) => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
@@ -675,6 +731,40 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
 
     expect(resp.status).toBe(401)
     await expect(resp.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
+  })
+
+  it('rejects application keys at the exact strict expiration boundary', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'boundary-expired-reauth-key',
+      validDurationInSeconds: 1,
+    })
+    sim.advanceTime(1000)
+
+    const resp = await authorizeWire(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
+  })
+
+  it('keeps permissive authorize fallback for expired application keys', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-expired-reauth-key',
+      validDurationInSeconds: 1,
+    })
+    sim.advanceTime(1000)
+
+    const resp = await authorizeWire(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+    const auth = await resp.json<AuthorizeAccountResponse>()
+
+    expect(resp.status).toBe(200)
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toContain(Capability.WriteFiles)
+    expect(auth.applicationKeyExpirationTimestamp).toBeNull()
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
