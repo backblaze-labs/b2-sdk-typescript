@@ -571,6 +571,41 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
   })
 
+  it('reports restricted key capabilities and scope in authorize responses', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'authz-scope-key',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'authz-scope-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'photos/',
+      validDurationInSeconds: 60,
+    })
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const auth = scopedClient.accountInfo.getAuth()
+    const storageApi = auth?.apiInfo.storageApi
+
+    expect(storageApi?.allowed.capabilities).toEqual([Capability.ListFiles])
+    expect(storageApi?.allowed.buckets).toEqual([{ id: bucket.id, name: bucket.name }])
+    expect(storageApi?.allowed.bucketId).toBe(bucket.id)
+    expect(storageApi?.allowed.bucketName).toBe(bucket.name)
+    expect(storageApi?.allowed.namePrefix).toBe('photos/')
+    expect(storageApi?.bucketId).toBe(bucket.id)
+    expect(storageApi?.bucketName).toBe(bucket.name)
+    expect(storageApi?.namePrefix).toBe('photos/')
+    expect(auth?.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
+    expect(scopedClient.hasCapabilities([Capability.ListFiles])).toEqual({ ok: true, missing: [] })
+    expect(scopedClient.hasCapabilities([Capability.ReadFiles])).toEqual({
+      ok: false,
+      missing: [Capability.ReadFiles],
+    })
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
