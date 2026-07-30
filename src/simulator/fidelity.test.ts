@@ -571,6 +571,40 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
   })
 
+  it('reports restricted application key capabilities and scope in authorize allowed info', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-allowed-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'auth-allowed-key',
+      bucketIds: [bucket.id],
+      namePrefix: 'tenant/',
+    })
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const allowed = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed
+
+    expect(allowed).toEqual({
+      capabilities: [Capability.ListFiles],
+      buckets: [{ id: bucket.id, name: bucket.name }],
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      namePrefix: 'tenant/',
+    })
+    expect(scopedClient.hasCapabilities([Capability.ListFiles])).toEqual({
+      ok: true,
+      missing: [],
+    })
+    expect(scopedClient.hasCapabilities([Capability.WriteFiles])).toEqual({
+      ok: false,
+      missing: [Capability.WriteFiles],
+    })
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
