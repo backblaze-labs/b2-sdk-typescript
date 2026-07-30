@@ -30,6 +30,7 @@ import {
  * that matches the published B2 docs at https://www.backblaze.com/apidocs:
  *
  * - Input validation (bucket name, file name, file info, max counts)
+ * - Bucket deletion fidelity (non-empty buckets, unfinished large files)
  * - Wire-level edges (Content-Range header, Range header forms)
  * - Pluggable post-upload hooks (webhook delivery, replication)
  * - Strict-auth capability + scope + expiry enforcement
@@ -535,6 +536,12 @@ describe('B2Simulator updateBucket revision guard', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Bucket deletion
+// ---------------------------------------------------------------------------
+
+// b2_delete_bucket requires an empty bucket:
+// https://www.backblaze.com/apidocs/b2-delete-bucket
 describe('B2Simulator bucket deletion fidelity', () => {
   let client: B2Client
 
