@@ -535,6 +535,56 @@ describe('B2Simulator updateBucket revision guard', () => {
   })
 })
 
+describe('B2Simulator bucket deletion fidelity', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('rejects b2_delete_bucket while the bucket still has file versions', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'non-empty-delete',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'still-here.txt',
+      source: new BufferSource(new TextEncoder().encode('data')),
+    })
+
+    await expect(bucket.delete()).rejects.toMatchObject({
+      status: 400,
+      code: 'cannot_delete_non_empty_bucket',
+    })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
+  })
+
+  it('deletes the bucket after deleteAll removes every file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'delete-after-delete-all',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'versioned.txt',
+      source: new BufferSource(new TextEncoder().encode('v1')),
+    })
+    await bucket.upload({
+      fileName: 'versioned.txt',
+      source: new BufferSource(new TextEncoder().encode('v2')),
+    })
+
+    let deleted = 0
+    for await (const event of bucket.deleteAll()) {
+      if (event.type === 'delete') deleted += 1
+    }
+
+    expect(deleted).toBe(2)
+    await expect(bucket.delete()).resolves.toMatchObject({ bucketId: bucket.id })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(0)
+  })
+})
+
 describe('B2Simulator input validation: file name', () => {
   let client: B2Client
   let bucket: Awaited<ReturnType<B2Client['createBucket']>>

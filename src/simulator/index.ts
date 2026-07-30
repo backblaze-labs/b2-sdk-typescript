@@ -3151,6 +3151,13 @@ export class B2Simulator {
   private deleteBucket(req: { bucketId: string }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    if ([...bucket.files.values()].some((versions) => versions.length > 0)) {
+      return this.error(
+        400,
+        'cannot_delete_non_empty_bucket',
+        'Bucket is not empty and cannot be deleted',
+      )
+    }
     this.buckets.delete(req.bucketId)
     return { status: 200, body: bucket.info }
   }
