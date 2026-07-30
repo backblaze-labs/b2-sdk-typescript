@@ -59,5 +59,37 @@ describe('createParallelDownloadStream Node diagnostics', () => {
     expect(diagnostics).not.toContain(serverSideEncryption.customerKey)
     expect(diagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
     expect(diagnostics).toContain('[redacted SSE-C key]')
+
+    const jsonDiagnostics = JSON.stringify(seenOptions[0])
+    expect(jsonDiagnostics).not.toContain(serverSideEncryption.customerKey)
+    expect(jsonDiagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
+
+    const seenDownloadOptions = seenOptions[0] as { serverSideEncryption?: unknown }
+    expect(String(seenDownloadOptions.serverSideEncryption)).toContain('[redacted SSE-C key]')
+  })
+
+  it('throws a fallback range error when no attempts are allowed', async () => {
+    let calls = 0
+    const raw = {
+      async downloadFileById(): Promise<never> {
+        calls++
+        throw new Error('download should not start')
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: 'parallel_no_attempts' as FileId,
+      totalSize: 1,
+      rangeSize: 1,
+      concurrency: 1,
+      maxRetries: -1,
+    })
+
+    await expect(readStream(stream)).rejects.toThrow(/Range download failed after retries/)
+    expect(calls).toBe(0)
   })
 })

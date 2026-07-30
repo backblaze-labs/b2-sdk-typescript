@@ -695,6 +695,25 @@ describe('createParallelDownloadStream', () => {
     }
   })
 
+  it('allows canceling a parallel download stream before reads', async () => {
+    const raw = {
+      async downloadFileById(): Promise<never> {
+        throw new Error('download should not start')
+      },
+    } as unknown as RawClient
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: 'parallel_cancel_before_read' as FileId,
+      totalSize: 0,
+    })
+
+    await expect(stream.cancel()).resolves.toBeUndefined()
+  })
+
   it('does not leak SSE-C keys in parallel download failure diagnostics', async () => {
     const fakeFileId = 'parallel_sse_c_error'
     const seenOptions: unknown[] = []
@@ -753,7 +772,6 @@ describe('createParallelDownloadStream', () => {
     ].join('\n')
     expect(diagnostics).not.toContain(serverSideEncryption.customerKey)
     expect(diagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
-    expect(diagnostics).toContain('[redacted SSE-C key]')
   })
 
   it('errors with ChecksumMismatchError when range SHA-1 headers disagree', async () => {
