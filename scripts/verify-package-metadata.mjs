@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Verify the package.json, README, RELEASE.md, CHANGELOG.md, and src/version.ts
-// agree on the package name and version. Run by `pnpm run verify:metadata` and
-// before publishing.
+// Verify the package.json, README, RELEASE.md, CHANGELOG.md, src/version.ts,
+// and generated package-metadata artifacts agree on the package name and
+// version. Run by `pnpm run verify:metadata` and before publishing.
 //
 // The motivation is that a release touches several files (package.json, the
 // CHANGELOG entry, the README install snippet, etc.) and it's easy for them to
@@ -13,6 +13,8 @@
 //   3. CHANGELOG.md has a `## [<version>]` heading for the current version.
 //   4. RELEASE.md's tarball-name examples use `name.replace('/', '-').replace('@', '')`.
 //   5. src/version.ts re-exports the version from package.json (no hardcode).
+//   6. Built package metadata artifacts expose only `version`, never the full
+//      package.json metadata.
 //
 // Exits 0 on success, prints a numbered list of mismatches on failure.
 
@@ -25,6 +27,17 @@ const repo = join(here, '..')
 
 async function read(rel) {
   return await fs.readFile(join(repo, rel), 'utf8')
+}
+
+async function readIfExists(rel) {
+  try {
+    return await read(rel)
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return null
+    }
+    throw error
+  }
 }
 
 function escapeRegExp(value) {
@@ -99,6 +112,38 @@ if (!/export const VERSION:\s*string\s*=\s*pkg\.version/.test(versionTs)) {
   errors.push('src/version.ts must export `VERSION` derived from `pkg.version`')
 }
 
+// --- generated package metadata artifacts must stay version-only
+const packageMetadataArtifacts = [
+  'dist/package.json.js',
+  'dist/package.json.cjs',
+  'dist/_virtual/_b2-sdk-version-json.js',
+  'dist/_virtual/_b2-sdk-version-json.cjs',
+]
+const unrelatedPackageMetadataKeys = Object.keys(pkg).filter((key) => key !== 'version')
+let checkedPackageMetadataArtifacts = 0
+for (const rel of packageMetadataArtifacts) {
+  const contents = await readIfExists(rel)
+  if (contents === null) continue
+
+  checkedPackageMetadataArtifacts += 1
+  const versionKeyRe = /(?:["']version["']|\bversion\b)\s*:/
+  const versionValueRe = new RegExp(
+    `(?:["']version["']|\\bversion\\b)\\s*:\\s*["']${escapeRegExp(version)}["']`,
+  )
+  if (!versionKeyRe.test(contents) || !versionValueRe.test(contents)) {
+    errors.push(`${rel} must contain only the package version ${JSON.stringify(version)}`)
+  }
+
+  for (const key of unrelatedPackageMetadataKeys) {
+    const keyRe = new RegExp(`(?:["']${escapeRegExp(key)}["']|\\b${escapeRegExp(key)}\\b)\\s*:`)
+    if (keyRe.test(contents)) {
+      errors.push(
+        `${rel} includes package metadata key ${JSON.stringify(key)}; generated metadata artifacts must be version-only`,
+      )
+    }
+  }
+}
+
 if (errors.length > 0) {
   console.error(`verify-package-metadata: ${errors.length} problem(s) found`)
   errors.forEach((e, i) => {
@@ -108,5 +153,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `verify-package-metadata: OK (name=${name}, version=${version}, tarball=${tarballPrefix}.tgz)`,
+  `verify-package-metadata: OK (name=${name}, version=${version}, tarball=${tarballPrefix}.tgz, distArtifacts=${checkedPackageMetadataArtifacts})`,
 )
