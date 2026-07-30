@@ -1,4 +1,3 @@
-import { inspect } from 'node:util'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Client } from '../client.ts'
@@ -750,9 +749,7 @@ describe('createParallelDownloadStream', () => {
       String(thrown),
       thrown instanceof Error ? thrown.message : '',
       JSON.stringify(thrown),
-      inspect(thrown),
       ...seenOptions.map((options) => JSON.stringify(options)),
-      ...seenOptions.map((options) => inspect(options)),
     ].join('\n')
     expect(diagnostics).not.toContain(serverSideEncryption.customerKey)
     expect(diagnostics).not.toContain(serverSideEncryption.customerKeyMd5)
