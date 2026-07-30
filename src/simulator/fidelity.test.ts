@@ -546,6 +546,54 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     return client
   }
 
+  function basicHeader(applicationKeyId: string, applicationKey: string): string {
+    return `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`
+  }
+
+  function issuedTokenCount(sim: B2Simulator): number {
+    return (
+      sim as unknown as {
+        readonly issuedTokens: Map<string, unknown>
+      }
+    ).issuedTokens.size
+  }
+
+  async function sendAuthorize(
+    sim: B2Simulator,
+    authorization: string | undefined,
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+    })
+  }
+
+  async function sendListBuckets(sim: B2Simulator, authToken: string): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_list_buckets',
+      headers: { Authorization: authToken },
+      body: JSON.stringify({ accountId: 'sim_account_0001' }),
+    })
+  }
+
+  async function expectAuthorizeFailure(
+    sim: B2Simulator,
+    authorization: string,
+    code = 'bad_auth_token',
+  ): Promise<void> {
+    const before = issuedTokenCount(sim)
+    const resp = await sendAuthorize(sim, authorization)
+    expect(resp.status).toBe(401)
+    const body = (await resp.json()) as { code: string; authorizationToken?: string }
+    expect(body).toMatchObject({ code })
+    expect(body).not.toHaveProperty('authorizationToken')
+    expect(issuedTokenCount(sim)).toBe(before)
+    const tokenProbe = await sendListBuckets(sim, body.authorizationToken ?? 'unissued-token')
+    expect(tokenProbe.status).toBe(401)
+  }
+
   function forgeAdjacentTokenValue(token: string): string {
     return `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`
   }
@@ -604,6 +652,112 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ok: false,
       missing: [Capability.ReadFiles],
     })
+  })
+
+  it('rejects malformed and invalid Basic credentials in strict authorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const wrongSecretKey = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'wrong-secret-key',
+    })
+    const deletedKey = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'deleted-auth-key',
+    })
+    const deletedClient = await authorizeWithKey(sim, deletedKey)
+    const deletedToken = deletedClient.accountInfo.getAuthToken()
+    await client.deleteKey(deletedKey.applicationKeyId)
+
+    await expectAuthorizeFailure(sim, `Basic ${btoa('missing-colon')}`)
+    await expectAuthorizeFailure(sim, basicHeader('unknown-key-id', 'secret'))
+    await expectAuthorizeFailure(sim, basicHeader(wrongSecretKey.applicationKeyId, 'wrong-secret'))
+    const revokedToken = await sendListBuckets(sim, deletedToken)
+    expect(revokedToken.status).toBe(401)
+    await expect(revokedToken.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
+    await expectAuthorizeFailure(
+      sim,
+      basicHeader(deletedKey.applicationKeyId, deletedKey.applicationKey),
+    )
+  })
+
+  it('rejects expired application keys during authorize without issuing a token', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'expired-auth-key',
+      validDurationInSeconds: 1,
+    })
+
+    sim.advanceTime(2000)
+
+    await expectAuthorizeFailure(
+      sim,
+      basicHeader(key.applicationKeyId, key.applicationKey),
+      'expired_auth_token',
+    )
+  })
+
+  it('expires issued key tokens at the application key expiration', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true, authTokenTtlMs: 60_000 } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'short-token-key',
+      validDurationInSeconds: 1,
+    })
+    const authResp = await sendAuthorize(sim, basicHeader(key.applicationKeyId, key.applicationKey))
+    expect(authResp.status).toBe(200)
+    const auth = await authResp.json<AuthorizeAccountResponse>()
+    expect(auth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
+    await expect(sendListBuckets(sim, auth.authorizationToken)).resolves.toMatchObject({
+      status: 200,
+    })
+
+    sim.advanceTime(2000)
+
+    const expired = await sendListBuckets(sim, auth.authorizationToken)
+    expect(expired.status).toBe(401)
+    await expect(expired.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
+  })
+
+  it('does not expose issued token capabilities by response reference', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'capability-copy-key',
+    })
+    const authResp = await sendAuthorize(sim, basicHeader(key.applicationKeyId, key.applicationKey))
+    const auth = await authResp.json<AuthorizeAccountResponse>()
+    ;(auth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(Capability.WriteKeys)
+
+    const createKeyResp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: auth.authorizationToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'leaked-capability-key',
+      }),
+    })
+    expect(createKeyResp.status).toBe(403)
+    await expect(createKeyResp.json()).resolves.toMatchObject({ code: 'unauthorized' })
+
+    const secondAuthResp = await sendAuthorize(
+      sim,
+      basicHeader(key.applicationKeyId, key.applicationKey),
+    )
+    const secondAuth = await secondAuthResp.json<AuthorizeAccountResponse>()
+    expect(secondAuth.apiInfo.storageApi.allowed.capabilities).toEqual([Capability.ListBuckets])
+    expect(secondAuth.apiInfo.storageApi.allowed.capabilities).not.toBe(
+      auth.apiInfo.storageApi.allowed.capabilities,
+    )
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {

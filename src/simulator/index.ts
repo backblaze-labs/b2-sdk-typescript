@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,6 +208,11 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
+const MASTER_APPLICATION_KEY_ID = 'test-key-id'
+const MASTER_APPLICATION_KEY = 'test-key'
+// Implicit master grant for tests that don't mint keys first. Object-lock
+// capabilities are intentionally omitted; tests that need them must create a
+// key with those opt-in scopes, matching real B2 behaviour.
 const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -344,6 +349,15 @@ const MASTER_KEY_SCOPE: AuthorizedKeyScope = Object.freeze({
   applicationKeyId: null,
   expirationTimestamp: null,
 })
+
+type AuthScopeResolution =
+  | { readonly ok: true; readonly scope: AuthorizedKeyScope }
+  | { readonly ok: false; readonly error: SimulatorJsonResponse }
+
+interface BasicCredentials {
+  readonly applicationKeyId: string
+  readonly applicationKey: string
+}
 
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
@@ -1237,7 +1251,7 @@ export class B2Simulator {
     if (!token) {
       return this.error(401, 'bad_auth_token', 'unknown auth token')
     }
-    if (this.now() > token.expiresAt) {
+    if (this.now() >= token.expiresAt) {
       return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
     }
     const missing = missingCapabilitiesFor(endpoint, token.capabilities)
@@ -1747,20 +1761,7 @@ export class B2Simulator {
     }))
   }
 
-  /**
-   * Look up the application key matching the `Authorization` header on
-   * an `authorize_account` request. The header is in the form
-   * `Basic base64(applicationKeyId:applicationKey)`.
-   *
-   * Returns `null` when the header does not identify a key minted via
-   * `b2_create_key`; in that case `authorize` grants the simulator's
-   * implicit master credential.
-   *
-   * @param authzHeader - Raw HTTP `Authorization` header value.
-   *
-   * @returns The matching key's grant scope, or `null` for the implicit master.
-   */
-  private findKeyForAuthHeader(authzHeader: string | undefined): AuthorizedKeyScope | null {
+  private decodeBasicAuthHeader(authzHeader: string | undefined): BasicCredentials | null {
     if (!authzHeader?.startsWith('Basic ')) return null
     // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
     // Wrapped in a try because malformed base64 throws.
@@ -1774,16 +1775,54 @@ export class B2Simulator {
     if (decoded === null) return null
     const idx = decoded.indexOf(':')
     if (idx === -1) return null
-    const applicationKeyId = decoded.slice(0, idx)
-    const applicationKey = decoded.slice(idx + 1)
-    const stored = this.keys.get(applicationKeyId)
-    if (!stored || stored.applicationKey !== applicationKey) return null
     return {
-      capabilities: stored.capabilities as readonly Capability[],
-      bucketIds: stored.bucketIds,
-      namePrefix: stored.namePrefix,
-      applicationKeyId,
-      expirationTimestamp: stored.expirationTimestamp,
+      applicationKeyId: decoded.slice(0, idx),
+      applicationKey: decoded.slice(idx + 1),
+    }
+  }
+
+  private resolveAuthScopeForHeader(authzHeader: string | undefined): AuthScopeResolution {
+    const credentials = this.decodeBasicAuthHeader(authzHeader)
+    if (credentials === null) {
+      return this.strictAuth
+        ? {
+            ok: false,
+            error: this.error(401, 'bad_auth_token', 'malformed or missing Basic credentials'),
+          }
+        : { ok: true, scope: MASTER_KEY_SCOPE }
+    }
+
+    if (
+      credentials.applicationKeyId === MASTER_APPLICATION_KEY_ID &&
+      credentials.applicationKey === MASTER_APPLICATION_KEY
+    ) {
+      return { ok: true, scope: MASTER_KEY_SCOPE }
+    }
+
+    const stored = this.keys.get(credentials.applicationKeyId)
+    if (!stored || stored.applicationKey !== credentials.applicationKey) {
+      return this.strictAuth
+        ? {
+            ok: false,
+            error: this.error(401, 'bad_auth_token', 'application key credentials are invalid'),
+          }
+        : { ok: true, scope: MASTER_KEY_SCOPE }
+    }
+    if (stored.expirationTimestamp !== null && this.now() >= stored.expirationTimestamp) {
+      return {
+        ok: false,
+        error: this.error(401, 'expired_auth_token', 'application key has expired'),
+      }
+    }
+    return {
+      ok: true,
+      scope: {
+        capabilities: stored.capabilities as readonly Capability[],
+        bucketIds: stored.bucketIds,
+        namePrefix: stored.namePrefix,
+        applicationKeyId: credentials.applicationKeyId,
+        expirationTimestamp: stored.expirationTimestamp,
+      },
     }
   }
 
@@ -2579,32 +2618,31 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(
-    authzHeader?: string,
-    origin = 'http://localhost:0',
-  ): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(authzHeader?: string, origin = 'http://localhost:0'): SimulatorJsonResponse {
     // Real B2 derives the grant from the application key used for this
     // authorize call. The simulator preserves its implicit master credential
     // for tests that do not mint app keys, but restricted keys must shape both
     // the issued token and the response's `allowed` block.
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-    const authScope = this.findKeyForAuthHeader(authzHeader) ?? MASTER_KEY_SCOPE
+    const scopeResolution = this.resolveAuthScopeForHeader(authzHeader)
+    if (!scopeResolution.ok) return scopeResolution.error
+    const authScope = scopeResolution.scope
     const allowedBuckets = this.allowedBuckets(authScope.bucketIds)
     const legacyBucketId = singleBucketId(authScope.bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
+    const now = this.now()
+    const tokenCapabilities = [...authScope.capabilities]
+    const tokenExpiresAt = Math.min(
+      now + this.authTokenTtlMs,
+      authScope.expirationTimestamp ?? Number.POSITIVE_INFINITY,
+    )
     this.issuedTokens.set(tokenStr, {
-      capabilities: authScope.capabilities,
+      capabilities: tokenCapabilities,
       bucketIds: authScope.bucketIds,
       namePrefix: authScope.namePrefix,
-      expiresAt: this.now() + this.authTokenTtlMs,
+      expiresAt: tokenExpiresAt,
       applicationKeyId: authScope.applicationKeyId,
     })
     return {
@@ -2627,7 +2665,7 @@ export class B2Simulator {
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
-              capabilities: authScope.capabilities,
+              capabilities: [...authScope.capabilities],
               buckets: allowedBuckets,
               bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
               bucketName: legacyBucketName,
@@ -3538,7 +3576,7 @@ export class B2Simulator {
     const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
-        ? Date.now() + req.validDurationInSeconds * 1000
+        ? this.now() + req.validDurationInSeconds * 1000
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
