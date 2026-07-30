@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,8 +208,10 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
-const MASTER_APPLICATION_KEY_ID = 'test-key-id'
-const MASTER_APPLICATION_KEY = 'test-key'
+/** Application key ID for the simulator's implicit master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'test-key-id'
+/** Application key secret for the simulator's implicit master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY = 'test-key'
 // Object-lock-related capabilities are intentionally omitted from the
 // simulator master grant. Real B2 does not auto-grant BypassGovernance,
 // WriteFileLegalHolds, or WriteFileRetentions; tests that need them
@@ -1253,7 +1255,7 @@ export class B2Simulator {
     if (!token) {
       return this.error(401, 'bad_auth_token', 'unknown auth token')
     }
-    if (this.now() > token.expiresAt) {
+    if (this.now() >= token.expiresAt) {
       return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
     }
     const missing = missingCapabilitiesFor(endpoint, token.capabilities)
@@ -1823,17 +1825,22 @@ export class B2Simulator {
 
     const { applicationKeyId, applicationKey } = credentials
     if (
-      applicationKeyId === MASTER_APPLICATION_KEY_ID &&
-      timingSafeStringEqual(applicationKey, MASTER_APPLICATION_KEY)
+      applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+      timingSafeStringEqual(applicationKey, SIMULATOR_MASTER_APPLICATION_KEY)
     ) {
       return { ok: true, grant: masterGrant }
     }
 
     const stored = this.keys.get(applicationKeyId)
-    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+    if (stored === undefined) {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
-    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
+    if (!timingSafeStringEqual(stored.applicationKey, applicationKey)) return invalidCredentials()
+    if (
+      this.strictAuth &&
+      stored.expirationTimestamp !== null &&
+      stored.expirationTimestamp <= this.now()
+    ) {
       return {
         ok: false,
         error: this.error(401, 'unauthorized', 'application key has expired'),
@@ -2659,44 +2666,50 @@ export class B2Simulator {
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
+    const tokenExpiresAt = Math.min(
+      this.now() + this.authTokenTtlMs,
+      grant.expirationTimestamp ?? Number.POSITIVE_INFINITY,
+    )
     this.issuedTokens.set(tokenStr, {
       capabilities: [...responseCapabilities],
       bucketIds,
       namePrefix: grant.namePrefix,
-      // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-      expiresAt: this.now() + this.authTokenTtlMs,
+      // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`,
+      // but never beyond the backing application key's own expiration.
+      expiresAt: tokenExpiresAt,
       applicationKeyId: grant.applicationKeyId,
     })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.accountId),
-        // `AuthToken` has no public factory by design — auth tokens are
-        // minted by B2, not constructed by user code. The simulator is
-        // the only legitimate place that needs to forge one.
-        authorizationToken: tokenStr as unknown as AuthToken,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: origin,
+    const body: AuthorizeAccountResponse = {
+      accountId: accountIdOf(this.accountId),
+      // `AuthToken` has no public factory by design — auth tokens are
+      // minted by B2, not constructed by user code. The simulator is
+      // the only legitimate place that needs to forge one.
+      authorizationToken: tokenStr as unknown as AuthToken,
+      apiInfo: {
+        storageApi: {
+          absoluteMinimumPartSize: this.minimumPartSize,
+          apiUrl: origin,
+          bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+          bucketName: legacyBucketName,
+          downloadUrl: origin,
+          infoType: 'storageApi',
+          namePrefix: grant.namePrefix,
+          recommendedPartSize: this.recommendedPartSize,
+          s3ApiUrl: origin,
+          allowed: {
+            capabilities: responseCapabilities,
+            buckets: allowedBuckets,
             bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
             bucketName: legacyBucketName,
-            downloadUrl: origin,
-            infoType: 'storageApi',
             namePrefix: grant.namePrefix,
-            recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: origin,
-            allowed: {
-              capabilities: responseCapabilities,
-              buckets: allowedBuckets,
-              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
-              bucketName: legacyBucketName,
-              namePrefix: grant.namePrefix,
-            },
           },
         },
-        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
+      applicationKeyExpirationTimestamp: grant.expirationTimestamp,
+    }
+    return {
+      status: 200,
+      body,
     }
   }
 

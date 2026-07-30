@@ -15,7 +15,12 @@
 
 import { B2Client, type B2ClientOptions } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
+import {
+  B2Simulator,
+  type B2SimulatorOptions,
+  SIMULATOR_MASTER_APPLICATION_KEY,
+  SIMULATOR_MASTER_APPLICATION_KEY_ID,
+} from '../simulator/index.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
 /**
@@ -64,8 +69,8 @@ export function makeClient(
 
   const sim = new B2Simulator(simOptions ?? {})
   const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
+    applicationKeyId: SIMULATOR_MASTER_APPLICATION_KEY_ID,
+    applicationKey: SIMULATOR_MASTER_APPLICATION_KEY,
     transport: sim.transport(),
     ...(clientOverrides ?? {}),
   })

@@ -15,6 +15,8 @@ import {
   type B2Simulator,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
   DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
+  SIMULATOR_MASTER_APPLICATION_KEY,
+  SIMULATOR_MASTER_APPLICATION_KEY_ID,
 } from './index.ts'
 
 /**
@@ -561,6 +563,8 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   }
 
+  // Internal seam: no public API exposes how many account auth tokens
+  // were minted, so rejection tests keep private-field coupling here.
   function issuedAuthTokenCount(sim: B2Simulator): number {
     return (
       sim as unknown as {
@@ -684,7 +688,10 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       keyName: 'invalid-auth-key',
     })
 
-    const masterResponse = await authorizeWithHeader(sim, basicAuth('test-key-id', 'test-key'))
+    const masterResponse = await authorizeWithHeader(
+      sim,
+      basicAuth(SIMULATOR_MASTER_APPLICATION_KEY_ID, SIMULATOR_MASTER_APPLICATION_KEY),
+    )
     expect(masterResponse.status).toBe(200)
     const masterAuth = await masterResponse.json<AuthorizeAccountResponse>()
     expect(masterAuth.apiInfo.storageApi.allowed.capabilities).toContain(Capability.WriteFiles)
@@ -717,6 +724,69 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('expires issued auth tokens no later than the backing application key', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'token-key-expiry',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'token-expiring-key',
+      bucketIds: [bucket.id],
+      validDurationInSeconds: 1,
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const authToken = scopedClient.accountInfo.getAuthToken()
+
+    sim.advanceTime(1000)
+
+    const response = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_list_file_names',
+      headers: { Authorization: authToken },
+      body: JSON.stringify({ bucketId: bucket.id }),
+    })
+    expect(response.status).toBe(401)
+    const body = (await response.json()) as { code: string }
+    expect(body.code).toBe('expired_auth_token')
+  })
+
+  it('rejects known application keys with wrong secrets in permissive authorize', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-wrong-secret',
+    })
+
+    const response = await authorizeWithHeader(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
+    expect(response.status).toBe(401)
+    const body = (await response.json()) as { authorizationToken?: string }
+    expect(body).not.toHaveProperty('authorizationToken')
+  })
+
+  it('keeps expired-key matching permissive when strictAuth is disabled', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-expired-key',
+      validDurationInSeconds: 1,
+    })
+
+    sim.advanceTime(1000)
+
+    const response = await authorizeWithHeader(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+    )
+    expect(response.status).toBe(200)
+    const auth = await response.json<AuthorizeAccountResponse>()
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toEqual([Capability.ListFiles])
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
@@ -740,7 +810,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const authResp = await transport.send({
       method: 'GET',
       url: 'http://localhost:0/b2api/v3/b2_authorize_account',
-      headers: { Authorization: `Basic ${btoa('test-key-id:test-key')}` },
+      headers: {
+        Authorization: basicAuth(
+          SIMULATOR_MASTER_APPLICATION_KEY_ID,
+          SIMULATOR_MASTER_APPLICATION_KEY,
+        ),
+      },
     })
     expect(authResp.status).toBe(200)
     const authBody = (await authResp.json()) as { authorizationToken: string }
@@ -927,6 +1002,26 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expect(resp.json()).resolves.toMatchObject({
       code: 'bad_request',
       message: expect.stringContaining('bucketId is not accepted'),
+    })
+  })
+
+  it('rejects unknown capabilities on direct b2_create_key simulator requests', async () => {
+    const { sim } = makeClient()
+    const resp = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: { Authorization: 'unused', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [Capability.ReadFiles, 'inventFiles'],
+        keyName: 'unknown-capability',
+      }),
+    })
+
+    expect(resp.status).toBe(400)
+    await expect(resp.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: expect.stringContaining('valid B2 capabilities'),
     })
   })
 
