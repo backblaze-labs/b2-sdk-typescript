@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,6 +208,12 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
+const MASTER_APPLICATION_KEY_ID = 'test-key-id'
+const MASTER_APPLICATION_KEY = 'test-key'
+// Object-lock-related capabilities are intentionally omitted from the
+// simulator master grant. Real B2 does not auto-grant BypassGovernance,
+// WriteFileLegalHolds, or WriteFileRetentions; tests that need them
+// should mint an application key with those capabilities explicitly.
 const MASTER_CAPABILITIES: readonly Capability[] = [
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -224,6 +230,7 @@ const MASTER_CAPABILITIES: readonly Capability[] = [
   Capability.ReadBucketNotifications,
   Capability.WriteBucketNotifications,
 ]
+const VALID_CAPABILITIES = new Set<string>(Object.values(Capability))
 
 const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
   'b2ContentDisposition',
@@ -337,6 +344,10 @@ interface AuthorizationGrant {
   readonly expirationTimestamp: number | null
 }
 
+type AuthorizationGrantResult =
+  | { readonly ok: true; readonly grant: AuthorizationGrant }
+  | { readonly ok: false; readonly error: SimulatorJsonResponse }
+
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
   readonly bucketIds: readonly string[] | null
@@ -407,6 +418,19 @@ function singleBucketId(bucketIds: readonly string[] | null | undefined): string
 
 function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] | null {
   return bucketIds === null ? null : [...bucketIds]
+}
+
+function isCapability(capability: string): capability is Capability {
+  return VALID_CAPABILITIES.has(capability)
+}
+
+function normalizeKeyCapabilities(capabilities: readonly string[]): readonly Capability[] | null {
+  const normalized: Capability[] = []
+  for (const capability of capabilities) {
+    if (!isCapability(capability)) return null
+    normalized.push(capability)
+  }
+  return Object.freeze(normalized)
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -1740,22 +1764,18 @@ export class B2Simulator {
   }
 
   /**
-   * Look up the application key matching the `Authorization` header on
-   * an `authorize_account` request. The header is in the form
-   * `Basic base64(applicationKeyId:applicationKey)`.
-   *
-   * Returns `null` for the implicit master credential (anything that
-   * does not match a key minted via `b2_create_key`); in that case
-   * `authorizationGrantForAuthHeader` grants the simulator's master scope.
+   * Parse the `Authorization` header on an `authorize_account` request.
+   * The header is in the form `Basic base64(applicationKeyId:applicationKey)`.
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
-   * @returns The matching key's grant scope, or `null` for the master.
+   * @returns Parsed credentials, or `null` when the header is malformed.
    */
-  private findKeyForAuthHeader(authzHeader: string | undefined): AuthorizationGrant | null {
+  private parseBasicAuthHeader(authzHeader: string | undefined): {
+    readonly applicationKeyId: string
+    readonly applicationKey: string
+  } | null {
     if (!authzHeader?.startsWith('Basic ')) return null
-    // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
-    // Wrapped in a try because malformed base64 throws.
     const decoded = (() => {
       try {
         return atob(authzHeader.slice(6))
@@ -1765,30 +1785,70 @@ export class B2Simulator {
     })()
     if (decoded === null) return null
     const idx = decoded.indexOf(':')
-    if (idx === -1) return null
+    if (idx <= 0) return null
     const applicationKeyId = decoded.slice(0, idx)
     const applicationKey = decoded.slice(idx + 1)
-    const stored = this.keys.get(applicationKeyId)
-    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) return null
-    return {
-      capabilities: [...stored.capabilities],
-      bucketIds: cloneBucketIds(stored.bucketIds),
-      namePrefix: stored.namePrefix,
-      applicationKeyId,
-      expirationTimestamp: stored.expirationTimestamp,
-    }
+    if (applicationKey === '') return null
+    return { applicationKeyId, applicationKey }
   }
 
-  private authorizationGrantForAuthHeader(authzHeader: string | undefined): AuthorizationGrant {
-    return (
-      this.findKeyForAuthHeader(authzHeader) ?? {
-        capabilities: [...MASTER_CAPABILITIES],
-        bucketIds: null,
-        namePrefix: null,
-        applicationKeyId: null,
-        expirationTimestamp: null,
+  /**
+   * Resolve the authorization grant for a Basic-auth credential. The
+   * documented simulator master credential gets the master grant; stored
+   * application keys get their own grant; invalid credentials fail closed in
+   * strict mode and fall back to the legacy master grant only in permissive mode.
+   *
+   * @param authzHeader - Raw HTTP `Authorization` header value.
+   *
+   * @returns A successful authorization grant or a 401 response.
+   */
+  private authorizationGrantForAuthHeader(
+    authzHeader: string | undefined,
+  ): AuthorizationGrantResult {
+    const masterGrant: AuthorizationGrant = {
+      capabilities: [...MASTER_CAPABILITIES],
+      bucketIds: null,
+      namePrefix: null,
+      applicationKeyId: null,
+      expirationTimestamp: null,
+    }
+    const invalidCredentials = (): AuthorizationGrantResult => ({
+      ok: false,
+      error: this.error(401, 'unauthorized', 'invalid application key credentials'),
+    })
+    const credentials = this.parseBasicAuthHeader(authzHeader)
+    if (credentials === null) {
+      return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
+    }
+
+    const { applicationKeyId, applicationKey } = credentials
+    if (
+      applicationKeyId === MASTER_APPLICATION_KEY_ID &&
+      timingSafeStringEqual(applicationKey, MASTER_APPLICATION_KEY)
+    ) {
+      return { ok: true, grant: masterGrant }
+    }
+
+    const stored = this.keys.get(applicationKeyId)
+    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+      return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
+    }
+    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
+      return {
+        ok: false,
+        error: this.error(401, 'unauthorized', 'application key has expired'),
       }
-    )
+    }
+    return {
+      ok: true,
+      grant: {
+        capabilities: [...stored.capabilities],
+        bucketIds: cloneBucketIds(stored.bucketIds),
+        namePrefix: stored.namePrefix,
+        applicationKeyId,
+        expirationTimestamp: stored.expirationTimestamp,
+      },
+    }
   }
 
   /**
@@ -2583,21 +2643,15 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(
-    authzHeader?: string,
-    origin = 'http://localhost:0',
-  ): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(authzHeader?: string, origin = 'http://localhost:0'): SimulatorJsonResponse {
     // The auth response and issued token must both be derived from the
     // same grant. B2Client.hasCapabilities reads the response body, while
     // strictAuth enforcement reads the issued-token map.
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
-    const grant = this.authorizationGrantForAuthHeader(authzHeader)
-    const tokenCapabilities = [...grant.capabilities]
+    const grantResult = this.authorizationGrantForAuthHeader(authzHeader)
+    if (!grantResult.ok) return grantResult.error
+    const grant = grantResult.grant
+    // Keep response and token arrays separate so caller mutation of the
+    // auth response cannot alter strict-auth enforcement state.
     const responseCapabilities = [...grant.capabilities]
     const bucketIds = cloneBucketIds(grant.bucketIds)
     const allowedBuckets = this.allowedBuckets(bucketIds)
@@ -2606,7 +2660,7 @@ export class B2Simulator {
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
-      capabilities: tokenCapabilities,
+      capabilities: [...responseCapabilities],
       bucketIds,
       namePrefix: grant.namePrefix,
       // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
@@ -3530,10 +3584,13 @@ export class B2Simulator {
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
-    if (
-      hasKeyManagementCapability(req.capabilities) &&
-      (bucketIds !== null || namePrefix !== null)
-    ) {
+    const capabilities = Array.isArray(req.capabilities)
+      ? normalizeKeyCapabilities(req.capabilities)
+      : null
+    if (capabilities === null) {
+      return this.error(400, 'bad_request', 'capabilities must be valid B2 capabilities')
+    }
+    if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
       return this.error(
         400,
         'bad_request',
@@ -3544,12 +3601,12 @@ export class B2Simulator {
     const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
-        ? Date.now() + req.validDurationInSeconds * 1000
+        ? this.now() + req.validDurationInSeconds * 1000
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: Object.freeze(req.capabilities.map((capability) => capability as Capability)),
+      capabilities,
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,

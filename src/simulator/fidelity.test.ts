@@ -546,6 +546,58 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     return client
   }
 
+  function basicAuth(applicationKeyId: string, applicationKey: string): string {
+    return `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`
+  }
+
+  async function authorizeWithHeader(
+    sim: B2Simulator,
+    authorization: string | undefined,
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+    })
+  }
+
+  function issuedAuthTokenCount(sim: B2Simulator): number {
+    return (
+      sim as unknown as {
+        readonly issuedTokens: Map<string, unknown>
+      }
+    ).issuedTokens.size
+  }
+
+  async function expectAuthorizeRejected(
+    sim: B2Simulator,
+    authorization: string | undefined,
+    message: RegExp = /invalid application key credentials/,
+  ): Promise<void> {
+    const tokenCount = issuedAuthTokenCount(sim)
+    const response = await authorizeWithHeader(sim, authorization)
+    expect(response.status).toBe(401)
+    const body = (await response.json()) as {
+      code: string
+      message: string
+      authorizationToken?: string
+    }
+    expect(body).toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringMatching(message),
+    })
+    expect(body).not.toHaveProperty('authorizationToken')
+    expect(issuedAuthTokenCount(sim)).toBe(tokenCount)
+
+    const protectedResponse = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_list_buckets',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+      body: JSON.stringify({ accountId: 'sim_account_0001' }),
+    })
+    expect(protectedResponse.status).toBe(401)
+  }
+
   function forgeAdjacentTokenValue(token: string): string {
     return `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`
   }
@@ -603,6 +655,66 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ok: false,
       missing: [Capability.WriteFiles],
     })
+  })
+
+  it('reports application key expiration in authorize responses', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'expiring-auth-info-key',
+      validDurationInSeconds: 60,
+    })
+
+    const response = await authorizeWithHeader(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+    )
+    expect(response.status).toBe(200)
+    const auth = await response.json<AuthorizeAccountResponse>()
+    expect(auth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
+    expect(auth.apiInfo.storageApi.allowed.capabilities).toEqual([Capability.ListBuckets])
+  })
+
+  it('rejects invalid application key credentials in strict authorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'invalid-auth-key',
+    })
+
+    const masterResponse = await authorizeWithHeader(sim, basicAuth('test-key-id', 'test-key'))
+    expect(masterResponse.status).toBe(200)
+    const masterAuth = await masterResponse.json<AuthorizeAccountResponse>()
+    expect(masterAuth.apiInfo.storageApi.allowed.capabilities).toContain(Capability.WriteFiles)
+
+    await expectAuthorizeRejected(sim, undefined)
+    await expectAuthorizeRejected(sim, 'Basic not-valid-base64')
+    await expectAuthorizeRejected(sim, `Basic ${btoa('missing-colon')}`)
+    await expectAuthorizeRejected(sim, basicAuth('does-not-exist', 'anything'))
+    await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
+
+    await client.deleteKey(key.applicationKeyId)
+    await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+  })
+
+  it('rejects expired application keys during strict authorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'expired-auth-key',
+      validDurationInSeconds: 1,
+    })
+
+    sim.advanceTime(1000)
+
+    await expectAuthorizeRejected(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+      /application key has expired/,
+    )
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
