@@ -8,6 +8,7 @@ import { RawClient } from '../raw/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient, readStream } from '../test-utils/index.ts'
+import { EncryptionAlgorithm, EncryptionKey } from '../types/encryption.ts'
 import type { FileId } from '../types/ids.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 import { downloadById, downloadByName, headById, headByName } from './single.ts'
@@ -644,6 +645,53 @@ describe('createParallelDownloadStream', () => {
     // Verify every byte is in order
     for (let i = 0; i < 100; i++) {
       expect(result[i]).toBe(i)
+    }
+  })
+
+  it('passes SSE-C headers to every ranged request', async () => {
+    const fileData = new Uint8Array(100)
+    for (let i = 0; i < 100; i++) fileData[i] = i
+    const fakeFileId = 'parallel_sse_c_headers'
+    const seenHeaders: Record<string, string>[] = []
+    const serverSideEncryption = {
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'customer-key',
+      customerKeyMd5: 'customer-key-md5',
+    }
+
+    const transport = createMockTransport(fileData, fakeFileId, {
+      onDownload: (request) => {
+        seenHeaders.push(request.headers ?? {})
+        return undefined
+      },
+    })
+    const raw = new RawClient({ transport })
+    const accountInfo = {
+      getDownloadUrl: () => 'http://mock:0',
+      getAuthToken: () => 'mock_token',
+    }
+
+    const stream = createParallelDownloadStream(raw, accountInfo as unknown as AccountInfo, {
+      fileId: fakeFileId as FileId,
+      totalSize: 100,
+      rangeSize: 25,
+      concurrency: 2,
+      serverSideEncryption,
+    })
+
+    const result = await readStream(stream)
+    expect(result.byteLength).toBe(100)
+    expect(seenHeaders).toHaveLength(4)
+    for (const headers of seenHeaders) {
+      expect(headers['X-Bz-Server-Side-Encryption-Customer-Algorithm']).toBe(
+        EncryptionAlgorithm.Aes256,
+      )
+      expect(headers['X-Bz-Server-Side-Encryption-Customer-Key']).toBe(
+        serverSideEncryption.customerKey,
+      )
+      expect(headers['X-Bz-Server-Side-Encryption-Customer-Key-Md5']).toBe(
+        serverSideEncryption.customerKeyMd5,
+      )
     }
   })
 
@@ -1361,6 +1409,33 @@ describe('createParallelDownloadStream with simulator', () => {
     for (let i = 0; i < 256; i++) {
       expect(result[i]).toBe(i % 256)
     }
+  })
+
+  it('downloads an SSE-C object via parallel ranges using the simulator', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'parallel-sse-c-sim',
+      bucketType: 'allPrivate',
+    })
+
+    const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(26))
+    const content = new Uint8Array(256)
+    for (let i = 0; i < 256; i++) content[i] = (i * 3) % 256
+    const uploaded = await bucket.upload({
+      fileName: 'parallel-sse-c-test.bin',
+      source: new BufferSource(content),
+      serverSideEncryption: key,
+    })
+
+    const stream = createParallelDownloadStream(client.raw, client.accountInfo, {
+      fileId: uploaded.fileId,
+      totalSize: content.byteLength,
+      rangeSize: 64,
+      concurrency: 2,
+      serverSideEncryption: key,
+    })
+
+    const result = await readStream(stream)
+    expect(result).toEqual(content)
   })
 
   it('parallel download with concurrency=1 produces correct output', async () => {

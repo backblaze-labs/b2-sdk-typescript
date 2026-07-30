@@ -1,7 +1,7 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Error, classifyError, NetworkError } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
-import type { RawClient } from '../raw/index.ts'
+import type { RawClient, SseCDownloadKey } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
@@ -23,6 +23,8 @@ export interface ParallelDownloadOptions {
   readonly rangeSize?: number
   /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
+  /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+  readonly serverSideEncryption?: SseCDownloadKey
   /**
    * Extra retry attempts per range on transient failures. Defaults to 0 because
    * `B2Client` already applies `RetryTransport`; set this only when supplying a
@@ -118,6 +120,7 @@ export function createParallelDownloadStream(
             range.start,
             range.end,
             totalSize,
+            options.serverSideEncryption,
             retryOptions,
             abort,
           )
@@ -214,6 +217,7 @@ export function createParallelDownloadStream(
  * @param start - Inclusive byte offset where the range begins.
  * @param end - Inclusive byte offset where the range ends.
  * @param totalSize - Expected complete file size.
+ * @param serverSideEncryption - Optional SSE-C decryption parameters for the file.
  * @param retryOptions - Retry settings controlling attempts and backoff.
  * @param signal - Optional abort signal that cancels the range and any pending retry.
  *
@@ -226,6 +230,7 @@ async function fetchRangeWithRetry(
   start: number,
   end: number,
   totalSize: number,
+  serverSideEncryption: SseCDownloadKey | undefined,
   retryOptions: RetryOptions,
   signal: AbortSignal | undefined,
 ): Promise<RangeDownloadResult> {
@@ -247,6 +252,7 @@ async function fetchRangeWithRetry(
         fileId,
         {
           range: byteRangeHeader(start, end),
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
           ...(signal !== undefined ? { signal } : {}),
         },
       )
