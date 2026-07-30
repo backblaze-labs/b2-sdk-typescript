@@ -571,6 +571,65 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
   })
 
+  it('reports restricted key capabilities and scope in authorize allowed info', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-allowed-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'restricted-auth-allowed',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+
+    const restrictedClient = await authorizeWithKey(sim, key)
+    const allowed = restrictedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed
+
+    expect(allowed).toEqual({
+      capabilities: [Capability.ListFiles],
+      buckets: [{ id: bucket.id, name: bucket.name }],
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      namePrefix: 'allowed/',
+    })
+    expect(restrictedClient.hasCapabilities([Capability.ListFiles])).toEqual({
+      ok: true,
+      missing: [],
+    })
+    expect(restrictedClient.hasCapabilities([Capability.WriteFiles])).toEqual({
+      ok: false,
+      missing: [Capability.WriteFiles],
+    })
+  })
+
+  it('keeps authorize response capabilities isolated from stored key grants', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'isolated-auth-allowed',
+    })
+
+    const restrictedClient = await authorizeWithKey(sim, key)
+    const auth = restrictedClient.accountInfo.getAuth()
+    if (auth === null) throw new Error('expected restricted authorization')
+    ;(auth.apiInfo.storageApi.allowed.capabilities as Capability[]).push(Capability.WriteFiles)
+
+    const restrictedAgain = await authorizeWithKey(sim, key)
+    expect(restrictedAgain.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
+      Capability.ListFiles,
+    ])
+    const listed = await client.listKeys()
+    expect(
+      listed.keys.find((item) => item.applicationKeyId === key.applicationKeyId),
+    ).toMatchObject({
+      capabilities: [Capability.ListFiles],
+    })
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
