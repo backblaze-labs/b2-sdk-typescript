@@ -100,6 +100,13 @@ function timingSafeStringEqual(left: string, right: string): boolean {
   return mismatch === 0
 }
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const MAX_JS_DATE_MS = 8.64e15
+
+function isValidRetentionTimestamp(timestamp: number, now = Date.now()): boolean {
+  return Number.isFinite(timestamp) && timestamp <= MAX_JS_DATE_MS && timestamp > now
+}
+
 /**
  * Result of {@link parseRangeHeader}. `'ok'` is satisfiable,
  * `'unsatisfiable'` is well-formed but cannot be served (e.g. range
@@ -216,6 +223,7 @@ import {
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
+  validateBucketTypes,
   validateCorsRules,
   validateDefaultRetention,
   validateDownloadAuthorizationDuration,
@@ -406,6 +414,7 @@ interface RequestScope {
   readonly bucketIds: readonly string[]
   readonly fileNames?: readonly string[]
   readonly requiresBucketScope: boolean
+  readonly requiresAccountLevelBucketAccess?: boolean
 }
 
 function normalizeKeyBucketIds(req: {
@@ -432,6 +441,86 @@ function requestStringField(body: unknown, field: string): string | undefined {
   if (typeof body !== 'object' || body === null) return undefined
   const value = (body as Record<string, unknown>)[field]
   return typeof value === 'string' ? value : undefined
+}
+
+function requestRecord(body: unknown): Record<string, unknown> | null {
+  return typeof body === 'object' && body !== null && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : null
+}
+
+function replicationDestinationBucketIds(body: unknown): readonly string[] {
+  const req = requestRecord(body)
+  const replicationConfiguration = requestRecord(req?.['replicationConfiguration'])
+  const source = requestRecord(replicationConfiguration?.['asReplicationSource'])
+  const rules = source?.['replicationRules']
+  if (!Array.isArray(rules)) return []
+
+  const bucketIds: string[] = []
+  for (const rule of rules) {
+    const destinationBucketId = requestRecord(rule)?.['destinationBucketId']
+    if (typeof destinationBucketId === 'string') bucketIds.push(destinationBucketId)
+  }
+  return [...new Set(bucketIds)]
+}
+
+function normalizeReplicationConfiguration(
+  config: BucketInfo['replicationConfiguration'],
+): BucketInfo['replicationConfiguration'] {
+  return {
+    asReplicationSource: config.asReplicationSource ?? null,
+    asReplicationDestination: config.asReplicationDestination ?? null,
+  }
+}
+
+interface BucketConfigurationFields {
+  readonly corsRules?: unknown
+  readonly defaultRetention?: unknown
+  readonly lifecycleRules?: unknown
+  readonly replicationConfiguration?: unknown
+}
+
+function validateBucketConfigurationFields(
+  fields: BucketConfigurationFields,
+  options: { readonly objectLockEnabled: boolean },
+): ValidationError | null {
+  if (fields.corsRules !== undefined) {
+    const corsError = validateCorsRules(fields.corsRules)
+    if (corsError) return corsError
+  }
+  if (fields.lifecycleRules !== undefined) {
+    const lifecycleError = validateLifecycleRules(fields.lifecycleRules)
+    if (lifecycleError) return lifecycleError
+  }
+  if (fields.replicationConfiguration !== undefined) {
+    const replicationError = validateReplicationConfiguration(fields.replicationConfiguration)
+    if (replicationError) return replicationError
+  }
+  if (fields.defaultRetention !== undefined) {
+    const retentionError = validateDefaultRetention(fields.defaultRetention)
+    if (retentionError) return retentionError
+    if (
+      requestRecord(fields.defaultRetention)?.['mode'] !== BucketRetentionMode.None &&
+      !options.objectLockEnabled
+    ) {
+      return {
+        code: 'file_lock_not_enabled',
+        message: 'Bucket must have Object Lock enabled to set defaultRetention',
+      }
+    }
+  }
+  return null
+}
+
+function nextObjectLockEnabled(current: boolean, requested: unknown): boolean | ValidationError {
+  if (requested === undefined) return current
+  if (typeof requested !== 'boolean') {
+    return { code: 'bad_request', message: 'fileLockEnabled must be a boolean' }
+  }
+  if (current && requested === false) {
+    return { code: 'file_lock_conflict', message: 'Object Lock cannot be disabled' }
+  }
+  return current || requested
 }
 
 function requestHeaderValue(headers: Record<string, string>, name: string): string | undefined {
@@ -533,6 +622,18 @@ function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
       capability === Capability.WriteKeys ||
       capability === Capability.DeleteKeys,
   )
+}
+
+function missingStoredKeyCapabilities(
+  key: StoredKey,
+  required: readonly Capability[],
+): readonly Capability[] {
+  const capabilities = new Set(key.capabilities)
+  return required.filter((capability) => !capabilities.has(capability))
+}
+
+function storedKeyAllowsBucket(key: StoredKey, bucketId: string): boolean {
+  return key.bucketIds === null || key.bucketIds.includes(bucketId)
 }
 
 function publicServerSideEncryption(
@@ -740,9 +841,11 @@ function defaultFileRetention(
 ): FileRetentionValue | null {
   if (policy.mode === BucketRetentionMode.None || policy.period === null) return null
   const days = policy.period.unit === 'days' ? policy.period.duration : policy.period.duration * 365
+  const retainUntilTimestamp = uploadTimestamp + days * MS_PER_DAY
+  if (!isValidRetentionTimestamp(retainUntilTimestamp, uploadTimestamp)) return null
   return {
     mode: policy.mode as RetentionMode,
-    retainUntilTimestamp: uploadTimestamp + days * 24 * 60 * 60 * 1000,
+    retainUntilTimestamp,
   }
 }
 
@@ -760,8 +863,7 @@ function parseFileRetentionValue(value: unknown, now: number): FileRetentionValu
     return { mode, retainUntilTimestamp }
   }
   if (isRetentionMode(mode) && typeof retainUntilTimestamp === 'number') {
-    if (!Number.isFinite(retainUntilTimestamp)) return null
-    if (retainUntilTimestamp <= now) return null
+    if (!isValidRetentionTimestamp(retainUntilTimestamp, now)) return null
     return { mode, retainUntilTimestamp }
   }
   return null
@@ -1385,6 +1487,9 @@ export class B2Simulator {
     },
   ): SimulatorJsonResponse | null {
     if (grant.bucketIds !== null) {
+      if (scope?.requiresAccountLevelBucketAccess === true) {
+        return this.error(403, 'unauthorized', grant.bucketScopeRequiredMessage())
+      }
       if ((scope?.bucketIds.length ?? 0) === 0 && scope?.requiresBucketScope === true) {
         return this.error(403, 'unauthorized', grant.bucketScopeRequiredMessage())
       }
@@ -1563,13 +1668,89 @@ export class B2Simulator {
     return null
   }
 
+  private validateReplicationApplicationKey(
+    applicationKeyId: string,
+    requiredCapabilities: readonly Capability[],
+    options: { readonly bucketId?: string | undefined; readonly role: string },
+  ): SimulatorJsonResponse | null {
+    const key = this.keys.get(applicationKeyId)
+    if (key === undefined) {
+      return this.error(
+        400,
+        'bad_request',
+        `${options.role} application key ${applicationKeyId} does not exist`,
+      )
+    }
+    const missing = missingStoredKeyCapabilities(key, requiredCapabilities)
+    if (missing.length > 0) {
+      return this.error(
+        400,
+        'bad_request',
+        `${options.role} application key ${applicationKeyId} lacks required capabilities: ${missing.join(', ')}`,
+      )
+    }
+    if (options.bucketId !== undefined && !storedKeyAllowsBucket(key, options.bucketId)) {
+      return this.error(
+        403,
+        'unauthorized',
+        `${options.role} application key ${applicationKeyId} is not scoped to bucket ${options.bucketId}`,
+      )
+    }
+    return null
+  }
+
+  private validateReplicationApplicationKeys(
+    config: unknown,
+    bucketId: string | undefined,
+  ): SimulatorJsonResponse | null {
+    if (!this.strictAuth || config === undefined) return null
+
+    const replicationConfiguration = requestRecord(config)
+    const source = requestRecord(replicationConfiguration?.['asReplicationSource'])
+    if (source !== null) {
+      const sourceApplicationKeyId = source['sourceApplicationKeyId']
+      if (typeof sourceApplicationKeyId === 'string') {
+        const sourceKeyError = this.validateReplicationApplicationKey(
+          sourceApplicationKeyId,
+          [Capability.ReadFiles, Capability.ListFiles],
+          { bucketId, role: 'replication source' },
+        )
+        if (sourceKeyError !== null) return sourceKeyError
+      }
+    }
+
+    const destination = requestRecord(replicationConfiguration?.['asReplicationDestination'])
+    const mapping = requestRecord(destination?.['sourceToDestinationKeyMapping'])
+    if (mapping !== null) {
+      for (const [sourceApplicationKeyId, destinationApplicationKeyId] of Object.entries(mapping)) {
+        const sourceKeyError = this.validateReplicationApplicationKey(
+          sourceApplicationKeyId,
+          [Capability.ReadFiles, Capability.ListFiles],
+          { role: 'replication source' },
+        )
+        if (sourceKeyError !== null) return sourceKeyError
+
+        if (typeof destinationApplicationKeyId === 'string') {
+          const destinationKeyError = this.validateReplicationApplicationKey(
+            destinationApplicationKeyId,
+            [Capability.WriteFiles],
+            { bucketId, role: 'replication destination' },
+          )
+          if (destinationKeyError !== null) return destinationKeyError
+        }
+      }
+    }
+
+    return null
+  }
+
   private requestScope(endpoint: string, body: unknown): RequestScope | undefined {
     const directBucketId = requestStringField(body, 'bucketId')
     const directFileName = requestStringField(body, 'fileName')
 
     switch (endpoint) {
       case 'b2_create_bucket':
-        return { bucketIds: [], requiresBucketScope: true }
+        return this.createBucketScope(body)
       case 'b2_list_buckets':
         return this.listBucketsScope(body, directBucketId)
       case 'b2_list_file_names':
@@ -1620,8 +1801,28 @@ export class B2Simulator {
         return this.notificationRulesScope(body, directBucketId, false)
       case 'b2_set_bucket_notification_rules':
         return this.notificationRulesScope(body, directBucketId, true)
+      case 'b2_update_bucket':
+        return this.updateBucketScope(body, directBucketId)
       default:
         return this.defaultRequestScope(directBucketId, directFileName)
+    }
+  }
+
+  private createBucketScope(body: unknown): RequestScope {
+    return {
+      bucketIds: replicationDestinationBucketIds(body),
+      requiresBucketScope: true,
+      requiresAccountLevelBucketAccess: true,
+    }
+  }
+
+  private updateBucketScope(body: unknown, directBucketId: string | undefined): RequestScope {
+    return {
+      bucketIds: [
+        ...(directBucketId === undefined ? [] : [directBucketId]),
+        ...replicationDestinationBucketIds(body),
+      ],
+      requiresBucketScope: true,
     }
   }
 
@@ -2836,24 +3037,17 @@ export class B2Simulator {
       const infoError = validateBucketInfo(req.bucketInfo)
       if (infoError) return this.error(400, infoError.code, infoError.message)
     }
-    if (req.corsRules !== undefined) {
-      const corsError = validateCorsRules(req.corsRules)
-      if (corsError) return this.error(400, corsError.code, corsError.message)
+    const objectLockEnabled = nextObjectLockEnabled(false, req.fileLockEnabled)
+    if (typeof objectLockEnabled !== 'boolean') {
+      return this.error(400, objectLockEnabled.code, objectLockEnabled.message)
     }
-    if (req.lifecycleRules !== undefined) {
-      const lifecycleError = validateLifecycleRules(req.lifecycleRules)
-      if (lifecycleError) return this.error(400, lifecycleError.code, lifecycleError.message)
-    }
-    if (req.replicationConfiguration !== undefined) {
-      const replicationError = validateReplicationConfiguration(req.replicationConfiguration)
-      if (replicationError) {
-        return this.error(400, replicationError.code, replicationError.message)
-      }
-    }
-    if (req.defaultRetention !== undefined) {
-      const retentionError = validateDefaultRetention(req.defaultRetention)
-      if (retentionError) return this.error(400, retentionError.code, retentionError.message)
-    }
+    const configError = validateBucketConfigurationFields(req, { objectLockEnabled })
+    if (configError) return this.error(400, configError.code, configError.message)
+    const replicationKeyError = this.validateReplicationApplicationKeys(
+      req.replicationConfiguration,
+      undefined,
+    )
+    if (replicationKeyError !== null) return replicationKeyError
     for (const b of this.buckets.values()) {
       if (b.info.bucketName === req.bucketName) {
         return this.error(400, 'duplicate_bucket_name', 'Bucket name already in use')
@@ -2881,7 +3075,7 @@ export class B2Simulator {
       fileLockConfiguration: {
         isClientAuthorizedToRead: true,
         value: {
-          isFileLockEnabled: req.fileLockEnabled ?? false,
+          isFileLockEnabled: objectLockEnabled,
           defaultRetention,
         },
       },
@@ -2889,10 +3083,10 @@ export class B2Simulator {
       options: [],
       revision: 1,
       defaultRetention,
-      replicationConfiguration: req.replicationConfiguration ?? {
-        asReplicationSource: null,
-        asReplicationDestination: null,
-      },
+      replicationConfiguration:
+        req.replicationConfiguration === undefined
+          ? { asReplicationSource: null, asReplicationDestination: null }
+          : normalizeReplicationConfiguration(req.replicationConfiguration),
     }
     this.buckets.set(bid, { info, files: new Map() })
     return { status: 200, body: info }
@@ -2903,6 +3097,8 @@ export class B2Simulator {
     bucketName?: string
     bucketTypes?: readonly BucketType[]
   }): SimulatorJsonResponse {
+    const bucketTypesError = validateBucketTypes(req.bucketTypes)
+    if (bucketTypesError) return this.error(400, bucketTypesError.code, bucketTypesError.message)
     const buckets = [...this.buckets.values()]
       .map((b) => b.info)
       .filter((bucket) => req.bucketId === undefined || bucket.bucketId === req.bucketId)
@@ -2923,7 +3119,7 @@ export class B2Simulator {
   private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {
     const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
-    const revisionGuard = req['ifRevisionIs'] ?? req['ifRevisionMatch']
+    const revisionGuard = req['ifRevisionIs']
     if (revisionGuard !== undefined) {
       if (typeof revisionGuard !== 'number' || !Number.isInteger(revisionGuard)) {
         return this.error(400, 'bad_request', 'ifRevisionIs must be an integer')
@@ -2938,24 +3134,30 @@ export class B2Simulator {
       const infoError = validateBucketInfo(req['bucketInfo'] as Record<string, string>)
       if (infoError) return this.error(400, infoError.code, infoError.message)
     }
-    if (req['corsRules'] !== undefined) {
-      const corsError = validateCorsRules(req['corsRules'])
-      if (corsError) return this.error(400, corsError.code, corsError.message)
+    const currentObjectLockEnabled =
+      bucket.info.fileLockConfiguration.value?.isFileLockEnabled ?? false
+    const objectLockEnabled = nextObjectLockEnabled(
+      currentObjectLockEnabled,
+      req['fileLockEnabled'],
+    )
+    if (typeof objectLockEnabled !== 'boolean') {
+      return this.error(400, objectLockEnabled.code, objectLockEnabled.message)
     }
-    if (req['lifecycleRules'] !== undefined) {
-      const lifecycleError = validateLifecycleRules(req['lifecycleRules'])
-      if (lifecycleError) return this.error(400, lifecycleError.code, lifecycleError.message)
-    }
-    if (req['replicationConfiguration'] !== undefined) {
-      const replicationError = validateReplicationConfiguration(req['replicationConfiguration'])
-      if (replicationError) {
-        return this.error(400, replicationError.code, replicationError.message)
-      }
-    }
-    if (req['defaultRetention'] !== undefined) {
-      const retentionError = validateDefaultRetention(req['defaultRetention'])
-      if (retentionError) return this.error(400, retentionError.code, retentionError.message)
-    }
+    const configError = validateBucketConfigurationFields(
+      {
+        corsRules: req['corsRules'],
+        defaultRetention: req['defaultRetention'],
+        lifecycleRules: req['lifecycleRules'],
+        replicationConfiguration: req['replicationConfiguration'],
+      },
+      { objectLockEnabled },
+    )
+    if (configError) return this.error(400, configError.code, configError.message)
+    const replicationKeyError = this.validateReplicationApplicationKeys(
+      req['replicationConfiguration'],
+      req['bucketId'] as string,
+    )
+    if (replicationKeyError !== null) return replicationKeyError
     const updated: BucketInfo = {
       ...bucket.info,
       ...(req['bucketType'] !== undefined ? { bucketType: req['bucketType'] as BucketType } : {}),
@@ -2970,9 +3172,9 @@ export class B2Simulator {
         : {}),
       ...(req['replicationConfiguration'] !== undefined
         ? {
-            replicationConfiguration: req[
-              'replicationConfiguration'
-            ] as BucketInfo['replicationConfiguration'],
+            replicationConfiguration: normalizeReplicationConfiguration(
+              req['replicationConfiguration'] as BucketInfo['replicationConfiguration'],
+            ),
           }
         : {}),
       ...(req['defaultRetention'] !== undefined
@@ -2981,9 +3183,19 @@ export class B2Simulator {
             fileLockConfiguration: {
               isClientAuthorizedToRead: true,
               value: {
-                isFileLockEnabled:
-                  bucket.info.fileLockConfiguration.value?.isFileLockEnabled ?? false,
+                isFileLockEnabled: objectLockEnabled,
                 defaultRetention: req['defaultRetention'] as BucketInfo['defaultRetention'],
+              },
+            },
+          }
+        : {}),
+      ...(req['fileLockEnabled'] !== undefined && req['defaultRetention'] === undefined
+        ? {
+            fileLockConfiguration: {
+              isClientAuthorizedToRead: true,
+              value: {
+                isFileLockEnabled: objectLockEnabled,
+                defaultRetention: bucket.info.defaultRetention,
               },
             },
           }

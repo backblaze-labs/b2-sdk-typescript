@@ -14,12 +14,15 @@ import type { ReplicationRule } from './types/replication.ts'
  * primary bucket spec.
  */
 
-async function makeBucket(): Promise<{ bucket: Bucket; client: B2Client }> {
+async function makeBucket(
+  options: { readonly fileLockEnabled?: boolean } = {},
+): Promise<{ bucket: Bucket; client: B2Client }> {
   const { client } = makeClient()
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'cfg-bucket',
     bucketType: BucketType.AllPrivate,
+    ...(options.fileLockEnabled !== undefined ? { fileLockEnabled: options.fileLockEnabled } : {}),
   })
   return { bucket, client }
 }
@@ -236,7 +239,7 @@ describe('Bucket.defaultRetention helpers', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ bucket } = await makeBucket())
+    ;({ bucket } = await makeBucket({ fileLockEnabled: true }))
   })
 
   it('getDefaultRetention returns mode "none" on a fresh bucket', async () => {

@@ -14,6 +14,7 @@ import {
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
+  validateBucketTypes,
   validateCorsRules,
   validateDefaultRetention,
   validateDownloadAuthorizationDuration,
@@ -171,6 +172,20 @@ describe('validateDownloadAuthorizationPrefix', () => {
   })
 })
 
+describe('validateBucketTypes', () => {
+  it('accepts undefined and known bucket type arrays', () => {
+    expect(validateBucketTypes(undefined)).toBeNull()
+    expect(validateBucketTypes(['allPrivate', 'allPublic'])).toBeNull()
+  })
+
+  it('rejects non-array and unknown bucket type values', () => {
+    expect(validateBucketTypes(null)?.code).toBe('bad_request')
+    expect(validateBucketTypes({})?.code).toBe('bad_request')
+    expect(validateBucketTypes('allPrivate')?.code).toBe('bad_request')
+    expect(validateBucketTypes(['allPrivate', 'not-real'])?.code).toBe('bad_request')
+  })
+})
+
 describe('validateCorsRules', () => {
   const validRule = {
     allowedHeaders: null,
@@ -192,6 +207,8 @@ describe('validateCorsRules', () => {
       'bad_request',
     )
     expect(validateCorsRules([{ ...validRule, maxAgeSeconds: -1 }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: 86_400 }])).toBeNull()
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: 86_401 }])?.code).toBe('bad_request')
     expect(validateCorsRules([validRule, { ...validRule }])?.message).toMatch(/unique/)
   })
 })
@@ -206,6 +223,17 @@ describe('validateLifecycleRules', () => {
   it('returns null for an empty list and valid lifecycle rules', () => {
     expect(validateLifecycleRules([])).toBeNull()
     expect(validateLifecycleRules([validRule])).toBeNull()
+    expect(
+      validateLifecycleRules([{ daysFromHidingToDeleting: 30, fileNamePrefix: 'tmp/' }]),
+    ).toBeNull()
+    expect(
+      validateLifecycleRules([
+        {
+          daysFromStartingToCancelingUnfinishedLargeFiles: 3,
+          fileNamePrefix: 'uploads/',
+        },
+      ]),
+    ).toBeNull()
   })
 
   it('rejects malformed lifecycle rule fields', () => {
@@ -217,6 +245,7 @@ describe('validateLifecycleRules', () => {
       validateLifecycleRules([
         {
           ...validRule,
+          daysFromStartingToCancelingUnfinishedLargeFiles: null,
           daysFromHidingToDeleting: null,
           daysFromUploadingToHiding: null,
         },
@@ -249,6 +278,18 @@ describe('validateDefaultRetention', () => {
       validateDefaultRetention({
         mode: BucketRetentionMode.Governance,
         period: { duration: 0, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 3001, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Compliance,
+        period: { duration: 1e308, unit: 'years' },
       })?.code,
     ).toBe('bad_request')
   })

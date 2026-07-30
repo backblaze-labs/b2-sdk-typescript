@@ -24,7 +24,7 @@ import {
   hasValidB2BucketNameShape,
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
-import { BucketRetentionMode, CorsOperation } from '../types/bucket.ts'
+import { BucketRetentionMode, BucketType, CorsOperation } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
@@ -386,6 +386,13 @@ function validateNonNegativeInteger(value: unknown, path: string): ValidationErr
   return null
 }
 
+function validateIntegerAtMost(value: number, max: number, path: string): ValidationError | null {
+  if (value > max) {
+    return { code: 'bad_request', message: `${path} must not exceed ${max}` }
+  }
+  return null
+}
+
 function validatePositiveInteger(value: unknown, path: string): ValidationError | null {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     return { code: 'bad_request', message: `${path} must be a positive integer` }
@@ -394,13 +401,52 @@ function validatePositiveInteger(value: unknown, path: string): ValidationError 
 }
 
 function validateNullablePositiveInteger(value: unknown, path: string): ValidationError | null {
-  if (value === null) return null
+  if (value === undefined || value === null) return null
   return validatePositiveInteger(value, path)
+}
+
+function validateUniqueName(
+  names: Set<string>,
+  name: string,
+  path: string,
+): ValidationError | null {
+  if (names.has(name)) {
+    return { code: 'bad_request', message: `${path} must be unique` }
+  }
+  names.add(name)
+  return null
 }
 
 // ---------------------------------------------------------------------------
 // Bucket configuration (`b2_create_bucket`, `b2_update_bucket`)
 // ---------------------------------------------------------------------------
+
+const KNOWN_BUCKET_TYPES = new Set<string>(Object.values(BucketType))
+
+/**
+ * Validates a `b2_list_buckets.bucketTypes` filter.
+ *
+ * @param bucketTypes - Caller-supplied bucket type filter.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-list-buckets
+ */
+export function validateBucketTypes(bucketTypes: unknown): ValidationError | null {
+  if (bucketTypes === undefined) return null
+  if (!Array.isArray(bucketTypes)) {
+    return { code: 'bad_request', message: 'bucketTypes must be an array' }
+  }
+  for (const [index, bucketType] of bucketTypes.entries()) {
+    if (typeof bucketType !== 'string' || !KNOWN_BUCKET_TYPES.has(bucketType)) {
+      return {
+        code: 'bad_request',
+        message: `bucketTypes[${index}] must be a known bucket type`,
+      }
+    }
+  }
+  return null
+}
 
 const CORS_RULE_FIELDS = new Set([
   'allowedHeaders',
@@ -411,6 +457,7 @@ const CORS_RULE_FIELDS = new Set([
   'maxAgeSeconds',
 ])
 
+const CORS_MAX_AGE_SECONDS_MAX = 86_400
 const KNOWN_CORS_OPERATIONS = new Set<string>(Object.values(CorsOperation))
 
 /**
@@ -419,6 +466,8 @@ const KNOWN_CORS_OPERATIONS = new Set<string>(Object.values(CorsOperation))
  * @param rules - Caller-supplied CORS rules.
  *
  * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules
  */
 export function validateCorsRules(rules: unknown): ValidationError | null {
   if (!Array.isArray(rules)) {
@@ -438,10 +487,8 @@ export function validateCorsRules(rules: unknown): ValidationError | null {
     const nameError = validateNonEmptyString(rule['corsRuleName'], `${rulePath}.corsRuleName`)
     if (nameError) return nameError
     const ruleName = rule['corsRuleName'] as string
-    if (names.has(ruleName)) {
-      return { code: 'bad_request', message: `${rulePath}.corsRuleName must be unique` }
-    }
-    names.add(ruleName)
+    const uniqueNameError = validateUniqueName(names, ruleName, `${rulePath}.corsRuleName`)
+    if (uniqueNameError) return uniqueNameError
 
     const originsError = validateStringArray(rule['allowedOrigins'], `${rulePath}.allowedOrigins`, {
       requireNonEmpty: true,
@@ -475,6 +522,12 @@ export function validateCorsRules(rules: unknown): ValidationError | null {
 
     const ageError = validateNonNegativeInteger(rule['maxAgeSeconds'], `${rulePath}.maxAgeSeconds`)
     if (ageError) return ageError
+    const maxAgeError = validateIntegerAtMost(
+      rule['maxAgeSeconds'] as number,
+      CORS_MAX_AGE_SECONDS_MAX,
+      `${rulePath}.maxAgeSeconds`,
+    )
+    if (maxAgeError) return maxAgeError
   }
 
   return null
@@ -482,6 +535,7 @@ export function validateCorsRules(rules: unknown): ValidationError | null {
 
 const LIFECYCLE_RULE_FIELDS = new Set([
   'daysFromHidingToDeleting',
+  'daysFromStartingToCancelingUnfinishedLargeFiles',
   'daysFromUploadingToHiding',
   'fileNamePrefix',
 ])
@@ -492,6 +546,8 @@ const LIFECYCLE_RULE_FIELDS = new Set([
  * @param rules - Caller-supplied lifecycle rules.
  *
  * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/docs/cloud-storage-lifecycle-rules
  */
 export function validateLifecycleRules(rules: unknown): ValidationError | null {
   if (!Array.isArray(rules)) {
@@ -519,7 +575,17 @@ export function validateLifecycleRules(rules: unknown): ValidationError | null {
     )
     if (hidingError) return hidingError
 
-    if (rule['daysFromHidingToDeleting'] === null && rule['daysFromUploadingToHiding'] === null) {
+    const cancelError = validateNullablePositiveInteger(
+      rule['daysFromStartingToCancelingUnfinishedLargeFiles'],
+      `${rulePath}.daysFromStartingToCancelingUnfinishedLargeFiles`,
+    )
+    if (cancelError) return cancelError
+
+    if (
+      rule['daysFromHidingToDeleting'] == null &&
+      rule['daysFromUploadingToHiding'] == null &&
+      rule['daysFromStartingToCancelingUnfinishedLargeFiles'] == null
+    ) {
       return {
         code: 'bad_request',
         message: `${rulePath} must set at least one lifecycle action`,
@@ -537,6 +603,7 @@ export function validateLifecycleRules(rules: unknown): ValidationError | null {
 const DEFAULT_RETENTION_FIELDS = new Set(['mode', 'period'])
 const RETENTION_PERIOD_FIELDS = new Set(['duration', 'unit'])
 const DEFAULT_RETENTION_MODES = new Set<string>(Object.values(BucketRetentionMode))
+const OBJECT_LOCK_RETENTION_MAX_DAYS = 3000
 
 /**
  * Validates default Object Lock retention policy structure for bucket requests.
@@ -544,6 +611,8 @@ const DEFAULT_RETENTION_MODES = new Set<string>(Object.values(BucketRetentionMod
  * @param policy - Caller-supplied default retention policy.
  *
  * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/docs/cloud-storage-object-lock
  */
 export function validateDefaultRetention(policy: unknown): ValidationError | null {
   if (!isRecord(policy)) {
@@ -596,6 +665,16 @@ export function validateDefaultRetention(policy: unknown): ValidationError | nul
     return {
       code: 'bad_request',
       message: 'defaultRetention.period.unit must be "days" or "years"',
+    }
+  }
+  const durationDays =
+    period['unit'] === 'days'
+      ? (period['duration'] as number)
+      : (period['duration'] as number) * 365
+  if (!Number.isFinite(durationDays) || durationDays > OBJECT_LOCK_RETENTION_MAX_DAYS) {
+    return {
+      code: 'bad_request',
+      message: `defaultRetention.period must not exceed ${OBJECT_LOCK_RETENTION_MAX_DAYS} days`,
     }
   }
 
@@ -687,10 +766,8 @@ function validateReplicationSource(source: unknown): ValidationError | null {
     const ruleError = validateReplicationRule(rule, rulePath)
     if (ruleError) return ruleError
     const ruleName = (rule as Record<string, unknown>)['replicationRuleName'] as string
-    if (names.has(ruleName)) {
-      return { code: 'bad_request', message: `${rulePath}.replicationRuleName must be unique` }
-    }
-    names.add(ruleName)
+    const uniqueNameError = validateUniqueName(names, ruleName, `${rulePath}.replicationRuleName`)
+    if (uniqueNameError) return uniqueNameError
   }
 
   return null
@@ -746,6 +823,8 @@ function validateReplicationDestination(destination: unknown): ValidationError |
  * @param config - Caller-supplied replication configuration.
  *
  * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-update-bucket
  */
 export function validateReplicationConfiguration(config: unknown): ValidationError | null {
   if (!isRecord(config)) {
