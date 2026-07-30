@@ -15,6 +15,8 @@ import {
   type B2Simulator,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
   DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
+  SIMULATOR_MASTER_APPLICATION_KEY,
+  SIMULATOR_MASTER_APPLICATION_KEY_ID,
 } from './index.ts'
 
 /**
@@ -652,7 +654,10 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       keyName: 'invalid-auth-key',
     })
 
-    const masterResponse = await authorizeWithHeader(sim, basicAuth('test-key-id', 'test-key'))
+    const masterResponse = await authorizeWithHeader(
+      sim,
+      basicAuth(SIMULATOR_MASTER_APPLICATION_KEY_ID, SIMULATOR_MASTER_APPLICATION_KEY),
+    )
     expect(masterResponse.status).toBe(200)
     await expectAuthorizeRejected(sim, undefined)
     await expectAuthorizeRejected(sim, 'Basic not-valid-base64')
@@ -662,6 +667,17 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
 
     await client.deleteKey(key.applicationKeyId)
     await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+  })
+
+  it('rejects a known application key with the wrong secret in permissive mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-wrong-secret',
+    })
+
+    await expectAuthorizeRejected(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
   })
 
   it('reports and enforces application key expiration during authorize', async () => {
@@ -684,11 +700,41 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(activeAuth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
 
     sim.advanceTime(2000)
+    const expiredTokenResponse = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_list_buckets',
+      headers: { Authorization: activeAuth.authorizationToken },
+      body: JSON.stringify({ accountId: 'sim_account_0001' }),
+    })
+    expect(expiredTokenResponse.status).toBe(401)
+    await expect(expiredTokenResponse.json()).resolves.toMatchObject({
+      code: 'expired_auth_token',
+    })
     await expectAuthorizeRejected(
       sim,
       basicAuth(key.applicationKeyId, key.applicationKey),
       /application key has expired/,
     )
+  })
+
+  it('keeps permissive expired-key authorize behavior while reporting expiration', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'permissive-expiring-auth-key',
+      validDurationInSeconds: 1,
+    })
+    expect(key.expirationTimestamp).not.toBeNull()
+
+    sim.advanceTime(2000)
+    const response = await authorizeWithHeader(
+      sim,
+      basicAuth(key.applicationKeyId, key.applicationKey),
+    )
+    expect(response.status).toBe(200)
+    const auth = await response.json<AuthorizeAccountResponse>()
+    expect(auth.applicationKeyExpirationTimestamp).toBe(key.expirationTimestamp)
   })
 
   it('keeps authorize response capabilities isolated from stored key grants', async () => {
@@ -739,7 +785,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const authResp = await transport.send({
       method: 'GET',
       url: 'http://localhost:0/b2api/v3/b2_authorize_account',
-      headers: { Authorization: `Basic ${btoa('test-key-id:test-key')}` },
+      headers: {
+        Authorization: basicAuth(
+          SIMULATOR_MASTER_APPLICATION_KEY_ID,
+          SIMULATOR_MASTER_APPLICATION_KEY,
+        ),
+      },
     })
     expect(authResp.status).toBe(200)
     const authBody = (await authResp.json()) as { authorizationToken: string }
@@ -1928,6 +1979,20 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
 describe('B2Simulator upload authorization tokens', () => {
   const fileBytes = new Uint8Array([1, 2, 3])
 
+  async function authorizeWithKey(
+    sim: B2Simulator,
+    key: { applicationKeyId: string; applicationKey: string },
+  ): Promise<B2Client> {
+    const client = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    return client
+  }
+
   async function expectError(resp: HttpResponse, status: number, code: string): Promise<void> {
     expect(resp.status).toBe(status)
     await expect(resp.json()).resolves.toMatchObject({ code })
@@ -2046,6 +2111,51 @@ describe('B2Simulator upload authorization tokens', () => {
     )
     expect(part.fileId).toBe(large.fileId)
     expect(part.partNumber).toBe(1)
+  })
+
+  it('expires upload tokens when the backing application key expires', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'upload-token-key-expiry',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'expiring-upload-token-key',
+      bucketIds: [bucket.id],
+      validDurationInSeconds: 1,
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    const apiUrl = scopedClient.accountInfo.getApiUrl()
+    const authToken = scopedClient.accountInfo.getAuthToken()
+    const fileUrl = await scopedClient.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const large = await scopedClient.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'expired-part.bin',
+      contentType: 'application/octet-stream',
+    })
+    const partUrl = await scopedClient.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: large.fileId,
+    })
+
+    sim.advanceTime(2000)
+    await expectError(
+      await wireUploadFile(sim, fileUrl.uploadUrl, fileUrl.authorizationToken, 'expired-file.txt'),
+      401,
+      'expired_auth_token',
+    )
+    await expectError(
+      await wireUploadPart(sim, partUrl.uploadUrl, partUrl.authorizationToken),
+      401,
+      'expired_auth_token',
+    )
+    const listing = await client.raw.listFileNames(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(listing.files).toHaveLength(0)
   })
 
   it('rejects upload-part tokens with missing file-name scope', async () => {

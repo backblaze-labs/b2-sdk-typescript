@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { Capability } from '../types/auth.ts'
+import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,8 +208,10 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
-const MASTER_APPLICATION_KEY_ID = 'test-key-id'
-const MASTER_APPLICATION_KEY = 'test-key'
+/** Application key ID accepted as the simulator's built-in master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'test-key-id'
+/** Application key secret accepted as the simulator's built-in master credential. */
+export const SIMULATOR_MASTER_APPLICATION_KEY = 'test-key'
 const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -332,6 +334,7 @@ interface StoredKey {
 }
 
 interface AuthorizationGrant {
+  readonly source: 'applicationKey' | 'masterFallback'
   readonly capabilities: readonly Capability[]
   readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
@@ -342,6 +345,14 @@ interface AuthorizationGrant {
 type AuthorizationGrantResult =
   | { readonly ok: true; readonly grant: AuthorizationGrant }
   | { readonly ok: false; readonly error: SimulatorJsonResponse }
+
+type BasicAuthCredentialsResult =
+  | {
+      readonly ok: true
+      readonly applicationKeyId: string
+      readonly applicationKey: string
+    }
+  | { readonly ok: false }
 
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
@@ -880,23 +891,42 @@ export interface B2SimulatorOptions {
    *
    * In strict mode:
    *
+   * - `b2_authorize_account` with missing, malformed, unknown, wrong-secret,
+   *   or deleted application-key credentials returns HTTP 401 with code
+   *   `unauthorized`.
+   * - `b2_authorize_account` with an expired application key returns HTTP 401
+   *   with code `unauthorized`.
+   * - Successful `b2_authorize_account` responses mirror the matched key grant:
+   *   capabilities, bucket restrictions, name prefix, and key expiration
+   *   timestamp are derived from that key. The simulator master credential
+   *   uses unrestricted buckets, no prefix, a `null` key expiration timestamp,
+   *   and the documented master capability set.
    * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
-   * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
+   * - Expired tokens (per {@link B2Simulator.advanceTime}), including tokens
+   *   whose backing application key has expired, return HTTP 401 with code
+   *   `expired_auth_token`.
    * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
    * - Calls outside the key's bucketIds / namePrefix scope return HTTP 403 `unauthorized`.
+   *
+   * In permissive mode, missing, malformed, or unknown credentials retain the
+   * historical master fallback. A known application-key ID with the wrong
+   * secret is rejected, and expired known keys may still authorize so tests can
+   * inspect the derived expiration metadata without enabling strict checks.
    *
    * Each test can opt in: `new B2Simulator({ strictAuth: true })`.
    */
   strictAuth?: boolean
   /**
    * How long auth tokens issued via `b2_authorize_account` are valid
-   * for, in milliseconds. The simulator also uses this TTL for upload
+   * for, in milliseconds, capped by the backing application key's
+   * expiration when present. The simulator also uses this TTL for upload
    * authorization tokens issued via `b2_get_upload_url` and
-   * `b2_get_upload_part_url`. Defaults to 24 hours (real B2). Tests
-   * that want to exercise the 401/reauth retry path or stale upload
-   * URL handling can lower this and use {@link B2Simulator.advanceTime}
-   * to move simulator time past account-token expiry. Upload tokens are
-   * rejected at the exact expiry boundary.
+   * `b2_get_upload_part_url`; in strict mode those upload tokens are
+   * again capped by the source auth token's expiration. Defaults to 24 hours (real B2). Tests that want to
+   * exercise the 401/reauth retry path or stale upload URL handling can
+   * lower this and use {@link B2Simulator.advanceTime} to move simulator
+   * time past account-token expiry. Upload tokens are rejected at the
+   * exact expiry boundary.
    */
   authTokenTtlMs?: number
 }
@@ -908,10 +938,17 @@ export interface B2SimulatorOptions {
  *
  * @example
  * ```ts
+ * import { B2Client } from '@backblaze-labs/b2-sdk'
+ * import {
+ *   B2Simulator,
+ *   SIMULATOR_MASTER_APPLICATION_KEY,
+ *   SIMULATOR_MASTER_APPLICATION_KEY_ID,
+ * } from '@backblaze-labs/b2-sdk/simulator'
+ *
  * const sim = new B2Simulator()
  * const client = new B2Client({
- *   applicationKeyId: 'test-key-id',
- *   applicationKey: 'test-key',
+ *   applicationKeyId: SIMULATOR_MASTER_APPLICATION_KEY_ID,
+ *   applicationKey: SIMULATOR_MASTER_APPLICATION_KEY,
  *   transport: sim.transport(),
  * })
  * await client.authorize()
@@ -1643,14 +1680,18 @@ export class B2Simulator {
       options.sourceAuthToken === undefined
         ? undefined
         : this.issuedTokens.get(options.sourceAuthToken)
+    const expiresAt =
+      this.strictAuth && sourceToken !== undefined
+        ? Math.min(now + this.authTokenTtlMs, sourceToken.expiresAt)
+        : now + this.authTokenTtlMs
     const token: StoredUploadToken = {
       kind: options.kind,
       fileName: options.kind === 'part' ? options.fileName : null,
       uploadUrl: uploadUrl.toString(),
       namePrefix: this.strictAuth ? (sourceToken?.namePrefix ?? null) : null,
       applicationKeyId: sourceToken?.applicationKeyId ?? null,
-      expiresAt: now + this.authTokenTtlMs,
-      cleanupAt: now + this.authTokenTtlMs,
+      expiresAt,
+      cleanupAt: expiresAt,
       invalidated: false,
     }
     const authorizationToken = await this.encodeUploadAuthorizationToken(token)
@@ -1751,13 +1792,11 @@ export class B2Simulator {
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
-   * @returns Parsed credentials, or `null` when the header is malformed.
+   * @returns An explicit parse result so malformed credentials cannot be
+   *   confused with the historical permissive master fallback.
    */
-  private parseBasicAuthHeader(authzHeader: string | undefined): {
-    readonly applicationKeyId: string
-    readonly applicationKey: string
-  } | null {
-    if (!authzHeader?.startsWith('Basic ')) return null
+  private parseBasicAuthHeader(authzHeader: string | undefined): BasicAuthCredentialsResult {
+    if (!authzHeader?.startsWith('Basic ')) return { ok: false }
     // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
     // Wrapped in a try because malformed base64 throws.
     const decoded = (() => {
@@ -1767,13 +1806,13 @@ export class B2Simulator {
         return null
       }
     })()
-    if (decoded === null) return null
+    if (decoded === null) return { ok: false }
     const idx = decoded.indexOf(':')
-    if (idx <= 0) return null
+    if (idx <= 0) return { ok: false }
     const applicationKeyId = decoded.slice(0, idx)
     const applicationKey = decoded.slice(idx + 1)
-    if (applicationKey === '') return null
-    return { applicationKeyId, applicationKey }
+    if (applicationKey === '') return { ok: false }
+    return { ok: true, applicationKeyId, applicationKey }
   }
 
   /**
@@ -1794,6 +1833,7 @@ export class B2Simulator {
       error: this.error(401, 'unauthorized', 'invalid application key credentials'),
     })
     const masterGrant: AuthorizationGrant = {
+      source: 'masterFallback',
       capabilities: MASTER_CAPABILITIES,
       bucketIds: null,
       namePrefix: null,
@@ -1801,23 +1841,30 @@ export class B2Simulator {
       expirationTimestamp: null,
     }
 
-    if (credentials === null) {
+    if (!credentials.ok) {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
 
     const { applicationKeyId, applicationKey } = credentials
     if (
-      applicationKeyId === MASTER_APPLICATION_KEY_ID &&
-      timingSafeStringEqual(applicationKey, MASTER_APPLICATION_KEY)
+      applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+      timingSafeStringEqual(applicationKey, SIMULATOR_MASTER_APPLICATION_KEY)
     ) {
       return { ok: true, grant: masterGrant }
     }
 
     const stored = this.keys.get(applicationKeyId)
-    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+    if (!stored) {
       return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
     }
-    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
+    if (!timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+      return invalidCredentials()
+    }
+    if (
+      this.strictAuth &&
+      stored.expirationTimestamp !== null &&
+      stored.expirationTimestamp <= this.now()
+    ) {
       return {
         ok: false,
         error: this.error(401, 'unauthorized', 'application key has expired'),
@@ -1827,6 +1874,7 @@ export class B2Simulator {
     return {
       ok: true,
       grant: {
+        source: 'applicationKey',
         capabilities: [...stored.capabilities],
         bucketIds: cloneBucketIds(stored.bucketIds),
         namePrefix: stored.namePrefix,
@@ -2651,45 +2699,51 @@ export class B2Simulator {
     const legacyBucketId = singleBucketId(bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
+    const now = this.now()
+    const authExpiresAt =
+      grant.expirationTimestamp === null
+        ? now + this.authTokenTtlMs
+        : Math.min(now + this.authTokenTtlMs, grant.expirationTimestamp)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       capabilities: tokenCapabilities,
       bucketIds,
       namePrefix: grant.namePrefix,
-      // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-      expiresAt: this.now() + this.authTokenTtlMs,
+      // Token validity: real B2 = 24h; bound by expiring application keys.
+      expiresAt: authExpiresAt,
       applicationKeyId: grant.applicationKeyId,
     })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.accountId),
-        // `AuthToken` has no public factory by design — auth tokens are
-        // minted by B2, not constructed by user code. The simulator is
-        // the only legitimate place that needs to forge one.
-        authorizationToken: tokenStr as unknown as AuthToken,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.minimumPartSize,
-            apiUrl: origin,
+    const body = {
+      accountId: accountIdOf(this.accountId),
+      // `AuthToken` has no public factory by design — auth tokens are
+      // minted by B2, not constructed by user code. The simulator is
+      // the only legitimate place that needs to forge one.
+      authorizationToken: tokenStr as unknown as AuthToken,
+      apiInfo: {
+        storageApi: {
+          absoluteMinimumPartSize: this.minimumPartSize,
+          apiUrl: origin,
+          bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
+          bucketName: legacyBucketName,
+          downloadUrl: origin,
+          infoType: 'storageApi',
+          namePrefix: grant.namePrefix,
+          recommendedPartSize: this.recommendedPartSize,
+          s3ApiUrl: origin,
+          allowed: {
+            capabilities: responseCapabilities,
+            buckets: allowedBuckets,
             bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
             bucketName: legacyBucketName,
-            downloadUrl: origin,
-            infoType: 'storageApi',
             namePrefix: grant.namePrefix,
-            recommendedPartSize: this.recommendedPartSize,
-            s3ApiUrl: origin,
-            allowed: {
-              capabilities: responseCapabilities,
-              buckets: allowedBuckets,
-              bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
-              bucketName: legacyBucketName,
-              namePrefix: grant.namePrefix,
-            },
           },
         },
-        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
+      applicationKeyExpirationTimestamp: grant.expirationTimestamp,
+    } satisfies AuthorizeAccountResponse
+    return {
+      status: 200,
+      body,
     }
   }
 
@@ -3596,7 +3650,7 @@ export class B2Simulator {
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: Object.freeze(req.capabilities.map((capability) => capability as Capability)),
+      capabilities: Object.freeze([...req.capabilities] as Capability[]),
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,

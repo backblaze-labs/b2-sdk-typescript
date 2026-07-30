@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
-import { B2Simulator } from './simulator/index.ts'
+import {
+  B2Simulator,
+  SIMULATOR_MASTER_APPLICATION_KEY,
+  SIMULATOR_MASTER_APPLICATION_KEY_ID,
+} from './simulator/index.ts'
 import { BufferSource } from './streams/source.ts'
 import { daysFromNow } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
@@ -23,8 +27,8 @@ async function setup(options: { fileLockEnabled?: boolean; strictAuth?: boolean 
 }> {
   const sim = new B2Simulator(options.strictAuth === true ? { strictAuth: true } : {})
   const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
+    applicationKeyId: SIMULATOR_MASTER_APPLICATION_KEY_ID,
+    applicationKey: SIMULATOR_MASTER_APPLICATION_KEY,
     transport: sim.transport(),
   })
   await client.authorize()

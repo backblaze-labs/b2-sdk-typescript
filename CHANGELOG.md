@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timings and timeout failures for authorization, bucket listing, stale cleanup,
   and bucket creation, and contributor/release docs now spell out
   simulator-vs-live-B2 expectations.
+- **B2Simulator authorize-account fidelity.** Strict-auth simulator authorization now
+  rejects invalid, deleted, and expired application-key credentials before minting
+  auth tokens, caps issued auth/upload tokens at the backing key expiration, and
+  derives authorize response allowed capabilities, bucket restrictions, name
+  prefixes, and key expiration timestamps from the matched key grant.
 - **B2Simulator SSE-C fidelity.** Simulator uploads, large-file parts, downloads, copyFile, and copyPart now validate SSE-C customer-key headers more closely to B2, preserve destination encryption semantics, and keep customer keys out of public response metadata.
 
 ## [0.2.0] - 2026-07-08
