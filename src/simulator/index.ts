@@ -12,7 +12,7 @@
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -208,7 +208,12 @@ export {
 const DOWNLOAD_AUTH_TOKEN_BYTES = 32
 const DOWNLOAD_AUTH_TOKEN_PREFIX = 'sim_dl_auth_'
 const DOWNLOAD_AUTH_PURGE_BATCH_SIZE = 128
-const MASTER_CAPABILITIES: readonly Capability[] = [
+const MASTER_APPLICATION_KEY_ID = 'test-key-id'
+const MASTER_APPLICATION_KEY = 'test-key'
+// The simulator master credential intentionally excludes object-lock
+// capabilities. Grant BypassGovernance, WriteFileLegalHolds, and
+// WriteFileRetentions only through created application keys.
+const MASTER_CAPABILITIES: readonly Capability[] = Object.freeze([
   Capability.ListBuckets,
   Capability.ReadBuckets,
   Capability.WriteBuckets,
@@ -223,7 +228,7 @@ const MASTER_CAPABILITIES: readonly Capability[] = [
   Capability.ShareFiles,
   Capability.ReadBucketNotifications,
   Capability.WriteBucketNotifications,
-]
+])
 
 const DOWNLOAD_RESPONSE_OVERRIDE_PARAMS = [
   'b2ContentDisposition',
@@ -321,7 +326,7 @@ interface LargeFileInProgress {
 interface StoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
-  readonly capabilities: readonly string[]
+  readonly capabilities: readonly Capability[]
   readonly accountId: string
   readonly applicationKey: string
   readonly bucketIds: readonly string[] | null
@@ -336,6 +341,10 @@ interface AuthGrant {
   readonly applicationKeyId: string | null
   readonly expirationTimestamp: number | null
 }
+
+type AuthGrantResult =
+  | { readonly ok: true; readonly grant: AuthGrant }
+  | { readonly ok: false; readonly error: SimulatorJsonResponse }
 
 interface IssuedToken {
   readonly capabilities: readonly Capability[]
@@ -1740,22 +1749,18 @@ export class B2Simulator {
   }
 
   /**
-   * Look up the application key matching the `Authorization` header on
-   * an `authorize_account` request. The header is in the form
-   * `Basic base64(applicationKeyId:applicationKey)`.
-   *
-   * Returns `null` for the implicit master credential (anything that
-   * does not match a key minted via `b2_create_key`); in that case
-   * `authorize` derives the response from the simulator's master grant.
+   * Parse the `Authorization` header on an `authorize_account` request.
+   * The header is in the form `Basic base64(applicationKeyId:applicationKey)`.
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
-   * @returns The matching key's grant scope, or `null` for the master.
+   * @returns Parsed credentials, or `null` when the header is malformed.
    */
-  private findKeyForAuthHeader(authzHeader: string | undefined): AuthGrant | null {
+  private parseBasicAuthHeader(authzHeader: string | undefined): {
+    readonly applicationKeyId: string
+    readonly applicationKey: string
+  } | null {
     if (!authzHeader?.startsWith('Basic ')) return null
-    // `atob` is standard on Node 16+, browsers, and modern edge runtimes.
-    // Wrapped in a try because malformed base64 throws.
     const decoded = (() => {
       try {
         return atob(authzHeader.slice(6))
@@ -1765,30 +1770,68 @@ export class B2Simulator {
     })()
     if (decoded === null) return null
     const idx = decoded.indexOf(':')
-    if (idx === -1) return null
+    if (idx <= 0) return null
     const applicationKeyId = decoded.slice(0, idx)
     const applicationKey = decoded.slice(idx + 1)
-    const stored = this.keys.get(applicationKeyId)
-    if (!stored || stored.applicationKey !== applicationKey) return null
-    return {
-      capabilities: stored.capabilities as readonly Capability[],
-      bucketIds: stored.bucketIds,
-      namePrefix: stored.namePrefix,
-      applicationKeyId,
-      expirationTimestamp: stored.expirationTimestamp,
-    }
+    if (applicationKey === '') return null
+    return { applicationKeyId, applicationKey }
   }
 
-  private grantForAuthHeader(authzHeader: string | undefined): AuthGrant {
-    return (
-      this.findKeyForAuthHeader(authzHeader) ?? {
-        capabilities: MASTER_CAPABILITIES,
-        bucketIds: null,
-        namePrefix: null,
-        applicationKeyId: null,
-        expirationTimestamp: null,
+  /**
+   * Look up the grant matching an `authorize_account` request. Strict mode
+   * rejects invalid credentials; permissive mode keeps the historical
+   * simulator behavior of treating them as the implicit master credential.
+   *
+   * @param authzHeader - Raw HTTP `Authorization` header value.
+   *
+   * @returns A successful authorization grant or a 401 response.
+   */
+  private authorizationGrantForAuthHeader(authzHeader: string | undefined): AuthGrantResult {
+    const credentials = this.parseBasicAuthHeader(authzHeader)
+    const invalidCredentials = (): AuthGrantResult => ({
+      ok: false,
+      error: this.error(401, 'unauthorized', 'invalid application key credentials'),
+    })
+    const masterGrant: AuthGrant = {
+      capabilities: MASTER_CAPABILITIES,
+      bucketIds: null,
+      namePrefix: null,
+      applicationKeyId: null,
+      expirationTimestamp: null,
+    }
+    if (credentials === null) {
+      return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
+    }
+
+    const { applicationKeyId, applicationKey } = credentials
+    if (
+      applicationKeyId === MASTER_APPLICATION_KEY_ID &&
+      timingSafeStringEqual(applicationKey, MASTER_APPLICATION_KEY)
+    ) {
+      return { ok: true, grant: masterGrant }
+    }
+
+    const stored = this.keys.get(applicationKeyId)
+    if (!stored || !timingSafeStringEqual(stored.applicationKey, applicationKey)) {
+      return this.strictAuth ? invalidCredentials() : { ok: true, grant: masterGrant }
+    }
+    if (stored.expirationTimestamp !== null && stored.expirationTimestamp <= this.now()) {
+      return {
+        ok: false,
+        error: this.error(401, 'unauthorized', 'application key has expired'),
       }
-    )
+    }
+
+    return {
+      ok: true,
+      grant: {
+        capabilities: stored.capabilities,
+        bucketIds: stored.bucketIds,
+        namePrefix: stored.namePrefix,
+        applicationKeyId,
+        expirationTimestamp: stored.expirationTimestamp,
+      },
+    }
   }
 
   /**
@@ -2583,29 +2626,25 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(
-    authzHeader?: string,
-    origin = 'http://localhost:0',
-  ): { status: number; body: AuthorizeAccountResponse } {
+  private authorize(authzHeader?: string, origin = 'http://localhost:0'): SimulatorJsonResponse {
     // The auth response and issued token must both be derived from the
     // same grant. B2Client.hasCapabilities reads the response body, while
     // strictAuth enforcement reads the issued-token map.
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
-    const grant = this.grantForAuthHeader(authzHeader)
+    const grantResult = this.authorizationGrantForAuthHeader(authzHeader)
+    if (!grantResult.ok) return grantResult.error
+    const grant = grantResult.grant
+    const tokenCapabilities = [...grant.capabilities]
+    const responseCapabilities = [...grant.capabilities]
     const allowedBuckets = this.allowedBuckets(grant.bucketIds)
     const legacyBucketId = singleBucketId(grant.bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
-      capabilities: grant.capabilities,
+      capabilities: tokenCapabilities,
       bucketIds: grant.bucketIds,
       namePrefix: grant.namePrefix,
+      // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
       expiresAt: this.now() + this.authTokenTtlMs,
       applicationKeyId: grant.applicationKeyId,
     })
@@ -2629,7 +2668,7 @@ export class B2Simulator {
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
-              capabilities: grant.capabilities,
+              capabilities: responseCapabilities,
               buckets: allowedBuckets,
               bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
               bucketName: legacyBucketName,
@@ -3540,12 +3579,12 @@ export class B2Simulator {
     const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
-        ? Date.now() + req.validDurationInSeconds * 1000
+        ? this.now() + req.validDurationInSeconds * 1000
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
       keyName: req.keyName,
-      capabilities: req.capabilities,
+      capabilities: Object.freeze(req.capabilities.map((capability) => capability as Capability)),
       accountId: req.accountId,
       applicationKey: appKey,
       bucketIds,
@@ -3560,7 +3599,7 @@ export class B2Simulator {
         keyName: stored.keyName,
         applicationKeyId: stored.applicationKeyId,
         applicationKey: stored.applicationKey,
-        capabilities: stored.capabilities,
+        capabilities: [...stored.capabilities],
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
         bucketIds: cloneBucketIds(stored.bucketIds),
@@ -3591,7 +3630,7 @@ export class B2Simulator {
     const keys = allKeys.slice(0, max).map((k) => ({
       keyName: k.keyName,
       applicationKeyId: k.applicationKeyId,
-      capabilities: k.capabilities,
+      capabilities: [...k.capabilities],
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
       bucketIds: cloneBucketIds(k.bucketIds),
@@ -3629,7 +3668,7 @@ export class B2Simulator {
       body: {
         keyName: key.keyName,
         applicationKeyId: key.applicationKeyId,
-        capabilities: key.capabilities,
+        capabilities: [...key.capabilities],
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
         bucketIds: cloneBucketIds(key.bucketIds),
