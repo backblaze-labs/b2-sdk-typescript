@@ -546,6 +546,18 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     return client
   }
 
+  async function authorizeWire(sim: B2Simulator, authorization?: string): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: authorization === undefined ? {} : { Authorization: authorization },
+    })
+  }
+
+  function basicAuth(applicationKeyId: string, applicationKey: string): string {
+    return `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`
+  }
+
   function forgeAdjacentTokenValue(token: string): string {
     return `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`
   }
@@ -603,6 +615,66 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       ok: false,
       missing: [Capability.WriteFiles],
     })
+  })
+
+  it.each([
+    ['missing header', undefined],
+    ['non-Basic header', 'Bearer not-basic'],
+    ['malformed Basic value', 'Basic !!!'],
+    ['Basic value without a separator', `Basic ${btoa('not-a-key-pair')}`],
+    ['unknown key id', basicAuth('bogus-key', 'bogus-secret')],
+  ])('rejects %s on strict authorize', async (_name, authorization) => {
+    const { sim } = makeClient({ sim: { strictAuth: true } })
+
+    const resp = await authorizeWire(sim, authorization)
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
+  })
+
+  it('rejects the wrong application key secret on strict authorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'wrong-secret-key',
+    })
+
+    const resp = await authorizeWire(sim, basicAuth(key.applicationKeyId, 'wrong-secret'))
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
+  })
+
+  it('rejects deleted application keys on strict reauthorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'deleted-reauth-key',
+    })
+    await client.deleteKey(key.applicationKeyId)
+
+    const resp = await authorizeWire(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
+  })
+
+  it('rejects expired application keys on strict reauthorize', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'expired-reauth-key',
+      validDurationInSeconds: 1,
+    })
+    sim.advanceTime(2000)
+
+    const resp = await authorizeWire(sim, basicAuth(key.applicationKeyId, key.applicationKey))
+
+    expect(resp.status).toBe(401)
+    await expect(resp.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {
