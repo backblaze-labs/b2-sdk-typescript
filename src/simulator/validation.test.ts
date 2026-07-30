@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Capability } from '../types/auth.ts'
+import { BucketRetentionMode, CorsOperation } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
@@ -13,12 +14,16 @@ import {
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
+  validateCorsRules,
+  validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
+  validateLifecycleRules,
   validateMaxCount,
   validateNotificationRules,
+  validateReplicationConfiguration,
 } from './validation.ts'
 
 /**
@@ -163,6 +168,148 @@ describe('validateDownloadAuthorizationPrefix', () => {
   it('rejects missing and non-string prefixes', () => {
     expect(validateDownloadAuthorizationPrefix(undefined)?.code).toBe('bad_request')
     expect(validateDownloadAuthorizationPrefix(42)?.code).toBe('bad_request')
+  })
+})
+
+describe('validateCorsRules', () => {
+  const validRule = {
+    allowedHeaders: null,
+    allowedOperations: [CorsOperation.B2DownloadFileByName],
+    allowedOrigins: ['https://example.com'],
+    corsRuleName: 'downloads',
+    exposeHeaders: ['x-bz-content-sha1'],
+    maxAgeSeconds: 3600,
+  }
+
+  it('returns null for an empty list and valid CORS rules', () => {
+    expect(validateCorsRules([])).toBeNull()
+    expect(validateCorsRules([validRule])).toBeNull()
+  })
+
+  it('rejects malformed CORS rule fields', () => {
+    expect(validateCorsRules('not-rules')?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, allowedOperations: ['not_real'] }])?.code).toBe(
+      'bad_request',
+    )
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: -1 }])?.code).toBe('bad_request')
+    expect(validateCorsRules([validRule, { ...validRule }])?.message).toMatch(/unique/)
+  })
+})
+
+describe('validateLifecycleRules', () => {
+  const validRule = {
+    daysFromHidingToDeleting: 30,
+    daysFromUploadingToHiding: null,
+    fileNamePrefix: 'tmp/',
+  }
+
+  it('returns null for an empty list and valid lifecycle rules', () => {
+    expect(validateLifecycleRules([])).toBeNull()
+    expect(validateLifecycleRules([validRule])).toBeNull()
+  })
+
+  it('rejects malformed lifecycle rule fields', () => {
+    expect(validateLifecycleRules('not-rules')?.code).toBe('bad_request')
+    expect(validateLifecycleRules([{ ...validRule, daysFromHidingToDeleting: 1.5 }])?.code).toBe(
+      'bad_request',
+    )
+    expect(
+      validateLifecycleRules([
+        {
+          ...validRule,
+          daysFromHidingToDeleting: null,
+          daysFromUploadingToHiding: null,
+        },
+      ])?.code,
+    ).toBe('bad_request')
+    expect(validateLifecycleRules([{ ...validRule, fileNamePrefix: 42 }])?.code).toBe('bad_request')
+  })
+})
+
+describe('validateDefaultRetention', () => {
+  it('returns null for valid none and retention-mode policies', () => {
+    expect(validateDefaultRetention({ mode: BucketRetentionMode.None, period: null })).toBeNull()
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 7, unit: 'days' },
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects malformed default retention policies', () => {
+    expect(validateDefaultRetention(null)?.code).toBe('bad_request')
+    expect(
+      validateDefaultRetention({ mode: BucketRetentionMode.None, period: { duration: 1 } })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({ mode: BucketRetentionMode.Compliance, period: null })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 0, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+  })
+})
+
+describe('validateReplicationConfiguration', () => {
+  const validConfig = {
+    asReplicationDestination: null,
+    asReplicationSource: {
+      replicationRules: [
+        {
+          destinationBucketId: 'dest-bucket-id',
+          fileNamePrefix: '',
+          includeExistingFiles: false,
+          isEnabled: true,
+          priority: 1,
+          replicationRuleName: 'replicate-all',
+        },
+      ],
+      sourceApplicationKeyId: 'source-key-id',
+    },
+  }
+
+  it('returns null for empty and valid replication configurations', () => {
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: null,
+        asReplicationSource: null,
+      }),
+    ).toBeNull()
+    expect(validateReplicationConfiguration(validConfig)).toBeNull()
+  })
+
+  it('rejects malformed replication configuration fields', () => {
+    expect(validateReplicationConfiguration(null)?.code).toBe('bad_request')
+    expect(validateReplicationConfiguration({})?.code).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationSource: { sourceApplicationKeyId: 'source-key-id' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              includeExistingFiles: 'false',
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: { sourceToDestinationKeyMapping: { source: 42 } },
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
   })
 })
 

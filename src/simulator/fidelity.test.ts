@@ -5,12 +5,20 @@ import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { makeClient, readStream } from '../test-utils/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
-import { BucketType } from '../types/bucket.ts'
+import {
+  BucketRetentionMode,
+  type BucketRetentionPolicy,
+  BucketType,
+  CorsOperation,
+  type CorsRule,
+  type LifecycleRule,
+} from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
 import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
-import { fileId as fileIdOf } from '../types/ids.ts'
+import { applicationKeyId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
+import type { ReplicationConfiguration } from '../types/replication.ts'
 import {
   type B2Simulator,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
@@ -80,6 +88,221 @@ describe('B2Simulator input validation: bucket name', () => {
       bucketType: BucketType.AllPrivate,
     })
     expect(bucket.name).toBe('happy.bucket')
+  })
+})
+
+describe('B2Simulator bucket configuration validation', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('rejects malformed CORS rules on create and update', async () => {
+    const malformedCors = [
+      {
+        allowedHeaders: null,
+        allowedOperations: ['b2_not_real'],
+        allowedOrigins: ['https://example.com'],
+        corsRuleName: 'bad-cors',
+        exposeHeaders: null,
+        maxAgeSeconds: 3600,
+      },
+    ] as unknown as CorsRule[]
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-cors-create',
+        bucketType: BucketType.AllPrivate,
+        corsRules: malformedCors,
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-cors-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(bucket.update({ corsRules: malformedCors })).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+  })
+
+  it('rejects malformed lifecycle rules on create and update', async () => {
+    const malformedLifecycle = [
+      {
+        daysFromHidingToDeleting: null,
+        daysFromUploadingToHiding: null,
+        fileNamePrefix: 'tmp/',
+      },
+    ] as unknown as LifecycleRule[]
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-life-create',
+        bucketType: BucketType.AllPrivate,
+        lifecycleRules: malformedLifecycle,
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-life-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(bucket.update({ lifecycleRules: malformedLifecycle })).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+  })
+
+  it('rejects malformed replication configuration on create and update', async () => {
+    const malformedReplication = {
+      asReplicationDestination: null,
+      asReplicationSource: {
+        replicationRules: [
+          {
+            destinationBucketId: 'dest-bucket-id',
+            fileNamePrefix: '',
+            includeExistingFiles: 'false',
+            isEnabled: true,
+            priority: 1,
+            replicationRuleName: 'replicate-all',
+          },
+        ],
+        sourceApplicationKeyId: 'source-key-id',
+      },
+    } as unknown as ReplicationConfiguration
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-repl-create',
+        bucketType: BucketType.AllPrivate,
+        replicationConfiguration: malformedReplication,
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-repl-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(
+      bucket.update({ replicationConfiguration: malformedReplication }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+  })
+
+  it('rejects malformed default retention on create and update', async () => {
+    const malformedRetention = {
+      mode: BucketRetentionMode.Governance,
+      period: null,
+    } as unknown as BucketRetentionPolicy
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-ret-create',
+        bucketType: BucketType.AllPrivate,
+        defaultRetention: malformedRetention,
+      }),
+    ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-ret-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(bucket.update({ defaultRetention: malformedRetention })).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+    })
+  })
+
+  it('accepts well-formed bucket configuration', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'good-config',
+      bucketType: BucketType.AllPrivate,
+      corsRules: [
+        {
+          allowedHeaders: null,
+          allowedOperations: [CorsOperation.B2DownloadFileByName],
+          allowedOrigins: ['https://example.com'],
+          corsRuleName: 'downloads',
+          exposeHeaders: null,
+          maxAgeSeconds: 3600,
+        },
+      ],
+      defaultRetention: { mode: BucketRetentionMode.None, period: null },
+      lifecycleRules: [
+        {
+          daysFromHidingToDeleting: 30,
+          daysFromUploadingToHiding: null,
+          fileNamePrefix: 'tmp/',
+        },
+      ],
+      replicationConfiguration: {
+        asReplicationDestination: null,
+        asReplicationSource: {
+          replicationRules: [],
+          sourceApplicationKeyId: applicationKeyId('source-key-id'),
+        },
+      },
+    })
+
+    expect(bucket.info.corsRules).toHaveLength(1)
+    expect(bucket.info.lifecycleRules).toHaveLength(1)
+    expect(bucket.info.replicationConfiguration.asReplicationSource).not.toBeNull()
+  })
+
+  it('honors listBuckets bucketId, bucketName, and bucketTypes filters', async () => {
+    const privateBucket = await client.createBucket({
+      bucketName: 'filter-private',
+      bucketType: BucketType.AllPrivate,
+    })
+    const publicBucket = await client.createBucket({
+      bucketName: 'filter-public',
+      bucketType: BucketType.AllPublic,
+    })
+
+    await expect(client.listBuckets({ bucketId: privateBucket.id })).resolves.toMatchObject([
+      { id: privateBucket.id },
+    ])
+    await expect(client.listBuckets({ bucketName: publicBucket.name })).resolves.toMatchObject([
+      { id: publicBucket.id },
+    ])
+    await expect(
+      client.listBuckets({ bucketTypes: [BucketType.AllPrivate] }),
+    ).resolves.toMatchObject([{ id: privateBucket.id }])
+    await expect(
+      client.listBuckets({
+        bucketName: publicBucket.name,
+        bucketTypes: [BucketType.AllPrivate],
+      }),
+    ).resolves.toEqual([])
+  })
+
+  it('returns a 409 conflict when ifRevisionIs does not match', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'revision-guard',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const updated = await bucket.update({
+      bucketInfo: { generation: 'first' },
+      ifRevisionIs: bucket.info.revision,
+    })
+    expect(updated.revision).toBe(bucket.info.revision + 1)
+
+    await expect(
+      bucket.update({
+        bucketInfo: { generation: 'stale' },
+        ifRevisionIs: bucket.info.revision,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'conflict' })
+
+    const [fresh] = await client.listBuckets({ bucketId: bucket.id })
+    expect(fresh?.info.bucketInfo).toEqual({ generation: 'first' })
+    expect(fresh?.info.revision).toBe(updated.revision)
   })
 })
 

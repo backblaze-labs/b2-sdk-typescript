@@ -24,6 +24,7 @@ import {
   hasValidB2BucketNameShape,
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
+import { BucketRetentionMode, CorsOperation } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
@@ -331,6 +332,456 @@ export function validateDownloadAuthorizationPrefix(requested: unknown): Validat
   return null
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function validateKnownFields(
+  value: Record<string, unknown>,
+  allowedFields: ReadonlySet<string>,
+  path: string,
+): ValidationError | null {
+  for (const field of Object.keys(value)) {
+    if (!allowedFields.has(field)) {
+      return {
+        code: 'bad_request',
+        message: `${path}.${field} is not a supported field`,
+      }
+    }
+  }
+  return null
+}
+
+function validateStringArray(
+  value: unknown,
+  path: string,
+  options: { readonly allowNull?: boolean; readonly requireNonEmpty?: boolean } = {},
+): ValidationError | null {
+  if (value === null && options.allowNull === true) return null
+  if (!Array.isArray(value)) {
+    return { code: 'bad_request', message: `${path} must be an array of strings` }
+  }
+  if (options.requireNonEmpty === true && value.length === 0) {
+    return { code: 'bad_request', message: `${path} must be a non-empty array` }
+  }
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== 'string') {
+      return { code: 'bad_request', message: `${path}[${index}] must be a string` }
+    }
+  }
+  return null
+}
+
+function validateNonEmptyString(value: unknown, path: string): ValidationError | null {
+  if (typeof value !== 'string' || value.length === 0) {
+    return { code: 'bad_request', message: `${path} must be a non-empty string` }
+  }
+  return null
+}
+
+function validateNonNegativeInteger(value: unknown, path: string): ValidationError | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    return { code: 'bad_request', message: `${path} must be a non-negative integer` }
+  }
+  return null
+}
+
+function validatePositiveInteger(value: unknown, path: string): ValidationError | null {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    return { code: 'bad_request', message: `${path} must be a positive integer` }
+  }
+  return null
+}
+
+function validateNullablePositiveInteger(value: unknown, path: string): ValidationError | null {
+  if (value === null) return null
+  return validatePositiveInteger(value, path)
+}
+
+// ---------------------------------------------------------------------------
+// Bucket configuration (`b2_create_bucket`, `b2_update_bucket`)
+// ---------------------------------------------------------------------------
+
+const CORS_RULE_FIELDS = new Set([
+  'allowedHeaders',
+  'allowedOperations',
+  'allowedOrigins',
+  'corsRuleName',
+  'exposeHeaders',
+  'maxAgeSeconds',
+])
+
+const KNOWN_CORS_OPERATIONS = new Set<string>(Object.values(CorsOperation))
+
+/**
+ * Validates B2 CORS rule structure for bucket create/update requests.
+ *
+ * @param rules - Caller-supplied CORS rules.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateCorsRules(rules: unknown): ValidationError | null {
+  if (!Array.isArray(rules)) {
+    return { code: 'bad_request', message: 'corsRules must be an array' }
+  }
+
+  const names = new Set<string>()
+  for (const [index, rule] of rules.entries()) {
+    const rulePath = `corsRules[${index}]`
+    if (!isRecord(rule)) {
+      return { code: 'bad_request', message: `${rulePath} must be an object` }
+    }
+
+    const fieldError = validateKnownFields(rule, CORS_RULE_FIELDS, rulePath)
+    if (fieldError) return fieldError
+
+    const nameError = validateNonEmptyString(rule['corsRuleName'], `${rulePath}.corsRuleName`)
+    if (nameError) return nameError
+    const ruleName = rule['corsRuleName'] as string
+    if (names.has(ruleName)) {
+      return { code: 'bad_request', message: `${rulePath}.corsRuleName must be unique` }
+    }
+    names.add(ruleName)
+
+    const originsError = validateStringArray(rule['allowedOrigins'], `${rulePath}.allowedOrigins`, {
+      requireNonEmpty: true,
+    })
+    if (originsError) return originsError
+
+    const operationsError = validateStringArray(
+      rule['allowedOperations'],
+      `${rulePath}.allowedOperations`,
+      { requireNonEmpty: true },
+    )
+    if (operationsError) return operationsError
+    for (const operation of rule['allowedOperations'] as readonly string[]) {
+      if (!KNOWN_CORS_OPERATIONS.has(operation)) {
+        return {
+          code: 'bad_request',
+          message: `${rulePath}.allowedOperations contains an unknown operation`,
+        }
+      }
+    }
+
+    const headersError = validateStringArray(rule['allowedHeaders'], `${rulePath}.allowedHeaders`, {
+      allowNull: true,
+    })
+    if (headersError) return headersError
+
+    const exposeError = validateStringArray(rule['exposeHeaders'], `${rulePath}.exposeHeaders`, {
+      allowNull: true,
+    })
+    if (exposeError) return exposeError
+
+    const ageError = validateNonNegativeInteger(rule['maxAgeSeconds'], `${rulePath}.maxAgeSeconds`)
+    if (ageError) return ageError
+  }
+
+  return null
+}
+
+const LIFECYCLE_RULE_FIELDS = new Set([
+  'daysFromHidingToDeleting',
+  'daysFromUploadingToHiding',
+  'fileNamePrefix',
+])
+
+/**
+ * Validates B2 lifecycle rule structure for bucket create/update requests.
+ *
+ * @param rules - Caller-supplied lifecycle rules.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateLifecycleRules(rules: unknown): ValidationError | null {
+  if (!Array.isArray(rules)) {
+    return { code: 'bad_request', message: 'lifecycleRules must be an array' }
+  }
+
+  for (const [index, rule] of rules.entries()) {
+    const rulePath = `lifecycleRules[${index}]`
+    if (!isRecord(rule)) {
+      return { code: 'bad_request', message: `${rulePath} must be an object` }
+    }
+
+    const fieldError = validateKnownFields(rule, LIFECYCLE_RULE_FIELDS, rulePath)
+    if (fieldError) return fieldError
+
+    const deletingError = validateNullablePositiveInteger(
+      rule['daysFromHidingToDeleting'],
+      `${rulePath}.daysFromHidingToDeleting`,
+    )
+    if (deletingError) return deletingError
+
+    const hidingError = validateNullablePositiveInteger(
+      rule['daysFromUploadingToHiding'],
+      `${rulePath}.daysFromUploadingToHiding`,
+    )
+    if (hidingError) return hidingError
+
+    if (rule['daysFromHidingToDeleting'] === null && rule['daysFromUploadingToHiding'] === null) {
+      return {
+        code: 'bad_request',
+        message: `${rulePath} must set at least one lifecycle action`,
+      }
+    }
+
+    if (typeof rule['fileNamePrefix'] !== 'string') {
+      return { code: 'bad_request', message: `${rulePath}.fileNamePrefix must be a string` }
+    }
+  }
+
+  return null
+}
+
+const DEFAULT_RETENTION_FIELDS = new Set(['mode', 'period'])
+const RETENTION_PERIOD_FIELDS = new Set(['duration', 'unit'])
+const DEFAULT_RETENTION_MODES = new Set<string>(Object.values(BucketRetentionMode))
+
+/**
+ * Validates default Object Lock retention policy structure for bucket requests.
+ *
+ * @param policy - Caller-supplied default retention policy.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateDefaultRetention(policy: unknown): ValidationError | null {
+  if (!isRecord(policy)) {
+    return { code: 'bad_request', message: 'defaultRetention must be an object' }
+  }
+
+  const fieldError = validateKnownFields(policy, DEFAULT_RETENTION_FIELDS, 'defaultRetention')
+  if (fieldError) return fieldError
+
+  const mode = policy['mode']
+  if (typeof mode !== 'string' || !DEFAULT_RETENTION_MODES.has(mode)) {
+    return {
+      code: 'bad_request',
+      message: 'defaultRetention.mode must be "compliance", "governance", or "none"',
+    }
+  }
+
+  const period = policy['period']
+  if (mode === BucketRetentionMode.None) {
+    if (period !== null) {
+      return {
+        code: 'bad_request',
+        message: 'defaultRetention.period must be null when mode is "none"',
+      }
+    }
+    return null
+  }
+
+  if (!isRecord(period)) {
+    return {
+      code: 'bad_request',
+      message: 'defaultRetention.period must be an object for retention modes',
+    }
+  }
+
+  const periodFieldError = validateKnownFields(
+    period,
+    RETENTION_PERIOD_FIELDS,
+    'defaultRetention.period',
+  )
+  if (periodFieldError) return periodFieldError
+
+  const durationError = validatePositiveInteger(
+    period['duration'],
+    'defaultRetention.period.duration',
+  )
+  if (durationError) return durationError
+
+  if (period['unit'] !== 'days' && period['unit'] !== 'years') {
+    return {
+      code: 'bad_request',
+      message: 'defaultRetention.period.unit must be "days" or "years"',
+    }
+  }
+
+  return null
+}
+
+const REPLICATION_CONFIG_FIELDS = new Set(['asReplicationSource', 'asReplicationDestination'])
+const REPLICATION_SOURCE_FIELDS = new Set(['replicationRules', 'sourceApplicationKeyId'])
+const REPLICATION_DESTINATION_FIELDS = new Set(['sourceToDestinationKeyMapping'])
+const REPLICATION_RULE_FIELDS = new Set([
+  'destinationBucketId',
+  'fileNamePrefix',
+  'includeExistingFiles',
+  'isEnabled',
+  'priority',
+  'replicationRuleName',
+])
+
+function validateReplicationRule(rule: unknown, rulePath: string): ValidationError | null {
+  if (!isRecord(rule)) {
+    return { code: 'bad_request', message: `${rulePath} must be an object` }
+  }
+
+  const fieldError = validateKnownFields(rule, REPLICATION_RULE_FIELDS, rulePath)
+  if (fieldError) return fieldError
+
+  const destinationError = validateNonEmptyString(
+    rule['destinationBucketId'],
+    `${rulePath}.destinationBucketId`,
+  )
+  if (destinationError) return destinationError
+
+  if (typeof rule['fileNamePrefix'] !== 'string') {
+    return { code: 'bad_request', message: `${rulePath}.fileNamePrefix must be a string` }
+  }
+
+  if (typeof rule['includeExistingFiles'] !== 'boolean') {
+    return { code: 'bad_request', message: `${rulePath}.includeExistingFiles must be a boolean` }
+  }
+
+  if (typeof rule['isEnabled'] !== 'boolean') {
+    return { code: 'bad_request', message: `${rulePath}.isEnabled must be a boolean` }
+  }
+
+  const priorityError = validatePositiveInteger(rule['priority'], `${rulePath}.priority`)
+  if (priorityError) return priorityError
+
+  const nameError = validateNonEmptyString(
+    rule['replicationRuleName'],
+    `${rulePath}.replicationRuleName`,
+  )
+  if (nameError) return nameError
+
+  return null
+}
+
+function validateReplicationSource(source: unknown): ValidationError | null {
+  if (!isRecord(source)) {
+    return {
+      code: 'bad_request',
+      message: 'replicationConfiguration.asReplicationSource must be an object',
+    }
+  }
+
+  const fieldError = validateKnownFields(
+    source,
+    REPLICATION_SOURCE_FIELDS,
+    'replicationConfiguration.asReplicationSource',
+  )
+  if (fieldError) return fieldError
+
+  const sourceKeyError = validateNonEmptyString(
+    source['sourceApplicationKeyId'],
+    'replicationConfiguration.asReplicationSource.sourceApplicationKeyId',
+  )
+  if (sourceKeyError) return sourceKeyError
+
+  const rules = source['replicationRules']
+  if (!Array.isArray(rules)) {
+    return {
+      code: 'bad_request',
+      message: 'replicationConfiguration.asReplicationSource.replicationRules must be an array',
+    }
+  }
+
+  const names = new Set<string>()
+  for (const [index, rule] of rules.entries()) {
+    const rulePath = `replicationConfiguration.asReplicationSource.replicationRules[${index}]`
+    const ruleError = validateReplicationRule(rule, rulePath)
+    if (ruleError) return ruleError
+    const ruleName = (rule as Record<string, unknown>)['replicationRuleName'] as string
+    if (names.has(ruleName)) {
+      return { code: 'bad_request', message: `${rulePath}.replicationRuleName must be unique` }
+    }
+    names.add(ruleName)
+  }
+
+  return null
+}
+
+function validateReplicationDestination(destination: unknown): ValidationError | null {
+  if (!isRecord(destination)) {
+    return {
+      code: 'bad_request',
+      message: 'replicationConfiguration.asReplicationDestination must be an object',
+    }
+  }
+
+  const fieldError = validateKnownFields(
+    destination,
+    REPLICATION_DESTINATION_FIELDS,
+    'replicationConfiguration.asReplicationDestination',
+  )
+  if (fieldError) return fieldError
+
+  const mapping = destination['sourceToDestinationKeyMapping']
+  if (!isRecord(mapping)) {
+    return {
+      code: 'bad_request',
+      message:
+        'replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping must be an object',
+    }
+  }
+
+  for (const [sourceKey, destinationKey] of Object.entries(mapping)) {
+    if (sourceKey.length === 0) {
+      return {
+        code: 'bad_request',
+        message:
+          'replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping keys must be non-empty',
+      }
+    }
+    if (typeof destinationKey !== 'string' || destinationKey.length === 0) {
+      return {
+        code: 'bad_request',
+        message:
+          'replicationConfiguration.asReplicationDestination.sourceToDestinationKeyMapping values must be non-empty strings',
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * Validates B2 replication configuration structure for bucket requests.
+ *
+ * @param config - Caller-supplied replication configuration.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ */
+export function validateReplicationConfiguration(config: unknown): ValidationError | null {
+  if (!isRecord(config)) {
+    return { code: 'bad_request', message: 'replicationConfiguration must be an object' }
+  }
+
+  const fieldError = validateKnownFields(
+    config,
+    REPLICATION_CONFIG_FIELDS,
+    'replicationConfiguration',
+  )
+  if (fieldError) return fieldError
+
+  if (!('asReplicationSource' in config) && !('asReplicationDestination' in config)) {
+    return {
+      code: 'bad_request',
+      message:
+        'replicationConfiguration must include asReplicationSource or asReplicationDestination',
+    }
+  }
+
+  const source = config['asReplicationSource']
+  if (source !== undefined && source !== null) {
+    const sourceError = validateReplicationSource(source)
+    if (sourceError) return sourceError
+  }
+
+  const destination = config['asReplicationDestination']
+  if (destination !== undefined && destination !== null) {
+    const destinationError = validateReplicationDestination(destination)
+    if (destinationError) return destinationError
+  }
+
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // Event notification rules (`b2_set_bucket_notification_rules`)
 // ---------------------------------------------------------------------------
@@ -354,26 +805,6 @@ const NOTIFICATION_TARGET_FIELDS = new Set([
 ])
 
 const KNOWN_NOTIFICATION_EVENT_TYPES = new Set<string>(Object.values(EventType))
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function validateKnownFields(
-  value: Record<string, unknown>,
-  allowedFields: ReadonlySet<string>,
-  path: string,
-): ValidationError | null {
-  for (const field of Object.keys(value)) {
-    if (!allowedFields.has(field)) {
-      return {
-        code: 'bad_request',
-        message: `${path}.${field} is not a supported field`,
-      }
-    }
-  }
-  return null
-}
 
 /**
  * Validates event notification rules for `b2_set_bucket_notification_rules`.

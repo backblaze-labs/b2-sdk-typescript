@@ -216,12 +216,16 @@ import {
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
+  validateCorsRules,
+  validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
+  validateLifecycleRules,
   validateMaxCount,
   validateNotificationRules,
+  validateReplicationConfiguration,
 } from './validation.ts'
 
 // Re-export the documented B2 spec limit constants so callers of
@@ -2832,6 +2836,24 @@ export class B2Simulator {
       const infoError = validateBucketInfo(req.bucketInfo)
       if (infoError) return this.error(400, infoError.code, infoError.message)
     }
+    if (req.corsRules !== undefined) {
+      const corsError = validateCorsRules(req.corsRules)
+      if (corsError) return this.error(400, corsError.code, corsError.message)
+    }
+    if (req.lifecycleRules !== undefined) {
+      const lifecycleError = validateLifecycleRules(req.lifecycleRules)
+      if (lifecycleError) return this.error(400, lifecycleError.code, lifecycleError.message)
+    }
+    if (req.replicationConfiguration !== undefined) {
+      const replicationError = validateReplicationConfiguration(req.replicationConfiguration)
+      if (replicationError) {
+        return this.error(400, replicationError.code, replicationError.message)
+      }
+    }
+    if (req.defaultRetention !== undefined) {
+      const retentionError = validateDefaultRetention(req.defaultRetention)
+      if (retentionError) return this.error(400, retentionError.code, retentionError.message)
+    }
     for (const b of this.buckets.values()) {
       if (b.info.bucketName === req.bucketName) {
         return this.error(400, 'duplicate_bucket_name', 'Bucket name already in use')
@@ -2901,11 +2923,38 @@ export class B2Simulator {
   private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {
     const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    const revisionGuard = req['ifRevisionIs'] ?? req['ifRevisionMatch']
+    if (revisionGuard !== undefined) {
+      if (typeof revisionGuard !== 'number' || !Number.isInteger(revisionGuard)) {
+        return this.error(400, 'bad_request', 'ifRevisionIs must be an integer')
+      }
+      if (revisionGuard !== bucket.info.revision) {
+        return this.error(409, 'conflict', 'ifRevisionIs test failed')
+      }
+    }
     // Validate bucketInfo budget on update too — real B2 rejects
     // oversized info maps on the update path, not just on create.
     if (req['bucketInfo'] !== undefined) {
       const infoError = validateBucketInfo(req['bucketInfo'] as Record<string, string>)
       if (infoError) return this.error(400, infoError.code, infoError.message)
+    }
+    if (req['corsRules'] !== undefined) {
+      const corsError = validateCorsRules(req['corsRules'])
+      if (corsError) return this.error(400, corsError.code, corsError.message)
+    }
+    if (req['lifecycleRules'] !== undefined) {
+      const lifecycleError = validateLifecycleRules(req['lifecycleRules'])
+      if (lifecycleError) return this.error(400, lifecycleError.code, lifecycleError.message)
+    }
+    if (req['replicationConfiguration'] !== undefined) {
+      const replicationError = validateReplicationConfiguration(req['replicationConfiguration'])
+      if (replicationError) {
+        return this.error(400, replicationError.code, replicationError.message)
+      }
+    }
+    if (req['defaultRetention'] !== undefined) {
+      const retentionError = validateDefaultRetention(req['defaultRetention'])
+      if (retentionError) return this.error(400, retentionError.code, retentionError.message)
     }
     const updated: BucketInfo = {
       ...bucket.info,
