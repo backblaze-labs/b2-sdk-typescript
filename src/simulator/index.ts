@@ -346,7 +346,13 @@ interface LargeFileInProgress {
   readonly legalHold: LegalHoldValue | null
   readonly serverSideEncryption: StoredServerSideEncryption
   readonly uploadTimestamp: number
-  readonly parts: Map<number, { data: Uint8Array; sha1: string }>
+  readonly parts: Map<number, StoredLargeFilePart>
+}
+
+interface StoredLargeFilePart {
+  readonly data: Uint8Array
+  readonly sha1: string
+  readonly uploadTimestamp: number
 }
 
 interface StoredKey {
@@ -2497,10 +2503,36 @@ export class B2Simulator {
     )
     if (authError !== null) return authError
 
+    const contentLengthError = this.validateContentLength(headers, data.byteLength)
+    if (contentLengthError !== null) return contentLengthError
+
     if (kind === 'part') {
       return await this.handleUploadPart(url, headers, data)
     }
     return await this.handleUploadFile(url, headers, data)
+  }
+
+  private validateContentLength(
+    headers: Record<string, string>,
+    actualLength: number,
+  ): SimulatorJsonResponse | null {
+    const header = headers['content-length']
+    if (header === undefined) return null
+    if (!/^\d+$/.test(header)) {
+      return this.error(400, 'bad_request', `Content-Length must be a byte count: ${header}`)
+    }
+    const expectedLength = Number(header)
+    if (!Number.isSafeInteger(expectedLength)) {
+      return this.error(400, 'bad_request', `Content-Length is too large: ${header}`)
+    }
+    if (expectedLength !== actualLength) {
+      return this.error(
+        400,
+        'bad_request',
+        `Content-Length ${expectedLength} does not match request body length ${actualLength}`,
+      )
+    }
+    return null
   }
 
   /**
@@ -2760,7 +2792,13 @@ export class B2Simulator {
     const large = this.largeFiles.get(fileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
 
-    const partNumber = Number.parseInt(headers['x-bz-part-number'] ?? '0', 10)
+    const partNumberHeader = headers['x-bz-part-number']
+    const partNumber =
+      partNumberHeader !== undefined && /^\d+$/.test(partNumberHeader)
+        ? Number(partNumberHeader)
+        : Number.NaN
+    const partNumberError = this.validatePartNumber(partNumber)
+    if (partNumberError !== null) return partNumberError
 
     const encryptionError = await this.validateUploadPartEncryption(large, headers)
     if (encryptionError !== null) return encryptionError
@@ -2771,7 +2809,8 @@ export class B2Simulator {
     if ('status' in resolved) return resolved
     const { sha1, data: partData } = resolved
 
-    large.parts.set(partNumber, { data: partData, sha1 })
+    const uploadTimestamp = this.monotonicTimestamp()
+    large.parts.set(partNumber, { data: partData, sha1, uploadTimestamp })
 
     return {
       status: 200,
@@ -2781,9 +2820,18 @@ export class B2Simulator {
         contentLength: partData.byteLength,
         contentSha1: sha1,
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
-        uploadTimestamp: Date.now(),
+        uploadTimestamp,
       },
     }
+  }
+
+  private validatePartNumber(partNumber: number): SimulatorJsonResponse | null {
+    if (Number.isInteger(partNumber) && partNumber >= 1 && partNumber <= 10_000) return null
+    return this.error(
+      400,
+      'bad_request',
+      `partNumber must be an integer between 1 and 10000; received ${String(partNumber)}`,
+    )
   }
 
   private downloadById(
@@ -3711,8 +3759,8 @@ export class B2Simulator {
     // B2 spec-compliance: every part number must be in [1, 10000].
     // Real B2 rejects a part upload with an out-of-range partNumber
     // server-side; we enforce here at finish time as a backstop in case
-    // a caller bypassed the upload-side validation (the simulator's
-    // own `handleUploadPart` stores whatever number the client sends).
+    // a caller bypassed the upload-side validation or older simulator
+    // state already contains invalid part numbers.
     for (const [partNumber] of sortedParts) {
       if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
         return this.error(
@@ -3889,7 +3937,7 @@ export class B2Simulator {
         partNumber,
         contentLength: part.data.byteLength,
         contentSha1: part.sha1,
-        uploadTimestamp: Date.now(),
+        uploadTimestamp: part.uploadTimestamp,
       }))
 
     const parts = allParts.slice(0, max)
@@ -3908,6 +3956,8 @@ export class B2Simulator {
   }): Promise<SimulatorJsonResponse> {
     const large = this.largeFiles.get(req.largeFileId)
     if (!large) return this.error(400, 'bad_request', 'Large file not found')
+    const partNumberError = this.validatePartNumber(req.partNumber)
+    if (partNumberError !== null) return partNumberError
 
     const found = this.findFile(req.sourceFileId)
     if (found === null) return this.error(404, 'file_not_present', 'Source file not found')
@@ -3926,20 +3976,22 @@ export class B2Simulator {
     if (destinationEncryptionError !== null) return destinationEncryptionError
 
     let partData = sourceStored.data
-    if (req.range) {
-      const match = req.range.match(/bytes=(\d+)-(\d+)?/)
-      if (match) {
-        const rs = Number.parseInt(match[1] ?? '0', 10)
-        const re =
-          match[2] !== undefined ? Number.parseInt(match[2], 10) : sourceStored.data.byteLength - 1
-        partData = sourceStored.data.slice(rs, re + 1)
+    if (req.range !== undefined) {
+      const parsed = parseRangeHeader(req.range, sourceStored.data.byteLength)
+      if (parsed.kind !== 'ok') {
+        return this.error(416, 'range_not_satisfiable', `Unsatisfiable copy range: ${req.range}`)
       }
+      partData = sourceStored.data.subarray(parsed.start, parsed.end + 1)
     }
 
     // Hash the part data so list_parts can return a real SHA-1.
     // sha1Hex is isomorphic (node:crypto in Node, WebCrypto in browsers).
     const sha1 = await sha1Hex(partData)
-    large.parts.set(req.partNumber, { data: new Uint8Array(partData), sha1 })
+    large.parts.set(req.partNumber, {
+      data: new Uint8Array(partData),
+      sha1,
+      uploadTimestamp: this.monotonicTimestamp(),
+    })
 
     return {
       status: 200,
