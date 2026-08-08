@@ -101,8 +101,14 @@ export function lifecycleXml(rules: readonly S3LifecycleRule[]): string {
  * @param parts - Completed parts to serialize.
  *
  * @returns S3 CompleteMultipartUpload XML.
+ *
+ * @throws RangeError when no completed parts are supplied or part numbers are invalid.
  */
 export function completeMultipartUploadXml(parts: readonly S3CompletedMultipartPart[]): string {
+  if (parts.length === 0) {
+    throw new RangeError('multipart completion requires at least one completed part.')
+  }
+
   let previousPartNumber = 0
   const partXml = parts.map((part) => {
     const partNumber = assertS3PartNumber(part.partNumber)
@@ -317,6 +323,15 @@ function assertSupportedLifecycleRule(rule: S3LifecycleRule): void {
   if (expiration?.expiredObjectDeleteMarker === false) {
     throw new TypeError('B2 S3 lifecycle expiration.expiredObjectDeleteMarker only supports true.')
   }
+  if (expiration !== undefined) {
+    const hasDays = (expiration as { readonly days?: unknown }).days !== undefined
+    const removesExpiredMarker = expiration.expiredObjectDeleteMarker === true
+    if (!hasDays && !removesExpiredMarker) {
+      throw new TypeError(
+        'B2 S3 lifecycle expiration requires days or expiredObjectDeleteMarker: true.',
+      )
+    }
+  }
 }
 
 function optionalOwner(xml: string): { readonly owner?: S3Owner } {
@@ -379,7 +394,7 @@ function xmlElementRaw(xml: string, element: string): string | undefined {
 function xmlElementText(xml: string, element: string): string | undefined {
   const raw = xmlElementRaw(xml, element)
   if (raw === undefined) return undefined
-  return decodeXml(raw.replace(/<[^>]*>/g, ''))
+  return decodeXml(xmlTextContent(raw))
 }
 
 function elementPattern(element: string, flags = ''): RegExp {
@@ -403,6 +418,23 @@ function decodeXml(value: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, '&')
+}
+
+function xmlTextContent(value: string): string {
+  let text = ''
+  let insideTag = false
+  for (const char of value) {
+    if (insideTag) {
+      if (char === '>') insideTag = false
+      continue
+    }
+    if (char === '<') {
+      insideTag = true
+      continue
+    }
+    text += char
+  }
+  return text
 }
 
 function decodeCodePoint(value: number): string {

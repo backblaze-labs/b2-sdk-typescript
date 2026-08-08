@@ -375,6 +375,26 @@ describe('S3CompatibleClient', () => {
     })
   })
 
+  it('drops nested markup from XML text fields without regex sanitization', async () => {
+    const { fetch } = mockFetch(
+      new Response(
+        [
+          '<ListBucketResult>',
+          '<IsTruncated>false</IsTruncated>',
+          '<Contents><Key>safe<script>alert(1)</script>name</Key><Size>1</Size></Contents>',
+          '<Contents><Key>prefix<script</Key><Size>2</Size></Contents>',
+          '</ListBucketResult>',
+        ].join(''),
+        { status: 200 },
+      ),
+    )
+    const client = createClient(fetch)
+
+    await expect(client.listObjectsV2({ bucket: 'my-bucket' })).resolves.toMatchObject({
+      objects: [{ key: 'safealert(1)name' }, { key: 'prefix' }],
+    })
+  })
+
   it('creates multipart uploads with metadata and supported headers', async () => {
     const { fetch, calls } = mockFetch(
       new Response(
@@ -427,6 +447,21 @@ describe('S3CompatibleClient', () => {
     expect(calls[0]?.init.body).toBe(
       '<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>&quot;part&quot;</ETag></Part></CompleteMultipartUpload>',
     )
+  })
+
+  it('rejects empty multipart completion part lists before sending a request', async () => {
+    const { fetch, calls } = mockFetch(new Response(null, { status: 200 }))
+    const client = createClient(fetch)
+
+    await expect(
+      client.multipart.complete({
+        bucket: 'my-bucket',
+        key: 'large.bin',
+        uploadId: 'upload-1',
+        parts: [],
+      }),
+    ).rejects.toThrow(/at least one completed part/)
+    expect(calls).toHaveLength(0)
   })
 
   it('aborts multipart uploads and drains successful response bodies', async () => {
@@ -623,6 +658,12 @@ describe('S3CompatibleClient', () => {
         ],
       }),
     ).rejects.toThrow(/expiredObjectDeleteMarker/)
+    await expect(
+      client.putBucketLifecycle({
+        bucket: 'my-bucket',
+        rules: [{ id: 'empty-expiration', status: 'Enabled', expiration: {} }],
+      }),
+    ).rejects.toThrow(/expiration requires/)
     expect(calls).toHaveLength(0)
   })
 

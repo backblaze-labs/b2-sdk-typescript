@@ -499,10 +499,11 @@ import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
 
 `createS3ClientConfig()` remains available for `@aws-sdk/client-s3`; install
-that optional peer before constructing an AWS `S3Client`. For the reviewed
-B2-specific S3 boundary, `createS3CompatibleClient()` signs and sends scoped S3
-requests first-party and does not require AWS SDK runtime packages. The presign
-helpers sign internally and do not require AWS presigner packages.
+that optional peer before constructing an AWS `S3Client`. Use
+`createS3CompatibleClient()` when you want the SDK's first-party B2-scoped S3
+helpers instead of an AWS client; it signs and sends the supported S3 requests
+without AWS SDK runtime packages. The presign helpers sign internally and do
+not require AWS presigner packages.
 
 Raw methods use a trailing options bag for request controls such as cancellation
 and per-request retry overrides: pass `{ signal, retry }` to `getUploadUrl`,
