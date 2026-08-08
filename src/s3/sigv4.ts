@@ -13,6 +13,9 @@ export const DEFAULT_PRESIGN_EXPIRES_IN = 3600
 /** Date input accepted by SigV4 presign internals and deterministic tests. */
 export type S3PresignDate = Date | number
 
+/** HTTP method accepted by SigV4 signed S3-compatible requests. */
+export type S3SignedRequestMethod = 'DELETE' | 'GET' | 'HEAD' | 'POST' | 'PUT'
+
 /** Query parameter included in the SigV4 canonical query string. */
 export type QueryParam = readonly [name: string, value: string]
 
@@ -37,6 +40,38 @@ export interface SigV4PresignRequestOptions {
   readonly expiresIn?: number
   /** Optional signing clock override. */
   readonly signingDate?: S3PresignDate
+}
+
+/** Internal inputs required to sign one S3-compatible HTTP request. */
+export interface SigV4SignedRequestOptions {
+  /** S3-compatible endpoint URL. */
+  readonly endpoint: string
+  /** S3 signing region. */
+  readonly region: string
+  /** S3 access key ID. */
+  readonly accessKeyId: string
+  /** S3 secret access key. */
+  readonly secretAccessKey: string
+  /** Bucket targeted by the request. */
+  readonly bucketName: string
+  /** Optional object key / B2 file name targeted by the request. */
+  readonly fileName?: string
+  /** Operation-specific query parameters to sign. */
+  readonly query?: readonly QueryParam[]
+  /** Operation-specific headers to sign and send. */
+  readonly headers?: readonly SignedHeader[]
+  /** Payload hash placed in `x-amz-content-sha256`. */
+  readonly payloadHash: string
+  /** Optional signing clock override. */
+  readonly signingDate?: S3PresignDate
+}
+
+/** Signed URL and headers ready for `fetch`. */
+export interface SigV4SignedRequest {
+  /** Fully qualified request URL. */
+  readonly url: string
+  /** Headers containing SigV4 authentication. */
+  readonly headers: Headers
 }
 
 /**
@@ -103,6 +138,73 @@ export async function presignS3Request(
   return `${endpoint.origin}${canonicalUri}?${finalQuery}`
 }
 
+/**
+ * Signs an S3-compatible HTTP request with AWS Signature Version 4 headers.
+ *
+ * This shares canonical URI, query, header, date, and signing-key mechanics
+ * with {@link presignS3Request}; callers provide only operation-specific
+ * request data and the payload hash.
+ *
+ * @param method - HTTP method to sign.
+ * @param options - S3 endpoint, credentials, target, query, headers, and payload hash.
+ *
+ * @returns The signed request URL and headers.
+ */
+export async function signS3Request(
+  method: S3SignedRequestMethod,
+  options: SigV4SignedRequestOptions,
+): Promise<SigV4SignedRequest> {
+  const endpoint = parseEndpoint(options.endpoint)
+  assertHttpsEndpoint(endpoint)
+  assertSafeBucketName(options.bucketName)
+  if (options.fileName !== undefined) assertValidB2FileName(options.fileName)
+
+  const { shortDate, longDate } = formatSigningDate(options.signingDate)
+  const canonicalUri = buildCanonicalUri(endpoint.pathname, options.bucketName, options.fileName)
+  const canonicalQuery = canonicalQueryString(options.query ?? [])
+  const url = `${endpoint.origin}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ''}`
+  const headers = new Headers()
+  for (const [name, value] of options.headers ?? []) {
+    headers.set(name, value)
+  }
+  headers.set('x-amz-content-sha256', options.payloadHash)
+  headers.set('x-amz-date', longDate)
+  const signedHeaders = normalizeSignedHeaders([
+    ['host', canonicalHostHeader(endpoint)],
+    ...[...headers.entries()],
+  ])
+  const signedHeaderNames = signedHeaders.map(([name]) => name).join(';')
+  const canonicalHeaders = signedHeaders.map(([name, value]) => `${name}:${value}\n`).join('')
+  const credentialScope = `${shortDate}/${options.region}/${SERVICE}/${TERMINATOR}`
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaderNames,
+    options.payloadHash,
+  ].join('\n')
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    longDate,
+    credentialScope,
+    await sha256Hex(canonicalRequest),
+  ].join('\n')
+  const signingKey = await deriveSigningKey(options.secretAccessKey, shortDate, options.region)
+  const signature = hexEncode(await hmacSha256(signingKey, stringToSign))
+  headers.set(
+    'authorization',
+    [
+      'AWS4-HMAC-SHA256',
+      `Credential=${options.accessKeyId}/${credentialScope},`,
+      `SignedHeaders=${signedHeaderNames},`,
+      `Signature=${signature}`,
+    ].join(' '),
+  )
+
+  return { url, headers }
+}
+
 function normalizeExpiresIn(expiresIn: number | undefined): number {
   const value = expiresIn ?? DEFAULT_PRESIGN_EXPIRES_IN
   if (!Number.isInteger(value) || value < 1 || value > MAX_PRESIGN_EXPIRES_IN) {
@@ -135,9 +237,14 @@ function formatSigningDate(input: S3PresignDate | undefined): {
   }
 }
 
-function buildCanonicalUri(endpointPath: string, bucketName: string, fileName: string): string {
+function buildCanonicalUri(
+  endpointPath: string,
+  bucketName: string,
+  fileName: string | undefined,
+): string {
   const basePath =
     endpointPath === '' || endpointPath === '/' ? '' : endpointPath.replace(/\/+$/, '')
+  if (fileName === undefined) return `${basePath}/${awsPercentEncode(bucketName)}`
   return `${basePath}/${awsPercentEncode(bucketName)}/${encodePath(fileName)}`
 }
 

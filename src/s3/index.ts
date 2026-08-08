@@ -126,6 +126,15 @@ export interface S3ClientConfig {
 export interface CreateS3CompatibleClientOptions extends B2S3Config {
   /** Optional fetch implementation for controlled runtimes and tests. */
   readonly fetch?: S3CompatibleFetch
+  /** Local root that confines `getObject({ saveToPath })` writes. */
+  readonly downloadRoot?: string
+  /**
+   * Per-request and consumed-body timeout in milliseconds. Defaults to 15
+   * minutes. Set to `0` only when caller-owned AbortSignals enforce deadlines.
+   */
+  readonly requestTimeoutMs?: number
+  /** Optional signing clock override for deterministic tests. */
+  readonly signingDate?: Date | number
 }
 
 /** Common options for S3-compatible presigned object URLs. */
@@ -301,9 +310,12 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
 export function createS3CompatibleClient(
   options: CreateS3CompatibleClientOptions,
 ): S3CompatibleClient {
-  const { fetch: fetchImpl, ...config } = options
+  const { downloadRoot, fetch: fetchImpl, requestTimeoutMs, signingDate, ...config } = options
   return new S3CompatibleClient(createS3ClientConfig(config), {
     ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+    ...(downloadRoot !== undefined ? { downloadRoot } : {}),
+    ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    ...(signingDate !== undefined ? { signingDate } : {}),
   })
 }
 

@@ -1,15 +1,27 @@
-import { redactUrlForError } from '../internal/url-redaction.ts'
-import { hexEncode, hmacSha256, sha256Hex } from '../util/crypto.ts'
-import { hasHttpHeaderControlCharacter } from '../util/http.ts'
+import {
+  assertSafeHeaderName,
+  assertSafeHeaderValue,
+  assertSafeQueryValue,
+  cancelResponseBody,
+  type S3RequestInput,
+  type S3RequestResult,
+  sendSignedS3Request,
+} from './request.ts'
 import { presignS3Request, type QueryParam, type SignedHeader } from './sigv4.ts'
-import { assertSafeBucketName, assertValidB2FileName } from './validation.ts'
+import {
+  completeMultipartUploadXml,
+  lifecycleXml,
+  parseBucketLocation,
+  parseCompleteMultipartUpload,
+  parseCreateMultipartUpload,
+  parseListMultipartUploads,
+  parseListObjectsV2,
+  parseListParts,
+  parseUploadPartCopy,
+  responseXml,
+} from './xml.ts'
 
-const UNSIGNED_PAYLOAD = 'UNSIGNED-PAYLOAD'
-const SERVICE = 's3'
-const TERMINATOR = 'aws4_request'
-const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
-
-type S3HttpMethod = 'DELETE' | 'GET' | 'HEAD' | 'POST' | 'PUT'
+export { S3CompatibleError } from './xml.ts'
 
 /** Fetch-compatible function used by {@link S3CompatibleClient}. */
 export type S3CompatibleFetch = (
@@ -41,12 +53,27 @@ export interface S3CompatibleClientOptions {
    * Tests and controlled runtimes can inject their own implementation.
    */
   readonly fetch?: S3CompatibleFetch
+  /**
+   * Local root that confines `getObject({ saveToPath })` writes. When set,
+   * `saveToPath` must be a relative path below this directory.
+   */
+  readonly downloadRoot?: string
+  /**
+   * Per-request and consumed-body timeout in milliseconds. Defaults to
+   * 15 minutes. Set to `0` only when caller-owned AbortSignals enforce a
+   * stricter deadline.
+   */
+  readonly requestTimeoutMs?: number
+  /** Optional signing clock override for deterministic tests. */
+  readonly signingDate?: Date | number
 }
 
 /** Common per-request controls accepted by every network S3 helper. */
 export interface S3CompatibleRequestOptions {
   /** Abort signal for cancelling the in-flight request. */
   readonly signal?: AbortSignal
+  /** Optional timeout override for this request; `0` disables the SDK timeout. */
+  readonly requestTimeoutMs?: number
 }
 
 /** Common input for bucket-level S3 helpers. */
@@ -76,10 +103,13 @@ export interface S3GetObjectOptions extends S3BucketRequestOptions {
   /** Optional S3 version ID. */
   readonly versionId?: string
   /**
-   * Optional local path to stream the response body to in Node.js.
-   * When set, the returned `body` is `null` because the stream has been consumed.
+   * Optional local path to stream the response body to in Node.js. This path
+   * must be relative to `downloadRoot`; absolute paths, traversal, symlink
+   * parents, symlink leaves, and existing destinations are rejected.
    */
   readonly saveToPath?: string
+  /** Optional per-call root for `saveToPath`, overriding the client root. */
+  readonly downloadRoot?: string
 }
 
 /** Result from {@link S3Compatible.getObject}. */
@@ -152,8 +182,8 @@ export interface S3ListObjectsV2Result {
 export interface S3LifecycleRule {
   /** Unique rule identifier. */
   readonly id: string
-  /** Rule status. */
-  readonly status: 'Disabled' | 'Enabled'
+  /** B2's S3 lifecycle API supports enabled rules only. */
+  readonly status: 'Enabled'
   /** Prefix filter. B2 does not support speculative advanced S3 filters here. */
   readonly filter?: {
     /** Prefix to match. */
@@ -163,8 +193,8 @@ export interface S3LifecycleRule {
   readonly expiration?: {
     /** Days after creation to expire the object. */
     readonly days?: number
-    /** Whether expired delete markers are removed. */
-    readonly expiredObjectDeleteMarker?: boolean
+    /** Whether expired delete markers are removed. B2 supports `true` only. */
+    readonly expiredObjectDeleteMarker?: true
   }
   /** Noncurrent-version expiration rule. */
   readonly noncurrentVersionExpiration?: {
@@ -192,7 +222,10 @@ export interface S3CreateMultipartUploadOptions extends S3BucketRequestOptions {
   readonly contentType?: string
   /** Optional user metadata. */
   readonly metadata?: Record<string, string>
-  /** S3 ACL compatibility hint accepted by B2. */
+  /**
+   * S3 ACL compatibility hint accepted by B2. `public-read` makes the object
+   * world-readable; never populate this from untrusted request JSON.
+   */
   readonly acl?: 'private' | 'public-read'
   /** B2 supports the S3 `AES256` server-side encryption value. */
   readonly serverSideEncryption?: 'AES256'
@@ -258,6 +291,17 @@ export interface S3PresignUploadPartOptions extends S3MultipartUploadTargetOptio
    * from 1 to 604800.
    */
   readonly expiresIn?: number
+  /**
+   * Expected upload body size. Strongly recommended for untrusted uploaders;
+   * when supplied, the URL signs `Content-Length` and upload clients must send
+   * the same value.
+   */
+  readonly contentLength?: number
+  /**
+   * Optional base64 SHA-256 checksum to sign as `x-amz-checksum-sha256`.
+   * Use only when the target S3-compatible endpoint accepts that header.
+   */
+  readonly checksumSha256?: string
 }
 
 /** Result from {@link S3Compatible.presignUploadPart}. */
@@ -345,7 +389,7 @@ export interface S3ListPartsResult {
   /** Whether another page is available. */
   readonly isTruncated: boolean
   /** Next part-number marker. */
-  readonly nextPartNumberMarker?: string
+  readonly nextPartNumberMarker?: number
 }
 
 /** Input for {@link S3CompatibleMultipart.uploadPartCopy}. */
@@ -398,65 +442,15 @@ export interface S3Compatible {
   putBucketLifecycle(input: S3PutBucketLifecycleOptions): Promise<void>
   /** Presign one multipart UploadPart PUT URL. */
   presignUploadPart(input: S3PresignUploadPartOptions): Promise<S3PresignUploadPartResult>
-  /** Flat alias for `multipart.create`. */
-  createMultipartUpload(
-    input: S3CreateMultipartUploadOptions,
-  ): Promise<S3CreateMultipartUploadResult>
-  /** Flat alias for `multipart.complete`. */
-  completeMultipartUpload(
-    input: S3CompleteMultipartUploadOptions,
-  ): Promise<S3CompleteMultipartUploadResult>
-  /** Flat alias for `multipart.abort`. */
-  abortMultipartUpload(input: S3AbortMultipartUploadOptions): Promise<void>
-  /** Flat alias for `multipart.listUploads`. */
-  listMultipartUploads(input: S3ListMultipartUploadsOptions): Promise<S3ListMultipartUploadsResult>
-  /** Flat alias for `multipart.listParts`. */
-  listParts(input: S3ListPartsOptions): Promise<S3ListPartsResult>
-  /** Flat alias for `multipart.uploadPartCopy`. */
-  uploadPartCopy(input: S3UploadPartCopyOptions): Promise<S3UploadPartCopyResult>
 }
 
-/** Error thrown for non-successful S3-compatible responses. */
-export class S3CompatibleError extends Error {
-  /** HTTP status code. */
-  readonly status: number
-  /** S3 error code, when supplied by the service. */
-  readonly code: string
-  /** S3 request ID, when supplied by the service. */
-  readonly requestId?: string
-  /** S3 extended request ID, when supplied by the service. */
-  readonly extendedRequestId?: string
-
-  /**
-   * Creates an S3-compatible response error.
-   *
-   * @param options - HTTP status and parsed S3 error details.
-   */
-  constructor(options: {
-    status: number
-    code: string
-    message: string
-    requestId?: string
-    extendedRequestId?: string
-  }) {
-    super(options.message)
-    this.name = 'S3CompatibleError'
-    this.status = options.status
-    this.code = options.code
-    if (options.requestId !== undefined) this.requestId = options.requestId
-    if (options.extendedRequestId !== undefined) this.extendedRequestId = options.extendedRequestId
-  }
-}
-
-interface SignedRequestInput {
-  readonly method: S3HttpMethod
-  readonly bucket: string
-  readonly key?: string
-  readonly query?: readonly QueryParam[]
-  readonly headers?: readonly SignedHeader[]
-  readonly body?: BodyInit
+interface SignedRequestInput
+  extends Pick<
+    S3RequestInput,
+    'body' | 'bucket' | 'expectedStatuses' | 'headers' | 'key' | 'method' | 'query'
+  > {
   readonly signal?: AbortSignal
-  readonly expectedStatuses: readonly number[]
+  readonly requestTimeoutMs?: number
 }
 
 /**
@@ -473,48 +467,59 @@ interface SignedRequestInput {
 export class S3CompatibleClient implements S3Compatible {
   private readonly config: S3CompatibleAuthConfig
   private readonly fetchImpl: S3CompatibleFetch
+  private readonly downloadRoot: string | undefined
+  private readonly requestTimeoutMs: number | undefined
+  private readonly signingDate: Date | number | undefined
   readonly multipart: S3CompatibleMultipart
 
   /**
    * Creates an S3-compatible helper client.
    *
    * @param config - Endpoint, region, and credentials from {@link createS3ClientConfig}.
-   * @param options - Optional fetch override for controlled runtimes and tests.
+   * @param options - Optional fetch, save root, timeout, and signing-clock controls.
    */
   constructor(config: S3CompatibleAuthConfig, options: S3CompatibleClientOptions = {}) {
     this.config = config
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis)
+    this.downloadRoot = options.downloadRoot
+    this.requestTimeoutMs = options.requestTimeoutMs
+    this.signingDate = options.signingDate
     this.multipart = {
-      create: (input) => this.createMultipartUpload(input),
-      complete: (input) => this.completeMultipartUpload(input),
-      abort: (input) => this.abortMultipartUpload(input),
-      listParts: (input) => this.listParts(input),
-      listUploads: (input) => this.listMultipartUploads(input),
-      uploadPartCopy: (input) => this.uploadPartCopy(input),
+      create: (input) => this.#createMultipartUpload(input),
+      complete: (input) => this.#completeMultipartUpload(input),
+      abort: (input) => this.#abortMultipartUpload(input),
+      listParts: (input) => this.#listParts(input),
+      listUploads: (input) => this.#listMultipartUploads(input),
+      uploadPartCopy: (input) => this.#uploadPartCopy(input),
     }
   }
 
   async headBucket(input: S3HeadBucketOptions): Promise<void> {
-    await this.request({
+    const request = await this.request({
       method: 'HEAD',
       bucket: input.bucket,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
+    try {
+      await request.race(cancelResponseBody(request.response))
+    } finally {
+      request.dispose()
+    }
   }
 
   async getBucketLocation(input: S3GetBucketLocationOptions): Promise<S3GetBucketLocationResult> {
-    const response = await this.request({
+    const request = await this.request({
       method: 'GET',
       bucket: input.bucket,
       query: [['location', '']],
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    const xml = await responseXml(response)
-    const locationConstraint = xmlElementText(xml, 'LocationConstraint')
-    return {
-      ...(locationConstraint !== undefined ? { locationConstraint } : {}),
+    try {
+      return parseBucketLocation(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
     }
   }
 
@@ -531,42 +536,62 @@ export class S3CompatibleClient implements S3Compatible {
       headers.push(['range', input.range])
     }
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'GET',
       bucket: input.bucket,
       key: input.key,
       query,
       headers,
       expectedStatuses: [200, 206],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    const metadata = responseMetadata(response.headers)
-    const resultBase = {
-      metadata,
-      ...optionalHeader(response.headers, 'content-type', 'contentType'),
-      ...optionalHeader(response.headers, 'content-range', 'contentRange'),
-      ...optionalHeader(response.headers, 'etag', 'etag'),
-      ...optionalHeader(response.headers, 'x-amz-version-id', 'versionId'),
-      ...optionalHeader(response.headers, 'x-amz-server-side-encryption', 'serverSideEncryption'),
-      ...optionalNumberHeader(response.headers, 'content-length', 'contentLength'),
-      ...optionalDateHeader(response.headers, 'last-modified', 'lastModified'),
-    } satisfies Omit<S3GetObjectResult, 'body' | 'savedToPath'>
+    try {
+      const { response } = request
+      const metadata = responseMetadata(response.headers)
+      const resultBase = {
+        metadata,
+        ...optionalHeader(response.headers, 'content-type', 'contentType'),
+        ...optionalHeader(response.headers, 'content-range', 'contentRange'),
+        ...optionalHeader(response.headers, 'etag', 'etag'),
+        ...optionalHeader(response.headers, 'x-amz-version-id', 'versionId'),
+        ...optionalHeader(response.headers, 'x-amz-server-side-encryption', 'serverSideEncryption'),
+        ...optionalNumberHeader(response.headers, 'content-length', 'contentLength'),
+        ...optionalDateHeader(response.headers, 'last-modified', 'lastModified'),
+      } satisfies Omit<S3GetObjectResult, 'body' | 'savedToPath'>
 
-    if (input.saveToPath !== undefined) {
-      if (response.body === null) {
-        throw new Error('S3 GetObject response did not include a body to save.')
+      if (input.saveToPath !== undefined) {
+        if (response.body === null) {
+          throw new Error('S3 GetObject response did not include a body to save.')
+        }
+        const downloadRoot = input.downloadRoot ?? this.downloadRoot
+        if (downloadRoot === undefined) {
+          await cancelResponseBody(response)
+          throw new TypeError('getObject({ saveToPath }) requires a configured downloadRoot.')
+        }
+        const { saveS3BodyToPath } = await import('./save-to-path.node.ts')
+        const savedToPath = await saveS3BodyToPath({
+          body: response.body,
+          downloadRoot,
+          relativePath: input.saveToPath,
+          signal: request.signal,
+          idleTimeoutMs: request.timeoutMs,
+        }).catch(async (error: unknown) => {
+          await cancelResponseBody(response)
+          throw error
+        })
+        return {
+          ...resultBase,
+          body: null,
+          savedToPath,
+        }
       }
-      await writeBodyToPath(response.body, input.saveToPath)
+
       return {
         ...resultBase,
-        body: null,
-        savedToPath: input.saveToPath,
+        body: response.body,
       }
-    }
-
-    return {
-      ...resultBase,
-      body: response.body,
+    } finally {
+      request.dispose()
     }
   }
 
@@ -579,32 +604,52 @@ export class S3CompatibleClient implements S3Compatible {
     pushOptionalQuery(query, 'continuation-token', input.continuationToken)
     pushOptionalQuery(query, 'start-after', input.startAfter)
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'GET',
       bucket: input.bucket,
       query,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    return parseListObjectsV2(await responseXml(response))
+    try {
+      return parseListObjectsV2(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
+    }
   }
 
   async putBucketLifecycle(input: S3PutBucketLifecycleOptions): Promise<void> {
     const body = lifecycleXml(input.rules)
-    await this.request({
+    const request = await this.request({
       method: 'PUT',
       bucket: input.bucket,
       query: [['lifecycle', '']],
       headers: [['content-type', 'application/xml']],
       body,
       expectedStatuses: [200, 204],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
+    try {
+      await request.race(cancelResponseBody(request.response))
+    } finally {
+      request.dispose()
+    }
   }
 
   async presignUploadPart(input: S3PresignUploadPartOptions): Promise<S3PresignUploadPartResult> {
     const partNumber = assertS3PartNumber(input.partNumber)
     assertSafeQueryValue('uploadId', input.uploadId)
+    const headers: SignedHeader[] = []
+    if (input.contentLength !== undefined) {
+      headers.push([
+        'content-length',
+        String(assertPositiveInteger('contentLength', input.contentLength)),
+      ])
+    }
+    if (input.checksumSha256 !== undefined) {
+      assertSafeHeaderValue('checksumSha256', input.checksumSha256)
+      headers.push(['x-amz-checksum-sha256', input.checksumSha256])
+    }
     const url = await presignS3Request(
       'PUT',
       {
@@ -614,6 +659,7 @@ export class S3CompatibleClient implements S3Compatible {
         secretAccessKey: this.config.credentials.secretAccessKey,
         bucketName: input.bucket,
         fileName: input.key,
+        ...(this.signingDate !== undefined ? { signingDate: this.signingDate } : {}),
         ...(input.expiresIn !== undefined ? { expiresIn: input.expiresIn } : {}),
       },
       [
@@ -621,13 +667,13 @@ export class S3CompatibleClient implements S3Compatible {
         ['uploadId', input.uploadId],
         ['x-id', 'UploadPart'],
       ],
-      [],
+      headers,
     )
 
     return { partNumber, url }
   }
 
-  async createMultipartUpload(
+  async #createMultipartUpload(
     input: S3CreateMultipartUploadOptions,
   ): Promise<S3CreateMultipartUploadResult> {
     const headers: SignedHeader[] = []
@@ -636,35 +682,37 @@ export class S3CompatibleClient implements S3Compatible {
       headers.push(['content-type', input.contentType])
     }
     if (input.acl !== undefined) {
-      headers.push(['x-amz-acl', input.acl])
+      headers.push(['x-amz-acl', assertS3Acl(input.acl)])
     }
     if (input.serverSideEncryption !== undefined) {
-      headers.push(['x-amz-server-side-encryption', input.serverSideEncryption])
+      headers.push([
+        'x-amz-server-side-encryption',
+        assertServerSideEncryption(input.serverSideEncryption),
+      ])
     }
     headers.push(...metadataHeaders(input.metadata))
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'POST',
       bucket: input.bucket,
       key: input.key,
       query: [['uploads', '']],
       headers,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    const xml = await responseXml(response)
-    return {
-      ...optionalXmlElement(xml, 'UploadId', 'uploadId'),
-      ...optionalXmlElement(xml, 'Bucket', 'bucket'),
-      ...optionalXmlElement(xml, 'Key', 'key'),
+    try {
+      return parseCreateMultipartUpload(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
     }
   }
 
-  async completeMultipartUpload(
+  async #completeMultipartUpload(
     input: S3CompleteMultipartUploadOptions,
   ): Promise<S3CompleteMultipartUploadResult> {
     const body = completeMultipartUploadXml(input.parts)
-    const response = await this.request({
+    const request = await this.request({
       method: 'POST',
       bucket: input.bucket,
       key: input.key,
@@ -672,30 +720,33 @@ export class S3CompatibleClient implements S3Compatible {
       headers: [['content-type', 'application/xml']],
       body,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    const xml = await responseXml(response)
-    return {
-      ...optionalXmlElement(xml, 'Location', 'location'),
-      ...optionalXmlElement(xml, 'Bucket', 'bucket'),
-      ...optionalXmlElement(xml, 'Key', 'key'),
-      ...optionalXmlElement(xml, 'ETag', 'etag'),
+    try {
+      return parseCompleteMultipartUpload(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
     }
   }
 
-  async abortMultipartUpload(input: S3AbortMultipartUploadOptions): Promise<void> {
+  async #abortMultipartUpload(input: S3AbortMultipartUploadOptions): Promise<void> {
     assertSafeQueryValue('uploadId', input.uploadId)
-    await this.request({
+    const request = await this.request({
       method: 'DELETE',
       bucket: input.bucket,
       key: input.key,
       query: [['uploadId', input.uploadId]],
       expectedStatuses: [204],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
+    try {
+      await request.race(cancelResponseBody(request.response))
+    } finally {
+      request.dispose()
+    }
   }
 
-  async listMultipartUploads(
+  async #listMultipartUploads(
     input: S3ListMultipartUploadsOptions,
   ): Promise<S3ListMultipartUploadsResult> {
     const query: QueryParam[] = [['uploads', '']]
@@ -706,17 +757,21 @@ export class S3CompatibleClient implements S3Compatible {
     pushOptionalQuery(query, 'key-marker', input.keyMarker)
     pushOptionalQuery(query, 'upload-id-marker', input.uploadIdMarker)
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'GET',
       bucket: input.bucket,
       query,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    return parseListMultipartUploads(await responseXml(response))
+    try {
+      return parseListMultipartUploads(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
+    }
   }
 
-  async listParts(input: S3ListPartsOptions): Promise<S3ListPartsResult> {
+  async #listParts(input: S3ListPartsOptions): Promise<S3ListPartsResult> {
     assertSafeQueryValue('uploadId', input.uploadId)
     const query: QueryParam[] = [
       ['uploadId', input.uploadId],
@@ -729,18 +784,22 @@ export class S3CompatibleClient implements S3Compatible {
       ])
     }
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'GET',
       bucket: input.bucket,
       key: input.key,
       query,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    return parseListParts(await responseXml(response))
+    try {
+      return parseListParts(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
+    }
   }
 
-  async uploadPartCopy(input: S3UploadPartCopyOptions): Promise<S3UploadPartCopyResult> {
+  async #uploadPartCopy(input: S3UploadPartCopyOptions): Promise<S3UploadPartCopyResult> {
     const partNumber = assertS3PartNumber(input.partNumber)
     assertSafeQueryValue('uploadId', input.uploadId)
     assertSafeHeaderValue('copySource', input.copySource)
@@ -750,7 +809,7 @@ export class S3CompatibleClient implements S3Compatible {
       headers.push(['x-amz-copy-source-range', input.copySourceRange])
     }
 
-    const response = await this.request({
+    const request = await this.request({
       method: 'PUT',
       bucket: input.bucket,
       key: input.key,
@@ -760,297 +819,42 @@ export class S3CompatibleClient implements S3Compatible {
       ],
       headers,
       expectedStatuses: [200],
-      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...requestControls(input),
     })
-    const xml = await responseXml(response)
-    return {
-      ...optionalXmlElement(xml, 'ETag', 'etag'),
-      ...optionalXmlDateElement(xml, 'LastModified', 'lastModified'),
+    try {
+      return parseUploadPartCopy(await request.race(responseXml(request.response)))
+    } finally {
+      request.dispose()
     }
   }
 
-  private async request(input: SignedRequestInput): Promise<Response> {
-    const signed = await this.signRequest(input)
-    const response = await this.fetchImpl(signed.url, {
+  private async request(input: SignedRequestInput): Promise<S3RequestResult> {
+    const requestTimeoutMs = input.requestTimeoutMs ?? this.requestTimeoutMs
+    return await sendSignedS3Request({
+      config: this.config,
+      fetchImpl: this.fetchImpl,
       method: input.method,
-      headers: signed.headers,
-      redirect: 'manual',
+      bucket: input.bucket,
+      expectedStatuses: input.expectedStatuses,
+      ...(this.signingDate !== undefined ? { signingDate: this.signingDate } : {}),
+      ...(input.key !== undefined ? { key: input.key } : {}),
+      ...(input.query !== undefined ? { query: input.query } : {}),
+      ...(input.headers !== undefined ? { headers: input.headers } : {}),
       ...(input.body !== undefined ? { body: input.body } : {}),
       ...(input.signal !== undefined ? { signal: input.signal } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
     })
-
-    if (!input.expectedStatuses.includes(response.status)) {
-      throw await s3ResponseError(response)
-    }
-
-    return response
-  }
-
-  private async signRequest(input: SignedRequestInput): Promise<{
-    readonly url: string
-    readonly headers: Headers
-  }> {
-    const endpoint = parseHttpsEndpoint(this.config.endpoint)
-    assertSafeBucketName(input.bucket)
-    if (input.key !== undefined) assertValidB2FileName(input.key)
-
-    const canonicalUri = buildCanonicalUri(endpoint.pathname, input.bucket, input.key)
-    const canonicalQuery = canonicalQueryString(input.query ?? [])
-    const url = `${endpoint.origin}${canonicalUri}${canonicalQuery ? `?${canonicalQuery}` : ''}`
-    const payloadHash = await s3PayloadHash(input.body)
-    const { shortDate, longDate } = formatSigningDate(new Date())
-    const headers = new Headers()
-    for (const [name, value] of input.headers ?? []) {
-      assertSafeHeaderName(name)
-      assertSafeHeaderValue(name, value)
-      headers.set(name, value)
-    }
-    headers.set('x-amz-content-sha256', payloadHash)
-    headers.set('x-amz-date', longDate)
-
-    const signedHeaders = normalizeSignedHeaders([
-      ['host', canonicalHostHeader(endpoint)],
-      ...[...headers.entries()],
-    ])
-    const signedHeaderNames = signedHeaders.map(([name]) => name).join(';')
-    const canonicalHeaders = signedHeaders.map(([name, value]) => `${name}:${value}\n`).join('')
-    const credentialScope = `${shortDate}/${this.config.region}/${SERVICE}/${TERMINATOR}`
-    const canonicalRequest = [
-      input.method,
-      canonicalUri,
-      canonicalQuery,
-      canonicalHeaders,
-      signedHeaderNames,
-      payloadHash,
-    ].join('\n')
-    const stringToSign = [
-      'AWS4-HMAC-SHA256',
-      longDate,
-      credentialScope,
-      await sha256Hex(canonicalRequest),
-    ].join('\n')
-    const signingKey = await deriveSigningKey(
-      this.config.credentials.secretAccessKey,
-      shortDate,
-      this.config.region,
-    )
-    const signature = hexEncode(await hmacSha256(signingKey, stringToSign))
-    headers.set(
-      'authorization',
-      [
-        'AWS4-HMAC-SHA256',
-        `Credential=${this.config.credentials.accessKeyId}/${credentialScope},`,
-        `SignedHeaders=${signedHeaderNames},`,
-        `Signature=${signature}`,
-      ].join(' '),
-    )
-
-    return { url, headers }
   }
 }
 
-function parseHttpsEndpoint(endpoint: string): URL {
-  let parsed: URL
-  try {
-    parsed = new URL(endpoint)
-  } catch (cause) {
-    throw new TypeError(
-      `S3-compatible requests require a valid endpoint URL; received "${redactUrlForError(
-        endpoint,
-        { invalidUrlLabel: '<invalid S3 endpoint URL>' },
-      )}".`,
-      { cause },
-    )
-  }
-
-  if (parsed.protocol !== 'https:') {
-    throw new TypeError(
-      `S3-compatible requests require an https: endpoint; received "${redactUrlForError(parsed)}".`,
-    )
-  }
-
-  return parsed
-}
-
-function buildCanonicalUri(
-  endpointPath: string,
-  bucketName: string,
-  key: string | undefined,
-): string {
-  const basePath =
-    endpointPath === '' || endpointPath === '/' ? '' : endpointPath.replace(/\/+$/, '')
-  if (key === undefined) return `${basePath}/${awsPercentEncode(bucketName)}`
-  return `${basePath}/${awsPercentEncode(bucketName)}/${encodePath(key)}`
-}
-
-function encodePath(path: string): string {
-  return path.split('/').map(awsPercentEncode).join('/')
-}
-
-function canonicalHostHeader(endpoint: URL): string {
-  const host = endpoint.host
-  if (endpoint.protocol === 'https:' && host.endsWith(':443')) {
-    return host.slice(0, -4)
-  }
-  return host
-}
-
-function canonicalQueryString(query: readonly QueryParam[]): string {
-  return query
-    .map(([name, value]) => [awsPercentEncode(name), awsPercentEncode(value)] as const)
-    .sort(([aName, aValue], [bName, bValue]) => {
-      if (aName < bName) return -1
-      if (aName > bName) return 1
-      if (aValue < bValue) return -1
-      if (aValue > bValue) return 1
-      return 0
-    })
-    .map(([name, value]) => `${name}=${value}`)
-    .join('&')
-}
-
-function awsPercentEncode(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-  )
-}
-
-function normalizeSignedHeaders(headers: readonly SignedHeader[]): SignedHeader[] {
-  const combinedHeaders = new Map<string, string[]>()
-  for (const [name, value] of headers) {
-    const normalizedName = name.toLowerCase()
-    const values = combinedHeaders.get(normalizedName)
-    if (values) {
-      values.push(normalizeHeaderValue(value))
-    } else {
-      combinedHeaders.set(normalizedName, [normalizeHeaderValue(value)])
-    }
-  }
-
-  return [...combinedHeaders.entries()]
-    .map(([name, values]) => [name, values.join(',')] as const)
-    .sort(([a], [b]) => {
-      if (a < b) return -1
-      if (a > b) return 1
-      return 0
-    })
-}
-
-function normalizeHeaderValue(value: string): string {
-  if (hasHttpHeaderControlCharacter(value)) {
-    throw new TypeError('signed header values must not contain control characters.')
-  }
-
-  return value.trim().replace(/ +/g, ' ')
-}
-
-function formatSigningDate(date: Date): {
-  readonly shortDate: string
-  readonly longDate: string
+function requestControls(input: S3CompatibleRequestOptions): {
+  readonly signal?: AbortSignal
+  readonly requestTimeoutMs?: number
 } {
-  const year = String(date.getUTCFullYear()).padStart(4, '0')
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(date.getUTCDate()).padStart(2, '0')
-  const hour = String(date.getUTCHours()).padStart(2, '0')
-  const minute = String(date.getUTCMinutes()).padStart(2, '0')
-  const second = String(date.getUTCSeconds()).padStart(2, '0')
-  const shortDate = `${year}${month}${day}`
   return {
-    shortDate,
-    longDate: `${shortDate}T${hour}${minute}${second}Z`,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    ...(input.requestTimeoutMs !== undefined ? { requestTimeoutMs: input.requestTimeoutMs } : {}),
   }
-}
-
-async function deriveSigningKey(
-  secretAccessKey: string,
-  shortDate: string,
-  region: string,
-): Promise<Uint8Array> {
-  const dateKey = await hmacSha256(`AWS4${secretAccessKey}`, shortDate)
-  const dateRegionKey = await hmacSha256(dateKey, region)
-  const dateRegionServiceKey = await hmacSha256(dateRegionKey, SERVICE)
-  return await hmacSha256(dateRegionServiceKey, TERMINATOR)
-}
-
-async function s3PayloadHash(body: BodyInit | undefined): Promise<string> {
-  if (body === undefined) return await sha256Hex('')
-  if (typeof body === 'string') return await sha256Hex(body)
-  return UNSIGNED_PAYLOAD
-}
-
-function assertSafeHeaderName(name: string): void {
-  if (!HTTP_HEADER_TOKEN.test(name)) {
-    throw new TypeError(`S3 header name "${name}" must be a valid HTTP header token.`)
-  }
-}
-
-function assertSafeHeaderValue(name: string, value: string): void {
-  if (hasHttpHeaderControlCharacter(value)) {
-    throw new TypeError(`${name} must not contain control characters.`)
-  }
-}
-
-function assertSafeQueryValue(name: string, value: string): void {
-  if (hasHttpHeaderControlCharacter(value)) {
-    throw new TypeError(`${name} must not contain control characters.`)
-  }
-}
-
-function assertS3PartNumber(partNumber: number): number {
-  if (!Number.isSafeInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
-    throw new RangeError(`partNumber must be an integer from 1 to 10000; received ${partNumber}.`)
-  }
-  return partNumber
-}
-
-function assertS3PageSize(name: string, value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1 || value > 1000) {
-    throw new RangeError(`${name} must be an integer from 1 to 1000; received ${value}.`)
-  }
-  return value
-}
-
-function assertNonNegativeInteger(name: string, value: number): number {
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new RangeError(`${name} must be a non-negative integer; received ${value}.`)
-  }
-  return value
-}
-
-function assertPositiveInteger(name: string, value: number): number {
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new RangeError(`${name} must be a positive integer; received ${value}.`)
-  }
-  return value
-}
-
-function pushOptionalQuery(query: QueryParam[], name: string, value: string | undefined): void {
-  if (value === undefined) return
-  assertSafeQueryValue(name, value)
-  query.push([name, value])
-}
-
-function metadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
-  const headers: SignedHeader[] = []
-  const seenKeys = new Set<string>()
-  for (const [key, value] of Object.entries(metadata ?? {})) {
-    if (!HTTP_HEADER_TOKEN.test(key)) {
-      throw new TypeError(`metadata key "${key}" must be a non-empty valid HTTP header token.`)
-    }
-    if (typeof value !== 'string') {
-      throw new TypeError(`metadata value for "${key}" must be a string.`)
-    }
-    assertSafeHeaderValue(`metadata value for "${key}"`, value)
-
-    const lowerKey = key.toLowerCase()
-    if (seenKeys.has(lowerKey)) {
-      throw new TypeError(`metadata key "${key}" must not differ only by case.`)
-    }
-    seenKeys.add(lowerKey)
-    headers.push([`x-amz-meta-${lowerKey}`, value])
-  }
-  return headers
 }
 
 function optionalHeader<K extends string>(
@@ -1096,304 +900,70 @@ function responseMetadata(headers: Headers): Record<string, string> {
   return metadata
 }
 
-async function writeBodyToPath(body: ReadableStream<Uint8Array>, path: string): Promise<void> {
-  const [fs, pathModule, stream, streamPromises] = await Promise.all([
-    import('node:fs'),
-    import('node:path'),
-    import('node:stream'),
-    import('node:stream/promises'),
-  ])
-  await fs.promises.mkdir(pathModule.dirname(path), { recursive: true })
-  const nodeReadable = stream.Readable.fromWeb(
-    body as Parameters<typeof stream.Readable.fromWeb>[0],
-  )
-  try {
-    await streamPromises.pipeline(nodeReadable, fs.createWriteStream(path))
-  } catch (err) {
-    await fs.promises.unlink(path).catch(() => undefined)
-    throw err
+function assertS3PartNumber(partNumber: number): number {
+  if (!Number.isSafeInteger(partNumber) || partNumber < 1 || partNumber > 10_000) {
+    throw new RangeError(`partNumber must be an integer from 1 to 10000; received ${partNumber}.`)
   }
+  return partNumber
 }
 
-async function s3ResponseError(response: Response): Promise<S3CompatibleError> {
-  const text = await response.text().catch(() => '')
-  const code = xmlElementText(text, 'Code') ?? `S3Status${response.status}`
-  const message = xmlElementText(text, 'Message') ?? response.statusText
-  const requestId =
-    response.headers.get('x-amz-request-id') ?? xmlElementText(text, 'RequestId') ?? undefined
-  const extendedRequestId = response.headers.get('x-amz-id-2') ?? undefined
-  return new S3CompatibleError({
-    status: response.status,
-    code,
-    message,
-    ...(requestId !== undefined ? { requestId } : {}),
-    ...(extendedRequestId !== undefined ? { extendedRequestId } : {}),
-  })
-}
-
-async function responseXml(response: Response): Promise<string> {
-  const xml = await response.text()
-  throwIfEmbeddedS3Error(xml, response.status)
-  return xml
-}
-
-function throwIfEmbeddedS3Error(xml: string, status: number): void {
-  if (xmlElementRaw(xml, 'Error') === undefined) return
-  const code = xmlElementText(xml, 'Code')
-  if (code === undefined) return
-  throw new S3CompatibleError({
-    status,
-    code,
-    message: xmlElementText(xml, 'Message') ?? code,
-    ...optionalXmlElement(xml, 'RequestId', 'requestId'),
-    ...optionalXmlElement(xml, 'HostId', 'extendedRequestId'),
-  })
-}
-
-function lifecycleXml(rules: readonly S3LifecycleRule[]): string {
-  return [
-    '<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">',
-    ...rules.map(lifecycleRuleXml),
-    '</LifecycleConfiguration>',
-  ].join('')
-}
-
-function lifecycleRuleXml(rule: S3LifecycleRule): string {
-  const prefix = rule.filter?.prefix ?? ''
-  const parts = [
-    '<Rule>',
-    `<ID>${escapeXml(rule.id)}</ID>`,
-    `<Filter><Prefix>${escapeXml(prefix)}</Prefix></Filter>`,
-    `<Status>${escapeXml(rule.status)}</Status>`,
-  ]
-  if (rule.expiration !== undefined) {
-    parts.push('<Expiration>')
-    if (rule.expiration.days !== undefined) {
-      parts.push(`<Days>${assertPositiveInteger('expiration.days', rule.expiration.days)}</Days>`)
-    }
-    if (rule.expiration.expiredObjectDeleteMarker !== undefined) {
-      parts.push(
-        `<ExpiredObjectDeleteMarker>${String(
-          rule.expiration.expiredObjectDeleteMarker,
-        )}</ExpiredObjectDeleteMarker>`,
-      )
-    }
-    parts.push('</Expiration>')
+function assertS3PageSize(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1000) {
+    throw new RangeError(`${name} must be an integer from 1 to 1000; received ${value}.`)
   }
-  if (rule.noncurrentVersionExpiration !== undefined) {
-    parts.push(
-      '<NoncurrentVersionExpiration>',
-      `<NoncurrentDays>${assertPositiveInteger(
-        'noncurrentVersionExpiration.noncurrentDays',
-        rule.noncurrentVersionExpiration.noncurrentDays,
-      )}</NoncurrentDays>`,
-      '</NoncurrentVersionExpiration>',
-    )
-  }
-  if (rule.abortIncompleteMultipartUpload !== undefined) {
-    parts.push(
-      '<AbortIncompleteMultipartUpload>',
-      `<DaysAfterInitiation>${assertPositiveInteger(
-        'abortIncompleteMultipartUpload.daysAfterInitiation',
-        rule.abortIncompleteMultipartUpload.daysAfterInitiation,
-      )}</DaysAfterInitiation>`,
-      '</AbortIncompleteMultipartUpload>',
-    )
-  }
-  parts.push('</Rule>')
-  return parts.join('')
-}
-
-function completeMultipartUploadXml(parts: readonly S3CompletedMultipartPart[]): string {
-  let previousPartNumber = 0
-  const partXml = parts.map((part) => {
-    const partNumber = assertS3PartNumber(part.partNumber)
-    if (partNumber <= previousPartNumber) {
-      throw new RangeError('multipart completion parts must be in ascending partNumber order.')
-    }
-    previousPartNumber = partNumber
-    assertSafeHeaderValue('etag', part.etag)
-    return [
-      '<Part>',
-      `<PartNumber>${partNumber}</PartNumber>`,
-      `<ETag>${escapeXml(part.etag)}</ETag>`,
-      '</Part>',
-    ].join('')
-  })
-
-  return ['<CompleteMultipartUpload>', ...partXml, '</CompleteMultipartUpload>'].join('')
-}
-
-function parseListObjectsV2(xml: string): S3ListObjectsV2Result {
-  return {
-    objects: xmlElements(xml, 'Contents').map((entry) => ({
-      ...optionalInnerXmlElement(entry, 'Key', 'key'),
-      ...optionalInnerXmlDateElement(entry, 'LastModified', 'lastModified'),
-      ...optionalInnerXmlElement(entry, 'ETag', 'etag'),
-      ...optionalInnerXmlNumberElement(entry, 'Size', 'size'),
-      ...optionalInnerXmlElement(entry, 'StorageClass', 'storageClass'),
-    })),
-    commonPrefixes: xmlElements(xml, 'CommonPrefixes').flatMap((entry) => {
-      const prefix = xmlElementText(entry, 'Prefix')
-      return prefix === undefined ? [] : [prefix]
-    }),
-    isTruncated: xmlElementText(xml, 'IsTruncated') === 'true',
-    ...optionalXmlElement(xml, 'NextContinuationToken', 'nextContinuationToken'),
-    ...optionalXmlNumberElement(xml, 'KeyCount', 'keyCount'),
-  }
-}
-
-function parseListMultipartUploads(xml: string): S3ListMultipartUploadsResult {
-  return {
-    uploads: xmlElements(xml, 'Upload').map((entry) => ({
-      ...optionalInnerXmlElement(entry, 'Key', 'key'),
-      ...optionalInnerXmlElement(entry, 'UploadId', 'uploadId'),
-      ...optionalInnerXmlDateElement(entry, 'Initiated', 'initiated'),
-      ...optionalInnerXmlElement(entry, 'StorageClass', 'storageClass'),
-      ...optionalOwner(entry),
-    })),
-    commonPrefixes: xmlElements(xml, 'CommonPrefixes').flatMap((entry) => {
-      const prefix = xmlElementText(entry, 'Prefix')
-      return prefix === undefined ? [] : [prefix]
-    }),
-    isTruncated: xmlElementText(xml, 'IsTruncated') === 'true',
-    ...optionalXmlElement(xml, 'NextKeyMarker', 'nextKeyMarker'),
-    ...optionalXmlElement(xml, 'NextUploadIdMarker', 'nextUploadIdMarker'),
-  }
-}
-
-function parseListParts(xml: string): S3ListPartsResult {
-  return {
-    parts: xmlElements(xml, 'Part').map((entry) => ({
-      ...optionalInnerXmlNumberElement(entry, 'PartNumber', 'partNumber'),
-      ...optionalInnerXmlDateElement(entry, 'LastModified', 'lastModified'),
-      ...optionalInnerXmlElement(entry, 'ETag', 'etag'),
-      ...optionalInnerXmlNumberElement(entry, 'Size', 'size'),
-    })),
-    isTruncated: xmlElementText(xml, 'IsTruncated') === 'true',
-    ...optionalXmlElement(xml, 'NextPartNumberMarker', 'nextPartNumberMarker'),
-  }
-}
-
-function optionalOwner(xml: string): { readonly owner?: S3Owner } {
-  const ownerXml = xmlElementRaw(xml, 'Owner')
-  if (ownerXml === undefined) return {}
-  const owner = {
-    ...optionalInnerXmlElement(ownerXml, 'ID', 'id'),
-    ...optionalInnerXmlElement(ownerXml, 'DisplayName', 'displayName'),
-  }
-  return Object.keys(owner).length === 0 ? {} : { owner }
-}
-
-function optionalXmlElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: string } {
-  return optionalInnerXmlElement(xml, element, key)
-}
-
-function optionalInnerXmlElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: string } {
-  const value = xmlElementText(xml, element)
-  return value === undefined ? {} : ({ [key]: value } as { readonly [P in K]?: string })
-}
-
-function optionalXmlNumberElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: number } {
-  return optionalInnerXmlNumberElement(xml, element, key)
-}
-
-function optionalInnerXmlNumberElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: number } {
-  const value = xmlElementText(xml, element)
-  if (value === undefined) return {}
-  const numberValue = Number(value)
-  return Number.isFinite(numberValue)
-    ? ({ [key]: numberValue } as { readonly [P in K]?: number })
-    : {}
-}
-
-function optionalXmlDateElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: Date } {
-  return optionalInnerXmlDateElement(xml, element, key)
-}
-
-function optionalInnerXmlDateElement<K extends string>(
-  xml: string,
-  element: string,
-  key: K,
-): { readonly [P in K]?: Date } {
-  const value = xmlElementText(xml, element)
-  if (value === undefined) return {}
-  const date = new Date(value)
-  return Number.isFinite(date.getTime()) ? ({ [key]: date } as { readonly [P in K]?: Date }) : {}
-}
-
-function xmlElements(xml: string, element: string): string[] {
-  const pattern = elementPattern(element, 'g')
-  const matches: string[] = []
-  for (const match of xml.matchAll(pattern)) {
-    const value = match[1]
-    if (value !== undefined) matches.push(value)
-  }
-  return matches
-}
-
-function xmlElementRaw(xml: string, element: string): string | undefined {
-  return elementPattern(element).exec(xml)?.[1]
-}
-
-function xmlElementText(xml: string, element: string): string | undefined {
-  const raw = xmlElementRaw(xml, element)
-  if (raw === undefined) return undefined
-  return decodeXml(raw.replace(/<[^>]*>/g, ''))
-}
-
-function elementPattern(element: string, flags = ''): RegExp {
-  const tag = escapeRegExp(element)
-  return new RegExp(
-    `<(?:[^:>/\\s]+:)?${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[^:>/\\s]+:)?${tag}>`,
-    flags,
-  )
-}
-
-function decodeXml(value: string): string {
   return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
-    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) =>
-      String.fromCodePoint(Number.parseInt(hex, 16)),
-    )
-    .replace(/&#([0-9]+);/g, (_match, decimal: string) =>
-      String.fromCodePoint(Number.parseInt(decimal, 10)),
-    )
 }
 
-function escapeXml(value: string): string {
+function assertNonNegativeInteger(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative integer; received ${value}.`)
+  }
   return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function assertPositiveInteger(name: string, value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new RangeError(`${name} must be a positive integer; received ${value}.`)
+  }
+  return value
+}
+
+function pushOptionalQuery(query: QueryParam[], name: string, value: string | undefined): void {
+  if (value === undefined) return
+  assertSafeQueryValue(name, value)
+  query.push([name, value])
+}
+
+function metadataHeaders(metadata: Record<string, string> | undefined): SignedHeader[] {
+  const headers: SignedHeader[] = []
+  const seenKeys = new Set<string>()
+  for (const [key, value] of Object.entries(metadata ?? {})) {
+    assertSafeHeaderName(key)
+    if (typeof value !== 'string') {
+      throw new TypeError(`metadata value for "${key}" must be a string.`)
+    }
+    assertSafeHeaderValue(`metadata value for "${key}"`, value)
+
+    const lowerKey = key.toLowerCase()
+    if (seenKeys.has(lowerKey)) {
+      throw new TypeError(`metadata key "${key}" must not differ only by case.`)
+    }
+    seenKeys.add(lowerKey)
+    headers.push([`x-amz-meta-${lowerKey}`, value])
+  }
+  return headers
+}
+
+function assertS3Acl(value: unknown): 'private' | 'public-read' {
+  if (value !== 'private' && value !== 'public-read') {
+    throw new TypeError('acl must be "private" or "public-read".')
+  }
+  return value
+}
+
+function assertServerSideEncryption(value: unknown): 'AES256' {
+  if (value !== 'AES256') {
+    throw new TypeError('serverSideEncryption must be "AES256".')
+  }
+  return value
 }
