@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **First-party S3-only helper boundary.** `@backblaze-labs/b2-sdk/s3` now exports `createS3CompatibleClient()` for the reviewed S3-compatible operations needed by downstream MCP tooling: bucket reachability and location checks, ranged/saved GetObject reads, ListObjectsV2, bucket lifecycle updates, multipart create/complete/abort/list-parts/list-uploads/upload-part-copy, and presigned UploadPart URLs. Every network helper accepts an optional `AbortSignal`, and the README documents retry, idempotency, and presigned URL secret-handling requirements. Closes #154.
+
 ### Fixed
 
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo

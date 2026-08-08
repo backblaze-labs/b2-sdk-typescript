@@ -211,6 +211,10 @@ const publicExportProbes = [
     subpath: './s3',
     checks: [
       ["typeof entry.createS3ClientConfig === 'function'", 'createS3ClientConfig export missing'],
+      [
+        "typeof entry.createS3CompatibleClient === 'function'",
+        'createS3CompatibleClient export missing',
+      ],
       ["typeof entry.presignS3GetObjectUrl === 'function'", 'presignS3GetObjectUrl export missing'],
       ["typeof entry.presignS3PutObjectUrl === 'function'", 'presignS3PutObjectUrl export missing'],
       ["typeof entry.trustedUnsafeS3PresignOptIn === 'object'", 'trusted S3 opt-in token missing'],

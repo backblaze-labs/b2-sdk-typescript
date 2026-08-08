@@ -14,6 +14,7 @@ import { hostMatchesAllowedSuffix } from '../http/url-guard.ts'
 import { redactUrlForError } from '../internal/url-redaction.ts'
 import { encodeFileName } from '../raw/encoding.ts'
 import { hasHttpHeaderControlCharacter } from '../util/http.ts'
+import { S3CompatibleClient, type S3CompatibleFetch } from './client.ts'
 import {
   presignS3Request,
   type QueryParam,
@@ -21,6 +22,8 @@ import {
   type SigV4PresignRequestOptions,
 } from './sigv4.ts'
 import { assertNativeDownloadFileName, assertSafeBucketName } from './validation.ts'
+
+export * from './client.ts'
 
 const HTTP_HEADER_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const HTTP_MEDIA_TYPE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
@@ -117,6 +120,12 @@ export interface S3ClientConfig {
   }
   /** Always `true` for B2, which requires path-style bucket addressing. */
   readonly forcePathStyle: boolean
+}
+
+/** Options for creating a first-party B2 S3-compatible helper client. */
+export interface CreateS3CompatibleClientOptions extends B2S3Config {
+  /** Optional fetch implementation for controlled runtimes and tests. */
+  readonly fetch?: S3CompatibleFetch
 }
 
 /** Common options for S3-compatible presigned object URLs. */
@@ -276,6 +285,26 @@ export function createS3ClientConfig(config: B2S3Config): S3ClientConfig {
     },
     forcePathStyle: true,
   }
+}
+
+/**
+ * Creates a first-party helper client for the S3-compatible operations that
+ * are material to B2 SDK consumers but are not general native-B2 features.
+ *
+ * Each network method accepts an optional `signal` and performs exactly one
+ * signed HTTP request; callers own retry policy and idempotency decisions.
+ *
+ * @param options - B2 auth state, S3 credentials, optional region, and optional fetch implementation.
+ *
+ * @returns A typed S3-compatible helper client.
+ */
+export function createS3CompatibleClient(
+  options: CreateS3CompatibleClientOptions,
+): S3CompatibleClient {
+  const { fetch: fetchImpl, ...config } = options
+  return new S3CompatibleClient(createS3ClientConfig(config), {
+    ...(fetchImpl !== undefined ? { fetch: fetchImpl } : {}),
+  })
 }
 
 /**
