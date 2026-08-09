@@ -4,13 +4,13 @@ Status: Accepted
 
 Date: 2026-08-08
 
-Issue: #160, <https://github.com/backblaze-labs/b2-sdk-typescript/issues/160>
+Issue: [#160](https://github.com/backblaze-labs/b2-sdk-typescript/issues/160)
 
 ## Context
 
 The SDK is currently one zero-dependency isomorphic package with subpath exports for storage-facing modules and shared infrastructure such as `HttpTransport`, `RetryTransport`, `UrlGuard`, the `B2Error` hierarchy, encoding helpers, streams, and `B2Simulator`.
 
-Storage authorization types are intentionally tied to `apiInfo.storageApi` through `AuthorizeAccountResponse` and `AccountInfo`. The simulator also has one storage-oriented issued-token and endpoint-capability model. Partner API and Computer Backup support need an architecture decision before those surfaces add public types and runtime behavior.
+Storage authorization types are intentionally tied to `apiInfo.storageApi` through `AuthorizeAccountResponse` and `AccountInfo`. The simulator also has one storage-oriented issued token and endpoint-capability model. Partner API and Computer Backup support need an architecture decision before those surfaces add public types and runtime behavior.
 
 ## Decision
 
@@ -29,7 +29,7 @@ Partner and backup URL guarding must derive allowed endpoint hosts from the part
 
 The backup module reuses the partner auth store type because it uses the same partner token, but it targets `backupApiUrl` as its base URL. The backup module must not be implemented as a namespace inside `/partner`; `/partner` and `/backup` are separate public subpaths because the wire model exposes separate `groupsApiUrl` and `backupApiUrl` endpoints and the products have distinct API surfaces.
 
-## Open questions
+## Resolved questions
 
 1. Partner authorize path version: use `/b2api/v3/b2_authorize_account` for `authorizePartner` initially because the Partner API documentation shows v3. Keep the version localized to the partner authorizer so it can move to v4 later if Backblaze publishes or ratifies v4 partner authorization behavior.
 2. Shared storage and partner authorization: keep storage `authorize()` and partner `authorizePartner()` separate. Even though both call `b2_authorize_account`, their response shapes, endpoint roots, capability assumptions, and account-info stores are different enough that sharing one token store would blur product boundaries and weaken existing storage type guarantees.
