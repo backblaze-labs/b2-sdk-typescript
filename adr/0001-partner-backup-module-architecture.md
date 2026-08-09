@@ -27,7 +27,7 @@ Model Partner API authorization as a distinct `authorizePartner` flow. It uses t
 
 Partner and backup URL guarding must derive allowed endpoint hosts from the partner authorization response, including `groupsApiUrl` and `backupApiUrl` when present. This must preserve custom-realm behavior without falling back to storage-only `apiInfo.storageApi` suffix derivation, and rejected-host diagnostics should make the partner or backup endpoint root clear. Tests should cover accepted partner and backup endpoint hosts, custom realms, and rejected substituted hosts.
 
-The backup module reuses the partner auth store type because it uses the same partner token, but it targets `backupApiUrl` as its base URL. The backup module must not be implemented as a namespace inside `/partner`; `/partner` and `/backup` are separate public subpaths because the wire model exposes separate `groupsApiUrl` and `backupApiUrl` endpoints and the products have distinct API surfaces.
+The backup module reuses the partner auth store type because it uses the same partner token, but it targets `backupApiUrl` as its base URL. `authorizePartner` and `PartnerAccountInfo` are owned and exported by `/partner`; `/backup` accepts the `/partner` export and must not define or re-export a separate backup auth store or authorizer. The backup module must not be implemented as a namespace inside `/partner`; `/partner` and `/backup` are separate public subpaths because the wire model exposes separate `groupsApiUrl` and `backupApiUrl` endpoints and the products have distinct API surfaces.
 
 ## Resolved questions
 
@@ -43,7 +43,7 @@ Follow-on work should include:
 
 - adding package exports for `/partner` and `/backup`
 - implementing `PartnerAccountInfo`, `authorizePartner`, and partner response types
-- wiring `/backup` clients to use `PartnerAccountInfo` and `backupApiUrl`
+- wiring `/backup` clients to accept `/partner`'s `PartnerAccountInfo` and use `backupApiUrl`
 - defining endpoint-specific retry policy before automatic replay is enabled
 - deriving partner and backup URL guards from `groupsApiUrl` and `backupApiUrl`
 - extending simulator token and capability modeling for partner and backup endpoints without regressing storage strict-auth behavior

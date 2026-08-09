@@ -21,7 +21,7 @@ Use the same section order as `0001-partner-backup-module-architecture.md`:
 - `Issue`
 - `Context`
 - `Decision`
-- `Open questions`
+- `Resolved questions`
 - `Consequences`
 
 When an ADR creates follow-on implementation work, link the issue that requested the decision and list the known follow-on issues so implementers can find the recorded context.
