@@ -19,9 +19,13 @@ Add Partner API and Computer Backup as new subpath exports in the existing packa
 - `@backblaze-labs/b2-sdk/partner`
 - `@backblaze-labs/b2-sdk/backup`
 
-Do not create a second npm package, and do not add partner or backup methods to the storage `RawClient` or `B2Client`. Keeping one package preserves the current zero-dependency, isomorphic distribution model and lets the new surfaces reuse shared transports, retry behavior, URL guarding, errors, encoding, streams, and simulator utilities without creating duplicated infrastructure.
+Do not create a second npm package, and do not add partner or backup methods to the storage `RawClient` or `B2Client`. Keeping one package preserves the current zero-dependency, isomorphic distribution model and lets the new surfaces reuse shared transports, retry plumbing, URL guarding, errors, encoding, streams, and simulator utilities without creating duplicated infrastructure.
+
+Partner and backup implementations must define endpoint-specific retry and idempotency policy before enabling automatic retries for each operation. The safe default is to avoid replaying non-idempotent mutations after network errors, request timeouts, transient HTTP failures, or lost or unreadable responses. A mutating endpoint may opt into automatic replay only when it has an idempotency key, is documented as server-side replay-safe, or is otherwise proven idempotent for the SDK call shape. Simulator-backed tests must cover lost-response and network-error cases for any mutating partner or backup endpoint that enables automatic retries.
 
 Model Partner API authorization as a distinct `authorizePartner` flow. It uses the Master Application Key HTTP Basic exchange against `b2_authorize_account`, but stores the result in a separate `PartnerAccountInfo` abstraction instead of the storage `AccountInfo`. The partner account state must represent partner response fields such as `groupsApiUrl` and `backupApiUrl` without weakening the existing storage types that are hard-bound to `apiInfo.storageApi`.
+
+Partner and backup URL guarding must derive allowed endpoint hosts from the partner authorization response, including `groupsApiUrl` and `backupApiUrl` when present. This must preserve custom-realm behavior without falling back to storage-only `apiInfo.storageApi` suffix derivation, and rejected-host diagnostics should make the partner or backup endpoint root clear. Tests should cover accepted partner and backup endpoint hosts, custom realms, and rejected substituted hosts.
 
 The backup module reuses the partner auth store type because it uses the same partner token, but it targets `backupApiUrl` as its base URL. The backup module must not be implemented as a namespace inside `/partner`; `/partner` and `/backup` are separate public subpaths because the wire model exposes separate `groupsApiUrl` and `backupApiUrl` endpoints and the products have distinct API surfaces.
 
@@ -40,6 +44,8 @@ Follow-on work should include:
 - adding package exports for `/partner` and `/backup`
 - implementing `PartnerAccountInfo`, `authorizePartner`, and partner response types
 - wiring `/backup` clients to use `PartnerAccountInfo` and `backupApiUrl`
+- defining endpoint-specific retry policy before automatic replay is enabled
+- deriving partner and backup URL guards from `groupsApiUrl` and `backupApiUrl`
 - extending simulator token and capability modeling for partner and backup endpoints without regressing storage strict-auth behavior
 
 This decision intentionally records architecture only. It does not add public runtime exports or placeholder modules before the product API shapes are implemented.
