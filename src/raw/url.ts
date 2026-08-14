@@ -15,6 +15,29 @@ export interface B2UrlOptions {
   readonly endpoint: string
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1
+  }
+
+  return end === value.length ? value : value.slice(0, end)
+}
+
+function trimSlashes(value: string): string {
+  let start = 0
+  let end = value.length
+
+  while (start < end && value.charCodeAt(start) === 47) {
+    start += 1
+  }
+  while (end > start && value.charCodeAt(end - 1) === 47) {
+    end -= 1
+  }
+
+  return start === 0 && end === value.length ? value : value.slice(start, end)
+}
+
 /**
  * Builds a B2 API endpoint URL from a base URL, path prefix, optional version,
  * and endpoint name.
@@ -28,10 +51,10 @@ export function b2Url(
   baseUrl: string,
   { prefix = 'b2api', version, endpoint }: B2UrlOptions,
 ): string {
-  const base = baseUrl.replace(/\/+$/, '')
+  const base = trimTrailingSlashes(baseUrl)
   const path = [prefix, version, endpoint]
     .filter((segment): segment is string => segment !== undefined)
-    .map((segment) => segment.replace(/^\/+|\/+$/g, ''))
+    .map(trimSlashes)
     .filter((segment) => segment.length > 0)
     .join('/')
 
