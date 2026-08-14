@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { md5Base64Sync } from './md5.ts'
+import { md5Base64, md5Base64Sync, md5Base64WithCryptoLoader } from './md5.ts'
 
 const originalGetBuiltinModuleDescriptor = Object.getOwnPropertyDescriptor(
   process,
@@ -26,7 +26,7 @@ function restoreGlobals() {
   restoreProperty(globalThis, 'Buffer', originalBufferDescriptor)
 }
 
-describe('md5Base64Sync', () => {
+describe('MD5 base64 helpers', () => {
   afterEach(() => {
     restoreGlobals()
   })
@@ -35,6 +35,12 @@ describe('md5Base64Sync', () => {
     const bytes = new Uint8Array(32).fill(0x61)
 
     expect(md5Base64Sync(bytes)).toBe(createHash('md5').update(bytes).digest('base64'))
+  })
+
+  it('matches Node crypto base64 MD5 output asynchronously', async () => {
+    const bytes = new Uint8Array(32).fill(0x61)
+
+    await expect(md5Base64(bytes)).resolves.toBe(createHash('md5').update(bytes).digest('base64'))
   })
 
   it('falls back to pure JS when sync Node crypto is unavailable', () => {
@@ -52,5 +58,11 @@ describe('md5Base64Sync', () => {
     expect(md5Base64Sync(new Uint8Array(32).fill(0x61))).toBe('Xsqb0+sHwAbNQ65I395/0w==')
     expect(md5Base64Sync(new Uint8Array(32))).toBe('cLyPS3KoaSFGi/joRB3OUQ==')
     expect(md5Base64Sync(new Uint8Array(32).fill(0xff))).toBe('DX3EJmSXEA5IMfWzG2snTw==')
+  })
+
+  it('falls back when dynamic Node crypto import has no createHash function', async () => {
+    await expect(
+      md5Base64WithCryptoLoader(new Uint8Array(32).fill(0x61), async () => ({})),
+    ).resolves.toBe('Xsqb0+sHwAbNQ65I395/0w==')
   })
 })

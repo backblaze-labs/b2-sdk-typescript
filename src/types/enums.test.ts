@@ -4,12 +4,16 @@ import {
   BucketType,
   Capability,
   CorsOperation,
+  computerId,
   EncryptionAlgorithm,
   EncryptionMode,
   EventType,
   FileAction,
+  groupId,
   LegalHoldValue,
   MetadataDirective,
+  PartnerCapability,
+  Region,
   RetentionMode,
 } from './index.ts'
 
@@ -133,6 +137,14 @@ describe('const-object enums', () => {
       'bypassGovernance',
     ])
   })
+
+  it('PartnerCapability covers every PartnerCapability value', () => {
+    expectEnumMatches(PartnerCapability, ['all'])
+  })
+
+  it('Region covers every Region value', () => {
+    expectEnumMatches(Region, ['us-east', 'us-west', 'ca-east', 'eu-central'])
+  })
 })
 
 describe('enum value typing (compile-time)', () => {
@@ -160,5 +172,22 @@ describe('enum value typing (compile-time)', () => {
   it('EventType.ObjectCreatedAll matches the wildcard literal', () => {
     const v: EventType = EventType.ObjectCreatedAll
     expect(v).toBe('b2:ObjectCreated:*')
+  })
+
+  it('PartnerCapability.All is assignable to PartnerCapability', () => {
+    const v: PartnerCapability = PartnerCapability.All
+    expect(v).toBe('all')
+  })
+
+  it('Region.UsWest is assignable to Region', () => {
+    const v: Region = Region.UsWest
+    expect(v).toBe('us-west')
+  })
+})
+
+describe('branded ID factories', () => {
+  it('re-exports partner and backup ID factories from the type barrel', () => {
+    expect(groupId('254')).toBe('254')
+    expect(computerId('deb0b1bcd412a7759709081c')).toBe('deb0b1bcd412a7759709081c')
   })
 })

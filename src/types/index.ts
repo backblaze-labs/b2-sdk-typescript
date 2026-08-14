@@ -17,6 +17,15 @@ export type {
 // module declares them together via the const-object enum pattern.
 export { Capability } from './auth.ts'
 export type {
+  ComputerBackup,
+  DeleteComputerRequest,
+  DeleteComputerResponse,
+  DeleteComputerResult,
+  ListComputersRequest,
+  ListComputersResponse,
+  ListComputersResult,
+} from './backup.ts'
+export type {
   BucketInfo,
   BucketRetentionPolicy,
   CorsRule,
@@ -81,13 +90,25 @@ export type {
   Brand,
   BrandTag,
   BucketId,
+  ComputerId,
   FileId,
+  GroupId,
   KeyId,
   LargeFileId,
+  PartnerToken,
   UploadAuthToken,
   UploadUrl,
 } from './ids.ts'
-export { accountId, applicationKeyId, bucketId, fileId, keyId, largeFileId } from './ids.ts'
+export {
+  accountId,
+  applicationKeyId,
+  bucketId,
+  computerId,
+  fileId,
+  groupId,
+  keyId,
+  largeFileId,
+} from './ids.ts'
 export type {
   ApplicationKey,
   CreateKeyBucketScope,
@@ -117,6 +138,37 @@ export type {
 } from './notifications.ts'
 // `EventType` is forwarded as both type and value.
 export { EventType } from './notifications.ts'
+export type {
+  CreateGroupMemberRequest,
+  CreateGroupMemberResponse,
+  CreateGroupMemberResult,
+  EjectGroupMemberRequest,
+  EjectGroupMemberResponse,
+  EjectGroupMemberResult,
+  ListedGroupMember,
+  ListGroupMembersRequest,
+  ListGroupMembersResponse,
+  ListGroupMembersResult,
+  ListGroupsRequest,
+  ListGroupsResponse,
+  ListGroupsResult,
+  PartnerAccountStandingDetails,
+  PartnerApiInfo,
+  PartnerAuthorizeResponse,
+  PartnerB2Stats,
+  PartnerBackupApiInfo,
+  PartnerGroup,
+  PartnerGroupMember,
+  PartnerGroupStats,
+  PartnerGroupsApiInfo,
+  PartnerStorageApiInfo,
+  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
+  ReserveTrialCreateAccountResponse,
+  ReserveTrialCreateAccountResult,
+} from './partner.ts'
+// `PartnerCapability` and `Region` are forwarded as both type and value.
+export { PartnerCapability, Region } from './partner.ts'
 export type {
   ReplicationConfiguration,
   ReplicationDestination,

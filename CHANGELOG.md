@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Partner API and Computer Backup type layer.** Public exports now include
+  Partner API and Computer Backup request/response types, branded
+  `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
+  The response types document the Partner and Backup array-shaped wire
+  responses and preserve numeric-looking group IDs and B2 statistics counts as
+  strings.
+
 ### Fixed
 
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo
