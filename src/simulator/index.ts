@@ -38,10 +38,13 @@ import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
 
-function apiVersionFromPath(path: string): string {
+function apiPathParts(path: string): { endpoint: string; apiVersion: string } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
-  return candidate !== undefined && /^v\d+$/.test(candidate) ? candidate : 'v3'
+  return {
+    endpoint: segments.at(-1) ?? '',
+    apiVersion: candidate !== undefined && /^v\d+$/.test(candidate) ? candidate : 'v3',
+  }
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -1882,8 +1885,7 @@ export class B2Simulator {
     headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
-    const endpoint = path.split('/').pop() ?? ''
-    const apiVersion = apiVersionFromPath(path)
+    const { endpoint, apiVersion } = apiPathParts(path)
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get

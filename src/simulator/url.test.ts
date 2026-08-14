@@ -16,6 +16,20 @@ describe('B2Simulator API URL routing', () => {
     await expect(response.json()).resolves.toEqual({ buckets: [] })
   })
 
+  it('routes backup paths with trailing slashes by their endpoint segment', async () => {
+    const sim = new B2Simulator()
+
+    const response = await sim.transport().send({
+      url: 'http://localhost:0/api/backup/v1/b2_list_buckets/',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: 'account' }),
+    })
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({ buckets: [] })
+  })
+
   it('reads the API version from non-b2api paths', async () => {
     const sim = new B2Simulator()
 

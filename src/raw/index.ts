@@ -70,8 +70,6 @@ import { normalizeFileVersionListSha1, normalizeFileVersionSha1 } from '../util/
 import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
 import { type B2UrlOptions, b2Url } from './url.ts'
 
-export { type B2UrlOptions, b2Url } from './url.ts'
-
 type B2EndpointUrlOptions = Omit<B2UrlOptions, 'endpoint'>
 
 const B2_NATIVE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }

@@ -3,7 +3,8 @@ import { B2RealmConfigurationError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
-import { b2Url, RawClient } from './index.ts'
+import { RawClient } from './index.ts'
+import { b2Url } from './url.ts'
 
 describe('b2Url', () => {
   it('builds versioned b2api and backup API paths', () => {
