@@ -19,14 +19,14 @@ export interface PartnerAccountInfo {
 
   /** Current Partner/Backup authorization token. */
   getPartnerToken(): PartnerToken
-  /** Base URL for Partner API calls. */
-  getGroupsApiUrl(): string
+  /** Base URL for Partner API calls, or null when the suite is unavailable. */
+  getGroupsApiUrl(): string | null
   /** Base URL for Computer Backup API calls, or null when the suite is unavailable. */
   getBackupApiUrl(): string | null
   /** The authorized partner administrator account ID. */
   getAccountId(): AccountId
-  /** Capabilities granted for Partner API calls. */
-  getGroupsCapabilities(): readonly PartnerCapability[]
+  /** Capabilities granted for Partner API calls, or null when the suite is unavailable. */
+  getGroupsCapabilities(): readonly PartnerCapability[] | null
   /** Capabilities granted for Computer Backup API calls, or null when the suite is unavailable. */
   getBackupCapabilities(): readonly PartnerCapability[] | null
 }

@@ -2,7 +2,111 @@ import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type { AccountId, PartnerToken } from '../types/ids.ts'
 import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
-import { PARTNER_TOKEN_REDACTED, redactPartnerAuthorizeResponse } from './redaction.ts'
+import {
+  PARTNER_TOKEN_REDACTED,
+  partnerAuthorizeResponseToRedactedJson,
+  type RedactedPartnerAuthorizeResponseJson,
+  redactPartnerAuthorizeResponse,
+} from './redaction.ts'
+
+function sameCapabilities(
+  left: readonly PartnerCapability[] | undefined,
+  right: readonly PartnerCapability[],
+): boolean {
+  return (
+    left !== undefined && left.length === right.length && left.every((cap, i) => cap === right[i])
+  )
+}
+
+function validatePartnerAuthShape(auth: PartnerAuthorizeResponse): void {
+  const { groupsApi, backupApi } = auth.apiInfo
+  if (groupsApi === undefined && backupApi === undefined) {
+    throw new B2PartnerAuthorizationError(
+      'Partner authorization must include apiInfo.groupsApi or apiInfo.backupApi',
+    )
+  }
+
+  if (groupsApi === undefined) {
+    if (auth.groupsApiUrl !== undefined || auth.groupsCapabilities !== undefined) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization groups convenience fields require apiInfo.groupsApi',
+      )
+    }
+  } else {
+    if (auth.groupsApiUrl !== undefined && auth.groupsApiUrl !== groupsApi.groupsApiUrl) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization groupsApiUrl does not match apiInfo.groupsApi.groupsApiUrl',
+      )
+    }
+    if (
+      auth.groupsCapabilities !== undefined &&
+      !sameCapabilities(auth.groupsCapabilities, groupsApi.capabilities)
+    ) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization groupsCapabilities do not match apiInfo.groupsApi.capabilities',
+      )
+    }
+  }
+
+  if (backupApi === undefined) {
+    if (auth.backupApiUrl !== undefined || auth.backupCapabilities !== undefined) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization backup convenience fields require apiInfo.backupApi',
+      )
+    }
+  } else {
+    if (auth.backupApiUrl !== undefined && auth.backupApiUrl !== backupApi.backupApiUrl) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization backupApiUrl does not match apiInfo.backupApi.backupApiUrl',
+      )
+    }
+    if (
+      auth.backupCapabilities !== undefined &&
+      !sameCapabilities(auth.backupCapabilities, backupApi.capabilities)
+    ) {
+      throw new B2PartnerAuthorizationError(
+        'Partner authorization backupCapabilities do not match apiInfo.backupApi.capabilities',
+      )
+    }
+  }
+}
+
+function clonePartnerAuth(auth: PartnerAuthorizeResponse): PartnerAuthorizeResponse {
+  validatePartnerAuthShape(auth)
+
+  const groupsApi =
+    auth.apiInfo.groupsApi === undefined
+      ? undefined
+      : {
+          ...auth.apiInfo.groupsApi,
+          capabilities: [...auth.apiInfo.groupsApi.capabilities],
+          infoType: 'groupsApi' as const,
+        }
+  const backupApi =
+    auth.apiInfo.backupApi === undefined
+      ? undefined
+      : {
+          ...auth.apiInfo.backupApi,
+          capabilities: [...auth.apiInfo.backupApi.capabilities],
+          infoType: 'backupApi' as const,
+        }
+  const cloned: PartnerAuthorizeResponse = {
+    accountId: auth.accountId,
+    authorizationToken: auth.authorizationToken,
+    apiInfo: {
+      ...(auth.apiInfo.storageApi !== undefined ? { storageApi: auth.apiInfo.storageApi } : {}),
+      ...(groupsApi !== undefined ? { groupsApi } : {}),
+      ...(backupApi !== undefined ? { backupApi } : {}),
+    },
+    ...(groupsApi !== undefined ? { groupsApiUrl: groupsApi.groupsApiUrl } : {}),
+    ...(backupApi !== undefined ? { backupApiUrl: backupApi.backupApiUrl } : {}),
+    ...(groupsApi !== undefined ? { groupsCapabilities: groupsApi.capabilities } : {}),
+    ...(backupApi !== undefined ? { backupCapabilities: backupApi.capabilities } : {}),
+    applicationKeyExpirationTimestamp: auth.applicationKeyExpirationTimestamp,
+  }
+
+  return redactPartnerAuthorizeResponse(cloned)
+}
 
 /**
  * In-memory implementation of {@link PartnerAccountInfo}.
@@ -18,7 +122,7 @@ export class InMemoryPartnerAccountInfo implements PartnerAccountInfo {
    * @param auth - The Partner authorize response to store.
    */
   setAuth(auth: PartnerAuthorizeResponse): void {
-    this.#auth = redactPartnerAuthorizeResponse(auth)
+    this.#auth = clonePartnerAuth(auth)
   }
 
   /**
@@ -53,8 +157,8 @@ export class InMemoryPartnerAccountInfo implements PartnerAccountInfo {
    *
    * @throws B2PartnerAuthorizationError if not yet authorized.
    */
-  getGroupsApiUrl(): string {
-    return this.requireAuth().groupsApiUrl
+  getGroupsApiUrl(): string | null {
+    return this.requireAuth().apiInfo.groupsApi?.groupsApiUrl ?? null
   }
 
   /**
@@ -86,8 +190,8 @@ export class InMemoryPartnerAccountInfo implements PartnerAccountInfo {
    *
    * @throws B2PartnerAuthorizationError if not yet authorized.
    */
-  getGroupsCapabilities(): readonly PartnerCapability[] {
-    return this.requireAuth().groupsCapabilities
+  getGroupsCapabilities(): readonly PartnerCapability[] | null {
+    return this.requireAuth().apiInfo.groupsApi?.capabilities ?? null
   }
 
   /**
@@ -106,8 +210,10 @@ export class InMemoryPartnerAccountInfo implements PartnerAccountInfo {
    *
    * @returns Redacted Partner auth state, or null when not authorized.
    */
-  toJSON(): { readonly auth: PartnerAuthorizeResponse | null } {
-    return { auth: this.#auth }
+  toJSON(): { readonly auth: RedactedPartnerAuthorizeResponseJson | null } {
+    return {
+      auth: this.#auth === null ? null : partnerAuthorizeResponseToRedactedJson(this.#auth),
+    }
   }
 
   /**

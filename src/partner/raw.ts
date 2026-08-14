@@ -1,6 +1,6 @@
 import { assertSecureRealmUrl } from '../auth/realms.ts'
 import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
-import { FetchTransport, type HttpTransport } from '../http/transport.ts'
+import type { HttpTransport } from '../http/transport.ts'
 import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
 import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import { accountId, partnerToken } from '../types/ids.ts'
@@ -15,6 +15,7 @@ import { redactPartnerAuthorizeResponse } from './redaction.ts'
 const PARTNER_AUTHORIZE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
+const PRODUCTION_ENDPOINT_HOST_SUFFIX = 'backblaze.com'
 const STAGING_HOST_SUFFIX = 'backblaze.net'
 const VERIFIED_PARTNER_AUTHORIZE_REALM_ORIGINS = new Set([
   'https://api.backblazeb2.com',
@@ -39,6 +40,10 @@ interface WirePartnerAuthorizeResponse {
   readonly applicationKeyExpirationTimestamp: number | null
 }
 
+interface UrlGuardedTransport {
+  readonly urlGuard: Pick<UrlGuard, 'getAllowedSuffixes' | 'setAllowedSuffixes'>
+}
+
 function assertVerifiedPartnerAuthorizeRealm(realmUrl: string, allowCustomAuthorizeRealm: boolean) {
   if (allowCustomAuthorizeRealm) return
 
@@ -50,17 +55,35 @@ function assertVerifiedPartnerAuthorizeRealm(realmUrl: string, allowCustomAuthor
   )
 }
 
-function endpointAllowedSuffixesForRealm(realmUrl: string): readonly string[] {
+function endpointAllowedSuffixesForRealm(
+  realmUrl: string,
+  allowCustomAuthorizeRealm: boolean,
+): readonly string[] {
   const realmHost = new URL(realmUrl).hostname.toLowerCase()
-  if (hostMatchesAllowedSuffix(realmHost, PRODUCTION_HOST_SUFFIX)) return [PRODUCTION_HOST_SUFFIX]
+  if (hostMatchesAllowedSuffix(realmHost, PRODUCTION_HOST_SUFFIX)) {
+    return [PRODUCTION_ENDPOINT_HOST_SUFFIX, PRODUCTION_HOST_SUFFIX]
+  }
   if (hostMatchesAllowedSuffix(realmHost, STAGING_HOST_SUFFIX)) return [STAGING_HOST_SUFFIX]
-  return [realmHost]
+  return allowCustomAuthorizeRealm ? [] : [realmHost]
+}
+
+function authorizeRealmAllowedSuffix(realmUrl: string): string {
+  const host = new URL(realmUrl).hostname.toLowerCase()
+  if (hostMatchesAllowedSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
+  if (hostMatchesAllowedSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
+  if (hostMatchesAllowedSuffix(host, PRODUCTION_ENDPOINT_HOST_SUFFIX)) {
+    return PRODUCTION_ENDPOINT_HOST_SUFFIX
+  }
+  return host
 }
 
 function endpointAllowedSuffix(url: string): string {
   const host = new URL(url).hostname.toLowerCase()
   if (hostMatchesAllowedSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
   if (hostMatchesAllowedSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
+  if (hostMatchesAllowedSuffix(host, PRODUCTION_ENDPOINT_HOST_SUFFIX)) {
+    return PRODUCTION_ENDPOINT_HOST_SUFFIX
+  }
   return host
 }
 
@@ -93,7 +116,9 @@ function validatePartnerEndpointUrl(
   }
 
   const guard = new UrlGuard()
-  guard.setAllowedSuffixes(allowedSuffixes)
+  guard.setAllowedSuffixes(
+    allowedSuffixes.length === 0 ? [url.hostname.toLowerCase()] : allowedSuffixes,
+  )
   try {
     guard.check(rawUrl)
   } catch (err) {
@@ -142,34 +167,40 @@ function normalizeBackupApi(
 function normalizePartnerAuthorizeResponse(
   response: WirePartnerAuthorizeResponse,
   realmUrl: string,
+  allowCustomAuthorizeRealm: boolean,
 ): PartnerAuthorizeResponse {
   const { groupsApi, backupApi } = response.apiInfo
-  if (groupsApi === undefined) {
+  if (groupsApi === undefined && backupApi === undefined) {
     throw new B2PartnerAuthorizationError(
-      'Partner authorize response did not include apiInfo.groupsApi',
+      'Partner authorize response did not include apiInfo.groupsApi or apiInfo.backupApi',
     )
   }
 
-  const allowedSuffixes = endpointAllowedSuffixesForRealm(realmUrl)
-  const normalizedGroupsApi = normalizeGroupsApi(groupsApi, allowedSuffixes)
+  const allowedSuffixes = endpointAllowedSuffixesForRealm(realmUrl, allowCustomAuthorizeRealm)
+  const normalizedGroupsApi =
+    groupsApi !== undefined ? normalizeGroupsApi(groupsApi, allowedSuffixes) : undefined
   const normalizedBackupApi =
     backupApi !== undefined ? normalizeBackupApi(backupApi, allowedSuffixes) : undefined
   const apiInfo: PartnerApiInfo = {
     ...(response.apiInfo.storageApi !== undefined
       ? { storageApi: response.apiInfo.storageApi }
       : {}),
-    groupsApi: normalizedGroupsApi,
+    ...(normalizedGroupsApi !== undefined ? { groupsApi: normalizedGroupsApi } : {}),
     ...(normalizedBackupApi !== undefined ? { backupApi: normalizedBackupApi } : {}),
   }
   const normalized: PartnerAuthorizeResponse = {
     accountId: accountId(response.accountId),
     authorizationToken: partnerToken(response.authorizationToken),
     apiInfo,
-    groupsApiUrl: normalizedGroupsApi.groupsApiUrl,
+    ...(normalizedGroupsApi !== undefined
+      ? { groupsApiUrl: normalizedGroupsApi.groupsApiUrl }
+      : {}),
     ...(normalizedBackupApi !== undefined
       ? { backupApiUrl: normalizedBackupApi.backupApiUrl }
       : {}),
-    groupsCapabilities: normalizedGroupsApi.capabilities,
+    ...(normalizedGroupsApi !== undefined
+      ? { groupsCapabilities: normalizedGroupsApi.capabilities }
+      : {}),
     ...(normalizedBackupApi !== undefined
       ? { backupCapabilities: normalizedBackupApi.capabilities }
       : {}),
@@ -179,19 +210,39 @@ function normalizePartnerAuthorizeResponse(
   return redactPartnerAuthorizeResponse(normalized)
 }
 
-function derivePartnerAllowedSuffixes(auth: PartnerAuthorizeResponse): readonly string[] {
-  const suffixes = new Set<string>([endpointAllowedSuffix(auth.groupsApiUrl)])
-  if (auth.backupApiUrl !== undefined) suffixes.add(endpointAllowedSuffix(auth.backupApiUrl))
+function derivePartnerAllowedSuffixes(
+  auth: PartnerAuthorizeResponse,
+  realmUrl: string,
+): readonly string[] {
+  const suffixes = new Set<string>([authorizeRealmAllowedSuffix(realmUrl)])
+  if (auth.apiInfo.groupsApi !== undefined) {
+    suffixes.add(endpointAllowedSuffix(auth.apiInfo.groupsApi.groupsApiUrl))
+  }
+  if (auth.apiInfo.backupApi !== undefined) {
+    suffixes.add(endpointAllowedSuffix(auth.apiInfo.backupApi.backupApiUrl))
+  }
   return Array.from(suffixes).sort()
 }
 
 function lockFetchTransportUrlGuard(
   transport: HttpTransport,
   auth: PartnerAuthorizeResponse,
+  realmUrl: string,
 ): void {
-  if (transport instanceof FetchTransport) {
-    transport.urlGuard.setAllowedSuffixes(derivePartnerAllowedSuffixes(auth))
-  }
+  const candidate = transport as Partial<UrlGuardedTransport>
+  const guard = candidate.urlGuard
+  if (
+    guard === undefined ||
+    typeof guard.getAllowedSuffixes !== 'function' ||
+    typeof guard.setAllowedSuffixes !== 'function'
+  )
+    return
+
+  const suffixes = new Set([
+    ...guard.getAllowedSuffixes(),
+    ...derivePartnerAllowedSuffixes(auth, realmUrl),
+  ])
+  guard.setAllowedSuffixes(Array.from(suffixes).sort())
 }
 
 /**
@@ -246,8 +297,9 @@ export class PartnerRawClient {
     const auth = normalizePartnerAuthorizeResponse(
       await response.json<WirePartnerAuthorizeResponse>(),
       realmUrl,
+      this.allowCustomAuthorizeRealm,
     )
-    lockFetchTransportUrlGuard(this.transport, auth)
+    lockFetchTransportUrlGuard(this.transport, auth, realmUrl)
     return auth
   }
 }

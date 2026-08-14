@@ -7,6 +7,7 @@
 export type B2ApiVersion = `v${number}`
 
 const SLASH = '/'
+const BACKSLASH = '\\'
 const VERSION_PREFIX = 'v'
 const VERSION_DIGITS = '0123456789'
 const URL_DELIMITERS = ['?', '#'] as const
@@ -75,7 +76,12 @@ function hasUrlDelimiter(value: string): boolean {
 
 function hasEncodedPathDelimiter(value: string): boolean {
   const lowerValue = value.toLowerCase()
-  return lowerValue.includes('%2f') || lowerValue.includes('%3f') || lowerValue.includes('%23')
+  return (
+    lowerValue.includes('%2f') ||
+    lowerValue.includes('%3f') ||
+    lowerValue.includes('%23') ||
+    lowerValue.includes('%5c')
+  )
 }
 
 function withDotEscapesDecoded(value: string): string {
@@ -107,9 +113,12 @@ function validatePathComponent(component: string, optionName: string): void {
   if (hasUrlDelimiter(component)) {
     throw new TypeError(`Invalid ${optionName}: path components must not contain "?" or "#"`)
   }
+  if (component.includes(BACKSLASH)) {
+    throw new TypeError(`Invalid ${optionName}: path components must not contain "\\"`)
+  }
   if (hasEncodedPathDelimiter(component)) {
     throw new TypeError(
-      `Invalid ${optionName}: path components must not contain encoded "/", "?", or "#"`,
+      `Invalid ${optionName}: path components must not contain encoded "/", "\\", "?", or "#"`,
     )
   }
   if (isTraversalComponent(component)) {

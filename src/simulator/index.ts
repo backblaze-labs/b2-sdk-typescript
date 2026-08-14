@@ -3979,6 +3979,19 @@ function buildFaultResponse(fault: FaultSpec): HttpResponse {
   }
 }
 
+function rawUrlPathContainsLiteralBackslash(rawUrl: string): boolean {
+  const schemeEnd = rawUrl.indexOf('://')
+  const authorityStart = schemeEnd === -1 ? 0 : schemeEnd + 3
+  const pathStart = rawUrl.indexOf('/', authorityStart)
+  if (pathStart === -1) return false
+
+  const queryStart = rawUrl.indexOf('?', pathStart)
+  const hashStart = rawUrl.indexOf('#', pathStart)
+  const pathEndCandidates = [queryStart, hashStart].filter((index) => index !== -1)
+  const pathEnd = pathEndCandidates.length === 0 ? rawUrl.length : Math.min(...pathEndCandidates)
+  return rawUrl.slice(pathStart, pathEnd).includes('\\')
+}
+
 class SimulatorTransport implements HttpTransport {
   constructor(private readonly sim: B2Simulator) {}
 
@@ -3993,6 +4006,15 @@ class SimulatorTransport implements HttpTransport {
     const fault = this.sim.consumeMatchingFault(url)
     if (fault !== null) {
       return buildFaultResponse(fault)
+    }
+
+    if (rawUrlPathContainsLiteralBackslash(url)) {
+      return buildFaultResponse({
+        on: '\\',
+        status: 400,
+        code: 'bad_request',
+        message: 'URL path must not contain literal backslashes',
+      })
     }
 
     const headers: Record<string, string> = {}

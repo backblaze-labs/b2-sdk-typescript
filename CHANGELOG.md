@@ -18,10 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
   The response types document the Partner and Backup array-shaped wire
   responses and preserve numeric-looking group IDs and B2 statistics counts as
-  strings.
+  strings. Endpoint types without runtime methods are marked experimental until
+  those methods are implemented and exercised.
 
 ### Fixed
 
+- **B2 endpoint URL path hardening.** `b2Url()` now rejects literal and
+  percent-encoded backslashes in prefix, version, and endpoint path components
+  so WHATWG URL normalization cannot smuggle an endpoint into another path
+  segment.
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo
   integration workflow runs now fail when required B2 secrets are missing instead
   of silently accepting an all-skipped suite, integration setup logs per-step

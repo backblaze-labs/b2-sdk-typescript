@@ -6,7 +6,7 @@
     "@defaultValue": true,
     "@deprecated": true,
     "@example": true,
-    "@experimental": false,
+    "@experimental": true,
     "@inheritDoc": true,
     "@internal": true,
     "@link": true,
