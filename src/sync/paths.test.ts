@@ -51,6 +51,19 @@ describe('sync path safety', () => {
     )
   })
 
+  it('rejects resolved paths that escape the local root', () => {
+    const resolvingOutsidePath = {
+      sep: '/',
+      isAbsolute: () => false,
+      resolve: (...paths: string[]): string =>
+        paths.length === 1 ? '/sync-root' : '/outside/file.txt',
+    }
+
+    expect(() => resolveSafeLocalPath('/sync-root', 'file.txt', resolvingOutsidePath)).toThrow(
+      'Sync path escapes the local root',
+    )
+  })
+
   it.each([
     '../outside.txt',
     'a/../victim',

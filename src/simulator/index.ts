@@ -11,6 +11,7 @@
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
+import { b2Url } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
@@ -36,6 +37,12 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+
+function apiVersionFromPath(path: string): string {
+  const segments = path.split('/').filter((segment) => segment.length > 0)
+  const candidate = segments.at(-2)
+  return candidate !== undefined && /^v\d+$/.test(candidate) ? candidate : 'v3'
+}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
@@ -1605,7 +1612,7 @@ export class B2Simulator {
     const idParam = options.kind === 'file' ? 'bucketId' : 'fileId'
     const scopedId = options.kind === 'file' ? options.bucketId : options.fileId
     const uploadId = this.genId(options.kind === 'file' ? 'upload_file' : 'upload_part')
-    const uploadUrl = new URL(`http://localhost:0/b2api/v3/${endpoint}`)
+    const uploadUrl = new URL(b2Url('http://localhost:0', { version: 'v3', endpoint }))
     uploadUrl.searchParams.set(idParam, scopedId)
     uploadUrl.searchParams.set('uploadId', uploadId)
 
@@ -1876,7 +1883,7 @@ export class B2Simulator {
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
     const endpoint = path.split('/').pop() ?? ''
-    const apiVersion = path.match(/\/b2api\/(v\d+)\//)?.[1] ?? 'v3'
+    const apiVersion = apiVersionFromPath(path)
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
