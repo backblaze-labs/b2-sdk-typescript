@@ -140,6 +140,10 @@ import { B2Error } from './errors/index.js'          // used with instanceof
 
 ## Architecture overview
 
+Architecture decisions that affect public APIs, package layout, authorization,
+compatibility, simulator behavior, or security posture are recorded under
+[`adr/`](adr/README.md).
+
 ```
 src/
   types/         Pure type definitions (no runtime code) + EncryptionKey class
