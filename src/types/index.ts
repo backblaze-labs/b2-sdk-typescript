@@ -17,6 +17,14 @@ export type {
 // module declares them together via the const-object enum pattern.
 export { Capability } from './auth.ts'
 export type {
+  ComputerBackup,
+  DeleteComputerRequest,
+  DeleteComputerResponse,
+  DeleteComputerResult,
+  ListComputersRequest,
+  ListComputersResponse,
+} from './backup.ts'
+export type {
   BucketInfo,
   BucketRetentionPolicy,
   CorsRule,
@@ -117,6 +125,38 @@ export type {
 } from './notifications.ts'
 // `EventType` is forwarded as both type and value.
 export { EventType } from './notifications.ts'
+export type {
+  AccountStandingDetails,
+  ComputerId,
+  CreateGroupMemberRequest,
+  CreateGroupMemberResponse,
+  CreateGroupMemberResult,
+  EjectGroupMemberRequest,
+  EjectGroupMemberResponse,
+  GroupId,
+  GroupStats,
+  ListedGroupMember,
+  ListGroupMembersRequest,
+  ListGroupMembersResponse,
+  ListGroupsRequest,
+  ListGroupsResponse,
+  PartnerApiInfo,
+  PartnerAuthorizeResponse,
+  PartnerB2Stats,
+  PartnerBackupApiInfo,
+  PartnerGroup,
+  PartnerGroupMember,
+  PartnerGroupsApiInfo,
+  PartnerStorageApiInfo,
+  PartnerToken,
+  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
+  ReserveTrialCreateAccountResponse,
+  ReserveTrialCreateAccountResult,
+} from './partner.ts'
+// `PartnerCapability` and `Region` are forwarded as both type and value; the
+// ID factories are value-level helpers.
+export { computerId, groupId, PartnerCapability, Region } from './partner.ts'
 export type {
   ReplicationConfiguration,
   ReplicationDestination,
