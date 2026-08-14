@@ -175,6 +175,17 @@ const publicExportProbes = [
     checks: [["typeof entry.FileAccountInfo === 'function'", 'FileAccountInfo export missing']],
   },
   {
+    subpath: './partner',
+    checks: [
+      ["typeof entry.PartnerRawClient === 'function'", 'PartnerRawClient export missing'],
+      [
+        "typeof entry.InMemoryPartnerAccountInfo === 'function'",
+        'InMemoryPartnerAccountInfo export missing',
+      ],
+      ["entry.PartnerCapability?.All === 'all'", 'PartnerCapability enum export drifted'],
+    ],
+  },
+  {
     subpath: './streams',
     checks: [
       ["typeof entry.BufferSource === 'function'", 'BufferSource export missing'],

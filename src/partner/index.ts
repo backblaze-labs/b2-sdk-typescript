@@ -1,0 +1,39 @@
+/** @packageDocumentation */
+
+export type {
+  AccountId,
+  ApplicationKeyId,
+  ComputerId,
+  GroupId,
+  PartnerToken,
+} from '../types/ids.ts'
+export { accountId, applicationKeyId } from '../types/ids.ts'
+export type {
+  CreateGroupMemberRequest,
+  CreateGroupMemberResponse,
+  CreateGroupMemberResult,
+  EjectGroupMemberRequest,
+  EjectGroupMemberResponse,
+  EjectGroupMemberResult,
+  ListedGroupMember,
+  ListGroupMembersRequest,
+  ListGroupMembersResponse,
+  ListGroupMembersResult,
+  ListGroupsRequest,
+  ListGroupsResponse,
+  ListGroupsResult,
+  PartnerAccountStandingDetails,
+  PartnerAuthorizeResponse,
+  PartnerB2Stats,
+  PartnerGroup,
+  PartnerGroupMember,
+  PartnerGroupStats,
+  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
+  ReserveTrialCreateAccountResponse,
+  ReserveTrialCreateAccountResult,
+} from '../types/partner.ts'
+export { computerId, groupId, PartnerCapability, Region } from '../types/partner.ts'
+export type { PartnerAccountInfo } from './account-info.ts'
+export { InMemoryPartnerAccountInfo } from './in-memory.ts'
+export { PartnerRawClient, type PartnerRawClientOptions } from './raw.ts'

@@ -96,8 +96,14 @@ export interface PartnerAuthorizeResponse {
   readonly accountId: AccountId
   /** Authorization token to use for Partner API and Computer Backup API requests. Do not log this secret value. */
   readonly authorizationToken: PartnerToken
-  /** API-specific endpoint and capability information. */
-  readonly apiInfo: PartnerApiInfo
+  /** Base URL for Partner API calls. */
+  readonly groupsApiUrl: string
+  /** Base URL for Computer Backup API calls when that suite is enabled. */
+  readonly backupApiUrl?: string
+  /** Capabilities granted for Partner API calls, currently documented as `['all']`. */
+  readonly groupsCapabilities: readonly PartnerCapability[]
+  /** Capabilities granted for Computer Backup API calls when that suite is enabled. */
+  readonly backupCapabilities?: readonly PartnerCapability[]
   /** Expiration timestamp of the application key in milliseconds, or null if the key does not expire. */
   readonly applicationKeyExpirationTimestamp: number | null
 }
