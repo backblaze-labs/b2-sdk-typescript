@@ -11,7 +11,7 @@
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
-import { b2Url } from '../raw/url.ts'
+import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
@@ -38,12 +38,12 @@ import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
 
-function apiPathParts(path: string): { endpoint: string; apiVersion: string } {
+function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
   return {
     endpoint: segments.at(-1) ?? '',
-    apiVersion: candidate !== undefined && /^v\d+$/.test(candidate) ? candidate : 'v3',
+    version: candidate !== undefined && isB2ApiVersion(candidate) ? candidate : 'v3',
   }
 }
 
@@ -1885,7 +1885,7 @@ export class B2Simulator {
     headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
-    const { endpoint, apiVersion } = apiPathParts(path)
+    const { endpoint, version } = apiPathParts(path)
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
@@ -2017,7 +2017,7 @@ export class B2Simulator {
             bucketId?: string
             namePrefix?: string
           },
-          apiVersion,
+          version,
         )
       case 'b2_list_keys':
         return this.listKeys(
@@ -3512,20 +3512,20 @@ export class B2Simulator {
       bucketId?: string
       namePrefix?: string
     },
-    apiVersion: string,
+    version: B2ApiVersion,
   ): SimulatorJsonResponse {
-    if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
+    if (version === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
         400,
         'bad_request',
         'bucketId is not accepted by v4 b2_create_key; use bucketIds',
       )
     }
-    if (apiVersion !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
+    if (version !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
       return this.error(400, 'bad_request', 'b2_create_key accepts either bucketIds or bucketId')
     }
     const bucketIds =
-      apiVersion !== 'v4' && req.bucketId !== undefined
+      version !== 'v4' && req.bucketId !== undefined
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix

@@ -4,7 +4,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { RawClient } from './index.ts'
-import { b2Url } from './url.ts'
+import { b2Url, isB2ApiVersion } from './url.ts'
 
 describe('b2Url', () => {
   it('builds versioned b2api and backup API paths', () => {
@@ -34,6 +34,29 @@ describe('b2Url', () => {
     expect(b2Url('https://api.example.test/root/', { prefix: '', endpoint: '' })).toBe(
       'https://api.example.test/root',
     )
+  })
+
+  it('rejects unsafe path and version segments', () => {
+    expect(isB2ApiVersion('v3')).toBe(true)
+    expect(isB2ApiVersion('v1.5')).toBe(false)
+
+    const unsafeOptions = [
+      { endpoint: '../v3/b2_delete_file' },
+      { endpoint: '..' },
+      { endpoint: '%2e%2e' },
+      { endpoint: '%2e%2e%2fv3%2fb2_delete_file' },
+      { endpoint: 'b2_delete_file?fileId=1' },
+      { endpoint: 'b2_delete_file#fragment' },
+      { endpoint: 'b2_delete_file%3ffileId=1' },
+      { prefix: 'api/../backup', endpoint: 'backup_endpoint' },
+      { prefix: 'api/%2e%2e/backup', endpoint: 'backup_endpoint' },
+      { prefix: 'api//backup', endpoint: 'backup_endpoint' },
+      { version: 'v1.5', endpoint: 'backup_endpoint' },
+    ] as const
+
+    for (const options of unsafeOptions) {
+      expect(() => b2Url('https://api.example.test', options)).toThrow(TypeError)
+    }
   })
 })
 
