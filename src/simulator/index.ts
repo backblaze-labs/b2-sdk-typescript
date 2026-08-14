@@ -3982,12 +3982,25 @@ function buildFaultResponse(fault: FaultSpec): HttpResponse {
 function rawUrlPathContainsLiteralBackslash(rawUrl: string): boolean {
   const schemeEnd = rawUrl.indexOf('://')
   const authorityStart = schemeEnd === -1 ? 0 : schemeEnd + 3
-  const pathStart = rawUrl.indexOf('/', authorityStart)
-  if (pathStart === -1) return false
 
-  const queryStart = rawUrl.indexOf('?', pathStart)
-  const hashStart = rawUrl.indexOf('#', pathStart)
-  const pathEndCandidates = [queryStart, hashStart].filter((index) => index !== -1)
+  const queryStart = rawUrl.indexOf('?', authorityStart)
+  const hashStart = rawUrl.indexOf('#', authorityStart)
+  const urlEndCandidates = [queryStart, hashStart].filter((index) => index !== -1)
+  const urlEnd = urlEndCandidates.length === 0 ? rawUrl.length : Math.min(...urlEndCandidates)
+
+  const slashStart = rawUrl.indexOf('/', authorityStart)
+  const backslashStart = rawUrl.indexOf('\\', authorityStart)
+  const pathStartCandidates = [slashStart, backslashStart].filter(
+    (index) => index !== -1 && index < urlEnd,
+  )
+  if (pathStartCandidates.length === 0) return false
+
+  const pathStart = Math.min(...pathStartCandidates)
+  const queryStartAfterPath = rawUrl.indexOf('?', pathStart)
+  const hashStartAfterPath = rawUrl.indexOf('#', pathStart)
+  const pathEndCandidates = [queryStartAfterPath, hashStartAfterPath].filter(
+    (index) => index !== -1,
+  )
   const pathEnd = pathEndCandidates.length === 0 ? rawUrl.length : Math.min(...pathEndCandidates)
   return rawUrl.slice(pathStart, pathEnd).includes('\\')
 }
