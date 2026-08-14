@@ -4,6 +4,61 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { RawClient } from './index.ts'
+import { b2Url, isB2ApiVersion } from './url.ts'
+
+describe('b2Url', () => {
+  it('builds versioned b2api and backup API paths', () => {
+    expect(
+      b2Url('https://api.example.test', {
+        prefix: 'b2api',
+        version: 'v3',
+        endpoint: 'b2_list_buckets',
+      }),
+    ).toBe('https://api.example.test/b2api/v3/b2_list_buckets')
+    expect(
+      b2Url('https://api.example.test/', {
+        prefix: '/api/backup/',
+        version: 'v1',
+        endpoint: '/backup_endpoint',
+      }),
+    ).toBe('https://api.example.test/api/backup/v1/backup_endpoint')
+  })
+
+  it('omits the version segment when none is provided', () => {
+    expect(b2Url('https://api.example.test/root', { endpoint: 'partner_endpoint' })).toBe(
+      'https://api.example.test/root/b2api/partner_endpoint',
+    )
+  })
+
+  it('returns the normalized base URL when every path segment is empty', () => {
+    expect(b2Url('https://api.example.test/root/', { prefix: '', endpoint: '' })).toBe(
+      'https://api.example.test/root',
+    )
+  })
+
+  it('rejects unsafe path and version segments', () => {
+    expect(isB2ApiVersion('v3')).toBe(true)
+    expect(isB2ApiVersion('v1.5')).toBe(false)
+
+    const unsafeOptions = [
+      { endpoint: '../v3/b2_delete_file' },
+      { endpoint: '..' },
+      { endpoint: '%2e%2e' },
+      { endpoint: '%2e%2e%2fv3%2fb2_delete_file' },
+      { endpoint: 'b2_delete_file?fileId=1' },
+      { endpoint: 'b2_delete_file#fragment' },
+      { endpoint: 'b2_delete_file%3ffileId=1' },
+      { prefix: 'api/../backup', endpoint: 'backup_endpoint' },
+      { prefix: 'api/%2e%2e/backup', endpoint: 'backup_endpoint' },
+      { prefix: 'api//backup', endpoint: 'backup_endpoint' },
+      { version: 'v1.5', endpoint: 'backup_endpoint' },
+    ] as const
+
+    for (const options of unsafeOptions) {
+      expect(() => b2Url('https://api.example.test', options)).toThrow(TypeError)
+    }
+  })
+})
 
 describe('RawClient authorizeAccount', () => {
   it('uses the v4 authorize endpoint', async () => {
@@ -328,6 +383,54 @@ describe('RawClient upload URL request controls', () => {
     expect(seenRequests[0]?.retry).toBe(retry)
     expect(seenRequests[1]?.signal).toBe(controller.signal)
     expect(seenRequests[1]?.retry).toBe(retry)
+  })
+})
+
+describe('RawClient URL construction', () => {
+  it('preserves storage endpoint paths through the shared URL builder', async () => {
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        if (request.url.includes('b2_download_file_by_id')) {
+          return {
+            status: 200,
+            headers: new Headers(),
+            body: null,
+            json: <T>() => Promise.resolve({} as T),
+            text: () => Promise.resolve(''),
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+          }
+        }
+        if (request.url.includes('b2_finish_large_file')) {
+          return jsonResponse({ contentSha1: 'none' })
+        }
+        if (request.url.includes('b2_create_key')) {
+          return jsonResponse({ bucketIds: null })
+        }
+        return jsonResponse({})
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.listBuckets('https://api.example.test', 'auth', { accountId: 'account' as never })
+    await raw.finishLargeFile('https://api.example.test', 'auth', {
+      fileId: largeFileId('large-file'),
+      partSha1Array: [],
+    })
+    await raw.downloadFileById('https://download.example.test', 'auth', fileId('4_z_file'))
+    await raw.createKey('https://api.example.test', 'auth', {
+      accountId: 'account' as never,
+      capabilities: [],
+      keyName: 'key',
+    })
+
+    expect(seenRequests.map((request) => request.url)).toEqual([
+      'https://api.example.test/b2api/v3/b2_list_buckets',
+      'https://api.example.test/b2api/v3/b2_finish_large_file',
+      'https://download.example.test/b2api/v3/b2_download_file_by_id?fileId=4_z_file',
+      'https://api.example.test/b2api/v4/b2_create_key',
+    ])
   })
 })
 

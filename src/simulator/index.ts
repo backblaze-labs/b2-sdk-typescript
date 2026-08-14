@@ -11,6 +11,7 @@
 
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { encodeFileName } from '../raw/encoding.ts'
+import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
@@ -36,6 +37,15 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+
+function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
+  const segments = path.split('/').filter((segment) => segment.length > 0)
+  const candidate = segments.at(-2)
+  return {
+    endpoint: segments.at(-1) ?? '',
+    version: candidate !== undefined && isB2ApiVersion(candidate) ? candidate : 'v3',
+  }
+}
 
 function base64UrlEncode(bytes: Uint8Array): string {
   let binary = ''
@@ -1605,7 +1615,7 @@ export class B2Simulator {
     const idParam = options.kind === 'file' ? 'bucketId' : 'fileId'
     const scopedId = options.kind === 'file' ? options.bucketId : options.fileId
     const uploadId = this.genId(options.kind === 'file' ? 'upload_file' : 'upload_part')
-    const uploadUrl = new URL(`http://localhost:0/b2api/v3/${endpoint}`)
+    const uploadUrl = new URL(b2Url('http://localhost:0', { version: 'v3', endpoint }))
     uploadUrl.searchParams.set(idParam, scopedId)
     uploadUrl.searchParams.set('uploadId', uploadId)
 
@@ -1875,8 +1885,7 @@ export class B2Simulator {
     headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
-    const endpoint = path.split('/').pop() ?? ''
-    const apiVersion = path.match(/\/b2api\/(v\d+)\//)?.[1] ?? 'v3'
+    const { endpoint, version } = apiPathParts(path)
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
@@ -2008,7 +2017,7 @@ export class B2Simulator {
             bucketId?: string
             namePrefix?: string
           },
-          apiVersion,
+          version,
         )
       case 'b2_list_keys':
         return this.listKeys(
@@ -3503,20 +3512,20 @@ export class B2Simulator {
       bucketId?: string
       namePrefix?: string
     },
-    apiVersion: string,
+    version: B2ApiVersion,
   ): SimulatorJsonResponse {
-    if (apiVersion === 'v4' && hasOwnField(req, 'bucketId')) {
+    if (version === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
         400,
         'bad_request',
         'bucketId is not accepted by v4 b2_create_key; use bucketIds',
       )
     }
-    if (apiVersion !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
+    if (version !== 'v4' && req.bucketId !== undefined && req.bucketIds !== undefined) {
       return this.error(400, 'bad_request', 'b2_create_key accepts either bucketIds or bucketId')
     }
     const bucketIds =
-      apiVersion !== 'v4' && req.bucketId !== undefined
+      version !== 'v4' && req.bucketId !== undefined
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix

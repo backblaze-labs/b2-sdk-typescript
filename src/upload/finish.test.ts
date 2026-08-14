@@ -132,6 +132,19 @@ describe('finishLargeFileWithAbortReconciliation', () => {
     })
   })
 
+  it('rethrows finish response body errors that already have reconciliation metadata', async () => {
+    const rawError = new FinishLargeFileResponseBodyError('finish body lost', {
+      fileId: largeFileId('4_z_unfinished'),
+      bucketId: bucketId('bucket'),
+      fileName: 'finished.bin',
+    })
+    const raw = rawThatFinishes(async () => {
+      throw rawError
+    })
+
+    await expect(finish(raw)).rejects.toBe(rawError)
+  })
+
   it('wraps abort errors after finish dispatch as ambiguous', async () => {
     const controller = new AbortController()
     const raw = rawThatFinishes(async () => {

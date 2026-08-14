@@ -68,6 +68,12 @@ import type {
 import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.ts'
 import { normalizeFileVersionListSha1, normalizeFileVersionSha1 } from '../util/normalize.ts'
 import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
+import { type B2UrlOptions, b2Url } from './url.ts'
+
+type B2EndpointUrlOptions = Omit<B2UrlOptions, 'endpoint'>
+
+const B2_NATIVE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
+const B2_NATIVE_API_V4: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v4' }
 
 /** Configuration for constructing a {@link RawClient}. */
 export interface RawClientOptions {
@@ -280,7 +286,7 @@ export class RawClient {
   ): Promise<AuthorizeAccountResponse> {
     assertSecureRealmUrl(realmUrl)
     const response = await this.transport.send({
-      url: `${realmUrl}/b2api/v4/b2_authorize_account`,
+      url: b2Url(realmUrl, { ...B2_NATIVE_API_V4, endpoint: 'b2_authorize_account' }),
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`,
@@ -858,7 +864,7 @@ export class RawClient {
     options?: FinishLargeFileOptions,
   ): Promise<FileVersion> {
     const response = await this.transport.send({
-      url: `${apiUrl}/b2api/v3/b2_finish_large_file`,
+      url: b2Url(apiUrl, { ...B2_NATIVE_API_V3, endpoint: 'b2_finish_large_file' }),
       method: 'POST',
       headers: {
         Authorization: authToken,
@@ -973,7 +979,10 @@ export class RawClient {
   }> {
     const headers = buildDownloadRequestHeaders(authToken, options)
     const url = appendDownloadOverrides(
-      `${downloadUrl}/b2api/v3/b2_download_file_by_id?fileId=${encodeURIComponent(fileId)}`,
+      `${b2Url(downloadUrl, {
+        ...B2_NATIVE_API_V3,
+        endpoint: 'b2_download_file_by_id',
+      })}?fileId=${encodeURIComponent(fileId)}`,
       options,
     )
 
@@ -1069,7 +1078,7 @@ export class RawClient {
       'b2_create_key',
       normalizeCreateKeyRequest(request),
       undefined,
-      'v4',
+      B2_NATIVE_API_V4,
     )
     return normalizeKeyResponse(key)
   }
@@ -1093,7 +1102,7 @@ export class RawClient {
       'b2_list_keys',
       request,
       undefined,
-      'v4',
+      B2_NATIVE_API_V4,
     )
     return { ...response, keys: response.keys.map((key) => normalizeKeyResponse(key)) }
   }
@@ -1117,7 +1126,7 @@ export class RawClient {
       'b2_delete_key',
       request,
       undefined,
-      'v4',
+      B2_NATIVE_API_V4,
     )
     return normalizeKeyResponse(key)
   }
@@ -1219,7 +1228,7 @@ export class RawClient {
    * @param endpoint - The B2 API endpoint name.
    * @param body - The JSON request body.
    * @param options - Optional abort and per-request retry settings.
-   * @param apiVersion - B2 Native API version segment for this endpoint.
+   * @param urlOptions - B2 endpoint path prefix and version settings.
    *
    * @returns The parsed JSON response.
    */
@@ -1229,10 +1238,10 @@ export class RawClient {
     endpoint: string,
     body: unknown,
     options?: RawRequestOptions,
-    apiVersion: 'v3' | 'v4' = 'v3',
+    urlOptions: B2EndpointUrlOptions = B2_NATIVE_API_V3,
   ): Promise<T> {
     const response = await this.transport.send({
-      url: `${apiUrl}/b2api/${apiVersion}/${endpoint}`,
+      url: b2Url(apiUrl, { ...urlOptions, endpoint }),
       method: 'POST',
       headers: {
         Authorization: authToken,
