@@ -21,6 +21,10 @@ type SyncNodeHash = {
   digest(encoding: 'base64'): string
 }
 
+type AsyncNodeCryptoLoader = () => Promise<{ createHash?: unknown }>
+
+const loadNodeCrypto: AsyncNodeCryptoLoader = () => import('node:crypto')
+
 function syncNodeCreateHash(): ((algorithm: string) => SyncNodeHash) | null {
   const g = globalThis as {
     process?: {
@@ -45,19 +49,22 @@ function syncNodeCreateHash(): ((algorithm: string) => SyncNodeHash) | null {
  * boundary.
  *
  * @param bytes - The bytes to digest.
+ * @param loadCrypto - Optional crypto module loader for runtime fallback tests.
  *
  * @returns The base64-encoded MD5 digest.
  *
  * @internal
  */
-export async function md5Base64(bytes: Uint8Array): Promise<string> {
+export async function md5Base64(
+  bytes: Uint8Array,
+  loadCrypto: AsyncNodeCryptoLoader = loadNodeCrypto,
+): Promise<string> {
   try {
-    const { createHash } = await import('node:crypto')
+    const { createHash } = await loadCrypto()
     // Vite's browser shim resolves the import but does not implement
     // `createHash`. Probe explicitly so we fall through to the pure-JS path.
     if (typeof createHash !== 'function') throw new Error('createHash unavailable')
     return createHash('md5').update(bytes).digest('base64')
-    /* v8 ignore next 3 -- fallback only reachable in non-Node runtimes */
   } catch {
     return md5Base64Sync(bytes)
   }

@@ -23,6 +23,7 @@ export type {
   DeleteComputerResult,
   ListComputersRequest,
   ListComputersResponse,
+  ListComputersResult,
 } from './backup.ts'
 export type {
   BucketInfo,
@@ -89,13 +90,25 @@ export type {
   Brand,
   BrandTag,
   BucketId,
+  ComputerId,
   FileId,
+  GroupId,
   KeyId,
   LargeFileId,
+  PartnerToken,
   UploadAuthToken,
   UploadUrl,
 } from './ids.ts'
-export { accountId, applicationKeyId, bucketId, fileId, keyId, largeFileId } from './ids.ts'
+export {
+  accountId,
+  applicationKeyId,
+  bucketId,
+  computerId,
+  fileId,
+  groupId,
+  keyId,
+  largeFileId,
+} from './ids.ts'
 export type {
   ApplicationKey,
   CreateKeyBucketScope,
@@ -126,37 +139,37 @@ export type {
 // `EventType` is forwarded as both type and value.
 export { EventType } from './notifications.ts'
 export type {
-  AccountStandingDetails,
-  ComputerId,
   CreateGroupMemberRequest,
   CreateGroupMemberResponse,
   CreateGroupMemberResult,
   EjectGroupMemberRequest,
   EjectGroupMemberResponse,
-  GroupId,
-  GroupStats,
+  EjectGroupMemberResult,
   ListedGroupMember,
   ListGroupMembersRequest,
   ListGroupMembersResponse,
+  ListGroupMembersResult,
   ListGroupsRequest,
   ListGroupsResponse,
+  ListGroupsResult,
+  PartnerAccountStandingDetails,
   PartnerApiInfo,
   PartnerAuthorizeResponse,
   PartnerB2Stats,
   PartnerBackupApiInfo,
   PartnerGroup,
   PartnerGroupMember,
+  PartnerGroupMemberBase,
+  PartnerGroupStats,
   PartnerGroupsApiInfo,
   PartnerStorageApiInfo,
-  PartnerToken,
   ReserveTrialCreateAccountRequest,
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
   ReserveTrialCreateAccountResult,
 } from './partner.ts'
-// `PartnerCapability` and `Region` are forwarded as both type and value; the
-// ID factories are value-level helpers.
-export { computerId, groupId, PartnerCapability, Region } from './partner.ts'
+// `PartnerCapability` and `Region` are forwarded as both type and value.
+export { PartnerCapability, Region } from './partner.ts'
 export type {
   ReplicationConfiguration,
   ReplicationDestination,

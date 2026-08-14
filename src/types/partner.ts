@@ -1,34 +1,8 @@
 import type { Capability } from './auth.ts'
-import type { AccountId, ApplicationKeyId, Brand, BucketId } from './ids.ts'
+import type { AccountId, ApplicationKeyId, BucketId, GroupId, PartnerToken } from './ids.ts'
 
-/** Unique identifier for a Partner API group. Branded to prevent mixing with other string IDs. */
-export type GroupId = Brand<string, 'GroupId'>
-
-/** Unique identifier for a Computer Backup computer. Branded to prevent mixing with other string IDs. */
-export type ComputerId = Brand<string, 'ComputerId'>
-
-/** Authorization token for Partner API and Computer Backup API requests. */
-export type PartnerToken = Brand<string, 'PartnerToken'>
-
-/**
- * Creates a branded {@link GroupId} from a raw string.
- * @param raw - The raw group ID string from the Partner API.
- *
- * @returns A branded GroupId value.
- */
-export function groupId(raw: string): GroupId {
-  return raw as GroupId
-}
-
-/**
- * Creates a branded {@link ComputerId} from a raw string.
- * @param raw - The raw computer ID string from the Computer Backup API.
- *
- * @returns A branded ComputerId value.
- */
-export function computerId(raw: string): ComputerId {
-  return raw as ComputerId
-}
+export type { ComputerId, GroupId, PartnerToken } from './ids.ts'
+export { computerId, groupId } from './ids.ts'
 
 /**
  * Named constants for Partner API and Computer Backup API capabilities.
@@ -132,12 +106,7 @@ export interface PartnerAuthorizeResponse {
 export interface CreateGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
-  /**
-   * Group ID that the new Backblaze account will join.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
+  /** Group ID that the new Backblaze account will join. */
   readonly groupId: GroupId
   /** Email address for the new group member account. */
   readonly memberEmail: string
@@ -145,18 +114,13 @@ export interface CreateGroupMemberRequest {
   readonly region?: Region | null
 }
 
-/** Group member fields returned by Partner API membership operations. */
-export interface PartnerGroupMember {
+/** Shared fields returned for Partner API group members. */
+export interface PartnerGroupMemberBase {
   /** Account ID for the group member. Group member account IDs reuse the SDK's existing AccountId brand. */
   readonly accountId: AccountId
   /** Email address of the group member account. */
   readonly email: string
-  /**
-   * Group ID that contains the member.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
+  /** Group ID that contains the member. */
   readonly groupId: GroupId
   /** Name of the group that contains the member. */
   readonly groupName: string
@@ -165,6 +129,9 @@ export interface PartnerGroupMember {
   /** S3-compatible endpoint domain for the group member account. */
   readonly s3Endpoint: string
 }
+
+/** Group member fields returned by Partner API membership operations. */
+export type PartnerGroupMember = PartnerGroupMemberBase
 
 /**
  * Single result element returned by `b2_create_group_member`.
@@ -187,12 +154,7 @@ export type CreateGroupMemberResponse = readonly CreateGroupMemberResult[]
 export interface EjectGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
-  /**
-   * Group ID that currently contains the member.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
+  /** Group ID that currently contains the member. */
   readonly groupId: GroupId
   /** Account ID of the group member being ejected. */
   readonly memberAccountId: AccountId
@@ -200,26 +162,11 @@ export interface EjectGroupMemberRequest {
   readonly email?: string | null
 }
 
-/** Response from `b2_eject_group_member`. */
-export interface EjectGroupMemberResponse {
-  /** Account ID for the ejected group member. Group member account IDs reuse the SDK's AccountId brand. */
-  readonly accountId: AccountId
-  /**
-   * Group ID from which the account was ejected.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
-  readonly groupId: GroupId
-  /** Name of the group from which the account was ejected. */
-  readonly groupName: string
-  /** Email address of the ejected group member account. */
-  readonly email: string
-  /** Region where the ejected group member account's data resides. */
-  readonly region: Region
-  /** S3-compatible endpoint domain for the ejected group member account. */
-  readonly s3Endpoint: string
-}
+/** Single result element returned by `b2_eject_group_member`. */
+export type EjectGroupMemberResult = PartnerGroupMemberBase
+
+/** Array-shaped wire response from `b2_eject_group_member`. */
+export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
 
 /** Request parameters for `b2_list_groups`. */
 export interface ListGroupsRequest {
@@ -252,13 +199,13 @@ export interface PartnerB2Stats {
 }
 
 /** Account standing information for a partner group. */
-export interface AccountStandingDetails {
+export interface PartnerAccountStandingDetails {
   /** Account standing state reported by the Partner API. */
   readonly state: string
 }
 
 /** Daily group statistics returned by `b2_list_groups`. */
-export interface GroupStats {
+export interface PartnerGroupStats {
   /** Timestamp for when the group was created. */
   readonly createdTimestamp: string
   /** Timestamp for the last update to the group's statistics. */
@@ -270,26 +217,21 @@ export interface GroupStats {
 /** Group record returned by `b2_list_groups`. */
 export interface PartnerGroup {
   /** Account standing information for the group. */
-  readonly accountStandingDetails: AccountStandingDetails
+  readonly accountStandingDetails: PartnerAccountStandingDetails
   /** B2 storage statistics for the group. Count fields are preserved as decimal strings. */
   readonly b2Stats: PartnerB2Stats
-  /**
-   * Unique ID of the group.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
+  /** Unique ID of the group. */
   readonly groupId: GroupId
   /** Human-readable group name. */
   readonly groupName: string
   /** Products enabled for the group, such as `BACKUP` or `STORAGE`. */
   readonly groupProducts: readonly string[]
   /** Daily aggregate statistics for the group. */
-  readonly groupStats: GroupStats
+  readonly groupStats: PartnerGroupStats
 }
 
-/** Response from `b2_list_groups`. */
-export interface ListGroupsResponse {
+/** Single result element returned by `b2_list_groups`. */
+export interface ListGroupsResult {
   /** Account ID for the group administrator whose groups were listed. */
   readonly accountId: AccountId
   /** Groups matching the request. */
@@ -297,6 +239,9 @@ export interface ListGroupsResponse {
   /** Next group ID to use for pagination, or null if all groups have been listed. */
   readonly nextGroupId: GroupId | null
 }
+
+/** Array-shaped wire response from `b2_list_groups`. */
+export type ListGroupsResponse = readonly ListGroupsResult[]
 
 /** Request parameters for `b2_list_group_members`. */
 export interface ListGroupMembersRequest {
@@ -311,36 +256,14 @@ export interface ListGroupMembersRequest {
 }
 
 /** Group member record returned by `b2_list_group_members`. */
-export interface ListedGroupMember {
-  /** Account ID for the group member. Group member account IDs reuse the SDK's existing AccountId brand. */
-  readonly accountId: AccountId
+export interface ListedGroupMember extends PartnerGroupMemberBase {
   /** B2 storage statistics for the member. Count fields are preserved as decimal strings. */
   readonly b2Stats: PartnerB2Stats
-  /** Email address of the group member account. */
-  readonly email: string
-  /**
-   * Group ID that contains the member.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
-  readonly groupId: GroupId
-  /** Name of the group that contains the member. */
-  readonly groupName: string
-  /** Region where the group member account's data resides. */
-  readonly region: Region
-  /** S3-compatible endpoint domain for the group member account. */
-  readonly s3Endpoint: string
 }
 
-/** Response from `b2_list_group_members`. */
-export interface ListGroupMembersResponse {
-  /**
-   * Group ID whose members were listed.
-   *
-   * Group IDs look numeric in some examples, but the Partner API returns them
-   * as JSON strings. The SDK preserves the wire value as a branded string.
-   */
+/** Single result element returned by `b2_list_group_members`. */
+export interface ListGroupMembersResult {
+  /** Group ID whose members were listed. */
   readonly groupId: GroupId
   /** Human-readable group name. */
   readonly groupName: string
@@ -349,6 +272,9 @@ export interface ListGroupMembersResponse {
   /** Active accepted group members matching the request. */
   readonly groupMembers: readonly ListedGroupMember[]
 }
+
+/** Array-shaped wire response from `b2_list_group_members`. */
+export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
 
 /** Single request element accepted by `b2_reserve_trial_create_account`. */
 export interface ReserveTrialCreateAccountRequestEntry {

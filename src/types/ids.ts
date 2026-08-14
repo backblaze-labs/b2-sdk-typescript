@@ -31,6 +31,17 @@ export type KeyId = Brand<string, 'KeyId'>
 /** Unique identifier for a B2 application key, as returned by the API. Branded to prevent mixing with other string IDs. */
 export type ApplicationKeyId = Brand<string, 'ApplicationKeyId'>
 
+/**
+ * Unique identifier for a Partner API group. Branded to prevent mixing with other string IDs.
+ *
+ * Group IDs look numeric in some examples, but the Partner API returns them
+ * as JSON strings. The SDK preserves the wire value as a branded string.
+ */
+export type GroupId = Brand<string, 'GroupId'>
+
+/** Unique identifier for a Computer Backup computer. Branded to prevent mixing with other string IDs. */
+export type ComputerId = Brand<string, 'ComputerId'>
+
 /** Pre-signed URL for uploading files to a specific bucket. Branded to prevent misuse as a regular string. */
 export type UploadUrl = Brand<string, 'UploadUrl'>
 
@@ -39,6 +50,9 @@ export type UploadAuthToken = Brand<string, 'UploadAuthToken'>
 
 /** Authorization token for B2 API requests. Branded to prevent mixing with other string values. */
 export type AuthToken = Brand<string, 'AuthToken'>
+
+/** Authorization token for Partner API and Computer Backup API requests. */
+export type PartnerToken = Brand<string, 'PartnerToken'>
 
 /** Unique identifier for a large file upload in progress. Branded to prevent mixing with regular FileId values. */
 export type LargeFileId = Brand<string, 'LargeFileId'>
@@ -91,6 +105,26 @@ export function keyId(raw: string): KeyId {
  */
 export function applicationKeyId(raw: string): ApplicationKeyId {
   return raw as ApplicationKeyId
+}
+
+/**
+ * Creates a branded {@link GroupId} from a raw string.
+ * @param raw - The raw group ID string from the Partner API.
+ *
+ * @returns A branded GroupId value.
+ */
+export function groupId(raw: string): GroupId {
+  return raw as GroupId
+}
+
+/**
+ * Creates a branded {@link ComputerId} from a raw string.
+ * @param raw - The raw computer ID string from the Computer Backup API.
+ *
+ * @returns A branded ComputerId value.
+ */
+export function computerId(raw: string): ComputerId {
+  return raw as ComputerId
 }
 
 /**

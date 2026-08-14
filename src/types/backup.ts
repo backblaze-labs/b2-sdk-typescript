@@ -1,5 +1,4 @@
-import type { AccountId } from './ids.ts'
-import type { ComputerId } from './partner.ts'
+import type { AccountId, ComputerId } from './ids.ts'
 
 /** Request parameters for `bz_list_computers`. */
 export interface ListComputersRequest {
@@ -21,13 +20,16 @@ export interface ComputerBackup {
   readonly lastFileUploadedTimestamp: number
 }
 
-/** Response from `bz_list_computers`. */
-export interface ListComputersResponse {
+/** Single result element returned by `bz_list_computers`. */
+export interface ListComputersResult {
   /** Next computer ID to use for pagination, or null if all computers have been listed. */
   readonly nextComputerId: ComputerId | null
   /** Active computer backups matching the request. */
   readonly computers: readonly ComputerBackup[]
 }
+
+/** Array-shaped wire response from `bz_list_computers`. */
+export type ListComputersResponse = readonly ListComputersResult[]
 
 /** Request parameters for `bz_delete_computer`. */
 export interface DeleteComputerRequest {
