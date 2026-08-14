@@ -94,7 +94,7 @@ export interface PartnerApiInfo {
 export interface PartnerAuthorizeResponse {
   /** Account ID for the authorized partner administrator. */
   readonly accountId: AccountId
-  /** Authorization token to use for Partner API and Computer Backup API requests. */
+  /** Authorization token to use for Partner API and Computer Backup API requests. Do not log this secret value. */
   readonly authorizationToken: PartnerToken
   /** API-specific endpoint and capability information. */
   readonly apiInfo: PartnerApiInfo
@@ -114,8 +114,8 @@ export interface CreateGroupMemberRequest {
   readonly region?: Region | null
 }
 
-/** Shared fields returned for Partner API group members. */
-export interface PartnerGroupMemberBase {
+/** Group member fields returned by Partner API membership operations. */
+export interface PartnerGroupMember {
   /** Account ID for the group member. Group member account IDs reuse the SDK's existing AccountId brand. */
   readonly accountId: AccountId
   /** Email address of the group member account. */
@@ -130,9 +130,6 @@ export interface PartnerGroupMemberBase {
   readonly s3Endpoint: string
 }
 
-/** Group member fields returned by Partner API membership operations. */
-export type PartnerGroupMember = PartnerGroupMemberBase
-
 /**
  * Single result element returned by `b2_create_group_member`.
  *
@@ -141,7 +138,7 @@ export type PartnerGroupMember = PartnerGroupMemberBase
 export interface CreateGroupMemberResult {
   /** Application key ID for the new group member account. */
   readonly applicationKeyId: ApplicationKeyId
-  /** Application key secret for the new group member account. */
+  /** Application key secret for the new group member account. Do not log this secret value. */
   readonly applicationKey: string
   /** Newly created group member account details. */
   readonly groupMember: PartnerGroupMember
@@ -163,7 +160,7 @@ export interface EjectGroupMemberRequest {
 }
 
 /** Single result element returned by `b2_eject_group_member`. */
-export type EjectGroupMemberResult = PartnerGroupMemberBase
+export type EjectGroupMemberResult = PartnerGroupMember
 
 /** Array-shaped wire response from `b2_eject_group_member`. */
 export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
@@ -192,7 +189,7 @@ export interface PartnerB2Stats {
   readonly b2BytesStoredCount: string
   /** Total files stored as a decimal string. */
   readonly b2FilesStoredCount: string
-  /** Timestamp for the daily B2 statistics snapshot, or null if no snapshot is available. */
+  /** ISO 8601 UTC date-time string for the daily B2 statistics snapshot, or null if unavailable. */
   readonly b2StatsAsOfTimestamp: string | null
   /** Total bucket count as a decimal string. */
   readonly bucketCount: string
@@ -206,9 +203,9 @@ export interface PartnerAccountStandingDetails {
 
 /** Daily group statistics returned by `b2_list_groups`. */
 export interface PartnerGroupStats {
-  /** Timestamp for when the group was created. */
+  /** ISO 8601 UTC date-time string for when the group was created. */
   readonly createdTimestamp: string
-  /** Timestamp for the last update to the group's statistics. */
+  /** ISO 8601 UTC date-time string for the last update to the group's statistics. */
   readonly groupStatsAsOfTimestamp: string
   /** Total number of accepted members in the group. */
   readonly memberCount: number
@@ -256,7 +253,7 @@ export interface ListGroupMembersRequest {
 }
 
 /** Group member record returned by `b2_list_group_members`. */
-export interface ListedGroupMember extends PartnerGroupMemberBase {
+export interface ListedGroupMember extends PartnerGroupMember {
   /** B2 storage statistics for the member. Count fields are preserved as decimal strings. */
   readonly b2Stats: PartnerB2Stats
 }
@@ -300,7 +297,7 @@ export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccoun
 export interface ReserveTrialCreateAccountResult {
   /** Account ID of the newly created B2 reserve trial account. */
   readonly accountId: AccountId
-  /** Application key secret for the new account. */
+  /** Application key secret for the new account. Do not log this secret value. */
   readonly applicationKey: string
   /** Application key ID for the new account. */
   readonly applicationKeyId: ApplicationKeyId

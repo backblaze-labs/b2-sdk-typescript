@@ -49,15 +49,28 @@ function syncNodeCreateHash(): ((algorithm: string) => SyncNodeHash) | null {
  * boundary.
  *
  * @param bytes - The bytes to digest.
- * @param loadCrypto - Optional crypto module loader for runtime fallback tests.
  *
  * @returns The base64-encoded MD5 digest.
  *
  * @internal
  */
-export async function md5Base64(
+export async function md5Base64(bytes: Uint8Array): Promise<string> {
+  return md5Base64WithCryptoLoader(bytes, loadNodeCrypto)
+}
+
+/**
+ * Computes the MD5 digest with an injected async crypto loader.
+ *
+ * @param bytes - The bytes to digest.
+ * @param loadCrypto - Crypto module loader used by runtime fallback tests.
+ *
+ * @returns The base64-encoded MD5 digest.
+ *
+ * @internal
+ */
+export async function md5Base64WithCryptoLoader(
   bytes: Uint8Array,
-  loadCrypto: AsyncNodeCryptoLoader = loadNodeCrypto,
+  loadCrypto: AsyncNodeCryptoLoader,
 ): Promise<string> {
   try {
     const { createHash } = await loadCrypto()

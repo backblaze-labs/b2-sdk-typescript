@@ -159,7 +159,6 @@ export type {
   PartnerBackupApiInfo,
   PartnerGroup,
   PartnerGroupMember,
-  PartnerGroupMemberBase,
   PartnerGroupStats,
   PartnerGroupsApiInfo,
   PartnerStorageApiInfo,
