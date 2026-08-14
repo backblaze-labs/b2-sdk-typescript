@@ -566,6 +566,19 @@ export class B2RealmConfigurationError extends B2Error {
   }
 }
 
+/** Thrown when Partner authorization returns unusable Partner/Backup auth data. */
+export class B2PartnerAuthorizationError extends B2Error {
+  /**
+   * Creates a new B2PartnerAuthorizationError instance.
+   *
+   * @param message - Human-readable description of the invalid Partner authorization state.
+   */
+  constructor(message: string) {
+    super({ status: 400, code: 'bad_request', message })
+    this.name = 'B2PartnerAuthorizationError'
+  }
+}
+
 /** Thrown when the SDK refuses to follow an HTTP redirect automatically. */
 export class B2RedirectError extends Error {
   /** Always `false` because a blocked redirect is deterministic. */

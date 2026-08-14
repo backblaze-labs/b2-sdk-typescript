@@ -128,6 +128,16 @@ export function computerId(raw: string): ComputerId {
 }
 
 /**
+ * Creates a branded {@link PartnerToken} from a raw authorization token string.
+ * @param raw - The raw Partner/Backup authorization token from the B2 API.
+ *
+ * @returns A branded PartnerToken value.
+ */
+export function partnerToken(raw: string): PartnerToken {
+  return raw as PartnerToken
+}
+
+/**
  * Creates a branded {@link LargeFileId} from a raw string.
  *
  * `LargeFileId` is the same wire-level shape as `FileId` but is a

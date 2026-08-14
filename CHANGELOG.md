@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Partner authorize runtime surface.** New `@backblaze-labs/b2-sdk/partner`
+  subpath exports `PartnerRawClient.authorizePartner()`, `PartnerAccountInfo`,
+  and `InMemoryPartnerAccountInfo` for Master Application Key authorization
+  against the Partner and Computer Backup suites.
 - **Partner API and Computer Backup type layer.** Public exports now include
   Partner API and Computer Backup request/response types, branded
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.

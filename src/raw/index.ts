@@ -68,9 +68,7 @@ import type {
 import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '../types/upload.ts'
 import { normalizeFileVersionListSha1, normalizeFileVersionSha1 } from '../util/normalize.ts'
 import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
-import { type B2UrlOptions, b2Url } from './url.ts'
-
-type B2EndpointUrlOptions = Omit<B2UrlOptions, 'endpoint'>
+import { type B2EndpointUrlOptions, b2Url } from './url.ts'
 
 const B2_NATIVE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const B2_NATIVE_API_V4: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v4' }

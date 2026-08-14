@@ -2,7 +2,7 @@ import type { Capability } from './auth.ts'
 import type { AccountId, ApplicationKeyId, BucketId, GroupId, PartnerToken } from './ids.ts'
 
 export type { ComputerId, GroupId, PartnerToken } from './ids.ts'
-export { computerId, groupId } from './ids.ts'
+export { computerId, groupId, partnerToken } from './ids.ts'
 
 /**
  * Named constants for Partner API and Computer Backup API capabilities.
@@ -96,6 +96,8 @@ export interface PartnerAuthorizeResponse {
   readonly accountId: AccountId
   /** Authorization token to use for Partner API and Computer Backup API requests. Do not log this secret value. */
   readonly authorizationToken: PartnerToken
+  /** Suite-shaped API information returned by `b2_authorize_account`. */
+  readonly apiInfo: PartnerApiInfo
   /** Base URL for Partner API calls. */
   readonly groupsApiUrl: string
   /** Base URL for Computer Backup API calls when that suite is enabled. */

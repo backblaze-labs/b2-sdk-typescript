@@ -7,7 +7,7 @@ export type {
   GroupId,
   PartnerToken,
 } from '../types/ids.ts'
-export { accountId, applicationKeyId } from '../types/ids.ts'
+export { accountId, applicationKeyId, partnerToken } from '../types/ids.ts'
 export type {
   CreateGroupMemberRequest,
   CreateGroupMemberResponse,

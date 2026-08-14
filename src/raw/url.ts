@@ -25,6 +25,9 @@ export interface B2UrlOptions {
   readonly endpoint: string
 }
 
+/** URL path options for a B2 API surface before the endpoint is selected. */
+export type B2EndpointUrlOptions = Omit<B2UrlOptions, 'endpoint'>
+
 /**
  * Returns true when `value` is a B2 API version segment of the form `vN`.
  *
