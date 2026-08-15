@@ -41,11 +41,14 @@ export interface ListComputersResult {
 }
 
 /**
- * Array-shaped wire response from `bz_list_computers`.
+ * Wire response from `bz_list_computers`.
+ *
+ * The `bz_list_computers` response is a single JSON object containing a
+ * pagination cursor and the list of computers.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
-export type ListComputersResponse = readonly ListComputersResult[]
+export type ListComputersResponse = ListComputersResult
 
 /**
  * Request parameters for `bz_delete_computer`.
