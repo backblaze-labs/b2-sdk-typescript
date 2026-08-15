@@ -4,13 +4,13 @@ import {
   B2RedirectError,
   ExpiredAuthTokenError,
   FinishLargeFileResponseBodyError,
-  GroupMemberCreationFailedError,
   InvalidEmailError,
   InvalidGroupIdError,
   InvalidRegionError,
-  MissingSmsPhoneError,
+  InvalidSmsPhoneError,
+  MethodFailureError,
   NetworkError,
-  TooManyGroupMembersError,
+  TooManyMembersError,
   UploadResponseBodyError,
 } from '../errors/index.ts'
 import { RawClient } from '../raw/index.ts'
@@ -1269,12 +1269,12 @@ describe('RetryTransport', () => {
     })
 
     it.each([
-      ['too_many_members', TooManyGroupMembersError],
+      ['too_many_members', TooManyMembersError],
       ['invalid_group_id', InvalidGroupIdError],
       ['invalid_email', InvalidEmailError],
       ['invalid_region', InvalidRegionError],
-      ['invalid_sms_phone', MissingSmsPhoneError],
-      ['method_failure', GroupMemberCreationFailedError],
+      ['invalid_sms_phone', InvalidSmsPhoneError],
+      ['method_failure', MethodFailureError],
     ] as const)('does not reauth Partner 401 %s responses', async (code, ctor) => {
       const errorBody = { status: 401, code, message: 'Partner validation failed' }
       const error401 = mockResponse(401, errorBody)

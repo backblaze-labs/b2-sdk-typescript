@@ -24,7 +24,6 @@ import {
   ExpiredAuthTokenError,
   FileNotPresentError,
   FinishLargeFileResponseBodyError,
-  GroupMemberCreationFailedError,
   InternalError,
   InvalidAccountIdError,
   InvalidBucketIdError,
@@ -39,8 +38,9 @@ import {
   InvalidMemberAccountIdError,
   InvalidPartNumberError,
   InvalidRegionError,
+  InvalidSmsPhoneError,
+  MethodFailureError,
   MethodNotAllowedError,
-  MissingSmsPhoneError,
   NetworkError,
   NotFoundError,
   OutOfRangeError,
@@ -49,7 +49,7 @@ import {
   ServiceUnavailableError,
   TooManyBucketsError,
   TooManyFilesError,
-  TooManyGroupMembersError,
+  TooManyMembersError,
   TooManyRequestsError,
   UploadResponseBodyError,
 } from './index.ts'
@@ -474,8 +474,8 @@ const newSubclassCases = [
     retryable: false,
   },
   {
-    label: 'TooManyGroupMembersError',
-    ctor: TooManyGroupMembersError,
+    label: 'TooManyMembersError',
+    ctor: TooManyMembersError,
     response: makeResponse({ status: 401, code: 'too_many_members' }),
     retryable: false,
   },
@@ -498,14 +498,14 @@ const newSubclassCases = [
     retryable: false,
   },
   {
-    label: 'MissingSmsPhoneError',
-    ctor: MissingSmsPhoneError,
+    label: 'InvalidSmsPhoneError',
+    ctor: InvalidSmsPhoneError,
     response: makeResponse({ status: 401, code: 'invalid_sms_phone' }),
     retryable: false,
   },
   {
-    label: 'GroupMemberCreationFailedError',
-    ctor: GroupMemberCreationFailedError,
+    label: 'MethodFailureError',
+    ctor: MethodFailureError,
     response: makeResponse({ status: 401, code: 'method_failure' }),
     retryable: false,
   },
@@ -734,7 +734,7 @@ describe('classifyError', () => {
       duplicate_bucket_name: { status: 400, ctor: DuplicateBucketNameError },
       too_many_buckets: { status: 400, ctor: TooManyBucketsError },
       too_many_files: { status: 400, ctor: TooManyFilesError },
-      too_many_members: { status: 401, ctor: TooManyGroupMembersError },
+      too_many_members: { status: 401, ctor: TooManyMembersError },
       cap_exceeded: { status: 403, ctor: CapExceededError },
       storage_cap_exceeded: { status: 403, ctor: CapExceededError },
       transaction_cap_exceeded: { status: 403, ctor: CapExceededError },
@@ -751,7 +751,7 @@ describe('classifyError', () => {
       invalid_group_id: { status: 401, ctor: InvalidGroupIdError },
       invalid_member_account_id: { status: 400, ctor: InvalidMemberAccountIdError },
       invalid_region: { status: 401, ctor: InvalidRegionError },
-      invalid_sms_phone: { status: 401, ctor: MissingSmsPhoneError },
+      invalid_sms_phone: { status: 401, ctor: InvalidSmsPhoneError },
       file_not_present: { status: 404, ctor: FileNotPresentError },
       no_such_file: { status: 404, ctor: FileNotPresentError },
       out_of_range: { status: 400, ctor: OutOfRangeError },
@@ -760,7 +760,7 @@ describe('classifyError', () => {
       invalid_file_name: { status: 400, ctor: InvalidFileNameError },
       invalid_file_info: { status: 400, ctor: InvalidFileInfoError },
       invalid_part_number: { status: 400, ctor: InvalidPartNumberError },
-      method_failure: { status: 401, ctor: GroupMemberCreationFailedError },
+      method_failure: { status: 401, ctor: MethodFailureError },
       bad_sha1_checksum: { status: 400, ctor: ChecksumMismatchError },
       download_cap_exceeded: { status: 403, ctor: CapExceededError },
     } satisfies Record<KnownB2ErrorCode, { status: number; ctor: B2ErrorClass }>
@@ -783,12 +783,12 @@ describe('classifyError', () => {
 
     it('maps Partner 401 overload codes to non-auth subclasses', () => {
       const partnerCases = [
-        ['too_many_members', TooManyGroupMembersError],
+        ['too_many_members', TooManyMembersError],
         ['invalid_group_id', InvalidGroupIdError],
         ['invalid_email', InvalidEmailError],
         ['invalid_region', InvalidRegionError],
-        ['invalid_sms_phone', MissingSmsPhoneError],
-        ['method_failure', GroupMemberCreationFailedError],
+        ['invalid_sms_phone', InvalidSmsPhoneError],
+        ['method_failure', MethodFailureError],
       ] as const
 
       for (const [code, ctor] of partnerCases) {

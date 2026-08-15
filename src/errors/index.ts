@@ -493,15 +493,15 @@ export class ChecksumMismatchError extends B2Error {
 }
 
 /** Thrown when a Partner group has reached its maximum member count. */
-export class TooManyGroupMembersError extends B2Error {
+export class TooManyMembersError extends B2Error {
   /**
-   * Creates a new TooManyGroupMembersError instance.
+   * Creates a new TooManyMembersError instance.
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
-    this.name = 'TooManyGroupMembersError'
+    this.name = 'TooManyMembersError'
   }
 }
 
@@ -544,34 +544,35 @@ export class InvalidRegionError extends B2Error {
   }
 }
 
-/** Thrown when Partner account setup requires a valid SMS phone number. */
-export class MissingSmsPhoneError extends B2Error {
+/** Thrown when a Partner account SMS phone number fails validation. */
+export class InvalidSmsPhoneError extends B2Error {
   /**
-   * Creates a new MissingSmsPhoneError instance.
+   * Creates a new InvalidSmsPhoneError instance.
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
-    this.name = 'MissingSmsPhoneError'
+    this.name = 'InvalidSmsPhoneError'
   }
 }
 
 /**
- * Thrown when Partner group-member creation fails after the request is accepted.
+ * Thrown when B2 returns `method_failure`.
  *
- * Backblaze documents a background rollback before callers retry this failure,
- * so the SDK exposes it as a typed non-retryable API error.
+ * The documented Partner group-member creation flow uses this code after
+ * server-side creation fails and Backblaze rolls back before callers retry.
+ * The code itself is classified globally, so this class stays endpoint-neutral.
  */
-export class GroupMemberCreationFailedError extends B2Error {
+export class MethodFailureError extends B2Error {
   /**
-   * Creates a new GroupMemberCreationFailedError instance.
+   * Creates a new MethodFailureError instance.
    * @param response - Parsed B2 error response body.
    * @param options - Optional metadata from response headers.
    */
   constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
     super(response, options)
-    this.name = 'GroupMemberCreationFailedError'
+    this.name = 'MethodFailureError'
   }
 }
 
@@ -878,7 +879,7 @@ function classifyKnownError(
     case 'too_many_files':
       return new TooManyFilesError(response, options)
     case 'too_many_members':
-      return new TooManyGroupMembersError(response, options)
+      return new TooManyMembersError(response, options)
     case 'cap_exceeded':
     case 'storage_cap_exceeded':
     case 'transaction_cap_exceeded':
@@ -909,7 +910,7 @@ function classifyKnownError(
     case 'invalid_region':
       return new InvalidRegionError(response, options)
     case 'invalid_sms_phone':
-      return new MissingSmsPhoneError(response, options)
+      return new InvalidSmsPhoneError(response, options)
     case 'file_not_present':
     case 'no_such_file':
       return new FileNotPresentError(response, options)
@@ -926,7 +927,7 @@ function classifyKnownError(
     case 'invalid_part_number':
       return new InvalidPartNumberError(response, options)
     case 'method_failure':
-      return new GroupMemberCreationFailedError(response, options)
+      return new MethodFailureError(response, options)
     case 'bad_sha1_checksum':
       return new ChecksumMismatchError(response, options)
     default:
