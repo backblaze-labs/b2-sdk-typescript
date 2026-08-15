@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `createGroupMember()`, `ejectGroupMember()`, `listGroups()`,
   `listGroupMembers()`, and `reserveTrialCreateAccount()` bindings for Partner
   API group management and B2 Reserve trial-account creation.
+- **Partner API and Computer Backup typed error subclasses.** New exported
+  `TooManyMembersError`, `InvalidGroupIdError`, `InvalidEmailError`,
+  `InvalidRegionError`, `InvalidSmsPhoneError`, `MethodFailureError`,
+  `InvalidMemberAccountIdError`, `InvalidAccountIdError`, and
+  `InvalidComputerIdError` classify Partner API and Computer Backup error
+  codes; Partner 401 overload codes map to non-auth subclasses so they do not
+  trigger reauth.
 - **Partner API and Computer Backup type layer.** Public exports now include
   Partner API and Computer Backup request/response types, branded
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.

@@ -555,7 +555,7 @@ describe.each(newSubclassCases)('$label', ({ label, ctor, response, retryable })
   })
 })
 
-describe('MethodFailureError', () => {
+describe('MethodFailureError retryable override', () => {
   it('is not retryable even when paired with a transient status', () => {
     const err = new MethodFailureError(makeResponse({ status: 503, code: 'method_failure' }))
 

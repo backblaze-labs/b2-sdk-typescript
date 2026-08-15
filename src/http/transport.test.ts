@@ -1288,7 +1288,13 @@ describe('RetryTransport', () => {
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
 
-      await expect(transport.send(baseRequest)).rejects.toThrow(ctor)
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+        }),
+      ).rejects.toThrow(ctor)
       expect(onReauth).not.toHaveBeenCalled()
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
