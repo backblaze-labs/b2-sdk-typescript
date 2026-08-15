@@ -5,6 +5,14 @@ import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
 import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import { accountId, partnerToken } from '../types/ids.ts'
 import type {
+  CreateGroupMemberRequest,
+  CreateGroupMemberResponse,
+  EjectGroupMemberRequest,
+  EjectGroupMemberResponse,
+  ListGroupMembersRequest,
+  ListGroupMembersResponse,
+  ListGroupsRequest,
+  ListGroupsResponse,
   PartnerApiInfo,
   PartnerAuthorizeResponse,
   PartnerBackupApiInfo,
@@ -13,6 +21,7 @@ import type {
 import { redactPartnerAuthorizeResponse } from './redaction.ts'
 
 const PARTNER_AUTHORIZE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
+const PARTNER_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const PRODUCTION_ENDPOINT_HOST_SUFFIX = 'backblaze.com'
@@ -43,6 +52,9 @@ interface WirePartnerAuthorizeResponse {
 interface UrlGuardedTransport {
   readonly urlGuard: Pick<UrlGuard, 'getAllowedSuffixes' | 'setAllowedSuffixes'>
 }
+
+type QueryValue = string | number
+type QueryParams = Readonly<Record<string, QueryValue>>
 
 function assertVerifiedPartnerAuthorizeRealm(realmUrl: string, allowCustomAuthorizeRealm: boolean) {
   if (allowCustomAuthorizeRealm) return
@@ -245,8 +257,17 @@ function lockFetchTransportUrlGuard(
   guard.setAllowedSuffixes(Array.from(suffixes).sort())
 }
 
+function withQueryString(url: string, query: QueryParams): string {
+  const searchParams = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    searchParams.set(key, String(value))
+  }
+  const queryString = searchParams.toString()
+  return queryString.length === 0 ? url : `${url}?${queryString}`
+}
+
 /**
- * Low-level client for Partner API authorization and future Partner endpoints.
+ * Low-level client for Partner API authorization and group-management endpoints.
  */
 export class PartnerRawClient {
   /** @internal */
@@ -301,5 +322,173 @@ export class PartnerRawClient {
     )
     lockFetchTransportUrlGuard(this.transport, auth, realmUrl)
     return auth
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-create-group-member | b2_create_group_member}.
+   *
+   * The Partner API creates a new Backblaze account for an email address that
+   * is not already a Backblaze account and adds that account to the managed
+   * group. The wire response is a JSON array.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group-member creation request body.
+   *
+   * @returns The created member result array, including the member application key.
+   */
+  async createGroupMember(
+    groupsApiUrl: string,
+    authToken: string,
+    request: CreateGroupMemberRequest,
+  ): Promise<CreateGroupMemberResponse> {
+    return this.postJson<CreateGroupMemberResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_create_group_member',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        memberEmail: request.memberEmail,
+        ...(request.region !== undefined ? { region: request.region } : {}),
+      },
+    )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-eject-group-member | b2_eject_group_member}.
+   *
+   * Ejection removes the member account from the group but does not delete the
+   * Backblaze account. The wire response is a single group-member object.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group-member ejection request body.
+   *
+   * @returns The ejected member details.
+   */
+  async ejectGroupMember(
+    groupsApiUrl: string,
+    authToken: string,
+    request: EjectGroupMemberRequest,
+  ): Promise<EjectGroupMemberResponse> {
+    return this.postJson<EjectGroupMemberResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_eject_group_member',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        memberAccountId: request.memberAccountId,
+        ...(request.email !== undefined ? { email: request.email } : {}),
+      },
+    )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-groups | b2_list_groups}.
+   *
+   * Uses the documented canonical GET form. `nextGroupId` is surfaced on the
+   * response for cursor-based pagination.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group listing query parameters.
+   *
+   * @returns The groups page and the next group cursor, or null when complete.
+   */
+  async listGroups(
+    groupsApiUrl: string,
+    authToken: string,
+    request: ListGroupsRequest,
+  ): Promise<ListGroupsResponse> {
+    return this.getJson<ListGroupsResponse>(groupsApiUrl, authToken, 'b2_list_groups', {
+      adminAccountId: request.adminAccountId,
+      ...(request.groupName !== undefined ? { groupName: request.groupName } : {}),
+      ...(request.startGroupId !== undefined ? { startGroupId: request.startGroupId } : {}),
+      ...(request.maxGroupCount !== undefined ? { maxGroupCount: request.maxGroupCount } : {}),
+    })
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-group-members | b2_list_group_members}.
+   *
+   * Uses the documented canonical GET form. `nextEmail` is surfaced on the
+   * response for cursor-based pagination.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The member listing query parameters.
+   *
+   * @returns The group-member page and the next email cursor, or null when complete.
+   */
+  async listGroupMembers(
+    groupsApiUrl: string,
+    authToken: string,
+    request: ListGroupMembersRequest,
+  ): Promise<ListGroupMembersResponse> {
+    return this.getJson<ListGroupMembersResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_list_group_members',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        ...(request.startEmail !== undefined ? { startEmail: request.startEmail } : {}),
+        ...(request.maxMemberCount !== undefined ? { maxMemberCount: request.maxMemberCount } : {}),
+      },
+    )
+  }
+
+  /**
+   * Sends a JSON GET request to the specified Partner API endpoint.
+   * @param groupsApiUrl - The Partner API base URL.
+   * @param authToken - The Partner API authorization token.
+   * @param endpoint - The Partner API endpoint name.
+   * @param query - The query-string parameters.
+   *
+   * @returns The parsed JSON response.
+   */
+  private async getJson<T>(
+    groupsApiUrl: string,
+    authToken: string,
+    endpoint: string,
+    query: QueryParams,
+  ): Promise<T> {
+    const response = await this.transport.send({
+      url: withQueryString(b2Url(groupsApiUrl, { ...PARTNER_API_V3, endpoint }), query),
+      method: 'GET',
+      headers: {
+        Authorization: authToken,
+      },
+    })
+    return response.json<T>()
+  }
+
+  /**
+   * Sends a JSON POST request to the specified Partner API endpoint.
+   * @param groupsApiUrl - The Partner API base URL.
+   * @param authToken - The Partner API authorization token.
+   * @param endpoint - The Partner API endpoint name.
+   * @param body - The JSON request body.
+   *
+   * @returns The parsed JSON response.
+   */
+  private async postJson<T>(
+    groupsApiUrl: string,
+    authToken: string,
+    endpoint: string,
+    body: unknown,
+  ): Promise<T> {
+    const response = await this.transport.send({
+      url: b2Url(groupsApiUrl, { ...PARTNER_API_V3, endpoint }),
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+    return response.json<T>()
   }
 }

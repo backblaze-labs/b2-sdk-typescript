@@ -4,8 +4,8 @@ import { FetchTransport, type HttpRequest, type HttpTransport } from '../http/tr
 import { UrlGuard } from '../http/url-guard.ts'
 import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import type { PartnerToken } from '../types/ids.ts'
-import { accountId, partnerToken } from '../types/ids.ts'
-import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
+import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
+import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient } from './raw.ts'
 import { redactPartnerAuthorizeResponse } from './redaction.ts'
@@ -33,6 +33,199 @@ function partnerAuthorizeResponse(
     applicationKeyExpirationTimestamp: 1_786_662_000_000,
   }
 }
+
+function requestJsonBody(request: HttpRequest): unknown {
+  if (typeof request.body !== 'string') throw new Error('expected JSON request body')
+  return JSON.parse(request.body) as unknown
+}
+
+function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown>>): {
+  readonly raw: PartnerRawClient
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  const transport: HttpTransport = {
+    async send(request) {
+      seenRequests.push(request)
+      const endpoint = new URL(request.url).pathname.split('/').at(-1) ?? ''
+      return jsonResponse(responses[endpoint] ?? {})
+    },
+  }
+  return { raw: new PartnerRawClient({ transport }), seenRequests }
+}
+
+describe('PartnerRawClient group management endpoints', () => {
+  const groupsApiUrl = 'https://groups.backblazeb2.com/partner'
+  const authToken = partnerToken('partner-token')
+  const adminAccountId = accountId('admin-account')
+  const memberAccountId = accountId('member-account')
+  const group = groupId('254')
+  const groupMember = {
+    accountId: memberAccountId,
+    email: 'member@example.com',
+    groupId: group,
+    groupName: 'Example Group',
+    region: Region.UsWest,
+    s3Endpoint: 's3.us-west-004.backblazeb2.com',
+  }
+
+  it('sends Partner POST bodies through the partner base path', async () => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [
+        {
+          applicationKey: 'application-key-secret',
+          applicationKeyId: applicationKeyId('application-key-id'),
+          groupMember,
+        },
+      ],
+      b2_eject_group_member: groupMember,
+    })
+
+    const created = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+      region: Region.UsWest,
+    })
+    const ejected = await raw.ejectGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberAccountId,
+      email: 'replacement@example.com',
+    })
+
+    expect(created[0]?.groupMember.accountId).toBe(memberAccountId)
+    expect(ejected.accountId).toBe(memberAccountId)
+    expect(seenRequests).toHaveLength(2)
+    const createRequest = seenRequests[0]
+    const ejectRequest = seenRequests[1]
+    if (createRequest === undefined || ejectRequest === undefined) {
+      throw new Error('expected create and eject requests')
+    }
+    expect(createRequest).toMatchObject({
+      url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+    })
+    expect(requestJsonBody(createRequest)).toEqual({
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+      region: Region.UsWest,
+    })
+    expect(ejectRequest).toMatchObject({
+      url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+    })
+    expect(requestJsonBody(ejectRequest)).toEqual({
+      adminAccountId,
+      groupId: group,
+      memberAccountId,
+      email: 'replacement@example.com',
+    })
+  })
+
+  it('sends Partner list endpoints as canonical GET query requests', async () => {
+    const nextGroup = groupId('255')
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_list_groups: {
+        accountId: adminAccountId,
+        groups: [],
+        nextGroupId: nextGroup,
+      },
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: 'next@example.com',
+      },
+    })
+
+    const groups = await raw.listGroups(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupName: 'Example Group',
+      startGroupId: group,
+      maxGroupCount: 10,
+    })
+    const members = await raw.listGroupMembers(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      startEmail: 'next@example.com',
+      maxMemberCount: 1000,
+    })
+
+    expect(groups.nextGroupId).toBe(nextGroup)
+    expect(members.nextEmail).toBe('next@example.com')
+    expect(seenRequests).toEqual([
+      {
+        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account&groupName=Example+Group&startGroupId=254&maxGroupCount=10',
+        method: 'GET',
+        headers: { Authorization: authToken },
+      },
+      {
+        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_group_members?adminAccountId=admin-account&groupId=254&startEmail=next%40example.com&maxMemberCount=1000',
+        method: 'GET',
+        headers: { Authorization: authToken },
+      },
+    ])
+  })
+
+  it('omits undefined optional Partner request fields', async () => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [],
+      b2_eject_group_member: groupMember,
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
+    })
+
+    await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+    await raw.ejectGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberAccountId,
+    })
+    await raw.listGroups(groupsApiUrl, authToken, { adminAccountId })
+    await raw.listGroupMembers(groupsApiUrl, authToken, { adminAccountId, groupId: group })
+
+    const createRequest = seenRequests[0]
+    const ejectRequest = seenRequests[1]
+    if (createRequest === undefined || ejectRequest === undefined) {
+      throw new Error('expected create and eject requests')
+    }
+    expect(requestJsonBody(createRequest)).toEqual({
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+    expect(requestJsonBody(ejectRequest)).toEqual({
+      adminAccountId,
+      groupId: group,
+      memberAccountId,
+    })
+    expect(seenRequests[2]?.url).toBe(
+      'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account',
+    )
+    expect(seenRequests[3]?.url).toBe(
+      'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_group_members?adminAccountId=admin-account&groupId=254',
+    )
+  })
+})
 
 describe('PartnerRawClient authorizePartner', () => {
   it('normalizes Partner authorize response and stores it in PartnerAccountInfo', async () => {

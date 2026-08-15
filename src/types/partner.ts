@@ -199,11 +199,11 @@ export interface EjectGroupMemberRequest {
 export type EjectGroupMemberResult = PartnerGroupMember
 
 /**
- * Array-shaped wire response from `b2_eject_group_member`.
+ * Object-shaped wire response from `b2_eject_group_member`.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
-export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
+export type EjectGroupMemberResponse = EjectGroupMemberResult
 
 /**
  * Request parameters for `b2_list_groups`.
@@ -300,11 +300,11 @@ export interface ListGroupsResult {
 }
 
 /**
- * Array-shaped wire response from `b2_list_groups`.
+ * Object-shaped wire response from `b2_list_groups`.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
-export type ListGroupsResponse = readonly ListGroupsResult[]
+export type ListGroupsResponse = ListGroupsResult
 
 /**
  * Request parameters for `b2_list_group_members`.
@@ -349,11 +349,11 @@ export interface ListGroupMembersResult {
 }
 
 /**
- * Array-shaped wire response from `b2_list_group_members`.
+ * Object-shaped wire response from `b2_list_group_members`.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
-export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
+export type ListGroupMembersResponse = ListGroupMembersResult
 
 /**
  * Single request element accepted by `b2_reserve_trial_create_account`.
