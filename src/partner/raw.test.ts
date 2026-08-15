@@ -1046,6 +1046,27 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(reserveResponse.status).toBe(403)
   })
 
+  it('does not mint simulator Partner tokens with child account application keys', async () => {
+    const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'child-key-partner-auth@example.com',
+      term: 7,
+      storage: 1,
+    })
+    if (trial === undefined) throw new Error('expected reserve trial result')
+
+    const authResponse = await sim.transport().send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${trial.applicationKeyId}:${trial.applicationKey}`)}`,
+      },
+    })
+
+    expect(authResponse.status).toBe(401)
+    await expect(authResponse.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
+  })
+
   it.each([
     ['Partner API disabled', { partnerApiEnabled: false }],
     ['missing valid phone number', { partnerAccountHasValidPhone: false }],

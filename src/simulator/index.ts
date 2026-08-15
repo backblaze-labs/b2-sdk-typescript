@@ -1900,7 +1900,11 @@ export class B2Simulator {
       return true
     }
     const stored = this.keys.get(credentials.applicationKeyId)
-    return stored !== undefined && stored.applicationKey === credentials.applicationKey
+    return (
+      stored !== undefined &&
+      stored.accountId === this.accountId &&
+      stored.applicationKey === credentials.applicationKey
+    )
   }
 
   /**
