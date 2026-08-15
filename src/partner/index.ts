@@ -39,6 +39,16 @@ export type {
 } from '../types/partner.ts'
 export { computerId, groupId, PartnerCapability, Region } from '../types/partner.ts'
 export type { PartnerAccountInfo } from './account-info.ts'
+export {
+  type CreateGroupMemberOptions,
+  type EjectGroupMemberOptions,
+  type ListGroupMembersOptions,
+  type ListGroupsOptions,
+  type PaginateGroupMembersOptions,
+  type PaginateGroupsOptions,
+  PartnerClient,
+  type PartnerClientOptions,
+} from './client.ts'
 export { InMemoryPartnerAccountInfo } from './in-memory.ts'
 export {
   PartnerRawClient,
