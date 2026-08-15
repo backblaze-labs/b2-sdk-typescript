@@ -199,11 +199,14 @@ export interface EjectGroupMemberRequest {
 export type EjectGroupMemberResult = PartnerGroupMember
 
 /**
- * Array-shaped wire response from `b2_eject_group_member`.
+ * Single-object wire response from `b2_eject_group_member`.
+ *
+ * B2 returns one ejected-member object (not an array), unlike
+ * `b2_create_group_member` which returns an array.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
+export type EjectGroupMemberResponse = EjectGroupMemberResult
 
 /**
  * Request parameters for `b2_list_groups`.
@@ -300,11 +303,14 @@ export interface ListGroupsResult {
 }
 
 /**
- * Array-shaped wire response from `b2_list_groups`.
+ * Single-object wire response from `b2_list_groups`.
+ *
+ * B2 returns one object with `accountId`, `groups`, and the `nextGroupId`
+ * cursor (not an array), unlike `b2_list_group_members` which returns an array.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ListGroupsResponse = readonly ListGroupsResult[]
+export type ListGroupsResponse = ListGroupsResult
 
 /**
  * Request parameters for `b2_list_group_members`.

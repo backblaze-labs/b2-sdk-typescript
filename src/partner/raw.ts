@@ -411,14 +411,14 @@ export class PartnerRawClient {
    * Calls {@link https://www.backblaze.com/apidocs/b2-eject-group-member | b2_eject_group_member}.
    *
    * Ejection removes the member account from the group but does not delete the
-   * Backblaze account. The wire response is a JSON array.
+   * Backblaze account. The wire response is a single JSON object.
    *
    * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
    * @param authToken - The Partner API authorization token.
    * @param request - The group-member ejection request body.
    * @param options - Optional abort and per-request retry settings.
    *
-   * @returns The ejected member result array.
+   * @returns The ejected member object.
    */
   async ejectGroupMember(
     groupsApiUrl: string,
@@ -443,15 +443,15 @@ export class PartnerRawClient {
   /**
    * Calls {@link https://www.backblaze.com/apidocs/b2-list-groups | b2_list_groups}.
    *
-   * Uses the documented canonical GET form. The wire response is a JSON array
-   * whose result objects surface `nextGroupId` for cursor-based pagination.
+   * Uses the documented canonical GET form. The wire response is a single JSON
+   * object that surfaces `nextGroupId` for cursor-based pagination.
    *
    * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
    * @param authToken - The Partner API authorization token.
    * @param request - The group listing query parameters.
    * @param options - Optional abort and per-request retry settings.
    *
-   * @returns The groups page result array.
+   * @returns The groups page object.
    */
   async listGroups(
     groupsApiUrl: string,

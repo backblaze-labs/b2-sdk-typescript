@@ -92,7 +92,7 @@ describe('PartnerRawClient group management endpoints', () => {
           groupMember,
         },
       ],
-      b2_eject_group_member: [groupMember],
+      b2_eject_group_member: groupMember,
     })
 
     const created = await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -109,7 +109,7 @@ describe('PartnerRawClient group management endpoints', () => {
     })
 
     expect(created[0]?.groupMember.accountId).toBe(memberAccountId)
-    expect(ejected[0]?.accountId).toBe(memberAccountId)
+    expect(ejected.accountId).toBe(memberAccountId)
     expect(seenRequests).toHaveLength(2)
     const createRequest = seenRequests[0]
     const ejectRequest = seenRequests[1]
@@ -151,13 +151,11 @@ describe('PartnerRawClient group management endpoints', () => {
   it('sends Partner list endpoints as canonical GET query requests', async () => {
     const nextGroup = groupId('255')
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_list_groups: [
-        {
-          accountId: adminAccountId,
-          groups: [],
-          nextGroupId: nextGroup,
-        },
-      ],
+      b2_list_groups: {
+        accountId: adminAccountId,
+        groups: [],
+        nextGroupId: nextGroup,
+      },
       b2_list_group_members: [
         {
           groupId: group,
@@ -181,7 +179,7 @@ describe('PartnerRawClient group management endpoints', () => {
       maxMemberCount: 1000,
     })
 
-    expect(groups[0]?.nextGroupId).toBe(nextGroup)
+    expect(groups.nextGroupId).toBe(nextGroup)
     expect(members[0]?.nextEmail).toBe('next@example.com')
     expect(seenRequests).toEqual([
       {
@@ -197,9 +195,9 @@ describe('PartnerRawClient group management endpoints', () => {
     ])
   })
 
-  it('surfaces empty list pages with null cursors from array responses', async () => {
+  it('surfaces empty list pages with null cursors', async () => {
     const { raw } = makePartnerEndpointRawClient({
-      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
         {
           groupId: group,
@@ -216,7 +214,7 @@ describe('PartnerRawClient group management endpoints', () => {
       groupId: group,
     })
 
-    expect(groups).toEqual([{ accountId: adminAccountId, groups: [], nextGroupId: null }])
+    expect(groups).toEqual({ accountId: adminAccountId, groups: [], nextGroupId: null })
     expect(members).toEqual([
       {
         groupId: group,
@@ -230,8 +228,8 @@ describe('PartnerRawClient group management endpoints', () => {
   it('omits undefined optional Partner request fields', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: [groupMember],
-      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_eject_group_member: groupMember,
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
         {
           groupId: group,
@@ -283,8 +281,8 @@ describe('PartnerRawClient group management endpoints', () => {
     const retry = { maxRetries: 2 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: [groupMember],
-      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_eject_group_member: groupMember,
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
         {
           groupId: group,
@@ -338,7 +336,7 @@ describe('PartnerRawClient group management endpoints', () => {
     const retry = { requestTimeoutMs: 1000 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: [groupMember],
+      b2_eject_group_member: groupMember,
     })
 
     await raw.createGroupMember(
@@ -371,7 +369,7 @@ describe('PartnerRawClient group management endpoints', () => {
     ['off-realm attacker host', 'https://attacker.example/partner'],
   ])('rejects unsafe groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
     })
 
     await expect(raw.listGroups(unsafeGroupsApiUrl, authToken, { adminAccountId })).rejects.toThrow(
@@ -745,9 +743,7 @@ describe('PartnerRawClient authorizePartner', () => {
         const endpoint = new URL(request.url).pathname.split('/').at(-1)
         return endpoint === 'b2_authorize_account'
           ? jsonResponse(partnerAuthorizeResponse())
-          : jsonResponse([
-              { accountId: accountId('partner-account'), groups: [], nextGroupId: null },
-            ])
+          : jsonResponse({ accountId: accountId('partner-account'), groups: [], nextGroupId: null })
       },
     }
     const retry = new RetryTransport({
@@ -768,7 +764,7 @@ describe('PartnerRawClient authorizePartner', () => {
       adminAccountId: auth.accountId,
     })
 
-    expect(groups[0]?.nextGroupId).toBeNull()
+    expect(groups.nextGroupId).toBeNull()
     expect(seenRequests.map((request) => new URL(request.url).pathname.split('/').at(-1))).toEqual([
       'b2_authorize_account',
       'b2_list_groups',
