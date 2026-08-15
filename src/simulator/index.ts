@@ -14,7 +14,6 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
-import type { ComputerBackup } from '../types/backup.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -26,61 +25,19 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
   accountId as accountIdOf,
-  applicationKeyId as applicationKeyIdOf,
   type BucketId,
   bucketId as bucketIdOf,
-  computerId as computerIdOf,
   fileId as fileIdOf,
-  groupId as groupIdOf,
 } from '../types/ids.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
-import {
-  type CreateGroupMemberRequest,
-  type CreateGroupMemberResult,
-  type EjectGroupMemberRequest,
-  type EjectGroupMemberResponse,
-  type ListedGroupMember,
-  type ListGroupMembersRequest,
-  type ListGroupMembersResult,
-  type ListGroupsResult,
-  type PartnerB2Stats,
-  PartnerCapability,
-  type PartnerGroup,
-  type PartnerGroupMember,
-  Region,
-  type ReserveTrialCreateAccountRequestEntry,
-  type ReserveTrialCreateAccountResult,
-} from '../types/partner.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
+import { isPartnerQueryEndpoint, PartnerSimulator } from './partner.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
-const DAY_MS = 24 * 60 * 60 * 1000
-const PARTNER_REGIONS = new Set<string>(Object.values(Region))
-const PARTNER_API_ENDPOINTS = new Set<string>([
-  'b2_create_group_member',
-  'b2_eject_group_member',
-  'b2_list_groups',
-  'b2_list_group_members',
-  'b2_reserve_trial_create_account',
-  'bz_list_computers',
-  'bz_delete_computer',
-])
-const DEFAULT_GROUP_COUNT = 3
-const MAX_GROUPS_PER_ADMIN = 500
-const DEFAULT_MAX_GROUP_COUNT = 100
-const MAX_GROUP_COUNT = 100
-const MAX_GROUP_MEMBERS = 5000
-const DEFAULT_MAX_MEMBER_COUNT = 100
-const MAX_MEMBER_COUNT = 1000
-const DEFAULT_MAX_COMPUTER_COUNT = 100
-const MIN_COMPUTER_COUNT = 1
-const MAX_COMPUTER_COUNT = 500
-const DEFAULT_COMPUTER_COUNT = 3
-
 function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
@@ -88,19 +45,6 @@ function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion }
     endpoint: segments.at(-1) ?? '',
     version: candidate !== undefined && isB2ApiVersion(candidate) ? candidate : 'v3',
   }
-}
-
-function isPartnerApiEndpoint(endpoint: string): boolean {
-  return PARTNER_API_ENDPOINTS.has(endpoint)
-}
-
-function utcDateString(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10)
-}
-
-function utcDayStartMs(ms: number): number {
-  const date = new Date(ms)
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
 }
 
 interface BasicCredentials {
@@ -417,10 +361,6 @@ interface IssuedToken {
   readonly applicationKeyId: string | null
 }
 
-interface IssuedPartnerToken {
-  readonly expiresAt: number
-}
-
 type UploadTokenKind = 'file' | 'part'
 
 interface UploadTokenPayload {
@@ -456,43 +396,6 @@ interface DownloadAuthorizationExpiry {
   readonly expiresAt: number
 }
 
-interface StoredPartnerGroup {
-  readonly adminAccountId: string
-  readonly groupId: string
-  readonly groupName: string
-  readonly groupProducts: readonly string[]
-  readonly createdTimestamp: number
-  deleted: boolean
-}
-
-interface StoredPartnerGroupMember {
-  readonly accountId: string
-  email: string
-  normalizedEmail: string
-  readonly groupId: string
-  readonly groupName: string
-  readonly region: Region
-  readonly s3Endpoint: string
-  readonly applicationKeyId: string
-  readonly applicationKey: string
-  readonly createdTimestamp: number
-  ejected: boolean
-}
-
-interface StoredTrialAccount {
-  readonly account: ReserveTrialCreateAccountResult
-  readonly normalizedEmail: string
-  readonly createdTimestamp: number
-}
-
-interface StoredComputerBackup {
-  readonly accountId: string
-  readonly computerId: string
-  readonly computerName: string
-  readonly lastFileUploadedTimestamp: number
-  deleted: boolean
-}
-
 interface RequestScope {
   readonly bucketIds: readonly string[]
   readonly fileNames?: readonly string[]
@@ -525,10 +428,6 @@ function requestStringField(body: unknown, field: string): string | undefined {
   return typeof value === 'string' ? value : undefined
 }
 
-function requestObject(body: unknown): Record<string, unknown> {
-  return typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {}
-}
-
 function requestHeaderValue(headers: Record<string, string>, name: string): string | undefined {
   const exact = headers[name]
   if (exact !== undefined) return exact
@@ -544,26 +443,6 @@ function fileNames(...names: readonly (string | undefined)[]): readonly string[]
   return present.length > 0 ? present : undefined
 }
 
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase()
-}
-
-function isValidEmailAddress(email: string): boolean {
-  const trimmed = email.trim()
-  if (trimmed !== email || trimmed.length < 3 || trimmed.length > 254) return false
-  const at = trimmed.indexOf('@')
-  if (at <= 0 || at !== trimmed.lastIndexOf('@') || at === trimmed.length - 1) return false
-  const domain = trimmed.slice(at + 1)
-  if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return false
-  return !/\s/.test(trimmed)
-}
-
-function compareStrings(left: string, right: string): number {
-  if (left < right) return -1
-  if (left > right) return 1
-  return 0
-}
-
 function queryParamsBody(params: URLSearchParams): Record<string, string> | null {
   const body: Record<string, string> = {}
   let hasParams = false
@@ -573,6 +452,53 @@ function queryParamsBody(params: URLSearchParams): Record<string, string> | null
     hasParams = true
   }
   return hasParams ? body : null
+}
+
+const JSON_GET_ENDPOINTS = new Set<string>([
+  'b2_authorize_account',
+  'b2_list_groups',
+  'b2_list_group_members',
+  'bz_list_computers',
+])
+
+const JSON_POST_ENDPOINTS = new Set<string>([
+  'b2_create_group_member',
+  'b2_eject_group_member',
+  'b2_reserve_trial_create_account',
+  'bz_delete_computer',
+  'b2_create_bucket',
+  'b2_list_buckets',
+  'b2_delete_bucket',
+  'b2_update_bucket',
+  'b2_get_upload_url',
+  'b2_list_file_names',
+  'b2_list_file_versions',
+  'b2_get_file_info',
+  'b2_hide_file',
+  'b2_delete_file_version',
+  'b2_copy_file',
+  'b2_start_large_file',
+  'b2_get_upload_part_url',
+  'b2_finish_large_file',
+  'b2_cancel_large_file',
+  'b2_list_unfinished_large_files',
+  'b2_list_parts',
+  'b2_copy_part',
+  'b2_get_download_authorization',
+  'b2_create_key',
+  'b2_list_keys',
+  'b2_delete_key',
+  'b2_update_file_retention',
+  'b2_update_file_legal_hold',
+  'b2_get_bucket_notification_rules',
+  'b2_set_bucket_notification_rules',
+])
+
+function jsonEndpointAllowsMethod(method: string, endpoint: string): boolean {
+  const normalizedMethod = method.toUpperCase()
+  if (JSON_GET_ENDPOINTS.has(endpoint)) return normalizedMethod === 'GET'
+  if (JSON_POST_ENDPOINTS.has(endpoint)) return normalizedMethod === 'POST'
+  return true
 }
 
 function notificationRulePrefixes(body: unknown): readonly string[] | undefined {
@@ -1058,786 +984,6 @@ export interface B2SimulatorOptions {
    * Defaults to `true`; `false` produces `403 access_denied` on Partner calls.
    */
   partnerAccountInGoodStanding?: boolean
-}
-
-interface PartnerSimulatorHost {
-  readonly accountId: string
-  readonly authTokenTtlMs: number
-  readonly minimumPartSize: number
-  readonly recommendedPartSize: number
-  canAuthorize(authzHeader: string | undefined): boolean
-  createBucket(req: {
-    bucketName: string
-    bucketType: BucketType
-    accountId: string
-  }): SimulatorJsonResponse
-  error(status: number, code: string, message: string): SimulatorJsonResponse
-  genId(prefix: string): string
-  monotonicTimestamp(): number
-  now(): number
-  storeKey(key: StoredKey): void
-}
-
-class PartnerSimulator {
-  private readonly issuedTokens = new Map<string, IssuedPartnerToken>()
-  private readonly knownEmails = new Set<string>()
-  private readonly trialAccounts = new Map<string, StoredTrialAccount>()
-  private readonly groups = new Map<string, StoredPartnerGroup>()
-  private readonly groupsByAdmin = new Map<string, string[]>()
-  private readonly groupMembers = new Map<string, Map<string, StoredPartnerGroupMember>>()
-  private readonly groupMembersByAccountId = new Map<string, StoredPartnerGroupMember>()
-  private readonly computersByAccount = new Map<string, Map<string, StoredComputerBackup>>()
-  private readonly authorizeEnabled: boolean
-  private readonly apiEnabled: boolean
-  private readonly accountHasValidPhone: boolean
-  private readonly accountInGoodStanding: boolean
-  private readonly strictAuth: boolean
-
-  constructor(
-    private readonly host: PartnerSimulatorHost,
-    options: B2SimulatorOptions,
-  ) {
-    this.authorizeEnabled = options.partnerAuthorize ?? false
-    this.apiEnabled = options.partnerApiEnabled ?? true
-    this.accountHasValidPhone = options.partnerAccountHasValidPhone ?? true
-    this.accountInGoodStanding = options.partnerAccountInGoodStanding ?? true
-    this.strictAuth = options.strictAuth ?? false
-  }
-
-  isAuthorizeEnabled(): boolean {
-    return this.authorizeEnabled
-  }
-
-  isEndpoint(endpoint: string): boolean {
-    return isPartnerApiEndpoint(endpoint)
-  }
-
-  authorize(authzHeader: string | undefined, origin = 'http://localhost:0'): SimulatorJsonResponse {
-    if (!this.host.canAuthorize(authzHeader)) {
-      return this.host.error(
-        401,
-        'bad_auth_token',
-        'missing or invalid Partner authorize credentials',
-      )
-    }
-
-    const tokenStr = this.host.genId('sim_partner_auth_token')
-    this.issuedTokens.set(tokenStr, { expiresAt: this.host.now() + this.host.authTokenTtlMs })
-    return {
-      status: 200,
-      body: {
-        accountId: accountIdOf(this.host.accountId),
-        authorizationToken: tokenStr,
-        apiInfo: {
-          storageApi: {
-            absoluteMinimumPartSize: this.host.minimumPartSize,
-            apiUrl: origin,
-            bucketId: null,
-            bucketName: null,
-            capabilities: [
-              Capability.ListBuckets,
-              Capability.ReadBuckets,
-              Capability.WriteBuckets,
-              Capability.DeleteBuckets,
-              Capability.ListFiles,
-              Capability.ReadFiles,
-              Capability.WriteFiles,
-              Capability.DeleteFiles,
-            ],
-            downloadUrl: origin,
-            infoType: 'storageApi',
-            namePrefix: null,
-            recommendedPartSize: this.host.recommendedPartSize,
-            s3ApiUrl: origin,
-          },
-          groupsApi: {
-            capabilities: [PartnerCapability.All],
-            groupsApiUrl: `${origin}/partner`,
-            infoType: 'groupsApi',
-          },
-          backupApi: {
-            backupApiUrl: `${origin}/backup`,
-            capabilities: [PartnerCapability.All],
-            infoType: 'backupApi',
-          },
-        },
-        applicationKeyExpirationTimestamp: null,
-      },
-    }
-  }
-
-  reserveTrialCreateAccount(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken)
-    if (authError !== null) return authError
-    if (!Array.isArray(body)) {
-      return this.host.error(400, 'bad_request', 'request body must be an array')
-    }
-    if (body.length === 0) {
-      return this.host.error(400, 'bad_request', 'request body must include at least one account')
-    }
-
-    const entries: {
-      readonly entry: ReserveTrialCreateAccountRequestEntry
-      readonly normalizedEmail: string
-    }[] = []
-    const requestEmails = new Set<string>()
-    for (const item of body) {
-      const parsed = this.parseReserveTrialCreateAccountEntry(item, requestEmails)
-      if (parsed.error !== null) return parsed.error
-      entries.push(parsed)
-    }
-
-    const startDayMs = utcDayStartMs(this.host.now())
-    const results = entries.map(({ entry, normalizedEmail }) =>
-      this.createReserveTrialAccount(entry, normalizedEmail, startDayMs),
-    )
-    return { status: 200, body: results }
-  }
-
-  createGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken, { checkPhone: false })
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const request = this.parseCreateGroupMemberRequest(record)
-    if ('error' in request) return request.error
-
-    const group = this.activeGroup(request.groupId, request.adminAccountId)
-    if (group === null) {
-      return this.host.error(401, 'invalid_group_id', 'group ID is invalid or deleted')
-    }
-    if (!this.accountHasValidPhone) {
-      return this.host.error(401, 'invalid_sms_phone', 'account is missing a valid SMS phone')
-    }
-
-    const normalizedEmail = normalizeEmail(request.memberEmail)
-    if (!isValidEmailAddress(request.memberEmail) || this.knownEmails.has(normalizedEmail)) {
-      return this.host.error(401, 'invalid_email', 'email address is invalid or already exists')
-    }
-
-    const members = this.membersForGroup(group.groupId)
-    if (this.activeMembersForGroup(group.groupId).length >= MAX_GROUP_MEMBERS) {
-      return this.host.error(401, 'too_many_members', 'group member count limit exceeded')
-    }
-
-    const accountId = accountIdOf(this.host.genId('sim_group_member_account'))
-    const applicationKeyId = applicationKeyIdOf(this.host.genId('sim_key'))
-    const applicationKey = this.host.genId('sim_secret')
-    const region = request.region ?? Region.UsWest
-    const stored: StoredPartnerGroupMember = {
-      accountId,
-      email: request.memberEmail,
-      normalizedEmail,
-      groupId: group.groupId,
-      groupName: group.groupName,
-      region,
-      s3Endpoint: `s3.${region}-001.backblazeb2.com`,
-      applicationKeyId,
-      applicationKey,
-      createdTimestamp: this.host.monotonicTimestamp(),
-      ejected: false,
-    }
-    members.set(normalizedEmail, stored)
-    this.groupMembersByAccountId.set(accountId, stored)
-    this.knownEmails.add(normalizedEmail)
-    this.host.storeKey({
-      applicationKeyId,
-      keyName: `group-member-${accountId}`,
-      capabilities: [
-        Capability.ListBuckets,
-        Capability.ReadBuckets,
-        Capability.WriteBuckets,
-        Capability.ListFiles,
-        Capability.ReadFiles,
-        Capability.WriteFiles,
-        Capability.DeleteFiles,
-      ],
-      accountId,
-      applicationKey,
-      bucketIds: null,
-      namePrefix: null,
-      expirationTimestamp: null,
-    })
-
-    const result: CreateGroupMemberResult = {
-      applicationKeyId,
-      applicationKey,
-      groupMember: this.publicGroupMember(stored),
-    }
-    return { status: 200, body: [result] }
-  }
-
-  ejectGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken)
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const request = this.parseEjectGroupMemberRequest(record)
-    if ('error' in request) return request.error
-
-    const group = this.activeGroup(request.groupId, request.adminAccountId)
-    if (group === null) {
-      return this.host.error(401, 'invalid_group_id', 'group ID is invalid or deleted')
-    }
-
-    const member = this.groupMembersByAccountId.get(request.memberAccountId)
-    if (member === undefined || member.ejected || member.groupId !== group.groupId) {
-      return this.host.error(401, 'invalid_member_account_id', 'group member account ID is invalid')
-    }
-
-    const previousNormalizedEmail = member.normalizedEmail
-    if (request.email !== undefined && request.email !== null) {
-      const normalizedEmail = normalizeEmail(request.email)
-      if (!isValidEmailAddress(request.email) || this.knownEmails.has(normalizedEmail)) {
-        return this.host.error(401, 'invalid_email', 'email address is invalid or already exists')
-      }
-      this.knownEmails.add(normalizedEmail)
-      member.email = request.email
-      member.normalizedEmail = normalizedEmail
-    }
-
-    member.ejected = true
-    this.groupMembers.get(group.groupId)?.delete(previousNormalizedEmail)
-    const response: EjectGroupMemberResponse = this.publicGroupMember(member)
-    return { status: 200, body: response }
-  }
-
-  listGroups(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken, { checkPhone: false })
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
-    if ('error' in adminAccountId) return adminAccountId.error
-    const maxGroupCount = this.optionalInteger(
-      record,
-      'maxGroupCount',
-      DEFAULT_MAX_GROUP_COUNT,
-      1,
-      MAX_GROUP_COUNT,
-      401,
-      'out_of_range',
-    )
-    if ('error' in maxGroupCount) return maxGroupCount.error
-
-    this.ensureGroupsForAdmin(adminAccountId.value)
-    const groupNameValue = record['groupName']
-    const groupName = typeof groupNameValue === 'string' ? groupNameValue : undefined
-    const startGroupIdValue = record['startGroupId']
-    const startGroupId = typeof startGroupIdValue === 'string' ? startGroupIdValue : undefined
-    if (
-      startGroupId !== undefined &&
-      this.activeGroup(startGroupId, adminAccountId.value) === null
-    ) {
-      return this.host.error(401, 'invalid_group_id', 'group ID is invalid or deleted')
-    }
-
-    const allGroups = this.activeGroupsForAdmin(adminAccountId.value)
-      .filter((group) => groupName === undefined || group.groupName === groupName)
-      .sort((left, right) => compareStrings(left.groupId, right.groupId))
-    const startIndex =
-      startGroupId === undefined ? 0 : allGroups.findIndex((group) => group.groupId >= startGroupId)
-    const normalizedStartIndex = startIndex === -1 ? allGroups.length : startIndex
-    const page = allGroups.slice(normalizedStartIndex, normalizedStartIndex + maxGroupCount.value)
-    const next = allGroups[normalizedStartIndex + maxGroupCount.value]
-    const response: ListGroupsResult = {
-      accountId: accountIdOf(adminAccountId.value),
-      groups: page.map((group) => this.publicGroup(group)),
-      nextGroupId: next === undefined ? null : groupIdOf(next.groupId),
-    }
-    return { status: 200, body: response }
-  }
-
-  listGroupMembers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken, { checkPhone: false })
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const request = this.parseListGroupMembersRequest(record)
-    if ('error' in request) return request.error
-
-    const group = this.activeGroup(request.groupId, request.adminAccountId)
-    if (group === null) {
-      return this.host.error(401, 'invalid_group_id', 'group ID is invalid or deleted')
-    }
-
-    const members = this.activeMembersForGroup(group.groupId).sort((left, right) =>
-      compareStrings(left.normalizedEmail, right.normalizedEmail),
-    )
-    const startEmail =
-      request.startEmail === undefined ? undefined : normalizeEmail(request.startEmail)
-    const startIndex =
-      startEmail === undefined
-        ? 0
-        : members.findIndex((member) => member.normalizedEmail >= startEmail)
-    const normalizedStartIndex = startIndex === -1 ? members.length : startIndex
-    const page = members.slice(normalizedStartIndex, normalizedStartIndex + request.maxMemberCount)
-    const next = members[normalizedStartIndex + request.maxMemberCount]
-    const response: ListGroupMembersResult = {
-      groupId: groupIdOf(group.groupId),
-      groupName: group.groupName,
-      groupMembers: page.map((member) => this.publicListedGroupMember(member)),
-      nextEmail: next === undefined ? null : next.email,
-    }
-    return { status: 200, body: [response] }
-  }
-
-  listComputers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken, { checkPhone: false })
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
-    if ('error' in accountId) return accountId.error
-    const maxComputerCount = this.optionalInteger(
-      record,
-      'maxComputerCount',
-      DEFAULT_MAX_COMPUTER_COUNT,
-      MIN_COMPUTER_COUNT,
-      MAX_COMPUTER_COUNT,
-      400,
-      'out_of_range',
-    )
-    if ('error' in maxComputerCount) return maxComputerCount.error
-
-    this.ensureComputersForAccount(accountId.value)
-    const computers = this.computersByAccount.get(accountId.value)
-    if (computers === undefined) {
-      return { status: 200, body: [{ nextComputerId: null, computers: [] }] }
-    }
-    const startComputerIdValue = record['startComputerId']
-    const startComputerId =
-      typeof startComputerIdValue === 'string' ? startComputerIdValue : undefined
-    if (startComputerId !== undefined) {
-      const start = computers.get(startComputerId)
-      if (start === undefined || start.deleted) {
-        return this.host.error(400, 'invalid_computer_id', 'computer ID is invalid or deleted')
-      }
-    }
-
-    const activeComputers = [...computers.values()]
-      .filter((computer) => !computer.deleted)
-      .sort((left, right) => compareStrings(left.computerId, right.computerId))
-    const startIndex =
-      startComputerId === undefined
-        ? 0
-        : activeComputers.findIndex((computer) => computer.computerId >= startComputerId)
-    const normalizedStartIndex = startIndex === -1 ? activeComputers.length : startIndex
-    const page = activeComputers.slice(
-      normalizedStartIndex,
-      normalizedStartIndex + maxComputerCount.value,
-    )
-    const next = activeComputers[normalizedStartIndex + maxComputerCount.value]
-    return {
-      status: 200,
-      body: [
-        {
-          nextComputerId: next === undefined ? null : next.computerId,
-          computers: page.map((computer) => this.publicComputer(computer)),
-        },
-      ],
-    }
-  }
-
-  deleteComputer(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const authError = this.authorizeRequest(authToken, { checkPhone: false })
-    if (authError !== null) return authError
-    const record = requestObject(body)
-    const accountId = this.requiredString(record, 'accountId', 401, 'invalid_account_id')
-    if ('error' in accountId) return accountId.error
-    const computerId = this.requiredString(record, 'computerId', 401, 'invalid_computer_id')
-    if ('error' in computerId) return computerId.error
-
-    const computers = this.computersByAccount.get(accountId.value)
-    const computer = computers?.get(computerId.value)
-    if (computer === undefined || computer.deleted) {
-      return this.host.error(401, 'invalid_computer_id', 'computer ID is invalid or deleted')
-    }
-    computer.deleted = true
-    return { status: 200, body: [this.publicComputer(computer)] }
-  }
-
-  private authorizeRequest(
-    authToken: string | undefined,
-    options: { readonly checkPhone?: boolean } = {},
-  ): SimulatorJsonResponse | null {
-    if (authToken === undefined || authToken.trim() === '' || /\s/.test(authToken)) {
-      return this.host.error(
-        403,
-        'access_denied',
-        'missing or malformed Partner API Authorization header',
-      )
-    }
-
-    if (this.strictAuth) {
-      const token = this.issuedTokens.get(authToken)
-      if (token === undefined || this.host.now() > token.expiresAt) {
-        return this.host.error(401, 'unauthorized', 'invalid Partner API authorization token')
-      }
-    }
-    if (!this.apiEnabled) {
-      return this.host.error(403, 'access_denied', 'account is not enabled for Partner API')
-    }
-    if (options.checkPhone !== false && !this.accountHasValidPhone) {
-      return this.host.error(403, 'access_denied', 'account does not have a valid phone number')
-    }
-    if (!this.accountInGoodStanding) {
-      return this.host.error(403, 'access_denied', 'account is not in good standing')
-    }
-    return null
-  }
-
-  private parseReserveTrialCreateAccountEntry(
-    value: unknown,
-    requestEmails: Set<string>,
-  ):
-    | {
-        readonly entry: ReserveTrialCreateAccountRequestEntry
-        readonly normalizedEmail: string
-        readonly error: null
-      }
-    | {
-        readonly error: SimulatorJsonResponse
-      } {
-    if (typeof value !== 'object' || value === null) {
-      return {
-        error: this.host.error(400, 'bad_request', 'trial account request must be an object'),
-      }
-    }
-    const record = value as Record<string, unknown>
-    const email = record['email']
-    if (typeof email !== 'string' || !isValidEmailAddress(email)) {
-      return { error: this.host.error(400, 'bad_request', 'email is required') }
-    }
-    const normalizedEmail = normalizeEmail(email)
-    if (this.knownEmails.has(normalizedEmail) || requestEmails.has(normalizedEmail)) {
-      return {
-        error: this.host.error(
-          400,
-          'bad_request',
-          'email must not already exist as a Backblaze account',
-        ),
-      }
-    }
-    const term = record['term']
-    if (typeof term !== 'number' || !Number.isInteger(term) || term < 7 || term > 30) {
-      return { error: this.host.error(400, 'bad_request', 'term must be between 7 and 30 days') }
-    }
-    const storage = record['storage']
-    if (typeof storage !== 'number' || !Number.isInteger(storage) || storage < 1 || storage > 50) {
-      return { error: this.host.error(400, 'bad_request', 'storage must be between 1 and 50 TB') }
-    }
-    const region = record['region']
-    if (
-      region !== undefined &&
-      region !== null &&
-      (typeof region !== 'string' || !PARTNER_REGIONS.has(region))
-    ) {
-      return { error: this.host.error(400, 'bad_request', 'region is not supported') }
-    }
-
-    requestEmails.add(normalizedEmail)
-    return {
-      entry: {
-        email,
-        term,
-        storage,
-        ...(region !== undefined ? { region: region as Region | null } : {}),
-      },
-      normalizedEmail,
-      error: null,
-    }
-  }
-
-  private createReserveTrialAccount(
-    request: ReserveTrialCreateAccountRequestEntry,
-    normalizedEmail: string,
-    startDayMs: number,
-  ): ReserveTrialCreateAccountResult {
-    const accountId = accountIdOf(this.host.genId('sim_trial_account'))
-    const bucketName = `trial-${this.host.genId('bucket').slice(-8)}`
-    const bucketResponse = this.host.createBucket({
-      accountId,
-      bucketName,
-      bucketType: 'allPrivate',
-    })
-    if (bucketResponse.status !== 200) {
-      throw new Error('failed to create simulator reserve trial bucket')
-    }
-    const bucket = bucketResponse.body as BucketInfo
-    const keyId = applicationKeyIdOf(this.host.genId('sim_key'))
-    const applicationKey = this.host.genId('sim_secret')
-    this.host.storeKey({
-      applicationKeyId: keyId,
-      keyName: `reserve-trial-${bucketName}`,
-      capabilities: [
-        Capability.ListBuckets,
-        Capability.ReadBuckets,
-        Capability.WriteBuckets,
-        Capability.ListFiles,
-        Capability.ReadFiles,
-        Capability.WriteFiles,
-        Capability.DeleteFiles,
-      ],
-      accountId,
-      applicationKey,
-      bucketIds: [bucket.bucketId],
-      namePrefix: null,
-      expirationTimestamp: null,
-    })
-    this.knownEmails.add(normalizedEmail)
-    const region = request.region ?? Region.UsWest
-    const account: ReserveTrialCreateAccountResult = {
-      accountId,
-      applicationKey,
-      applicationKeyId: keyId,
-      s3Endpoint: `s3.${region}-001.backblazeb2.com`,
-      startDate: utcDateString(startDayMs),
-      endDate: utcDateString(startDayMs + request.term * DAY_MS),
-      email: request.email,
-      bucketName: bucket.bucketName,
-      bucketId: bucket.bucketId,
-    }
-    this.trialAccounts.set(accountId, {
-      account,
-      normalizedEmail,
-      createdTimestamp: this.host.monotonicTimestamp(),
-    })
-    return account
-  }
-
-  private parseCreateGroupMemberRequest(
-    record: Record<string, unknown>,
-  ): CreateGroupMemberRequest | { readonly error: SimulatorJsonResponse } {
-    const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
-    if ('error' in adminAccountId) return adminAccountId
-    const groupId = this.requiredString(record, 'groupId', 401, 'invalid_group_id')
-    if ('error' in groupId) return groupId
-    const memberEmail = this.requiredString(record, 'memberEmail', 401, 'invalid_email')
-    if ('error' in memberEmail) return memberEmail
-    const regionValue = record['region']
-    if (
-      regionValue !== undefined &&
-      regionValue !== null &&
-      (typeof regionValue !== 'string' || !PARTNER_REGIONS.has(regionValue))
-    ) {
-      return { error: this.host.error(401, 'invalid_region', 'region is invalid') }
-    }
-    return {
-      adminAccountId: accountIdOf(adminAccountId.value),
-      groupId: groupIdOf(groupId.value),
-      memberEmail: memberEmail.value,
-      ...(regionValue !== undefined ? { region: regionValue as Region | null } : {}),
-    }
-  }
-
-  private parseEjectGroupMemberRequest(
-    record: Record<string, unknown>,
-  ): EjectGroupMemberRequest | { readonly error: SimulatorJsonResponse } {
-    const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
-    if ('error' in adminAccountId) return adminAccountId
-    const groupId = this.requiredString(record, 'groupId', 401, 'invalid_group_id')
-    if ('error' in groupId) return groupId
-    const memberAccountId = this.requiredString(
-      record,
-      'memberAccountId',
-      401,
-      'invalid_member_account_id',
-    )
-    if ('error' in memberAccountId) return memberAccountId
-    const email = record['email']
-    if (email !== undefined && email !== null && typeof email !== 'string') {
-      return { error: this.host.error(401, 'invalid_email', 'email address is invalid') }
-    }
-    return {
-      adminAccountId: accountIdOf(adminAccountId.value),
-      groupId: groupIdOf(groupId.value),
-      memberAccountId: accountIdOf(memberAccountId.value),
-      ...(email !== undefined ? { email: email as string | null } : {}),
-    }
-  }
-
-  private parseListGroupMembersRequest(
-    record: Record<string, unknown>,
-  ):
-    | (ListGroupMembersRequest & { readonly maxMemberCount: number })
-    | { readonly error: SimulatorJsonResponse } {
-    const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
-    if ('error' in adminAccountId) return adminAccountId
-    const groupId = this.requiredString(record, 'groupId', 401, 'invalid_group_id')
-    if ('error' in groupId) return groupId
-    const maxMemberCount = this.optionalInteger(
-      record,
-      'maxMemberCount',
-      DEFAULT_MAX_MEMBER_COUNT,
-      1,
-      MAX_MEMBER_COUNT,
-      401,
-      'out_of_range',
-    )
-    if ('error' in maxMemberCount) return maxMemberCount
-    const startEmail = record['startEmail']
-    if (startEmail !== undefined && typeof startEmail !== 'string') {
-      return { error: this.host.error(400, 'bad_request', 'startEmail must be a string') }
-    }
-    return {
-      adminAccountId: accountIdOf(adminAccountId.value),
-      groupId: groupIdOf(groupId.value),
-      ...(startEmail !== undefined ? { startEmail } : {}),
-      maxMemberCount: maxMemberCount.value,
-    }
-  }
-
-  private requiredString(
-    record: Record<string, unknown>,
-    field: string,
-    status: number,
-    code: string,
-  ): { readonly value: string } | { readonly error: SimulatorJsonResponse } {
-    const value = record[field]
-    if (typeof value !== 'string' || value === '') {
-      return { error: this.host.error(status, code, `${field} is required`) }
-    }
-    return { value }
-  }
-
-  private optionalInteger(
-    record: Record<string, unknown>,
-    field: string,
-    defaultValue: number,
-    min: number,
-    max: number,
-    status: number,
-    code: string,
-  ): { readonly value: number } | { readonly error: SimulatorJsonResponse } {
-    const raw = record[field]
-    if (raw === undefined) return { value: defaultValue }
-    const value =
-      typeof raw === 'number'
-        ? raw
-        : typeof raw === 'string' && raw !== ''
-          ? Number(raw)
-          : Number.NaN
-    if (!Number.isInteger(value) || value < min || value > max) {
-      return { error: this.host.error(status, code, `${field} must be between ${min} and ${max}`) }
-    }
-    return { value }
-  }
-
-  private ensureGroupsForAdmin(adminAccountId: string): void {
-    if (this.groupsByAdmin.has(adminAccountId)) return
-    this.groupsByAdmin.set(adminAccountId, [])
-    for (let index = 1; index <= DEFAULT_GROUP_COUNT; index += 1) {
-      this.createGroup(adminAccountId, `Simulator Group ${index}`)
-    }
-  }
-
-  private createGroup(adminAccountId: string, groupName: string): StoredPartnerGroup {
-    const existingGroupIds = this.groupsByAdmin.get(adminAccountId) ?? []
-    if (existingGroupIds.length >= MAX_GROUPS_PER_ADMIN) {
-      throw new Error('simulator Partner group cap exceeded')
-    }
-    const group: StoredPartnerGroup = {
-      adminAccountId,
-      groupId: this.host.genId('sim_group'),
-      groupName,
-      groupProducts: ['STORAGE', 'BACKUP'],
-      createdTimestamp: this.host.monotonicTimestamp(),
-      deleted: false,
-    }
-    this.groups.set(group.groupId, group)
-    existingGroupIds.push(group.groupId)
-    this.groupsByAdmin.set(adminAccountId, existingGroupIds)
-    this.groupMembers.set(group.groupId, new Map())
-    return group
-  }
-
-  private activeGroup(groupId: string, adminAccountId: string): StoredPartnerGroup | null {
-    const group = this.groups.get(groupId)
-    if (group === undefined || group.deleted || group.adminAccountId !== adminAccountId) return null
-    return group
-  }
-
-  private activeGroupsForAdmin(adminAccountId: string): StoredPartnerGroup[] {
-    const groupIds = this.groupsByAdmin.get(adminAccountId) ?? []
-    return groupIds
-      .map((groupId) => this.groups.get(groupId))
-      .filter((group): group is StoredPartnerGroup => group !== undefined && !group.deleted)
-  }
-
-  private membersForGroup(groupId: string): Map<string, StoredPartnerGroupMember> {
-    const existing = this.groupMembers.get(groupId)
-    if (existing !== undefined) return existing
-    const created = new Map<string, StoredPartnerGroupMember>()
-    this.groupMembers.set(groupId, created)
-    return created
-  }
-
-  private activeMembersForGroup(groupId: string): StoredPartnerGroupMember[] {
-    return [...(this.groupMembers.get(groupId)?.values() ?? [])].filter((member) => !member.ejected)
-  }
-
-  private ensureComputersForAccount(accountId: string): void {
-    if (this.computersByAccount.has(accountId)) return
-    const computers = new Map<string, StoredComputerBackup>()
-    for (let index = 1; index <= DEFAULT_COMPUTER_COUNT; index += 1) {
-      const computer: StoredComputerBackup = {
-        accountId,
-        computerId: this.host.genId('sim_computer'),
-        computerName: `sim-computer-${index}`,
-        lastFileUploadedTimestamp: this.host.monotonicTimestamp(),
-        deleted: false,
-      }
-      computers.set(computer.computerId, computer)
-    }
-    this.computersByAccount.set(accountId, computers)
-  }
-
-  private publicGroup(group: StoredPartnerGroup): PartnerGroup {
-    const timestamp = new Date(group.createdTimestamp).toISOString()
-    return {
-      accountStandingDetails: { state: 'good_standing' },
-      b2Stats: this.emptyB2Stats(group.createdTimestamp),
-      groupId: groupIdOf(group.groupId),
-      groupName: group.groupName,
-      groupProducts: group.groupProducts,
-      groupStats: {
-        createdTimestamp: timestamp,
-        groupStatsAsOfTimestamp: timestamp,
-        memberCount: this.activeMembersForGroup(group.groupId).length,
-      },
-    }
-  }
-
-  private publicGroupMember(member: StoredPartnerGroupMember): PartnerGroupMember {
-    return {
-      accountId: accountIdOf(member.accountId),
-      email: member.email,
-      groupId: groupIdOf(member.groupId),
-      groupName: member.groupName,
-      region: member.region,
-      s3Endpoint: member.s3Endpoint,
-    }
-  }
-
-  private publicListedGroupMember(member: StoredPartnerGroupMember): ListedGroupMember {
-    return {
-      ...this.publicGroupMember(member),
-      b2Stats: this.emptyB2Stats(member.createdTimestamp),
-    }
-  }
-
-  private publicComputer(computer: StoredComputerBackup): ComputerBackup {
-    return {
-      computerId: computerIdOf(computer.computerId),
-      computerName: computer.computerName,
-      lastFileUploadedTimestamp: computer.lastFileUploadedTimestamp,
-    }
-  }
-
-  private emptyB2Stats(timestamp: number): PartnerB2Stats {
-    return {
-      b2BytesStoredCount: '0',
-      b2FilesStoredCount: '0',
-      b2StatsAsOfTimestamp: new Date(timestamp).toISOString(),
-      bucketCount: '0',
-    }
-  }
 }
 
 /**
@@ -2843,7 +1989,7 @@ export class B2Simulator {
 
   /**
    * Dispatches a JSON API request to the appropriate handler.
-   * @param _method - The HTTP method (unused).
+   * @param method - The HTTP method.
    * @param origin - The request URL origin used for simulator-issued endpoints.
    * @param path - The request URL path containing the B2 endpoint name.
    * @param headers - The HTTP request headers; consulted by the
@@ -2853,13 +1999,20 @@ export class B2Simulator {
    * @returns An object with HTTP status and JSON response body.
    */
   async handleRequest(
-    _method: string,
+    method: string,
     origin: string,
     path: string,
     headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
     const { endpoint, version } = apiPathParts(path)
+    if (!jsonEndpointAllowsMethod(method, endpoint)) {
+      return this.error(
+        405,
+        'method_not_allowed',
+        `${endpoint} does not support ${method.toUpperCase()}`,
+      )
+    }
 
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
@@ -2888,10 +2041,7 @@ export class B2Simulator {
       case 'b2_list_group_members':
         return this.partner.listGroupMembers(body, headers['authorization'])
       case 'b2_reserve_trial_create_account':
-        return this.partner.reserveTrialCreateAccount(
-          body as readonly ReserveTrialCreateAccountRequestEntry[],
-          headers['authorization'],
-        )
+        return this.partner.reserveTrialCreateAccount(body, headers['authorization'])
       case 'bz_list_computers':
         return this.partner.listComputers(body, headers['authorization'])
       case 'bz_delete_computer':
@@ -5111,7 +4261,10 @@ class SimulatorTransport implements HttpTransport {
         } catch {
           body = text
         }
-      } else {
+      } else if (
+        request.method.toUpperCase() === 'GET' &&
+        isPartnerQueryEndpoint(apiPathParts(parsedUrl.pathname).endpoint)
+      ) {
         body = queryParamsBody(parsedUrl.searchParams)
       }
       result = await this.sim.handleRequest(

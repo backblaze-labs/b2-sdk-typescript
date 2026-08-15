@@ -27,6 +27,7 @@ import type {
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
 import {
+  redactCreateGroupMemberResponse,
   redactPartnerAuthorizeResponse,
   redactReserveTrialCreateAccountResponse,
 } from './redaction.ts'
@@ -411,7 +412,7 @@ export class PartnerRawClient {
     request: CreateGroupMemberRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<CreateGroupMemberResponse> {
-    return this.postJson<CreateGroupMemberResponse>(
+    const response = await this.postJson<CreateGroupMemberResponse>(
       groupsApiUrl,
       authToken,
       'b2_create_group_member',
@@ -423,6 +424,7 @@ export class PartnerRawClient {
       },
       mutationRequestOptions(options),
     )
+    return redactCreateGroupMemberResponse(response)
   }
 
   /**
