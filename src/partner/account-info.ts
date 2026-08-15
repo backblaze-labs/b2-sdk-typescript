@@ -5,9 +5,9 @@ import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partn
  * Stores Partner API and Computer Backup authorization state between requests.
  *
  * Reauthorization follows the storage client's `RetryTransport.onReauth`
- * contract: clear this store, re-run `PartnerRawClient.authorizePartner` with
- * the same Master Application Key credentials, store the fresh response with
- * `setAuth`, then return `authorizationToken` to the retry transport.
+ * contract: re-run `PartnerRawClient.authorizePartner` with the same Master
+ * Application Key credentials, store the fresh response with `setAuth`, then
+ * return `authorizationToken` to the retry transport.
  */
 export interface PartnerAccountInfo {
   /** Store a fresh Partner authorization response, replacing any previous state. */

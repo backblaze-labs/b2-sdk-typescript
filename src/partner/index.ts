@@ -48,6 +48,7 @@ export {
   type PaginateGroupsOptions,
   PartnerClient,
   type PartnerClientOptions,
+  type ReserveTrialAccountsOptions,
 } from './client.ts'
 export { InMemoryPartnerAccountInfo } from './in-memory.ts'
 export {

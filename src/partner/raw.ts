@@ -53,6 +53,13 @@ export interface PartnerRawClientOptions {
    */
   readonly transport: HttpTransport
   /**
+   * Partner endpoint host suffixes that have already been validated from a
+   * cached Partner authorize response.
+   *
+   * @internal
+   */
+  readonly authorizedPartnerEndpointSuffixes?: readonly string[]
+  /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
    */
@@ -243,7 +250,18 @@ function normalizePartnerAuthorizeResponse(
   return redactPartnerAuthorizeResponse(normalized)
 }
 
-function derivePartnerAllowedSuffixes(
+/**
+ * Derives the Partner authorize and endpoint host suffixes that may receive
+ * Partner tokens after a trusted authorize response has been validated.
+ *
+ * @param auth - Normalized Partner authorize response.
+ * @param realmUrl - Realm URL used for Partner authorization.
+ *
+ * @returns Sorted list of unique host suffixes to allow.
+ *
+ * @internal
+ */
+export function derivePartnerAllowedSuffixes(
   auth: PartnerAuthorizeResponse,
   realmUrl: string,
 ): readonly string[] {
@@ -255,6 +273,43 @@ function derivePartnerAllowedSuffixes(
     suffixes.add(endpointAllowedSuffix(auth.apiInfo.backupApi.backupApiUrl))
   }
   return Array.from(suffixes).sort()
+}
+
+/**
+ * Validates cached Partner authorize endpoint URLs with the same realm policy
+ * applied to fresh `authorizePartner()` responses and returns guard suffixes.
+ *
+ * @param auth - Cached Partner authorize response to validate.
+ * @param realmUrl - Realm URL used for Partner authorization.
+ * @param allowCustomAuthorizeRealm - Whether custom authorize realms are trusted.
+ *
+ * @returns Sorted list of host suffixes derived from the validated auth state.
+ *
+ * @throws B2PartnerAuthorizationError if the cached auth endpoints are unsafe.
+ *
+ * @internal
+ */
+export function validatePartnerAuthorizeResponseEndpoints(
+  auth: PartnerAuthorizeResponse,
+  realmUrl: string,
+  allowCustomAuthorizeRealm: boolean,
+): readonly string[] {
+  const { groupsApi, backupApi } = auth.apiInfo
+  if (groupsApi === undefined && backupApi === undefined) {
+    throw new B2PartnerAuthorizationError(
+      'Partner authorize response did not include apiInfo.groupsApi or apiInfo.backupApi',
+    )
+  }
+
+  const allowedSuffixes = endpointAllowedSuffixesForRealm(realmUrl, allowCustomAuthorizeRealm)
+  if (groupsApi !== undefined) {
+    validatePartnerEndpointUrl(groupsApi.groupsApiUrl, 'groupsApiUrl', allowedSuffixes)
+  }
+  if (backupApi !== undefined) {
+    validatePartnerEndpointUrl(backupApi.backupApiUrl, 'backupApiUrl', allowedSuffixes)
+  }
+
+  return derivePartnerAllowedSuffixes(auth, realmUrl)
 }
 
 function lockTransportUrlGuard(transport: HttpTransport, allowedSuffixes: readonly string[]): void {
@@ -349,6 +404,7 @@ export class PartnerRawClient {
   constructor(options: PartnerRawClientOptions) {
     this.transport = options.transport
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
+    this.partnerEndpointSuffixes = options.authorizedPartnerEndpointSuffixes ?? []
   }
 
   /**

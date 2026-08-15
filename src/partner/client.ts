@@ -3,7 +3,7 @@ import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import { FetchTransport, RetryTransport } from '../http/transport.ts'
-import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
+import { UrlGuard } from '../http/url-guard.ts'
 import type { AccountId, GroupId, PartnerToken } from '../types/ids.ts'
 import type {
   CreateGroupMemberResponse,
@@ -21,13 +21,20 @@ import type {
 import { paginateItems } from '../util/paginator.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
-import { PartnerRawClient } from './raw.ts'
+import {
+  derivePartnerAllowedSuffixes,
+  PartnerRawClient,
+  validatePartnerAuthorizeResponseEndpoints,
+} from './raw.ts'
+import { PARTNER_TOKEN_REDACTED } from './redaction.ts'
 
-const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
-const PRODUCTION_ENDPOINT_HOST_SUFFIX = 'backblaze.com'
-const STAGING_HOST_SUFFIX = 'backblaze.net'
+const MASTER_KEY_REDACTED = '[redacted Master Application Key]'
 
-/** Configuration options for creating a {@link PartnerClient}. */
+/**
+ * Configuration options for creating a {@link PartnerClient}.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface PartnerClientOptions {
   /** The Master Application Key ID for the partner administrator account. */
   readonly masterKeyId: string
@@ -36,8 +43,14 @@ export interface PartnerClientOptions {
   /**
    * B2 realm to authenticate against. Accepts a known realm-map key
    * (`"production"` or `"staging"`) or a direct base URL. Custom HTTPS hosts
-   * are trusted with Master Application Key credentials only when
-   * {@link allowCustomAuthorizeRealm} is also enabled.
+   * are trusted with the Master Application Key during authorize, so never
+   * derive `realm` from untrusted input. URL values must use HTTPS, or
+   * loopback IP literal HTTP for local testing only; Master Application Key
+   * credentials are sent unencrypted over loopback HTTP. Unsupported schemes,
+   * malformed URLs, non-URL strings, plaintext HTTP hostnames such as
+   * `localhost`, and non-loopback plaintext HTTP are rejected before
+   * credentials are sent. URL values must not include userinfo, query strings,
+   * or fragments. Defaults to `"production"`.
    */
   readonly realm?: string
   /** Storage backend for Partner authorization state. Defaults to {@link InMemoryPartnerAccountInfo}. */
@@ -49,15 +62,23 @@ export interface PartnerClientOptions {
   /** Custom user-agent string prepended to the SDK default. */
   readonly userAgent?: string
   /**
-   * Override the SSRF allow-list. By default the SDK locks the
+   * Additional SSRF allow-list host suffixes. By default the SDK locks the
    * {@link FetchTransport} to host suffixes derived from the Partner authorize
-   * response. Pass an explicit list to add hosts (for example, a trusted test
-   * proxy) or set to an empty array to disable the guard entirely.
+   * response. Pass an explicit list to add trusted hosts, for example a test
+   * proxy. An empty array adds no hosts and leaves the default guard enabled.
    *
    * Only consulted when {@link PartnerClientOptions.transport} is unset; a
    * custom transport is the user's responsibility to harden.
    */
   readonly allowedHostSuffixes?: readonly string[]
+  /**
+   * Explicitly disable the default SSRF guard after authorize.
+   *
+   * This is intended only for controlled simulator/private-proxy tests. Never
+   * enable it for URLs derived from untrusted input or production credentials.
+   * Only consulted when {@link PartnerClientOptions.transport} is unset.
+   */
+  readonly disableSsrfGuard?: boolean
   /**
    * Follow same-origin GET/HEAD redirects in the default fetch transport after
    * checking each target with the SSRF guard. POST redirects remain blocked.
@@ -72,7 +93,11 @@ export interface PartnerClientOptions {
   readonly allowCustomAuthorizeRealm?: boolean
 }
 
-/** Options for listing Partner groups. */
+/**
+ * Options for listing Partner groups.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface ListGroupsOptions {
   /** Optional group name filter. Multiple groups may share the same name. */
   readonly groupName?: string
@@ -84,7 +109,11 @@ export interface ListGroupsOptions {
   readonly signal?: AbortSignal
 }
 
-/** Options for paginating Partner groups. */
+/**
+ * Options for paginating Partner groups.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface PaginateGroupsOptions extends Omit<ListGroupsOptions, 'startGroupId'> {
   /**
    * Aborts the iteration between page fetches. The signal is also forwarded to
@@ -93,7 +122,11 @@ export interface PaginateGroupsOptions extends Omit<ListGroupsOptions, 'startGro
   readonly signal?: AbortSignal
 }
 
-/** Options for listing Partner group members. */
+/**
+ * Options for listing Partner group members.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface ListGroupMembersOptions {
   /** Group ID whose active members should be listed. */
   readonly groupId: GroupId
@@ -105,7 +138,11 @@ export interface ListGroupMembersOptions {
   readonly signal?: AbortSignal
 }
 
-/** Options for paginating Partner group members. */
+/**
+ * Options for paginating Partner group members.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface PaginateGroupMembersOptions extends Omit<ListGroupMembersOptions, 'startEmail'> {
   /**
    * Aborts the iteration between page fetches. The signal is also forwarded to
@@ -114,7 +151,11 @@ export interface PaginateGroupMembersOptions extends Omit<ListGroupMembersOption
   readonly signal?: AbortSignal
 }
 
-/** Options for creating a Partner group member. */
+/**
+ * Options for creating a Partner group member.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface CreateGroupMemberOptions {
   /** Group ID that the new Backblaze account will join. */
   readonly groupId: GroupId
@@ -126,7 +167,11 @@ export interface CreateGroupMemberOptions {
   readonly signal?: AbortSignal
 }
 
-/** Options for ejecting a Partner group member. */
+/**
+ * Options for ejecting a Partner group member.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
 export interface EjectGroupMemberOptions {
   /** Group ID that currently contains the member. */
   readonly groupId: GroupId
@@ -134,6 +179,16 @@ export interface EjectGroupMemberOptions {
   readonly memberAccountId: AccountId
   /** Replacement email for the ejected account, or null to keep the current email address. */
   readonly email?: string | null
+  /** Abort signal for cancelling the request. */
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Options for reserving B2 Reserve trial accounts.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
+export interface ReserveTrialAccountsOptions {
   /** Abort signal for cancelling the request. */
   readonly signal?: AbortSignal
 }
@@ -159,6 +214,8 @@ interface PartnerGroupsCoordinates {
  *   console.log(group.groupName)
  * }
  * ```
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export class PartnerClient {
   /** Low-level client for direct Partner API calls. */
@@ -171,10 +228,12 @@ export class PartnerClient {
    * guard.
    */
   readonly urlGuard: UrlGuard | null
-  private readonly masterKeyId: string
-  private readonly masterKey: string
+  readonly #masterKeyId: string
+  readonly #masterKey: string
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
+  private readonly disableSsrfGuard: boolean
+  #inflightReauth: Promise<string> | null = null
 
   /**
    * Creates a new PartnerClient. Call {@link authorize} before making API requests.
@@ -182,11 +241,13 @@ export class PartnerClient {
    * @param options - Configuration including credentials, realm, and transport settings.
    */
   constructor(options: PartnerClientOptions) {
-    this.masterKeyId = options.masterKeyId
-    this.masterKey = options.masterKey
+    this.#masterKeyId = options.masterKeyId
+    this.#masterKey = options.masterKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.partnerAccountInfo = options.partnerAccountInfo ?? new InMemoryPartnerAccountInfo()
     this.userAllowedSuffixes = options.allowedHostSuffixes
+    this.disableSsrfGuard = options.disableSsrfGuard ?? false
+    const allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -211,10 +272,21 @@ export class PartnerClient {
     })
 
     const cachedAuth = this.partnerAccountInfo.getAuth()
-    if (cachedAuth !== null) this.lockUrlGuard(cachedAuth)
+    const cachedEndpointSuffixes =
+      cachedAuth === null
+        ? undefined
+        : validatePartnerAuthorizeResponseEndpoints(
+            cachedAuth,
+            this.realmUrl,
+            allowCustomAuthorizeRealm,
+          )
+    if (cachedEndpointSuffixes !== undefined) this.lockUrlGuardFromSuffixes(cachedEndpointSuffixes)
 
     this.raw = new PartnerRawClient({
       transport: retryTransport,
+      ...(cachedEndpointSuffixes !== undefined
+        ? { authorizedPartnerEndpointSuffixes: cachedEndpointSuffixes }
+        : {}),
       ...(options.allowCustomAuthorizeRealm !== undefined
         ? { allowCustomAuthorizeRealm: options.allowCustomAuthorizeRealm }
         : {}),
@@ -225,9 +297,11 @@ export class PartnerClient {
    * Authenticates with B2 Partner authorization and stores the authorization state.
    *
    * @returns The Partner authorization response containing tokens, URLs, and capabilities.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async authorize(): Promise<PartnerAuthorizeResponse> {
-    const auth = await this.raw.authorizePartner(this.masterKeyId, this.masterKey, this.realmUrl)
+    const auth = await this.raw.authorizePartner(this.#masterKeyId, this.#masterKey, this.realmUrl)
     this.partnerAccountInfo.setAuth(auth)
     this.lockUrlGuard(auth)
     return auth
@@ -239,6 +313,8 @@ export class PartnerClient {
    * @param options - Optional group filter and pagination settings.
    *
    * @returns A page of Partner groups with an optional continuation cursor.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async listGroups(options?: ListGroupsOptions): Promise<ListGroupsResponse> {
     const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
@@ -261,6 +337,8 @@ export class PartnerClient {
    * @param options - Optional group filter, page size, and abort signal.
    *
    * @returns An async iterable of {@link PartnerGroup} entries.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   paginateGroups(options?: PaginateGroupsOptions): AsyncIterableIterator<PartnerGroup> {
     return paginateItems(
@@ -284,6 +362,8 @@ export class PartnerClient {
    * @param options - Group ID plus optional pagination settings.
    *
    * @returns A page of group-member results with an optional continuation cursor.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async listGroupMembers(options: ListGroupMembersOptions): Promise<ListGroupMembersResponse> {
     const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
@@ -306,6 +386,8 @@ export class PartnerClient {
    * @param options - Group ID plus optional page size and abort signal.
    *
    * @returns An async iterable of {@link ListedGroupMember} entries.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   paginateGroupMembers(
     options: PaginateGroupMembersOptions,
@@ -318,9 +400,12 @@ export class PartnerClient {
           ...(cursor !== undefined ? { startEmail: cursor } : {}),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
+        // The API returns an array for consistency with batch-capable Partner
+        // surfaces, but this request is scoped to one group ID.
+        const result = resp[0]
         return {
           page: resp,
-          nextCursor: resp.find((result) => result.nextEmail !== null)?.nextEmail ?? undefined,
+          nextCursor: result?.nextEmail ?? undefined,
         }
       },
       (page) => page.flatMap((result) => result.groupMembers),
@@ -334,6 +419,8 @@ export class PartnerClient {
    * @param options - Group ID, member email, and optional region.
    *
    * @returns The created member result array, including the member application key.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async createGroupMember(options: CreateGroupMemberOptions): Promise<CreateGroupMemberResponse> {
     const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
@@ -356,6 +443,8 @@ export class PartnerClient {
    * @param options - Group ID, member account ID, and optional replacement email.
    *
    * @returns The ejected member object.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async ejectGroupMember(options: EjectGroupMemberOptions): Promise<EjectGroupMemberResponse> {
     const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
@@ -375,33 +464,96 @@ export class PartnerClient {
   /**
    * Reserves one or more new B2 Reserve trial accounts.
    *
+   * This operation is non-idempotent and automatic retries/expired-token
+   * reauthorization are disabled at the raw layer. If the request fails after
+   * the server processes it, the returned application keys may be
+   * unrecoverable; reconcile account state before reissuing a batch.
+   *
    * @param request - A single trial account request or a non-empty request array.
+   * @param options - Optional abort signal.
    *
    * @returns The created reserve-trial account result array.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async reserveTrialAccounts(
     request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
+    options?: ReserveTrialAccountsOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
     const { groupsApiUrl, authToken } = this.groupsCoordinates()
-    return this.raw.reserveTrialCreateAccount(groupsApiUrl, authToken, request)
+    return this.raw.reserveTrialCreateAccount(
+      groupsApiUrl,
+      authToken,
+      request,
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
+    )
   }
 
   private lockUrlGuard(auth: PartnerAuthorizeResponse): void {
+    this.lockUrlGuardFromSuffixes(derivePartnerAllowedSuffixes(auth, this.realmUrl))
+  }
+
+  private lockUrlGuardFromSuffixes(derived: readonly string[]): void {
     if (this.urlGuard === null) return
-    const derived = derivePartnerAllowedSuffixes(auth, this.realmUrl)
     const merged =
-      this.userAllowedSuffixes !== undefined
-        ? this.userAllowedSuffixes.length === 0
-          ? []
-          : Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
-        : derived
+      this.disableSsrfGuard === true
+        ? []
+        : this.userAllowedSuffixes !== undefined
+          ? Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
+          : derived
     this.urlGuard.setAllowedSuffixes(merged)
   }
 
-  private async reauthorize(): Promise<string> {
-    this.partnerAccountInfo.clear()
+  private reauthorize(): Promise<string> {
+    this.#inflightReauth ??= this.doReauthorize().finally(() => {
+      this.#inflightReauth = null
+    })
+    return this.#inflightReauth
+  }
+
+  private async doReauthorize(): Promise<string> {
     const auth = await this.authorize()
     return auth.authorizationToken
+  }
+
+  /**
+   * Hides credentials and Partner tokens from `JSON.stringify(client)`.
+   *
+   * @returns A redacted diagnostic object.
+   */
+  toJSON(): {
+    readonly type: 'PartnerClient'
+    readonly credentials: string
+    readonly authorization: string
+    readonly authorized: boolean
+    readonly urlGuardAllowedSuffixes: readonly string[] | null
+  } {
+    return {
+      type: 'PartnerClient',
+      credentials: MASTER_KEY_REDACTED,
+      authorization:
+        this.partnerAccountInfo.getAuth() === null ? '[unauthorized]' : PARTNER_TOKEN_REDACTED,
+      authorized: this.partnerAccountInfo.getAuth() !== null,
+      urlGuardAllowedSuffixes: this.urlGuard?.getAllowedSuffixes() ?? null,
+    }
+  }
+
+  /**
+   * Hides credentials and Partner tokens from default stringification.
+   *
+   * @returns A short redacted label.
+   */
+  toString(): string {
+    return `[PartnerClient ${MASTER_KEY_REDACTED}]`
+  }
+
+  /**
+   * Hides credentials and Partner tokens from Node's `util.inspect`.
+   *
+   * @returns A short redacted label.
+   */
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return this.toString()
   }
 
   private groupsCoordinates(): PartnerGroupsCoordinates {
@@ -417,37 +569,4 @@ export class PartnerClient {
       adminAccountId: this.partnerAccountInfo.getAccountId(),
     }
   }
-}
-
-function derivePartnerAllowedSuffixes(
-  auth: PartnerAuthorizeResponse,
-  realmUrl: string,
-): readonly string[] {
-  const suffixes = new Set<string>()
-  addPartnerUrlSuffix(suffixes, realmUrl)
-  if (auth.apiInfo.groupsApi !== undefined) {
-    addPartnerUrlSuffix(suffixes, auth.apiInfo.groupsApi.groupsApiUrl)
-  }
-  if (auth.apiInfo.backupApi !== undefined) {
-    addPartnerUrlSuffix(suffixes, auth.apiInfo.backupApi.backupApiUrl)
-  }
-  return Array.from(suffixes).sort()
-}
-
-function addPartnerUrlSuffix(suffixes: Set<string>, rawUrl: string): void {
-  try {
-    suffixes.add(partnerAllowedSuffix(new URL(rawUrl).hostname))
-  } catch {
-    // Malformed cached auth will be rejected by PartnerRawClient before use.
-  }
-}
-
-function partnerAllowedSuffix(hostname: string): string {
-  const host = hostname.toLowerCase()
-  if (hostMatchesAllowedSuffix(host, PRODUCTION_HOST_SUFFIX)) return PRODUCTION_HOST_SUFFIX
-  if (hostMatchesAllowedSuffix(host, STAGING_HOST_SUFFIX)) return STAGING_HOST_SUFFIX
-  if (hostMatchesAllowedSuffix(host, PRODUCTION_ENDPOINT_HOST_SUFFIX)) {
-    return PRODUCTION_ENDPOINT_HOST_SUFFIX
-  }
-  return host
 }

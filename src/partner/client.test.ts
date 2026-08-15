@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BadAuthTokenError, InvalidGroupIdError } from '../errors/index.ts'
+import {
+  B2PartnerAuthorizationError,
+  B2SsrfError,
+  BadAuthTokenError,
+  ExpiredAuthTokenError,
+  InvalidGroupIdError,
+  ServiceUnavailableError,
+} from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse } from '../test-utils/index.ts'
@@ -12,6 +19,13 @@ import {
   Region,
 } from '../types/partner.ts'
 import { PartnerClient, type PartnerClientOptions } from './client.ts'
+import { InMemoryPartnerAccountInfo } from './in-memory.ts'
+
+const runtimeGlobals = globalThis as Record<string, unknown>
+const runtimeProcess = runtimeGlobals['process'] as
+  | { readonly versions?: { readonly node?: string } }
+  | undefined
+const isNode = typeof runtimeProcess?.versions?.node === 'string'
 
 function requestJsonBody(request: HttpRequest): unknown {
   if (typeof request.body !== 'string') throw new Error('expected JSON request body')
@@ -52,24 +66,29 @@ function makeRecordingPartnerClient(options?: {
   }
 }
 
-function partnerAuthorizeResponse(token: string): PartnerAuthorizeResponse {
+function partnerAuthorizeResponse(
+  token: string,
+  overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
+): PartnerAuthorizeResponse {
+  const groupsApiUrl = overrides.groupsApiUrl ?? 'https://groups.backblazeb2.com/partner'
+  const backupApiUrl = overrides.backupApiUrl ?? 'https://backup.backblazeb2.com/backup'
   return {
     accountId: accountId('partner-account'),
     authorizationToken: partnerToken(token),
     apiInfo: {
       groupsApi: {
-        groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+        groupsApiUrl,
         capabilities: [PartnerCapability.All],
         infoType: 'groupsApi',
       },
       backupApi: {
-        backupApiUrl: 'https://backup.backblazeb2.com/backup',
+        backupApiUrl,
         capabilities: [PartnerCapability.All],
         infoType: 'backupApi',
       },
     },
-    groupsApiUrl: 'https://groups.backblazeb2.com/partner',
-    backupApiUrl: 'https://backup.backblazeb2.com/backup',
+    groupsApiUrl,
+    backupApiUrl,
     groupsCapabilities: [PartnerCapability.All],
     backupCapabilities: [PartnerCapability.All],
     applicationKeyExpirationTimestamp: null,
@@ -117,6 +136,14 @@ function make401ListGroupsClient(code: string): {
   }
 }
 
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('condition was not met')
+}
+
 describe('PartnerClient facade', () => {
   it('authorizes and reads Partner API coordinates from PartnerAccountInfo', async () => {
     const { client, seenRequests } = makeRecordingPartnerClient()
@@ -137,6 +164,62 @@ describe('PartnerClient facade', () => {
     expect(query.get('adminAccountId')).toBe(auth.accountId)
     expect(query.get('maxGroupCount')).toBe('1')
     expect(listRequest.headers).toMatchObject({ Authorization: auth.authorizationToken })
+  })
+
+  it('redacts credentials and tokens from JSON serialization paths', () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token-secret'))
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id-secret',
+      masterKey: 'master-key-secret',
+      partnerAccountInfo,
+      transport: {
+        async send() {
+          throw new Error('unexpected request')
+        },
+      },
+    })
+
+    const rendered = [
+      JSON.stringify(client),
+      JSON.stringify({ client }),
+      JSON.stringify({ client: { ...client } }),
+      String(client),
+    ].join('\n')
+
+    expect(rendered).not.toContain('master-key-id-secret')
+    expect(rendered).not.toContain('master-key-secret')
+    expect(rendered).not.toContain('masterKey')
+    expect(rendered).not.toContain('masterKeyId')
+    expect(rendered).not.toContain('partner-token-secret')
+    expect(rendered).not.toContain('application-key-secret')
+    expect(rendered).toContain('[redacted')
+  })
+
+  it.skipIf(!isNode)('redacts credentials and tokens from Node inspect', async () => {
+    const { inspect } = await import(/* @vite-ignore */ 'node:util')
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token-secret'))
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id-secret',
+      masterKey: 'master-key-secret',
+      partnerAccountInfo,
+      transport: {
+        async send() {
+          throw new Error('unexpected request')
+        },
+      },
+    })
+
+    const rendered = [inspect(client), inspect({ client: { ...client } })].join('\n')
+
+    expect(rendered).not.toContain('master-key-id-secret')
+    expect(rendered).not.toContain('master-key-secret')
+    expect(rendered).not.toContain('masterKey')
+    expect(rendered).not.toContain('masterKeyId')
+    expect(rendered).not.toContain('partner-token-secret')
+    expect(rendered).not.toContain('application-key-secret')
+    expect(rendered).toContain('[redacted')
   })
 
   it('paginates groups and group members through the simulator', async () => {
@@ -208,16 +291,50 @@ describe('PartnerClient facade', () => {
     expect(remainingMembers.map((member) => member.email)).toEqual(['z-facade-member@example.com'])
   })
 
+  it('passes documented null member options through to the raw layer', async () => {
+    const { client } = makeRecordingPartnerClient()
+    await client.authorize()
+    const group = groupId('group-id')
+    const memberAccountId = accountId('member-account')
+    const createSpy = vi.spyOn(client.raw, 'createGroupMember').mockResolvedValue([])
+    const ejectSpy = vi.spyOn(client.raw, 'ejectGroupMember').mockResolvedValue({
+      accountId: memberAccountId,
+      email: 'member@example.com',
+      groupId: group,
+      groupName: 'Example Group',
+      region: Region.UsWest,
+      s3Endpoint: 's3.us-west-001.backblazeb2.com',
+    })
+
+    await client.createGroupMember({
+      groupId: group,
+      memberEmail: 'member@example.com',
+      region: null,
+    })
+    await client.ejectGroupMember({
+      groupId: group,
+      memberAccountId,
+      email: null,
+    })
+
+    expect(createSpy.mock.calls[0]?.[2]).toMatchObject({ region: null })
+    expect(ejectSpy.mock.calls[0]?.[2]).toMatchObject({ email: null })
+  })
+
   it('reserves trial accounts from single and array inputs through the simulator', async () => {
     const { client, seenRequests } = makeRecordingPartnerClient()
+    const controller = new AbortController()
     await client.authorize()
 
-    const single = await client.reserveTrialAccounts({
-      email: 'facade-trial-one@example.com',
-      term: 15,
-      storage: 12,
-      region: Region.UsEast,
-    })
+    const single = await client.reserveTrialAccounts(
+      {
+        email: 'facade-trial-one@example.com',
+        term: 15,
+        storage: 12,
+        region: Region.UsEast,
+      },
+      { signal: controller.signal },
+    )
     const multiple = await client.reserveTrialAccounts([
       {
         email: 'facade-trial-two@example.com',
@@ -254,6 +371,7 @@ describe('PartnerClient facade', () => {
         region: Region.UsEast,
       },
     ])
+    expect(singleReserveRequest.signal).toBe(controller.signal)
     expect(requestJsonBody(multipleReserveRequest)).toEqual([
       {
         email: 'facade-trial-two@example.com',
@@ -282,6 +400,120 @@ describe('PartnerClient facade', () => {
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
   })
 
+  it('collapses concurrent expired-token reauthorization into one authorize call', async () => {
+    let authorizeCount = 0
+    let releaseReauth: (() => void) | undefined
+    const reauthGate = new Promise<void>((resolve) => {
+      releaseReauth = resolve
+    })
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount > 1) await reauthGate
+          return jsonResponse(partnerAuthorizeResponse(`partner-token-${authorizeCount}`))
+        }
+        if (endpoint === 'b2_list_groups') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+          }
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await client.authorize()
+    const calls = Array.from({ length: 5 }, () => client.listGroups())
+    await waitUntil(() => authorizeCount === 2)
+    releaseReauth?.()
+    const pages = await Promise.all(calls)
+
+    expect(pages.every((page) => page.groups.length === 0)).toBe(true)
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations).toEqual([
+      'partner-token-1',
+      'partner-token-1',
+      'partner-token-1',
+      'partner-token-1',
+      'partner-token-1',
+      'partner-token-2',
+      'partner-token-2',
+      'partner-token-2',
+      'partner-token-2',
+      'partner-token-2',
+    ])
+  })
+
+  it('keeps cached auth when expired-token reauthorization fails', async () => {
+    let authorizeCount = 0
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 1) {
+            return jsonResponse(partnerAuthorizeResponse('partner-token-1'))
+          }
+          return jsonErrorResponse(503, 'service_unavailable', 'try again')
+        }
+        if (endpoint === 'b2_list_groups') {
+          return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await client.authorize()
+    await expect(client.listGroups()).rejects.toThrow(ServiceUnavailableError)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
+
+    await expect(client.listGroups()).rejects.toThrow(ServiceUnavailableError)
+    expect(authorizeCount).toBe(3)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
+  })
+
+  it('does not reauthorize recursively when authorize returns expired_auth_token', async () => {
+    let authorizeCount = 0
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport: {
+        async send(request) {
+          if (apiEndpointName(request) !== 'b2_authorize_account') {
+            throw new Error('unexpected non-authorize request')
+          }
+          authorizeCount += 1
+          return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+        },
+      },
+      retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await expect(client.authorize()).rejects.toThrow(ExpiredAuthTokenError)
+    expect(authorizeCount).toBe(1)
+  })
+
   it('does not reauthorize for partner 401 non-expired auth codes', async () => {
     const { client, listAuthorizations, authorizeCount } = make401ListGroupsClient('unauthorized')
 
@@ -303,6 +535,59 @@ describe('PartnerClient facade', () => {
     expect(
       seenRequests.filter((request) => apiEndpointName(request) === 'b2_authorize_account'),
     ).toHaveLength(1)
+  })
+
+  it('rejects poisoned cached auth before Partner tokens can leave the client', () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(
+      partnerAuthorizeResponse('victim-partner-token', {
+        groupsApiUrl: 'https://attacker.example/partner',
+      }),
+    )
+    const seenRequests: HttpRequest[] = []
+
+    expect(
+      () =>
+        new PartnerClient({
+          masterKeyId: 'master-key-id',
+          masterKey: 'master-key',
+          partnerAccountInfo,
+          transport: {
+            async send(request) {
+              seenRequests.push(request)
+              return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+            },
+          },
+        }),
+    ).toThrow(B2PartnerAuthorizationError)
+
+    expect(seenRequests).toEqual([])
+  })
+
+  it('uses validated cached auth with a custom transport without reauthorizing', async () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('cached-partner-token'))
+    const seenRequests: HttpRequest[] = []
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        },
+      },
+    })
+
+    await client.listGroups()
+
+    expect(seenRequests.map((request) => apiEndpointName(request))).toEqual(['b2_list_groups'])
+    expect(seenRequests[0]?.headers?.['Authorization']).toBe('cached-partner-token')
   })
 
   it('locks the default URL guard from Partner authorize response hosts', async () => {
@@ -332,11 +617,14 @@ describe('PartnerClient facade', () => {
       const client = new PartnerClient({
         masterKeyId: 'master-key-id',
         masterKey: 'master-key',
+        allowedHostSuffixes: [],
       })
 
       await client.authorize()
 
       expect(client.urlGuard?.getAllowedSuffixes()).toEqual(['backblaze.com', 'backblazeb2.com'])
+      expect(() => client.urlGuard?.check('https://evil.example/collect')).toThrow(B2SsrfError)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       fetchMock.mockRestore()
     }

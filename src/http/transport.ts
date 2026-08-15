@@ -452,6 +452,10 @@ function isFinishLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_finish_large_file'
 }
 
+function isAuthorizeEndpoint(url: string): boolean {
+  return b2ApiEndpointName(url) === 'b2_authorize_account'
+}
+
 function isStartLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_start_large_file'
 }
@@ -496,6 +500,7 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isAuthorizeEndpoint(url) && error instanceof ExpiredAuthTokenError) return false
   if (isPartnerMutationEndpoint(url)) return false
   if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
@@ -612,6 +617,7 @@ export class RetryTransport implements HttpTransport {
         if (
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
+          !isAuthorizeEndpoint(request.url) &&
           !isUploadEndpoint(request.url) &&
           !isPartnerMutationEndpoint(request.url) &&
           !didReauth
