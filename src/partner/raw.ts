@@ -327,7 +327,7 @@ function reserveTrialCreateAccountRequestBody(
     email: entry.email,
     term: entry.term,
     storage: entry.storage,
-    ...(entry.region !== undefined ? { region: entry.region } : {}),
+    ...(entry.region != null ? { region: entry.region } : {}),
   }))
 }
 
@@ -419,7 +419,7 @@ export class PartnerRawClient {
         adminAccountId: request.adminAccountId,
         groupId: request.groupId,
         memberEmail: request.memberEmail,
-        ...(request.region !== undefined ? { region: request.region } : {}),
+        ...(request.region != null ? { region: request.region } : {}),
       },
       mutationRequestOptions(options),
     )
@@ -473,11 +473,15 @@ export class PartnerRawClient {
    * the requested storage in TB, documented as 1 through 50 inclusive.
    *
    * This operation is non-idempotent and creates billable accounts. Automatic
-   * retries are disabled; a network or timeout failure after the server has
-   * processed the request may still have created one or more accounts. Reconcile
-   * account state out of band before re-issuing the same batch.
+   * retries and expired-token reauthorization are disabled; long-lived batch
+   * callers must catch auth expiry, reauthorize, and then decide whether to
+   * issue a new request. A network or timeout failure after the server has
+   * processed the request may still have created one or more accounts, and the
+   * application keys from a lost response are not recoverable from B2. Bulk
+   * callers should reconcile account state out of band, such as through Partner
+   * account listing, before re-issuing the same batch.
    *
-   * @param partnerApiUrl - The Partner API base URL from `authorizePartner`. The authorize response currently exposes this as `groupsApiUrl`.
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`. The authorize response currently exposes the shared Partner endpoint base as `groupsApiUrl`.
    * @param authToken - The Partner API authorization token.
    * @param request - One reserve-trial account request, or one or more entries.
    * @param options - Optional abort and per-request retry settings.
@@ -487,13 +491,13 @@ export class PartnerRawClient {
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async reserveTrialCreateAccount(
-    partnerApiUrl: string,
+    groupsApiUrl: string,
     authToken: string,
     request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
     const response = await this.postJson<ReserveTrialCreateAccountResponse>(
-      partnerApiUrl,
+      groupsApiUrl,
       authToken,
       'b2_reserve_trial_create_account',
       reserveTrialCreateAccountRequestBody(request),

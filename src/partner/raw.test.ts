@@ -1,3 +1,4 @@
+import { inspect } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import {
@@ -5,6 +6,7 @@ import {
   B2PartnerAuthorizationError,
   B2RealmConfigurationError,
   BadAuthTokenError,
+  ExpiredAuthTokenError,
 } from '../errors/index.ts'
 import {
   FetchTransport,
@@ -569,6 +571,8 @@ describe('PartnerRawClient group management endpoints', () => {
 })
 
 describe('PartnerRawClient reserve trial endpoint', () => {
+  const authToken = partnerToken('partner-token')
+
   it('creates one reserve trial account from a single request through the simulator', async () => {
     const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
 
@@ -675,6 +679,28 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ])
   })
 
+  it('omits null region values from the reserve trial wire request', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-default-region@example.com',
+      term: 7,
+      storage: 1,
+      region: null,
+    })
+
+    expect(result[0]?.s3Endpoint).toBe('s3.us-west-001.backblazeb2.com')
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-default-region@example.com',
+        term: 7,
+        storage: 1,
+      },
+    ])
+  })
+
   it('redacts reserve trial application keys through SDK safe serialization paths', async () => {
     const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
 
@@ -683,18 +709,118 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       term: 7,
       storage: 1,
     })
-    const secret = result[0]?.applicationKey
-    if (secret === undefined) throw new Error('expected reserve trial secret')
+    const [account] = result
+    if (account === undefined) throw new Error('expected reserve trial result')
+    const secret = account.applicationKey
     const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
-    const inspected = (result as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
+    const inspectedResult = (account as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
+    const inspectedResponse = (result as unknown as Record<symbol, () => unknown>)[
+      inspectSymbol
+    ]?.()
+    const redactedResponseJson = JSON.stringify(result)
+    const redactedResultJson = JSON.stringify(account)
 
     expect(secret).not.toBe(APPLICATION_KEY_REDACTED)
+    expect(account.applicationKeyId).not.toBe('')
+    expect(account.accountId).not.toBe('')
+    expect(redactedResponseJson).toContain(APPLICATION_KEY_REDACTED)
+    expect(redactedResponseJson).toContain(account.applicationKeyId)
+    expect(redactedResultJson).toContain(APPLICATION_KEY_REDACTED)
+    expect(redactedResultJson).toContain(account.accountId)
     expect(String(result)).not.toContain(secret)
+    expect(String(account)).not.toContain(secret)
     expect(JSON.stringify(result)).not.toContain(secret)
-    expect(JSON.stringify(inspected)).not.toContain(secret)
+    expect(JSON.stringify(account)).not.toContain(secret)
+    expect(inspect(result)).not.toContain(secret)
+    expect(inspect(account)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResult)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
     expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
     )
+  })
+
+  it('rejects non-array reserve trial response bodies with a typed SDK error', async () => {
+    const { raw } = makePartnerEndpointRawClient({
+      b2_reserve_trial_create_account: { accountId: 'not-an-array' },
+    })
+
+    await expect(
+      raw.reserveTrialCreateAccount('https://groups.backblazeb2.com/partner', authToken, {
+        email: 'trial-bad-response@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+  })
+
+  it('does not retry reserve trial failures with an embedded b2api base segment', async () => {
+    const requests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        requests.push(request)
+        return jsonErrorResponse(503, 'service_unavailable', 'try again')
+      },
+    }
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+    const groupsApiUrl = 'https://groups.backblazeb2.com/partner/b2api/v3/proxy'
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-embedded-b2api-retry@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow()
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe(`${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`)
+  })
+
+  it('does not reauthorize reserve trial failures with an embedded b2api base segment', async () => {
+    const requests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        requests.push(request)
+        return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+      },
+    }
+    const onReauth = vi.fn().mockResolvedValue('fresh-partner-token')
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        onReauth,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      raw.reserveTrialCreateAccount(
+        'https://groups.backblazeb2.com/partner/b2api/v3/proxy',
+        authToken,
+        {
+          email: 'trial-embedded-b2api-reauth@example.com',
+          term: 7,
+          storage: 1,
+        },
+      ),
+    ).rejects.toThrow(ExpiredAuthTokenError)
+
+    expect(onReauth).not.toHaveBeenCalled()
+    expect(requests).toHaveLength(1)
   })
 
   it.each([

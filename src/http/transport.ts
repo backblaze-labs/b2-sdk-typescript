@@ -467,7 +467,9 @@ function isPartnerMutationEndpoint(url: string): boolean {
 
 function b2ApiEndpointName(url: string): string | undefined {
   const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
-  const apiRootIndex = segments.indexOf('b2api')
+  // Partner endpoint base URLs can themselves contain a b2api-looking segment
+  // before the SDK appends the real API route. Classify the terminal route.
+  const apiRootIndex = segments.lastIndexOf('b2api')
   if (apiRootIndex === -1) return undefined
   return segments[apiRootIndex + 2]
 }

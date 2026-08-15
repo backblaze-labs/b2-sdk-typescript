@@ -1,3 +1,4 @@
+import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type {
   PartnerAuthorizeResponse,
   ReserveTrialCreateAccountResponse,
@@ -108,6 +109,11 @@ export function redactPartnerAuthorizeResponse(
 /**
  * Adds non-enumerable serialization and inspection hooks that redact the
  * application key secret while preserving direct property access.
+ * Unlike Partner authorize token redaction, reserve-trial results redact
+ * `JSON.stringify` because the response contains newly minted application key
+ * secrets that are commonly logged as batch results. Callers that need to
+ * persist the key should read `applicationKey` directly into secure storage
+ * before serializing the object.
  *
  * @param result - Reserve trial account result to protect from accidental logging.
  *
@@ -150,10 +156,18 @@ export function redactReserveTrialCreateAccountResult(
  * @param response - Reserve trial account response to protect from accidental logging.
  *
  * @returns The same response array with redaction hooks installed when possible.
+ *
+ * @throws B2PartnerAuthorizationError if the response is not an array.
  */
 export function redactReserveTrialCreateAccountResponse(
   response: ReserveTrialCreateAccountResponse,
 ): ReserveTrialCreateAccountResponse {
+  if (!Array.isArray(response)) {
+    throw new B2PartnerAuthorizationError(
+      'b2_reserve_trial_create_account response was not a JSON array',
+    )
+  }
+
   const target = Object.isExtensible(response) ? response : [...response]
   const writableTarget = target as ReserveTrialCreateAccountResult[]
   for (let i = 0; i < writableTarget.length; i++) {
