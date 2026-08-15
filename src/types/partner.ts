@@ -379,10 +379,14 @@ export interface ReserveTrialCreateAccountRequestEntry {
 
 /**
  * Array-shaped wire request body for `b2_reserve_trial_create_account`.
+ * The Partner API requires at least one request entry per call.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccountRequestEntry[]
+export type ReserveTrialCreateAccountRequest = readonly [
+  ReserveTrialCreateAccountRequestEntry,
+  ...ReserveTrialCreateAccountRequestEntry[],
+]
 
 /**
  * Single result element returned by `b2_reserve_trial_create_account`.

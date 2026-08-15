@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { B2Client } from '../client.ts'
 import {
   AccessDeniedError,
   B2PartnerAuthorizationError,
@@ -20,7 +21,11 @@ import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '..
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient } from './raw.ts'
-import { redactPartnerAuthorizeResponse } from './redaction.ts'
+import {
+  APPLICATION_KEY_REDACTED,
+  redactPartnerAuthorizeResponse,
+  reserveTrialCreateAccountResponseToRedactedJson,
+} from './redaction.ts'
 
 function partnerAuthorizeResponse(
   overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
@@ -89,6 +94,7 @@ function makeRecordingSimulatorTransport(sim: B2Simulator): {
 
 async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Promise<{
   readonly raw: PartnerRawClient
+  readonly sim: B2Simulator
   readonly seenRequests: HttpRequest[]
   readonly groupsApiUrl: string
   readonly authToken: PartnerToken
@@ -106,6 +112,7 @@ async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Prom
   if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
   return {
     raw,
+    sim,
     seenRequests,
     groupsApiUrl: auth.groupsApiUrl,
     authToken: auth.authorizationToken,
@@ -579,10 +586,11 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     })
-    expect(result[0]?.accountId).toEqual(expect.stringMatching(/^sim_trial_account_/))
-    expect(result[0]?.applicationKey).toEqual(expect.stringMatching(/^sim_secret_/))
-    expect(result[0]?.applicationKeyId).toEqual(expect.stringMatching(/^sim_key_/))
-    expect(result[0]?.bucketId).toEqual(expect.stringMatching(/^b2_bucket_/))
+    expect(result[0]?.accountId).toEqual(expect.any(String))
+    expect(result[0]?.applicationKey).toEqual(expect.any(String))
+    expect(result[0]?.applicationKeyId).toEqual(expect.any(String))
+    expect(result[0]?.bucketId).toEqual(expect.any(String))
+    expect(result[0]?.applicationKey).not.toBe('')
     const reserveRequest = seenRequests.at(-1)
     if (reserveRequest === undefined) throw new Error('expected reserve trial request')
     expect(reserveRequest).toMatchObject({
@@ -602,6 +610,26 @@ describe('PartnerRawClient reserve trial endpoint', () => {
         region: Region.UsEast,
       },
     ])
+  })
+
+  it('authorizes storage clients as the created trial account', async () => {
+    const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-storage-auth@example.com',
+      term: 7,
+      storage: 1,
+    })
+    if (trial === undefined) throw new Error('expected reserve trial result')
+
+    const client = new B2Client({
+      applicationKeyId: trial.applicationKeyId,
+      applicationKey: trial.applicationKey,
+      transport: sim.transport(),
+    })
+    const auth = await client.authorize()
+
+    expect(auth.accountId).toBe(trial.accountId)
   })
 
   it('creates multiple reserve trial accounts from an array request through the simulator', async () => {
@@ -647,6 +675,28 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ])
   })
 
+  it('redacts reserve trial application keys through SDK safe serialization paths', async () => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-redaction@example.com',
+      term: 7,
+      storage: 1,
+    })
+    const secret = result[0]?.applicationKey
+    if (secret === undefined) throw new Error('expected reserve trial secret')
+    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+    const inspected = (result as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
+
+    expect(secret).not.toBe(APPLICATION_KEY_REDACTED)
+    expect(String(result)).not.toContain(secret)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(JSON.stringify(inspected)).not.toContain(secret)
+    expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
+      APPLICATION_KEY_REDACTED,
+    )
+  })
+
   it.each([
     ['missing Authorization header', '', AccessDeniedError, 403, 'access_denied'],
     [
@@ -677,6 +727,84 @@ describe('PartnerRawClient reserve trial endpoint', () => {
         storage: 1,
       }),
     ).rejects.toThrow(errorClass)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['empty', { Authorization: '' }],
+    ['non-Basic', { Authorization: 'Bearer partner-token' }],
+    ['malformed Basic', { Authorization: `Basic ${btoa('not-a-key-pair')}` }],
+    ['empty Basic credentials', { Authorization: `Basic ${btoa(':')}` }],
+  ] satisfies readonly (readonly [
+    string,
+    Record<string, string> | undefined,
+  ])[])('does not mint simulator Partner tokens with %s authorize credentials', async (_label, headers) => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const transport = sim.transport()
+
+    const authResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      ...(headers !== undefined ? { headers } : {}),
+    })
+    expect(authResponse.status).toBe(401)
+    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+    expect(authBody.authorizationToken).toBeUndefined()
+
+    const reserveResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: authBody.authorizationToken ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+    })
+
+    expect(reserveResponse.status).toBe(403)
+    await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'access_denied' })
+  })
+
+  it('does not mint simulator Partner tokens for a known application key secret mismatch', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const transport = sim.transport()
+    const keyResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      method: 'POST',
+      headers: {
+        Authorization: 'sim-auth-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [],
+        keyName: 'partner-authorize-negative',
+      }),
+    })
+    const key = (await keyResponse.json()) as { applicationKeyId: string }
+
+    const authResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:wrong-secret`)}`,
+      },
+    })
+
+    expect(authResponse.status).toBe(401)
+    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+    expect(authBody.authorizationToken).toBeUndefined()
+
+    const reserveResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: authBody.authorizationToken ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'mismatch@example.com', term: 7, storage: 1 }]),
+    })
+    expect(reserveResponse.status).toBe(403)
   })
 
   it.each([

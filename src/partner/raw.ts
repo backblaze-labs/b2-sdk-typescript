@@ -26,7 +26,10 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
-import { redactPartnerAuthorizeResponse } from './redaction.ts'
+import {
+  redactPartnerAuthorizeResponse,
+  redactReserveTrialCreateAccountResponse,
+} from './redaction.ts'
 
 const PARTNER_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
@@ -318,7 +321,7 @@ function withQueryString(url: string, query: QueryParams): string {
 
 function reserveTrialCreateAccountRequestBody(
   request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
-): ReserveTrialCreateAccountRequest {
+): readonly ReserveTrialCreateAccountRequestEntry[] {
   const entries = Array.isArray(request) ? request : [request]
   return entries.map((entry) => ({
     email: entry.email,
@@ -460,34 +463,43 @@ export class PartnerRawClient {
    *
    * The Partner API creates one or more new Backblaze B2 accounts and starts
    * B2 Reserve trials for them. Backblaze documents both the wire request and
-   * the success response as JSON arrays. For convenience, this raw binding
-   * accepts either one request entry or an array of request entries and always
-   * sends an array on the wire.
+   * the success response as JSON arrays. The array form must include at least
+   * one request entry. For convenience, this raw binding intentionally accepts
+   * one request entry for the one-account case and always sends an array on the
+   * wire.
    *
    * Each email address must not already be a Backblaze account. `term` is the
    * trial duration in days, documented as 7 through 30 inclusive. `storage` is
    * the requested storage in TB, documented as 1 through 50 inclusive.
    *
-   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * This operation is non-idempotent and creates billable accounts. Automatic
+   * retries are disabled; a network or timeout failure after the server has
+   * processed the request may still have created one or more accounts. Reconcile
+   * account state out of band before re-issuing the same batch.
+   *
+   * @param partnerApiUrl - The Partner API base URL from `authorizePartner`. The authorize response currently exposes this as `groupsApiUrl`.
    * @param authToken - The Partner API authorization token.
    * @param request - One reserve-trial account request, or one or more entries.
    * @param options - Optional abort and per-request retry settings.
    *
    * @returns The created reserve-trial account result array.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async reserveTrialCreateAccount(
-    groupsApiUrl: string,
+    partnerApiUrl: string,
     authToken: string,
     request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
-    return this.postJson<ReserveTrialCreateAccountResponse>(
-      groupsApiUrl,
+    const response = await this.postJson<ReserveTrialCreateAccountResponse>(
+      partnerApiUrl,
       authToken,
       'b2_reserve_trial_create_account',
       reserveTrialCreateAccountRequestBody(request),
       mutationRequestOptions(options),
     )
+    return redactReserveTrialCreateAccountResponse(response)
   }
 
   /**
