@@ -387,6 +387,25 @@ describe('PartnerClient facade', () => {
     ])
   })
 
+  it('rejects empty reserve trial account arrays before the raw request', async () => {
+    const { client, seenRequests } = makeRecordingPartnerClient()
+    await client.authorize()
+
+    await expect(
+      client.reserveTrialAccounts(
+        [] as unknown as Parameters<typeof client.reserveTrialAccounts>[0],
+      ),
+    ).rejects.toThrow(
+      'reserveTrialAccounts request array must include at least one account request',
+    )
+
+    expect(
+      seenRequests.filter(
+        (request) => apiEndpointName(request) === 'b2_reserve_trial_create_account',
+      ),
+    ).toEqual([])
+  })
+
   it('reauthorizes and retries list requests on expired auth token errors', async () => {
     const { client, listAuthorizations, authorizeCount } =
       make401ListGroupsClient('expired_auth_token')

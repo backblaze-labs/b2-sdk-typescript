@@ -480,6 +480,11 @@ export class PartnerClient {
     request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
     options?: ReserveTrialAccountsOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
+    if (Array.isArray(request) && request.length === 0) {
+      throw new TypeError(
+        'reserveTrialAccounts request array must include at least one account request.',
+      )
+    }
     const { groupsApiUrl, authToken } = this.groupsCoordinates()
     return this.raw.reserveTrialCreateAccount(
       groupsApiUrl,
@@ -560,7 +565,7 @@ export class PartnerClient {
     const groupsApiUrl = this.partnerAccountInfo.getGroupsApiUrl()
     if (groupsApiUrl === null) {
       throw new B2PartnerAuthorizationError(
-        'Partner API is not available; authorizePartner() did not return apiInfo.groupsApi.',
+        'Partner API is not available; PartnerClient.authorize() did not return apiInfo.groupsApi.',
       )
     }
     return {
