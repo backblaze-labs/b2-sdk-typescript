@@ -38,6 +38,8 @@ import { toError } from '../util/to-error.ts'
 import { isPartnerQueryEndpoint, PartnerSimulator } from './partner.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'master-key-id'
+const SIMULATOR_MASTER_APPLICATION_KEY = 'master-key'
 function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
@@ -962,8 +964,14 @@ export interface B2SimulatorOptions {
   authTokenTtlMs?: number
   /**
    * When `true`, v3 `b2_authorize_account` responses include Partner and
-   * Computer Backup suites and issue Partner authorization tokens. Defaults
-   * to `false` so storage-oriented v3 simulator tests keep native auth shape.
+   * Computer Backup suites and issue Partner authorization tokens. Partner
+   * and Backup endpoint calls then require one of those issued tokens, even
+   * when `strictAuth` is otherwise disabled, so SDK auth-error paths can test
+   * documented 401 responses.
+   *
+   * Defaults to `false`: direct Partner/Backup endpoint tests remain
+   * permissive and accept any non-empty, whitespace-free Partner token without
+   * requiring an authorize call first.
    */
   partnerAuthorize?: boolean
   /**
@@ -1885,8 +1893,14 @@ export class B2Simulator {
   private canAuthorizePartner(authzHeader: string | undefined): boolean {
     const credentials = parseBasicAuthorizationHeader(authzHeader)
     if (credentials === null) return false
+    if (
+      credentials.applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+      credentials.applicationKey === SIMULATOR_MASTER_APPLICATION_KEY
+    ) {
+      return true
+    }
     const stored = this.keys.get(credentials.applicationKeyId)
-    return stored === undefined || stored.applicationKey === credentials.applicationKey
+    return stored !== undefined && stored.applicationKey === credentials.applicationKey
   }
 
   /**

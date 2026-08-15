@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { APPLICATION_KEY_REDACTED } from '../partner/redaction.ts'
 import type { ListComputersResponse } from '../types/backup.ts'
 import type { BucketInfo, ListBucketsResponse } from '../types/bucket.ts'
 import type {
@@ -6,9 +7,10 @@ import type {
   EjectGroupMemberResponse,
   ListGroupMembersResponse,
   ListGroupsResponse,
+  ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
 import { Region } from '../types/partner.ts'
-import { B2Simulator } from './index.ts'
+import { B2Simulator, type B2SimulatorOptions } from './index.ts'
 
 interface ErrorBody {
   readonly status: number
@@ -77,6 +79,84 @@ async function expectUnauthorized(
 }
 
 describe('B2Simulator partner endpoints', () => {
+  it('accepts arbitrary non-empty Partner tokens in default permissive mode', async () => {
+    const sim = new B2Simulator()
+    const authorization = 'any-partner-token'
+    const adminAccountId = 'offline-admin'
+
+    const groupsPage = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${adminAccountId}`,
+      authorization,
+    })
+    expect(groupsPage.status).toBe(200)
+    const group = groupsPage.body.groups[0]
+    if (group === undefined) throw new Error('expected default simulator group')
+
+    const created = await simulatorRequest<CreateGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization,
+      body: {
+        adminAccountId,
+        groupId: group.groupId,
+        memberEmail: 'permissive@example.com',
+      },
+    })
+    expect(created.status).toBe(200)
+    expect(created.body[0]?.groupMember.email).toBe('permissive@example.com')
+
+    const computers = await simulatorRequest<ListComputersResponse>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=offline-backup',
+      authorization,
+    })
+    expect(computers.status).toBe(200)
+    expect(computers.body[0]?.computers).toHaveLength(3)
+  })
+
+  it.each([
+    [
+      'disabled Partner API',
+      { partnerApiEnabled: false },
+      'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=default-prereq',
+      undefined,
+      'account is not enabled for Partner API',
+    ],
+    [
+      'missing SMS phone',
+      { partnerAccountHasValidPhone: false },
+      'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      [{ email: 'default-phone@example.com', term: 7, storage: 1 }],
+      'account does not have a valid phone number',
+    ],
+    [
+      'account not in good standing',
+      { partnerAccountInGoodStanding: false },
+      'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=default-standing',
+      undefined,
+      'account is not in good standing',
+    ],
+  ] satisfies readonly (readonly [
+    string,
+    B2SimulatorOptions,
+    string,
+    unknown,
+    string,
+  ])[])('rejects default permissive Partner calls for %s', async (_label, options, url, body, message) => {
+    const sim = new B2Simulator(options)
+    const result = await simulatorRequest<ErrorBody>(sim, {
+      url,
+      method: body === undefined ? 'GET' : 'POST',
+      authorization: 'any-partner-token',
+      ...(body === undefined ? {} : { body }),
+    })
+
+    expect(result.status).toBe(403)
+    expect(result.body).toMatchObject({
+      code: 'access_denied',
+      message,
+    })
+  })
+
   it('creates, lists, paginates, and ejects group members with issued Partner tokens', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true })
     const auth = await authorizePartner(sim)
@@ -177,6 +257,49 @@ describe('B2Simulator partner endpoints', () => {
     expect(remainingMembersPage.body[0]?.groupMembers.map((member) => member.email)).toEqual([
       'z-member@example.com',
     ])
+  })
+
+  it('keeps simulator wire response application keys unredacted', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const auth = await authorizePartner(sim)
+    const group = await firstGroup(sim, auth)
+    const transport = sim.transport()
+
+    const createdResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      headers: {
+        Authorization: auth.authorizationToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberEmail: 'wire-member@example.com',
+      }),
+    })
+    const createdText = await createdResponse.text()
+    const created = JSON.parse(createdText) as CreateGroupMemberResponse
+    const memberKey = created[0]?.applicationKey
+    if (memberKey === undefined) throw new Error('expected member application key')
+    expect(createdText).toContain(memberKey)
+    expect(createdText).not.toContain(APPLICATION_KEY_REDACTED)
+
+    const trialResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: auth.authorizationToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'wire-trial@example.com', term: 7, storage: 1 }]),
+    })
+    const trialText = await trialResponse.text()
+    const trial = JSON.parse(trialText) as ReserveTrialCreateAccountResponse
+    const trialKey = trial[0]?.applicationKey
+    if (trialKey === undefined) throw new Error('expected trial application key')
+    expect(trialText).toContain(trialKey)
+    expect(trialText).not.toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('reproduces group-member invalid region, group, count, and SMS-phone errors', async () => {
@@ -603,6 +726,34 @@ describe('B2Simulator partner endpoints', () => {
     }
   })
 
+  it('rejects unknown Partner authorize keys in strict mode', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true, strictAuth: true })
+    const transport = sim.transport()
+
+    const authResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa('attacker-key:any-secret')}`,
+      },
+    })
+    expect(authResponse.status).toBe(401)
+    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+    expect(authBody.authorizationToken).toBeUndefined()
+
+    const reserveResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: 'attacker-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+    })
+    expect(reserveResponse.status).toBe(401)
+    await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'unauthorized' })
+  })
+
   it('rejects cross-account Partner and Backup requests in strict auth mode', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true, strictAuth: true })
     const auth = await authorizePartner(sim)
@@ -761,6 +912,59 @@ describe('B2Simulator partner endpoints', () => {
       body: { accountId: auth.accountId },
     })
     expect(buckets.body.buckets.map((listed) => listed.bucketId)).toContain(bucket.body.bucketId)
+  })
+
+  it('bounds auto-provisioned state for arbitrary list account IDs', async () => {
+    const sim = new B2Simulator()
+    const authorization = 'bounded-partner-token'
+
+    const firstGroups = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=bounded-admin-0',
+      authorization,
+    })
+    const secondGroups = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=bounded-admin-0',
+      authorization,
+    })
+    expect(secondGroups.body).toEqual(firstGroups.body)
+
+    for (let index = 1; index < 100; index += 1) {
+      const result = await simulatorRequest<ListGroupsResponse>(sim, {
+        url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=bounded-admin-${index}`,
+        authorization,
+      })
+      expect(result.status).toBe(200)
+    }
+    const groupCap = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=bounded-admin-100',
+      authorization,
+    })
+    expect(groupCap.status).toBe(400)
+    expect(groupCap.body.code).toBe('too_many_accounts')
+
+    const firstComputers = await simulatorRequest<ListComputersResponse>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=bounded-backup-0',
+      authorization,
+    })
+    const secondComputers = await simulatorRequest<ListComputersResponse>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=bounded-backup-0',
+      authorization,
+    })
+    expect(secondComputers.body).toEqual(firstComputers.body)
+
+    for (let index = 1; index < 100; index += 1) {
+      const result = await simulatorRequest<ListComputersResponse>(sim, {
+        url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=bounded-backup-${index}`,
+        authorization,
+      })
+      expect(result.status).toBe(200)
+    }
+    const computerCap = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=bounded-backup-100',
+      authorization,
+    })
+    expect(computerCap.status).toBe(400)
+    expect(computerCap.body.code).toBe('too_many_accounts')
   })
 })
 

@@ -1,7 +1,3 @@
-import {
-  redactCreateGroupMemberResponse,
-  redactReserveTrialCreateAccountResponse,
-} from '../partner/redaction.ts'
 import { Capability } from '../types/auth.ts'
 import type { ComputerBackup } from '../types/backup.ts'
 import type { BucketInfo, BucketType } from '../types/bucket.ts'
@@ -45,6 +41,7 @@ const DEFAULT_GROUP_COUNT = 3
 const MAX_GROUPS_PER_ADMIN = 500
 const DEFAULT_MAX_GROUP_COUNT = 100 // Default group page size.
 const MAX_GROUP_COUNT = 100 // Maximum accepted group page size.
+const MAX_AUTO_PROVISIONED_ADMINS = 100
 const MAX_GROUP_MEMBERS = 5000
 const DEFAULT_MAX_MEMBER_COUNT = 100
 const MAX_MEMBER_COUNT = 1000
@@ -52,6 +49,7 @@ const DEFAULT_MAX_COMPUTER_COUNT = 100
 const MIN_COMPUTER_COUNT = 1
 const MAX_COMPUTER_COUNT = 500
 const DEFAULT_COMPUTER_COUNT = 3
+const MAX_AUTO_PROVISIONED_BACKUP_ACCOUNTS = 100
 const PARTNER_CREATED_STORAGE_KEY_CAPABILITIES = Object.freeze([
   Capability.ListBuckets,
   Capability.ReadBuckets,
@@ -98,7 +96,7 @@ interface IssuedPartnerToken {
 }
 
 interface AuthorizedPartnerRequest {
-  readonly accountId: string
+  readonly accountId: string | null
 }
 
 interface StoredPartnerGroup {
@@ -188,9 +186,17 @@ export interface PartnerSimulatorHost {
 /**
  * Handles Partner and Computer Backup simulator state and endpoint logic.
  *
- * B2Simulator owns dispatch and shared storage primitives; this class owns
- * Partner-specific auth, account scoping, groups, members, trials, and backup
- * computers.
+ * B2Simulator owns dispatch and shared storage primitives. This collaborator
+ * intentionally keeps both Partner and Backup surfaces together because one
+ * Partner token authorizes both products. Product-specific state remains split
+ * by map: groups/trials/members for Partner, computers for Backup.
+ *
+ * Auth has two modes:
+ *
+ * - default `new B2Simulator()` endpoint tests are permissive and accept any
+ *   non-empty Partner token without binding request account IDs;
+ * - `partnerAuthorize: true` or `strictAuth: true` turns on issued-token
+ *   validation so client auth-error tests can still exercise 401 responses.
  */
 export class PartnerSimulator {
   private readonly issuedTokens = new Map<string, IssuedPartnerToken>()
@@ -201,6 +207,7 @@ export class PartnerSimulator {
   private readonly groupMembersByAccountId = new Map<string, StoredPartnerGroupMember>()
   private readonly computersByAccount = new Map<string, Map<string, StoredComputerBackup>>()
   private readonly authorizeEnabled: boolean
+  private readonly validateIssuedTokens: boolean
   private readonly apiEnabled: boolean
   private readonly accountHasValidPhone: boolean
   private readonly accountInGoodStanding: boolean
@@ -216,6 +223,7 @@ export class PartnerSimulator {
     options: B2SimulatorOptions,
   ) {
     this.authorizeEnabled = options.partnerAuthorize ?? false
+    this.validateIssuedTokens = this.authorizeEnabled || (options.strictAuth ?? false)
     this.apiEnabled = options.partnerApiEnabled ?? true
     this.accountHasValidPhone = options.partnerAccountHasValidPhone ?? true
     this.accountInGoodStanding = options.partnerAccountInGoodStanding ?? true
@@ -339,7 +347,7 @@ export class PartnerSimulator {
     const results = entries.map(({ entry, normalizedEmail }) =>
       this.createReserveTrialAccount(entry, normalizedEmail, startDayMs),
     )
-    return { status: 200, body: redactReserveTrialCreateAccountResponse(results) }
+    return { status: 200, body: results }
   }
 
   /**
@@ -413,7 +421,7 @@ export class PartnerSimulator {
       applicationKey,
       groupMember: this.publicGroupMember(stored),
     }
-    return { status: 200, body: redactCreateGroupMemberResponse([result]) }
+    return { status: 200, body: [result] }
   }
 
   /**
@@ -494,7 +502,8 @@ export class PartnerSimulator {
     )
     if ('error' in maxGroupCount) return maxGroupCount.error
 
-    this.ensureGroupsForAdmin(adminAccountId.value)
+    const groupSeedError = this.ensureGroupsForAdmin(adminAccountId.value)
+    if (groupSeedError !== null) return groupSeedError
     const groupNameValue = record['groupName']
     const groupName = typeof groupNameValue === 'string' ? groupNameValue : undefined
     const startGroupIdValue = record['startGroupId']
@@ -593,6 +602,7 @@ export class PartnerSimulator {
     if ('error' in maxComputerCount) return maxComputerCount.error
 
     const computers = this.ensureComputersForAccount(accountId.value)
+    if ('status' in computers) return computers
     const startComputerIdValue = record['startComputerId']
     const startComputerId =
       typeof startComputerIdValue === 'string' ? startComputerIdValue : undefined
@@ -668,6 +678,19 @@ export class PartnerSimulator {
       )
     }
 
+    if (!this.validateIssuedTokens) {
+      if (!this.apiEnabled) {
+        return this.host.error(403, 'access_denied', 'account is not enabled for Partner API')
+      }
+      if (options.checkPhone !== false && !this.accountHasValidPhone) {
+        return this.host.error(403, 'access_denied', 'account does not have a valid phone number')
+      }
+      if (!this.accountInGoodStanding) {
+        return this.host.error(403, 'access_denied', 'account is not in good standing')
+      }
+      return { accountId: null }
+    }
+
     const token = this.issuedTokens.get(authToken)
     if (token === undefined || this.host.now() > token.expiresAt) {
       return this.host.error(401, 'unauthorized', 'invalid Partner API authorization token')
@@ -688,6 +711,7 @@ export class PartnerSimulator {
     auth: AuthorizedPartnerRequest,
     requestedAccountId: string,
   ): SimulatorJsonResponse | null {
+    if (auth.accountId === null) return null
     if (auth.accountId === requestedAccountId) return null
     return this.host.error(
       403,
@@ -926,12 +950,20 @@ export class PartnerSimulator {
     return { value }
   }
 
-  private ensureGroupsForAdmin(adminAccountId: string): void {
-    if (this.groupsByAdmin.has(adminAccountId)) return
+  private ensureGroupsForAdmin(adminAccountId: string): SimulatorJsonResponse | null {
+    if (this.groupsByAdmin.has(adminAccountId)) return null
+    if (this.groupsByAdmin.size >= MAX_AUTO_PROVISIONED_ADMINS) {
+      return this.host.error(
+        400,
+        'too_many_accounts',
+        'simulator Partner account auto-provisioning cap exceeded',
+      )
+    }
     this.groupsByAdmin.set(adminAccountId, [])
     for (let index = 1; index <= DEFAULT_GROUP_COUNT; index += 1) {
       this.createGroup(adminAccountId, `Simulator Group ${index}`)
     }
+    return null
   }
 
   private createGroup(adminAccountId: string, groupName: string): StoredPartnerGroup {
@@ -979,9 +1011,18 @@ export class PartnerSimulator {
     return [...(this.groupMembers.get(groupId)?.values() ?? [])].filter((member) => !member.ejected)
   }
 
-  private ensureComputersForAccount(accountId: string): Map<string, StoredComputerBackup> {
+  private ensureComputersForAccount(
+    accountId: string,
+  ): Map<string, StoredComputerBackup> | SimulatorJsonResponse {
     const existing = this.computersByAccount.get(accountId)
     if (existing !== undefined) return existing
+    if (this.computersByAccount.size >= MAX_AUTO_PROVISIONED_BACKUP_ACCOUNTS) {
+      return this.host.error(
+        400,
+        'too_many_accounts',
+        'simulator Backup account auto-provisioning cap exceeded',
+      )
+    }
     const computers = new Map<string, StoredComputerBackup>()
     for (let index = 1; index <= DEFAULT_COMPUTER_COUNT; index += 1) {
       const computer: StoredComputerBackup = {
