@@ -40,4 +40,8 @@ export type {
 export { computerId, groupId, PartnerCapability, Region } from '../types/partner.ts'
 export type { PartnerAccountInfo } from './account-info.ts'
 export { InMemoryPartnerAccountInfo } from './in-memory.ts'
-export { PartnerRawClient, type PartnerRawClientOptions } from './raw.ts'
+export {
+  PartnerRawClient,
+  type PartnerRawClientOptions,
+  type PartnerRawRequestOptions,
+} from './raw.ts'

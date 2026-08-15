@@ -119,7 +119,7 @@ export interface PartnerAuthorizeResponse {
 /**
  * Request parameters for `b2_create_group_member`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface CreateGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
@@ -135,7 +135,7 @@ export interface CreateGroupMemberRequest {
 /**
  * Group member fields returned by Partner API membership operations.
  *
- * @experimental Provisional until the corresponding client methods are implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerGroupMember {
   /** Account ID for the group member. Group member account IDs reuse the SDK's existing AccountId brand. */
@@ -157,7 +157,7 @@ export interface PartnerGroupMember {
  *
  * The `b2_create_group_member` wire response is a JSON array of these objects.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface CreateGroupMemberResult {
   /** Application key ID for the new group member account. */
@@ -171,14 +171,14 @@ export interface CreateGroupMemberResult {
 /**
  * Array-shaped wire response from `b2_create_group_member`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type CreateGroupMemberResponse = readonly CreateGroupMemberResult[]
 
 /**
  * Request parameters for `b2_eject_group_member`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface EjectGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
@@ -194,21 +194,24 @@ export interface EjectGroupMemberRequest {
 /**
  * Single result element returned by `b2_eject_group_member`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type EjectGroupMemberResult = PartnerGroupMember
 
 /**
- * Array-shaped wire response from `b2_eject_group_member`.
+ * Single-object wire response from `b2_eject_group_member`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * B2 returns one ejected-member object (not an array), unlike
+ * `b2_create_group_member` which returns an array.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
+export type EjectGroupMemberResponse = EjectGroupMemberResult
 
 /**
  * Request parameters for `b2_list_groups`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListGroupsRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
@@ -228,7 +231,7 @@ export interface ListGroupsRequest {
  * they are numeric-looking values. The SDK preserves those decimal strings
  * instead of normalizing them to numbers.
  *
- * @experimental Provisional until the corresponding client methods are implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerB2Stats {
   /** Total bytes stored as a decimal string. */
@@ -244,7 +247,7 @@ export interface PartnerB2Stats {
 /**
  * Account standing information for a partner group.
  *
- * @experimental Provisional until the corresponding client methods are implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerAccountStandingDetails {
   /** Account standing state reported by the Partner API. */
@@ -254,7 +257,7 @@ export interface PartnerAccountStandingDetails {
 /**
  * Daily group statistics returned by `b2_list_groups`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerGroupStats {
   /** ISO 8601 UTC date-time string for when the group was created. */
@@ -268,7 +271,7 @@ export interface PartnerGroupStats {
 /**
  * Group record returned by `b2_list_groups`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerGroup {
   /** Account standing information for the group. */
@@ -288,7 +291,7 @@ export interface PartnerGroup {
 /**
  * Single result element returned by `b2_list_groups`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListGroupsResult {
   /** Account ID for the group administrator whose groups were listed. */
@@ -300,16 +303,19 @@ export interface ListGroupsResult {
 }
 
 /**
- * Array-shaped wire response from `b2_list_groups`.
+ * Single-object wire response from `b2_list_groups`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * B2 returns one object with `accountId`, `groups`, and the `nextGroupId`
+ * cursor (not an array), unlike `b2_list_group_members` which returns an array.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ListGroupsResponse = readonly ListGroupsResult[]
+export type ListGroupsResponse = ListGroupsResult
 
 /**
  * Request parameters for `b2_list_group_members`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListGroupMembersRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
@@ -325,7 +331,7 @@ export interface ListGroupMembersRequest {
 /**
  * Group member record returned by `b2_list_group_members`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListedGroupMember extends PartnerGroupMember {
   /** B2 storage statistics for the member. Count fields are preserved as decimal strings. */
@@ -335,7 +341,7 @@ export interface ListedGroupMember extends PartnerGroupMember {
 /**
  * Single result element returned by `b2_list_group_members`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListGroupMembersResult {
   /** Group ID whose members were listed. */
@@ -351,7 +357,7 @@ export interface ListGroupMembersResult {
 /**
  * Array-shaped wire response from `b2_list_group_members`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
 

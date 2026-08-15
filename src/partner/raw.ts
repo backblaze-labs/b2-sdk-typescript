@@ -1,10 +1,23 @@
 import { assertSecureRealmUrl } from '../auth/realms.ts'
 import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
-import type { HttpTransport } from '../http/transport.ts'
+import type { RetryOptions } from '../http/retry.ts'
+import {
+  getTransportUrlGuard,
+  type HttpTransport,
+  type UrlGuardedTransport,
+} from '../http/transport.ts'
 import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
 import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import { accountId, partnerToken } from '../types/ids.ts'
 import type {
+  CreateGroupMemberRequest,
+  CreateGroupMemberResponse,
+  EjectGroupMemberRequest,
+  EjectGroupMemberResponse,
+  ListGroupMembersRequest,
+  ListGroupMembersResponse,
+  ListGroupsRequest,
+  ListGroupsResponse,
   PartnerApiInfo,
   PartnerAuthorizeResponse,
   PartnerBackupApiInfo,
@@ -12,7 +25,7 @@ import type {
 } from '../types/partner.ts'
 import { redactPartnerAuthorizeResponse } from './redaction.ts'
 
-const PARTNER_AUTHORIZE_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
+const PARTNER_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const PRODUCTION_ENDPOINT_HOST_SUFFIX = 'backblaze.com'
@@ -24,13 +37,27 @@ const VERIFIED_PARTNER_AUTHORIZE_REALM_ORIGINS = new Set([
 
 /** Configuration for constructing a {@link PartnerRawClient}. */
 export interface PartnerRawClientOptions {
-  /** The HTTP transport used to send requests. */
+  /**
+   * The HTTP transport used to send requests.
+   *
+   * Group-management calls validate endpoint URLs against suffixes recorded by
+   * `authorizePartner()`. A rehydrated client that skips authorization must use
+   * a {@link UrlGuardedTransport} with a locked `urlGuard`.
+   */
   readonly transport: HttpTransport
   /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
    */
   readonly allowCustomAuthorizeRealm?: boolean
+}
+
+/** Optional controls for raw Partner API requests. */
+export interface PartnerRawRequestOptions {
+  /** Abort signal for cancelling the request. */
+  readonly signal?: AbortSignal
+  /** Per-request retry override. */
+  readonly retry?: Partial<RetryOptions>
 }
 
 interface WirePartnerAuthorizeResponse {
@@ -40,9 +67,8 @@ interface WirePartnerAuthorizeResponse {
   readonly applicationKeyExpirationTimestamp: number | null
 }
 
-interface UrlGuardedTransport {
-  readonly urlGuard: Pick<UrlGuard, 'getAllowedSuffixes' | 'setAllowedSuffixes'>
-}
+type QueryValue = string | number
+type QueryParams = Readonly<Record<string, QueryValue>>
 
 function assertVerifiedPartnerAuthorizeRealm(realmUrl: string, allowCustomAuthorizeRealm: boolean) {
   if (allowCustomAuthorizeRealm) return
@@ -224,34 +250,77 @@ function derivePartnerAllowedSuffixes(
   return Array.from(suffixes).sort()
 }
 
-function lockFetchTransportUrlGuard(
-  transport: HttpTransport,
-  auth: PartnerAuthorizeResponse,
-  realmUrl: string,
-): void {
-  const candidate = transport as Partial<UrlGuardedTransport>
-  const guard = candidate.urlGuard
-  if (
-    guard === undefined ||
-    typeof guard.getAllowedSuffixes !== 'function' ||
-    typeof guard.setAllowedSuffixes !== 'function'
-  )
-    return
+function lockTransportUrlGuard(transport: HttpTransport, allowedSuffixes: readonly string[]): void {
+  const guard = getTransportUrlGuard(transport)
+  if (guard === undefined) return
 
-  const suffixes = new Set([
-    ...guard.getAllowedSuffixes(),
-    ...derivePartnerAllowedSuffixes(auth, realmUrl),
-  ])
+  const suffixes = new Set([...guard.getAllowedSuffixes(), ...allowedSuffixes])
   guard.setAllowedSuffixes(Array.from(suffixes).sort())
 }
 
+function partnerEndpointAllowedSuffixes(
+  transport: HttpTransport,
+  authorizedSuffixes: readonly string[],
+): readonly string[] {
+  if (authorizedSuffixes.length > 0) return authorizedSuffixes
+
+  const guard = getTransportUrlGuard(transport)
+  if (guard === undefined) {
+    throw new B2PartnerAuthorizationError(
+      'Partner endpoint requests require authorizePartner() or a UrlGuardedTransport with a locked URL guard before sending Partner tokens',
+    )
+  }
+
+  const suffixes = guard.getAllowedSuffixes()
+  if (suffixes.length === 0) {
+    throw new B2PartnerAuthorizationError(
+      'Partner endpoint requests require a locked URL guard before sending Partner tokens',
+    )
+  }
+
+  return suffixes
+}
+
+function validatePartnerRequestGroupsApiUrl(
+  transport: HttpTransport,
+  authorizedSuffixes: readonly string[],
+  groupsApiUrl: string,
+): string {
+  return validatePartnerEndpointUrl(
+    groupsApiUrl,
+    'groupsApiUrl',
+    partnerEndpointAllowedSuffixes(transport, authorizedSuffixes),
+  )
+}
+
+function mutationRequestOptions(
+  options: PartnerRawRequestOptions | undefined,
+): PartnerRawRequestOptions {
+  return {
+    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    // These Partner POSTs create/eject accounts and are not idempotent. Keep
+    // in-place retries disabled even if callers share retry options with GETs.
+    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
+  }
+}
+
+function withQueryString(url: string, query: QueryParams): string {
+  // Match the storage raw client's encodeURIComponent query semantics: spaces
+  // are `%20`, not form-style `+`.
+  const queryString = Object.entries(query)
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
+    .join('&')
+  return queryString.length === 0 ? url : `${url}?${queryString}`
+}
+
 /**
- * Low-level client for Partner API authorization and future Partner endpoints.
+ * Low-level client for Partner API authorization and group-management endpoints.
  */
 export class PartnerRawClient {
   /** @internal */
   private readonly transport: HttpTransport
   private readonly allowCustomAuthorizeRealm: boolean
+  private partnerEndpointSuffixes: readonly string[] = []
 
   /**
    * Creates a new PartnerRawClient with the given transport.
@@ -288,7 +357,7 @@ export class PartnerRawClient {
     assertSecureRealmUrl(realmUrl)
     assertVerifiedPartnerAuthorizeRealm(realmUrl, this.allowCustomAuthorizeRealm)
     const response = await this.transport.send({
-      url: b2Url(realmUrl, { ...PARTNER_AUTHORIZE_API_V3, endpoint: 'b2_authorize_account' }),
+      url: b2Url(realmUrl, { ...PARTNER_API_V3, endpoint: 'b2_authorize_account' }),
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${masterKeyId}:${masterKey}`)}`,
@@ -299,7 +368,211 @@ export class PartnerRawClient {
       realmUrl,
       this.allowCustomAuthorizeRealm,
     )
-    lockFetchTransportUrlGuard(this.transport, auth, realmUrl)
+    this.partnerEndpointSuffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
+    lockTransportUrlGuard(this.transport, this.partnerEndpointSuffixes)
     return auth
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-create-group-member | b2_create_group_member}.
+   *
+   * The Partner API creates a new Backblaze account for an email address that
+   * is not already a Backblaze account and adds that account to the managed
+   * group. The wire response is a JSON array.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group-member creation request body.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The created member result array, including the member application key.
+   */
+  async createGroupMember(
+    groupsApiUrl: string,
+    authToken: string,
+    request: CreateGroupMemberRequest,
+    options?: PartnerRawRequestOptions,
+  ): Promise<CreateGroupMemberResponse> {
+    return this.postJson<CreateGroupMemberResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_create_group_member',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        memberEmail: request.memberEmail,
+        ...(request.region !== undefined ? { region: request.region } : {}),
+      },
+      mutationRequestOptions(options),
+    )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-eject-group-member | b2_eject_group_member}.
+   *
+   * Ejection removes the member account from the group but does not delete the
+   * Backblaze account. The wire response is a single JSON object.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group-member ejection request body.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The ejected member object.
+   */
+  async ejectGroupMember(
+    groupsApiUrl: string,
+    authToken: string,
+    request: EjectGroupMemberRequest,
+    options?: PartnerRawRequestOptions,
+  ): Promise<EjectGroupMemberResponse> {
+    return this.postJson<EjectGroupMemberResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_eject_group_member',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        memberAccountId: request.memberAccountId,
+        ...(request.email !== undefined ? { email: request.email } : {}),
+      },
+      mutationRequestOptions(options),
+    )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-groups | b2_list_groups}.
+   *
+   * Uses the documented canonical GET form. The wire response is a single JSON
+   * object that surfaces `nextGroupId` for cursor-based pagination.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The group listing query parameters.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The groups page object.
+   */
+  async listGroups(
+    groupsApiUrl: string,
+    authToken: string,
+    request: ListGroupsRequest,
+    options?: PartnerRawRequestOptions,
+  ): Promise<ListGroupsResponse> {
+    return this.getJson<ListGroupsResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_list_groups',
+      {
+        adminAccountId: request.adminAccountId,
+        ...(request.groupName !== undefined ? { groupName: request.groupName } : {}),
+        ...(request.startGroupId !== undefined ? { startGroupId: request.startGroupId } : {}),
+        ...(request.maxGroupCount !== undefined ? { maxGroupCount: request.maxGroupCount } : {}),
+      },
+      options,
+    )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-list-group-members | b2_list_group_members}.
+   *
+   * Uses the documented canonical GET form. The wire response is a JSON array
+   * whose result objects surface `nextEmail` for cursor-based pagination.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - The member listing query parameters.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The group-member page result array.
+   */
+  async listGroupMembers(
+    groupsApiUrl: string,
+    authToken: string,
+    request: ListGroupMembersRequest,
+    options?: PartnerRawRequestOptions,
+  ): Promise<ListGroupMembersResponse> {
+    return this.getJson<ListGroupMembersResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_list_group_members',
+      {
+        adminAccountId: request.adminAccountId,
+        groupId: request.groupId,
+        ...(request.startEmail !== undefined ? { startEmail: request.startEmail } : {}),
+        ...(request.maxMemberCount !== undefined ? { maxMemberCount: request.maxMemberCount } : {}),
+      },
+      options,
+    )
+  }
+
+  /**
+   * Sends a JSON GET request to the specified Partner API endpoint.
+   * @param groupsApiUrl - The Partner API base URL.
+   * @param authToken - The Partner API authorization token.
+   * @param endpoint - The Partner API endpoint name.
+   * @param query - The query-string parameters.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The parsed JSON response.
+   */
+  private async getJson<T>(
+    groupsApiUrl: string,
+    authToken: string,
+    endpoint: string,
+    query: QueryParams,
+    options?: PartnerRawRequestOptions,
+  ): Promise<T> {
+    const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
+      this.transport,
+      this.partnerEndpointSuffixes,
+      groupsApiUrl,
+    )
+    const response = await this.transport.send({
+      url: withQueryString(b2Url(safeGroupsApiUrl, { ...PARTNER_API_V3, endpoint }), query),
+      method: 'GET',
+      headers: {
+        Authorization: authToken,
+      },
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+    })
+    return response.json<T>()
+  }
+
+  /**
+   * Sends a JSON POST request to the specified Partner API endpoint.
+   * @param groupsApiUrl - The Partner API base URL.
+   * @param authToken - The Partner API authorization token.
+   * @param endpoint - The Partner API endpoint name.
+   * @param body - The JSON request body.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The parsed JSON response.
+   */
+  private async postJson<T>(
+    groupsApiUrl: string,
+    authToken: string,
+    endpoint: string,
+    body: unknown,
+    options?: PartnerRawRequestOptions,
+  ): Promise<T> {
+    const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
+      this.transport,
+      this.partnerEndpointSuffixes,
+      groupsApiUrl,
+    )
+    const response = await this.transport.send({
+      url: b2Url(safeGroupsApiUrl, { ...PARTNER_API_V3, endpoint }),
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+    })
+    return response.json<T>()
   }
 }

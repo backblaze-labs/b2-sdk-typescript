@@ -75,8 +75,9 @@ export type {
   HttpResponse,
   HttpTransport,
   RetryTransportOptions,
+  UrlGuardedTransport,
 } from './http/transport.ts'
-export { FetchTransport, RetryTransport } from './http/transport.ts'
+export { FetchTransport, getTransportUrlGuard, RetryTransport } from './http/transport.ts'
 export { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 export { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 export {

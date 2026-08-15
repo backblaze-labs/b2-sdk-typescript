@@ -57,13 +57,36 @@ export interface HttpTransport {
 }
 
 /**
+ * Transport capability for implementations that expose the SSRF URL guard
+ * protecting credential-bearing requests. Wrappers that preserve this
+ * capability should forward the same `urlGuard` property.
+ */
+export interface UrlGuardedTransport extends HttpTransport {
+  /** SSRF allow-list applied to outgoing URLs. */
+  readonly urlGuard: UrlGuard
+}
+
+/**
+ * Returns the URL guard exposed by `transport`, if it implements
+ * {@link UrlGuardedTransport}.
+ *
+ * @param transport - Transport to inspect.
+ *
+ * @returns The exposed URL guard, or undefined for unguarded transports.
+ */
+export function getTransportUrlGuard(transport: HttpTransport): UrlGuard | undefined {
+  const candidate = transport as Partial<UrlGuardedTransport>
+  return candidate.urlGuard instanceof UrlGuard ? candidate.urlGuard : undefined
+}
+
+/**
  * Default transport implementation using the global `fetch` API.
  * Automatically sets the User-Agent header on each request and applies the
  * SSRF {@link UrlGuard} (if configured) before opening the connection.
  * Redirect following is disabled so redirected URLs cannot bypass the guard or
  * receive credential-bearing headers without an explicit checked request.
  */
-export class FetchTransport implements HttpTransport {
+export class FetchTransport implements UrlGuardedTransport {
   /** User-Agent string sent with every request. */
   private readonly userAgent: string
   /** Whether same-origin GET/HEAD redirects should be followed after guard checks. */
@@ -433,14 +456,25 @@ function isStartLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_start_large_file'
 }
 
+function isPartnerGroupMutationEndpoint(url: string): boolean {
+  const endpoint = b2ApiEndpointName(url)
+  return endpoint === 'b2_create_group_member' || endpoint === 'b2_eject_group_member'
+}
+
 function b2ApiEndpointName(url: string): string | undefined {
-  const [, root, , endpoint] = new URL(url).pathname.split('/')
-  if (root !== 'b2api') return undefined
-  return endpoint
+  const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
+  const apiRootIndex = segments.indexOf('b2api')
+  if (apiRootIndex === -1) return undefined
+  return segments[apiRootIndex + 2]
 }
 
 function isReplayUnsafePostEndpoint(url: string): boolean {
-  return isUploadEndpoint(url) || isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)
+  return (
+    isUploadEndpoint(url) ||
+    isStartLargeFileEndpoint(url) ||
+    isFinishLargeFileEndpoint(url) ||
+    isPartnerGroupMutationEndpoint(url)
+  )
 }
 
 /**
@@ -456,6 +490,7 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isPartnerGroupMutationEndpoint(url)) return false
   if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
@@ -488,6 +523,8 @@ function isTerminalTransportError(err: unknown): boolean {
  * retry so account-level throttling does not trigger extra upload URL fetches.
  */
 export class RetryTransport implements HttpTransport {
+  /** URL guard from the wrapped transport, when the transport exposes one. */
+  readonly urlGuard: UrlGuard | undefined
   /** The wrapped transport that performs actual HTTP requests. */
   private readonly inner: HttpTransport
   /** Resolved retry options (defaults merged with user overrides). */
@@ -503,6 +540,7 @@ export class RetryTransport implements HttpTransport {
    */
   constructor(opts: RetryTransportOptions) {
     this.inner = opts.transport
+    this.urlGuard = getTransportUrlGuard(opts.transport)
     this.options = { ...DEFAULT_RETRY_OPTIONS, ...opts.retry }
     if (opts.onReauth !== undefined) this.onReauth = opts.onReauth
     this.sleepImpl = opts.sleepImpl ?? sleep
@@ -569,6 +607,7 @@ export class RetryTransport implements HttpTransport {
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
           !isUploadEndpoint(request.url) &&
+          !isPartnerGroupMutationEndpoint(request.url) &&
           !didReauth
         ) {
           // Reauth returns the FRESH token; build a new request with a

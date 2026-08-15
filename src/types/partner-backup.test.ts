@@ -11,7 +11,7 @@ import type {
 import { accountId, applicationKeyId, bucketId, computerId, groupId, Region } from './index.ts'
 
 describe('partner and backup wire response shapes', () => {
-  it('models successful Partner API responses as arrays', () => {
+  it('models successful Partner API response shapes', () => {
     const adminAccountId = accountId('admin-account')
     const memberAccountId = accountId('member-account')
     const group = groupId('254')
@@ -39,27 +39,25 @@ describe('partner and backup wire response shapes', () => {
         groupMember,
       },
     ]
-    const ejectGroupMember: EjectGroupMemberResponse = [groupMember]
-    const listGroups: ListGroupsResponse = [
-      {
-        accountId: adminAccountId,
-        groups: [
-          {
-            accountStandingDetails: { state: 'active' },
-            b2Stats,
-            groupId: group,
-            groupName: 'Example Group',
-            groupProducts: ['BACKUP', 'STORAGE'],
-            groupStats: {
-              createdTimestamp: '2026-08-14T00:00:00Z',
-              groupStatsAsOfTimestamp: '2026-08-14T00:00:00Z',
-              memberCount: 1,
-            },
+    const ejectGroupMember: EjectGroupMemberResponse = groupMember
+    const listGroups: ListGroupsResponse = {
+      accountId: adminAccountId,
+      groups: [
+        {
+          accountStandingDetails: { state: 'active' },
+          b2Stats,
+          groupId: group,
+          groupName: 'Example Group',
+          groupProducts: ['BACKUP', 'STORAGE'],
+          groupStats: {
+            createdTimestamp: '2026-08-14T00:00:00Z',
+            groupStatsAsOfTimestamp: '2026-08-14T00:00:00Z',
+            memberCount: 1,
           },
-        ],
-        nextGroupId: null,
-      },
-    ]
+        },
+      ],
+      nextGroupId: null,
+    }
     const listGroupMembers: ListGroupMembersResponse = [
       {
         groupId: group,
@@ -83,8 +81,8 @@ describe('partner and backup wire response shapes', () => {
     ]
 
     expect(createGroupMember[0]?.groupMember.groupId).toBe(group)
-    expect(ejectGroupMember[0]?.email).toBe('member@example.com')
-    expect(listGroups[0]?.groups[0]?.b2Stats.bucketCount).toBe('1')
+    expect(ejectGroupMember.email).toBe('member@example.com')
+    expect(listGroups.groups[0]?.b2Stats.bucketCount).toBe('1')
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe('3')
     expect(reserveTrialCreateAccount[0]?.bucketId).toBe(bucket)
   })
