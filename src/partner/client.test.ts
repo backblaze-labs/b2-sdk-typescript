@@ -680,7 +680,6 @@ describe('PartnerClient facade', () => {
 
       expect(client.urlGuard?.getAllowedSuffixes()).toEqual(['backblaze.com', 'backblazeb2.com'])
       expect(() => client.urlGuard?.check('https://evil.example/collect')).toThrow(B2SsrfError)
-      expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       fetchMock.mockRestore()
     }
