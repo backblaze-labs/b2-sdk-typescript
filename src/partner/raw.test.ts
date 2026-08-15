@@ -24,6 +24,7 @@ import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
+  createGroupMemberResponseToRedactedJson,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
@@ -208,6 +209,72 @@ describe('PartnerRawClient group management endpoints', () => {
       memberAccountId,
       email: 'replacement@example.com',
     })
+  })
+
+  it('redacts group-member application keys through SDK safe serialization paths', async () => {
+    const secret = 'application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_create_group_member: [
+        {
+          applicationKey: secret,
+          applicationKeyId: applicationKeyId('application-key-id'),
+          groupMember,
+        },
+      ],
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+    const [created] = result
+    if (created === undefined) throw new Error('expected create group member result')
+    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+    const inspectedResult = (created as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
+    const inspectedResponse = (result as unknown as Record<symbol, () => unknown>)[
+      inspectSymbol
+    ]?.()
+
+    expect(created.applicationKey).toBe(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(created)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(JSON.stringify(created)).not.toContain(secret)
+    expect(String(result)).not.toContain(secret)
+    expect(String(created)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResult)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
+    expect(createGroupMemberResponseToRedactedJson(result)[0]?.applicationKey).toBe(
+      APPLICATION_KEY_REDACTED,
+    )
+  })
+
+  it.skipIf(!isNode)('redacts group-member application keys through Node inspect', async () => {
+    const { inspect } = await import(/* @vite-ignore */ 'node:util')
+    const secret = 'application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_create_group_member: [
+        {
+          applicationKey: secret,
+          applicationKeyId: applicationKeyId('application-key-id'),
+          groupMember,
+        },
+      ],
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+    const [created] = result
+    if (created === undefined) throw new Error('expected create group member result')
+
+    expect(inspect(result)).not.toContain(secret)
+    expect(inspect(created)).not.toContain(secret)
+    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(inspect(created)).toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('sends Partner list endpoints as canonical GET query requests', async () => {
@@ -879,6 +946,28 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ).rejects.toThrow(errorClass)
   })
 
+  it('rejects non-issued Partner tokens in strict simulator mode', async () => {
+    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient({ strictAuth: true })
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, partnerToken('not-issued'), {
+        email: 'trial-strict-token@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: 'unauthorized',
+      status: 401,
+    })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, partnerToken('not-issued-again'), {
+        email: 'trial-strict-token-2@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(BadAuthTokenError)
+  })
+
   it.each([
     ['missing', undefined],
     ['empty', { Authorization: '' }],
@@ -955,6 +1044,27 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       body: JSON.stringify([{ email: 'mismatch@example.com', term: 7, storage: 1 }]),
     })
     expect(reserveResponse.status).toBe(403)
+  })
+
+  it('does not mint simulator Partner tokens with child account application keys', async () => {
+    const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'child-key-partner-auth@example.com',
+      term: 7,
+      storage: 1,
+    })
+    if (trial === undefined) throw new Error('expected reserve trial result')
+
+    const authResponse = await sim.transport().send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${trial.applicationKeyId}:${trial.applicationKey}`)}`,
+      },
+    })
+
+    expect(authResponse.status).toBe(401)
+    await expect(authResponse.json()).resolves.toMatchObject({ code: 'bad_auth_token' })
   })
 
   it.each([

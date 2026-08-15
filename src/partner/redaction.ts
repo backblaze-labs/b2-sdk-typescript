@@ -1,5 +1,7 @@
 import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type {
+  CreateGroupMemberResponse,
+  CreateGroupMemberResult,
   PartnerAuthorizeResponse,
   ReserveTrialCreateAccountResponse,
   ReserveTrialCreateAccountResult,
@@ -16,6 +18,15 @@ export type RedactedPartnerAuthorizeResponseJson = Omit<
 > & {
   readonly authorizationToken: string
 }
+
+export type RedactedCreateGroupMemberResultJson = Omit<
+  CreateGroupMemberResult,
+  'applicationKey'
+> & {
+  readonly applicationKey: string
+}
+
+export type RedactedCreateGroupMemberResponseJson = readonly RedactedCreateGroupMemberResultJson[]
 
 export type RedactedReserveTrialCreateAccountResultJson = Omit<
   ReserveTrialCreateAccountResult,
@@ -64,6 +75,35 @@ export function partnerAuthorizeResponseToRedactedJson(
 }
 
 /**
+ * Returns a redacted copy for log serializers that intentionally hide group-member keys.
+ *
+ * @param result - Create group member result to render safely.
+ *
+ * @returns A plain object with the application key secret replaced by a placeholder.
+ */
+export function createGroupMemberResultToRedactedJson(
+  result: CreateGroupMemberResult,
+): RedactedCreateGroupMemberResultJson {
+  return {
+    ...result,
+    applicationKey: APPLICATION_KEY_REDACTED,
+  }
+}
+
+/**
+ * Returns a redacted copy for log serializers that intentionally hide group-member keys.
+ *
+ * @param response - Create group member response to render safely.
+ *
+ * @returns A plain array with every application key secret replaced by a placeholder.
+ */
+export function createGroupMemberResponseToRedactedJson(
+  response: CreateGroupMemberResponse,
+): RedactedCreateGroupMemberResponseJson {
+  return response.map((result) => createGroupMemberResultToRedactedJson(result))
+}
+
+/**
  * Returns a redacted copy for log serializers that intentionally hide trial account keys.
  *
  * @param result - Reserve trial account result to render safely.
@@ -109,6 +149,88 @@ export function redactPartnerAuthorizeResponse(
   const toRedactedString = (): string => `[PartnerAuthorizeResponse ${PARTNER_TOKEN_REDACTED}]`
 
   Object.defineProperties(target, {
+    toString: {
+      value: toRedactedString,
+      enumerable: false,
+      configurable: true,
+    },
+    [inspectSymbol]: {
+      value: toRedactedJson,
+      enumerable: false,
+      configurable: true,
+    },
+  })
+
+  return target
+}
+
+/**
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * application key secret while preserving direct property access.
+ *
+ * @param result - Create group member result to protect from accidental logging.
+ *
+ * @returns The same result object with redaction hooks installed when possible.
+ */
+export function redactCreateGroupMemberResult(
+  result: CreateGroupMemberResult,
+): CreateGroupMemberResult {
+  const target = Object.isExtensible(result) ? result : { ...result }
+  const toRedactedJson = (): RedactedCreateGroupMemberResultJson =>
+    createGroupMemberResultToRedactedJson(target)
+  const toRedactedString = (): string => `[CreateGroupMemberResult ${APPLICATION_KEY_REDACTED}]`
+
+  installPortableJsonHook(target, toRedactedJson)
+  Object.defineProperties(target, {
+    toString: {
+      value: toRedactedString,
+      enumerable: false,
+      configurable: true,
+    },
+    [inspectSymbol]: {
+      value: toRedactedJson,
+      enumerable: false,
+      configurable: true,
+    },
+  })
+
+  return target
+}
+
+/**
+ * Adds non-enumerable serialization and inspection hooks that redact all
+ * create-group-member application key secrets while preserving direct access.
+ *
+ * @param response - Create group member response to protect from accidental logging.
+ *
+ * @returns The same response array with redaction hooks installed when possible.
+ *
+ * @throws B2PartnerAuthorizationError if the response is not an array.
+ */
+export function redactCreateGroupMemberResponse(
+  response: CreateGroupMemberResponse,
+): CreateGroupMemberResponse {
+  if (!Array.isArray(response)) {
+    throw new B2PartnerAuthorizationError('b2_create_group_member response was not a JSON array')
+  }
+
+  const target = Object.isExtensible(response) ? response : [...response]
+  const writableTarget = target as CreateGroupMemberResult[]
+  for (let i = 0; i < writableTarget.length; i++) {
+    const result = writableTarget[i]
+    if (result !== undefined) writableTarget[i] = redactCreateGroupMemberResult(result)
+  }
+
+  const toRedactedJson = (): RedactedCreateGroupMemberResponseJson =>
+    createGroupMemberResponseToRedactedJson(target)
+  const toRedactedString = (): string => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`
+
+  Object.defineProperties(target, {
+    toJSON: {
+      value: toRedactedJson,
+      enumerable: false,
+      configurable: true,
+    },
     toString: {
       value: toRedactedString,
       enumerable: false,
