@@ -565,6 +565,9 @@ export class InvalidSmsPhoneError extends B2Error {
  * The code itself is classified globally, so this class stays endpoint-neutral.
  */
 export class MethodFailureError extends B2Error {
+  /** Always `false` because callers should decide when a documented operation-level retry is safe. */
+  readonly retryable = false
+
   /**
    * Creates a new MethodFailureError instance.
    * @param response - Parsed B2 error response body.

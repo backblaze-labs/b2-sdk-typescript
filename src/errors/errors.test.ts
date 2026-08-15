@@ -555,6 +555,14 @@ describe.each(newSubclassCases)('$label', ({ label, ctor, response, retryable })
   })
 })
 
+describe('MethodFailureError', () => {
+  it('is not retryable even when paired with a transient status', () => {
+    const err = new MethodFailureError(makeResponse({ status: 503, code: 'method_failure' }))
+
+    expect(err.retryable).toBe(false)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // B2RealmConfigurationError
 // ---------------------------------------------------------------------------
