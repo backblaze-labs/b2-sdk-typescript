@@ -706,6 +706,9 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       403,
       'access_denied',
     ],
+    ['leading whitespace Authorization header', ' 000', AccessDeniedError, 403, 'access_denied'],
+    ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
+    ['interior whitespace Authorization header', '0 0 0', AccessDeniedError, 403, 'access_denied'],
     ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
   ])('surfaces the documented reserve trial auth error path: %s', async (_label, token, errorClass, status, code) => {
     const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()

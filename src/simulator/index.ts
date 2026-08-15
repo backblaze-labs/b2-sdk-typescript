@@ -1079,7 +1079,7 @@ class PartnerSimulator {
   }
 
   private authorizeRequest(authToken: string | undefined): SimulatorJsonResponse | null {
-    if (authToken === undefined || authToken.trim() === '' || /^[A-Za-z]+[ \t]+/.test(authToken)) {
+    if (authToken === undefined || authToken.trim() === '' || /\s/.test(authToken)) {
       return this.host.error(
         403,
         'access_denied',
