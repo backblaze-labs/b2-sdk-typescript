@@ -446,7 +446,7 @@ function fileNames(...names: readonly (string | undefined)[]): readonly string[]
 }
 
 function queryParamsBody(params: URLSearchParams): Record<string, string> | null {
-  const body: Record<string, string> = {}
+  const body = Object.create(null) as Record<string, string>
   let hasParams = false
   for (const [key, value] of params) {
     if (body[key] !== undefined) continue

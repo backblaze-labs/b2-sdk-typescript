@@ -113,6 +113,18 @@ describe('B2Simulator partner endpoints', () => {
     expect(computers.body[0]?.computers).toHaveLength(3)
   })
 
+  it('handles prototype-shaped query keys on Partner GET endpoints', async () => {
+    const sim = new B2Simulator()
+
+    const groupsPage = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups?__proto__=polluted&constructor=ignored&adminAccountId=query-admin',
+      authorization: 'any-partner-token',
+    })
+
+    expect(groupsPage.status).toBe(200)
+    expect(groupsPage.body.accountId).toBe('query-admin')
+  })
+
   it.each([
     [
       'disabled Partner API',
