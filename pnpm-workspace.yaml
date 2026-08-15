@@ -2,5 +2,8 @@ allowBuilds:
   '@biomejs/biome': true
   esbuild: true
 overrides:
+  fast-uri: 3.1.5
+  linkify-it: 5.0.2
   markdown-it: 14.2.0
+  postcss: 8.5.23
   ws: 8.21.0
