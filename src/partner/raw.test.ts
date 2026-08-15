@@ -856,7 +856,6 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ['leading whitespace Authorization header', ' 000', AccessDeniedError, 403, 'access_denied'],
     ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
     ['interior whitespace Authorization header', '0 0 0', AccessDeniedError, 403, 'access_denied'],
-    ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
   ])('surfaces the documented reserve trial auth error path: %s', async (_label, token, errorClass, status, code) => {
     const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
 
@@ -877,6 +876,40 @@ describe('PartnerRawClient reserve trial endpoint', () => {
         storage: 1,
       }),
     ).rejects.toThrow(errorClass)
+  })
+
+  it('accepts arbitrary non-empty Partner tokens in permissive simulator mode', async () => {
+    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, partnerToken('not-issued'), {
+      email: 'trial-permissive-token@example.com',
+      term: 7,
+      storage: 1,
+    })
+
+    expect(result[0]?.email).toBe('trial-permissive-token@example.com')
+  })
+
+  it('rejects non-issued Partner tokens in strict simulator mode', async () => {
+    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient({ strictAuth: true })
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, partnerToken('not-issued'), {
+        email: 'trial-strict-token@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: 'unauthorized',
+      status: 401,
+    })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, partnerToken('not-issued-again'), {
+        email: 'trial-strict-token-2@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(BadAuthTokenError)
   })
 
   it.each([
