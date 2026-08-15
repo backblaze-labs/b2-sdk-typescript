@@ -105,7 +105,7 @@ function endpointAllowedSuffixesForRealm(
     return [PRODUCTION_ENDPOINT_HOST_SUFFIX, PRODUCTION_HOST_SUFFIX]
   }
   if (hostMatchesAllowedSuffix(realmHost, STAGING_HOST_SUFFIX)) return [STAGING_HOST_SUFFIX]
-  return allowCustomAuthorizeRealm ? [] : [realmHost]
+  return allowCustomAuthorizeRealm ? [authorizeRealmAllowedSuffix(realmUrl)] : [realmHost]
 }
 
 function authorizeRealmAllowedSuffix(realmUrl: string): string {
@@ -128,6 +128,22 @@ function endpointAllowedSuffix(url: string): string {
   return host
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  if (host === '[::1]' || host === '::1') return true
+
+  const parts = host.split('.')
+  return (
+    parts.length === 4 &&
+    parts[0] === '127' &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  )
+}
+
+function hostAllowedBySuffixes(hostname: string, allowedSuffixes: readonly string[]): boolean {
+  return allowedSuffixes.some((suffix) => hostMatchesAllowedSuffix(hostname, suffix))
+}
+
 function validatePartnerEndpointUrl(
   rawUrl: string,
   fieldName: 'groupsApiUrl' | 'backupApiUrl',
@@ -142,7 +158,11 @@ function validatePartnerEndpointUrl(
     )
   }
 
-  if (url.protocol !== 'https:') {
+  const host = url.hostname.toLowerCase()
+  const isAllowedLoopbackHttp =
+    url.protocol === 'http:' && isLoopbackHost(host) && hostAllowedBySuffixes(host, allowedSuffixes)
+
+  if (url.protocol !== 'https:' && !isAllowedLoopbackHttp) {
     throw new B2PartnerAuthorizationError(`Partner authorize response ${fieldName} must use HTTPS`)
   }
   if (url.username !== '' || url.password !== '') {
@@ -156,10 +176,10 @@ function validatePartnerEndpointUrl(
     )
   }
 
+  if (isAllowedLoopbackHttp) return rawUrl
+
   const guard = new UrlGuard()
-  guard.setAllowedSuffixes(
-    allowedSuffixes.length === 0 ? [url.hostname.toLowerCase()] : allowedSuffixes,
-  )
+  guard.setAllowedSuffixes(allowedSuffixes)
   try {
     guard.check(rawUrl)
   } catch (err) {
@@ -415,6 +435,7 @@ export class PartnerRawClient {
    * @param masterKeyId - The Master Application Key ID for authentication.
    * @param masterKey - The Master Application Key secret.
    * @param realmUrl - The B2 realm URL to authenticate against.
+   * @param options - Optional abort and per-request retry settings.
    *
    * @returns The normalized Partner authorization response.
    *
@@ -425,6 +446,7 @@ export class PartnerRawClient {
     masterKeyId: string,
     masterKey: string,
     realmUrl = DEFAULT_PARTNER_REALM_URL,
+    options?: PartnerRawRequestOptions,
   ): Promise<PartnerAuthorizeResponse> {
     assertSecureRealmUrl(realmUrl)
     assertVerifiedPartnerAuthorizeRealm(realmUrl, this.allowCustomAuthorizeRealm)
@@ -434,6 +456,8 @@ export class PartnerRawClient {
       headers: {
         Authorization: `Basic ${btoa(`${masterKeyId}:${masterKey}`)}`,
       },
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     const auth = normalizePartnerAuthorizeResponse(
       await response.json<WirePartnerAuthorizeResponse>(),

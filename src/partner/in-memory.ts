@@ -10,6 +10,12 @@ import {
   redactPartnerAuthorizeResponse,
 } from './redaction.ts'
 
+/** Redacted JSON diagnostic shape emitted by {@link InMemoryPartnerAccountInfo.toJSON}. */
+export interface InMemoryPartnerAccountInfoJson {
+  /** Redacted cached authorization state, or null before authorization. */
+  readonly auth: RedactedPartnerAuthorizeResponseJson | null
+}
+
 function clonePartnerAuth(auth: PartnerAuthorizeResponse): PartnerAuthorizeResponse {
   validatePartnerAuthorizeResponseShape(auth)
 
@@ -149,7 +155,7 @@ export class InMemoryPartnerAccountInfo implements PartnerAccountInfo {
    *
    * @returns Redacted Partner auth state, or null when not authorized.
    */
-  toJSON(): { readonly auth: RedactedPartnerAuthorizeResponseJson | null } {
+  toJSON(): InMemoryPartnerAccountInfoJson {
     return {
       auth: this.#auth === null ? null : partnerAuthorizeResponseToRedactedJson(this.#auth),
     }

@@ -6,6 +6,7 @@
     "src/errors/index.ts",
     "src/auth/index.ts",
     "src/auth/file.ts",
+    "src/partner/index.ts",
     "src/notifications/index.ts",
     "src/streams/index.ts",
     "src/sync/index.ts",

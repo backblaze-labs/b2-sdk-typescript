@@ -292,6 +292,25 @@ describe('PartnerClient facade', () => {
     expect(remainingMembers.map((member) => member.email)).toEqual(['z-facade-member@example.com'])
   })
 
+  it('authorizes and calls Partner endpoints for loopback HTTP custom realms', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      realm: 'http://127.0.0.1:12345',
+      allowCustomAuthorizeRealm: true,
+      disableSsrfGuard: true,
+      transport: sim.transport(),
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    const auth = await client.authorize()
+    const page = await client.listGroups({ pageSize: 1 })
+
+    expect(auth.groupsApiUrl).toBe('http://127.0.0.1:12345/partner')
+    expect(page.groups).toHaveLength(1)
+  })
+
   it('passes documented null member options through to the raw layer', async () => {
     const { client } = makeRecordingPartnerClient()
     await client.authorize()
@@ -513,6 +532,50 @@ describe('PartnerClient facade', () => {
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
   })
 
+  it('cancels expired-token reauthorization with the original list signal', async () => {
+    let authorizeCount = 0
+    let reauthorizeSignal: AbortSignal | undefined
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 1) {
+            return jsonResponse(partnerAuthorizeResponse('partner-token-1'))
+          }
+          reauthorizeSignal = request.signal
+          return new Promise((_, reject) => {
+            request.signal?.addEventListener(
+              'abort',
+              () => reject(request.signal?.reason ?? new DOMException('Aborted', 'AbortError')),
+              { once: true },
+            )
+          })
+        }
+        if (endpoint === 'b2_list_groups') {
+          return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const controller = new AbortController()
+
+    await client.authorize()
+    const pending = client.listGroups({ signal: controller.signal })
+    await waitUntil(() => authorizeCount === 2)
+    controller.abort(new DOMException('caller canceled', 'AbortError'))
+
+    await expect(pending).rejects.toThrow('caller canceled')
+    expect(reauthorizeSignal?.aborted).toBe(true)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
+  })
+
   it('does not reauthorize recursively when authorize returns expired_auth_token', async () => {
     let authorizeCount = 0
     const client = new PartnerClient({
@@ -557,42 +620,47 @@ describe('PartnerClient facade', () => {
     ).toHaveLength(1)
   })
 
-  it('rejects poisoned cached auth before Partner tokens can leave the client', () => {
+  it.each([
+    ['off-realm HTTPS', { groupsApiUrl: 'https://attacker.example/partner' }],
+    ['plaintext HTTP', { groupsApiUrl: 'http://groups.backblazeb2.com/partner' }],
+    ['userinfo', { groupsApiUrl: 'https://user:secret@groups.backblazeb2.com/partner' }],
+    ['query string', { groupsApiUrl: 'https://groups.backblazeb2.com/partner?token=secret' }],
+    ['fragment', { groupsApiUrl: 'https://groups.backblazeb2.com/partner#token' }],
+    ['internal host', { groupsApiUrl: 'https://metadata.google.internal/partner' }],
+  ])('clears unsafe cached auth before Partner tokens can leave: %s', async (_label, overrides) => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    partnerAccountInfo.setAuth(
-      partnerAuthorizeResponse('victim-partner-token', {
-        groupsApiUrl: 'https://attacker.example/partner',
-      }),
-    )
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('victim-partner-token', overrides))
     const seenRequests: HttpRequest[] = []
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+        },
+      },
+    })
 
-    expect(
-      () =>
-        new PartnerClient({
-          masterKeyId: 'master-key-id',
-          masterKey: 'master-key',
-          partnerAccountInfo,
-          transport: {
-            async send(request) {
-              seenRequests.push(request)
-              return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
-            },
-          },
-        }),
-    ).toThrow(B2PartnerAuthorizationError)
+    expect(partnerAccountInfo.getAuth()).toBeNull()
+    await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
 
     expect(seenRequests).toEqual([])
   })
 
-  it('rejects cached auth whose endpoint mirror points away from apiInfo', () => {
+  it('rejects cached auth whose endpoint mirror points away from apiInfo', async () => {
     const cachedAuth = {
       ...partnerAuthorizeResponse('victim-partner-token'),
       groupsApiUrl: 'https://attacker.example/partner',
     }
+    let cleared = false
     const partnerAccountInfo: PartnerAccountInfo = {
       setAuth() {},
       getAuth: () => cachedAuth,
-      clear() {},
+      clear() {
+        cleared = true
+      },
       getPartnerToken: () => cachedAuth.authorizationToken,
       getGroupsApiUrl: () => cachedAuth.groupsApiUrl ?? null,
       getBackupApiUrl: () => cachedAuth.backupApiUrl ?? null,
@@ -601,21 +669,20 @@ describe('PartnerClient facade', () => {
       getBackupCapabilities: () => cachedAuth.backupCapabilities ?? null,
     }
     const seenRequests: HttpRequest[] = []
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+        },
+      },
+    })
 
-    expect(
-      () =>
-        new PartnerClient({
-          masterKeyId: 'master-key-id',
-          masterKey: 'master-key',
-          partnerAccountInfo,
-          transport: {
-            async send(request) {
-              seenRequests.push(request)
-              return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
-            },
-          },
-        }),
-    ).toThrow(B2PartnerAuthorizationError)
+    expect(cleared).toBe(true)
+    await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
 
     expect(seenRequests).toEqual([])
   })
@@ -673,13 +740,34 @@ describe('PartnerClient facade', () => {
       const client = new PartnerClient({
         masterKeyId: 'master-key-id',
         masterKey: 'master-key',
-        allowedHostSuffixes: [],
+        additionalAllowedHostSuffixes: [],
       })
 
       await client.authorize()
 
       expect(client.urlGuard?.getAllowedSuffixes()).toEqual(['backblaze.com', 'backblazeb2.com'])
       expect(() => client.urlGuard?.check('https://evil.example/collect')).toThrow(B2SsrfError)
+    } finally {
+      fetchMock.mockRestore()
+    }
+  })
+
+  it('disables the default URL guard only through disableSsrfGuard', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(partnerAuthorizeResponse('partner-token')), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    try {
+      const client = new PartnerClient({
+        masterKeyId: 'master-key-id',
+        masterKey: 'master-key',
+        disableSsrfGuard: true,
+      })
+
+      await client.authorize()
+
+      expect(client.urlGuard?.getAllowedSuffixes()).toEqual([])
     } finally {
       fetchMock.mockRestore()
     }

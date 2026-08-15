@@ -53,7 +53,12 @@ export interface PartnerClientOptions {
    * or fragments. Defaults to `"production"`.
    */
   readonly realm?: string
-  /** Storage backend for Partner authorization state. Defaults to {@link InMemoryPartnerAccountInfo}. */
+  /**
+   * Storage backend for Partner authorization state. Defaults to
+   * {@link InMemoryPartnerAccountInfo}. Cached authorization whose endpoint
+   * URLs fail the configured realm policy is cleared during construction so
+   * callers can reauthorize before making Partner API requests.
+   */
   readonly partnerAccountInfo?: PartnerAccountInfo
   /** Custom HTTP transport. Defaults to {@link FetchTransport}. Wrapped by {@link RetryTransport}. */
   readonly transport?: HttpTransport
@@ -70,7 +75,7 @@ export interface PartnerClientOptions {
    * Only consulted when {@link PartnerClientOptions.transport} is unset; a
    * custom transport is the user's responsibility to harden.
    */
-  readonly allowedHostSuffixes?: readonly string[]
+  readonly additionalAllowedHostSuffixes?: readonly string[]
   /**
    * Explicitly disable the default SSRF guard after authorize.
    *
@@ -91,6 +96,16 @@ export interface PartnerClientOptions {
    * Application Key.
    */
   readonly allowCustomAuthorizeRealm?: boolean
+}
+
+/**
+ * Options for Partner authorization.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
+export interface PartnerAuthorizeOptions {
+  /** Abort signal for cancelling the authorize request. */
+  readonly signal?: AbortSignal
 }
 
 /**
@@ -200,6 +215,54 @@ interface PartnerGroupsCoordinates {
   readonly adminAccountId: AccountId
 }
 
+/** Redacted JSON diagnostic shape emitted by {@link PartnerClient.toJSON}. */
+export interface PartnerClientJson {
+  /** Object kind for log consumers. */
+  readonly type: 'PartnerClient'
+  /** Redacted Master Application Key credential placeholder. */
+  readonly credentials: string
+  /** Redacted Partner token placeholder, or unauthorized state. */
+  readonly authorization: string
+  /** Whether this client currently has Partner authorization state. */
+  readonly authorized: boolean
+  /** Current default URL guard suffixes, or null when a custom transport owns guarding. */
+  readonly urlGuardAllowedSuffixes: readonly string[] | null
+}
+
+function throwIfSignalAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  }
+}
+
+async function racePromiseWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return promise
+  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
+  if (signal.aborted) {
+    void promise.catch(() => {})
+    throw abortReason()
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      void promise.catch(() => {})
+      reject(abortReason())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    removeAbortListener?.()
+  }
+}
+
 /**
  * High-level Partner API client for groups, members, and B2 Reserve trials.
  *
@@ -231,7 +294,7 @@ export class PartnerClient {
   readonly #masterKeyId: string
   readonly #masterKey: string
   private readonly realmUrl: string
-  private readonly userAllowedSuffixes: readonly string[] | undefined
+  private readonly additionalAllowedSuffixes: readonly string[] | undefined
   private readonly disableSsrfGuard: boolean
   #inflightReauth: Promise<string> | null = null
 
@@ -245,7 +308,7 @@ export class PartnerClient {
     this.#masterKey = options.masterKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
     this.partnerAccountInfo = options.partnerAccountInfo ?? new InMemoryPartnerAccountInfo()
-    this.userAllowedSuffixes = options.allowedHostSuffixes
+    this.additionalAllowedSuffixes = options.additionalAllowedHostSuffixes
     this.disableSsrfGuard = options.disableSsrfGuard ?? false
     const allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
 
@@ -268,18 +331,22 @@ export class PartnerClient {
     const retryTransport = new RetryTransport({
       transport: baseTransport,
       retry: { ...DEFAULT_RETRY_OPTIONS, ...options.retry },
-      onReauth: () => this.reauthorize(),
+      onReauth: (signal) => this.reauthorize(signal),
     })
 
     const cachedAuth = this.partnerAccountInfo.getAuth()
-    const cachedEndpointSuffixes =
-      cachedAuth === null
-        ? undefined
-        : validatePartnerAuthorizeResponseEndpoints(
-            cachedAuth,
-            this.realmUrl,
-            allowCustomAuthorizeRealm,
-          )
+    let cachedEndpointSuffixes: readonly string[] | undefined
+    if (cachedAuth !== null) {
+      try {
+        cachedEndpointSuffixes = validatePartnerAuthorizeResponseEndpoints(
+          cachedAuth,
+          this.realmUrl,
+          allowCustomAuthorizeRealm,
+        )
+      } catch {
+        this.partnerAccountInfo.clear()
+      }
+    }
     if (cachedEndpointSuffixes !== undefined) this.lockUrlGuardFromSuffixes(cachedEndpointSuffixes)
 
     this.raw = new PartnerRawClient({
@@ -296,12 +363,21 @@ export class PartnerClient {
   /**
    * Authenticates with B2 Partner authorization and stores the authorization state.
    *
+   * @param options - Optional abort signal.
+   *
    * @returns The Partner authorization response containing tokens, URLs, and capabilities.
    *
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
-  async authorize(): Promise<PartnerAuthorizeResponse> {
-    const auth = await this.raw.authorizePartner(this.#masterKeyId, this.#masterKey, this.realmUrl)
+  async authorize(options?: PartnerAuthorizeOptions): Promise<PartnerAuthorizeResponse> {
+    throwIfSignalAborted(options?.signal)
+    const auth = await this.raw.authorizePartner(
+      this.#masterKeyId,
+      this.#masterKey,
+      this.realmUrl,
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
+    )
+    throwIfSignalAborted(options?.signal)
     this.partnerAccountInfo.setAuth(auth)
     this.lockUrlGuard(auth)
     return auth
@@ -416,6 +492,10 @@ export class PartnerClient {
   /**
    * Creates a new Backblaze account and adds it to a Partner group.
    *
+   * This mutation is non-idempotent. Automatic retries and expired-token
+   * reauthorization are disabled; long-running batch callers must catch token
+   * expiry, call {@link authorize}, and decide whether to issue a new request.
+   *
    * @param options - Group ID, member email, and optional region.
    *
    * @returns The created member result array, including the member application key.
@@ -439,6 +519,10 @@ export class PartnerClient {
 
   /**
    * Ejects an active member from a Partner group without deleting the account.
+   *
+   * This mutation is non-idempotent. Automatic retries and expired-token
+   * reauthorization are disabled; long-running batch callers must catch token
+   * expiry, call {@link authorize}, and decide whether to issue a new request.
    *
    * @param options - Group ID, member account ID, and optional replacement email.
    *
@@ -503,21 +587,22 @@ export class PartnerClient {
     const merged =
       this.disableSsrfGuard === true
         ? []
-        : this.userAllowedSuffixes !== undefined
-          ? Array.from(new Set([...derived, ...this.userAllowedSuffixes]))
+        : this.additionalAllowedSuffixes !== undefined
+          ? Array.from(new Set([...derived, ...this.additionalAllowedSuffixes]))
           : derived
     this.urlGuard.setAllowedSuffixes(merged)
   }
 
-  private reauthorize(): Promise<string> {
-    this.#inflightReauth ??= this.doReauthorize().finally(() => {
+  private reauthorize(signal: AbortSignal | undefined): Promise<string> {
+    throwIfSignalAborted(signal)
+    this.#inflightReauth ??= this.doReauthorize(signal).finally(() => {
       this.#inflightReauth = null
     })
-    return this.#inflightReauth
+    return racePromiseWithAbort(this.#inflightReauth, signal)
   }
 
-  private async doReauthorize(): Promise<string> {
-    const auth = await this.authorize()
+  private async doReauthorize(signal: AbortSignal | undefined): Promise<string> {
+    const auth = await this.authorize(signal !== undefined ? { signal } : undefined)
     return auth.authorizationToken
   }
 
@@ -526,13 +611,7 @@ export class PartnerClient {
    *
    * @returns A redacted diagnostic object.
    */
-  toJSON(): {
-    readonly type: 'PartnerClient'
-    readonly credentials: string
-    readonly authorization: string
-    readonly authorized: boolean
-    readonly urlGuardAllowedSuffixes: readonly string[] | null
-  } {
+  toJSON(): PartnerClientJson {
     return {
       type: 'PartnerClient',
       credentials: MASTER_KEY_REDACTED,

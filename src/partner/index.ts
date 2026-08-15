@@ -46,13 +46,19 @@ export {
   type ListGroupsOptions,
   type PaginateGroupMembersOptions,
   type PaginateGroupsOptions,
+  type PartnerAuthorizeOptions,
   PartnerClient,
+  type PartnerClientJson,
   type PartnerClientOptions,
   type ReserveTrialAccountsOptions,
 } from './client.ts'
-export { InMemoryPartnerAccountInfo } from './in-memory.ts'
+export {
+  InMemoryPartnerAccountInfo,
+  type InMemoryPartnerAccountInfoJson,
+} from './in-memory.ts'
 export {
   PartnerRawClient,
   type PartnerRawClientOptions,
   type PartnerRawRequestOptions,
 } from './raw.ts'
+export type { RedactedPartnerAuthorizeResponseJson } from './redaction.ts'

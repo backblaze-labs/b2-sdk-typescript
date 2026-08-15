@@ -419,13 +419,15 @@ export interface RetryTransportOptions {
   readonly retry?: Partial<RetryOptions>
   /**
    * Callback invoked on expired auth token errors. Must refresh
-   * credentials AND return the fresh auth token. The transport
+   * credentials AND return the fresh auth token. The original request's
+   * abort signal is forwarded so reauthorization can be cancelled with the
+   * operation that triggered it. The transport
    * substitutes the new token into `request.headers.Authorization`
    * before retrying — without this, the retried request would still
    * carry the expired token captured by the original caller and the
    * loop would never make progress.
    */
-  readonly onReauth?: () => Promise<string>
+  readonly onReauth?: (signal?: AbortSignal) => Promise<string>
   /**
    * Sleep implementation used between retry attempts. Defaults to the real
    * `sleep` from `./retry.js`. Test code can inject a no-op to avoid real
@@ -541,7 +543,7 @@ export class RetryTransport implements HttpTransport {
   /** Resolved retry options (defaults merged with user overrides). */
   private readonly options: RetryOptions
   /** Optional callback to refresh auth credentials on 401 — returns the fresh token. */
-  private readonly onReauth?: () => Promise<string>
+  private readonly onReauth?: (signal?: AbortSignal) => Promise<string>
   /** Sleep implementation used between retries; injectable for tests. */
   private readonly sleepImpl: (ms: number, signal?: AbortSignal) => Promise<void>
 
@@ -629,7 +631,11 @@ export class RetryTransport implements HttpTransport {
           // retry would carry the expired token captured at
           // request-build time and bounce off the server again,
           // exhausting the retry budget.
-          const freshToken = await this.onReauth()
+          const freshToken = await racePromiseWithAbort(
+            this.onReauth(request.signal),
+            request.signal,
+          )
+          throwIfSignalAborted(request.signal)
           request = {
             ...request,
             headers: { ...(request.headers ?? {}), Authorization: freshToken },
@@ -687,4 +693,32 @@ async function throwIfSignalAbortedAfterResponse(
     // Best-effort cleanup before preserving the caller's abort reason.
   }
   throw reason
+}
+
+async function racePromiseWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return promise
+  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
+  if (signal.aborted) {
+    void promise.catch(() => {})
+    throw abortReason()
+  }
+
+  let removeAbortListener: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    const onAbort = (): void => {
+      void promise.catch(() => {})
+      reject(abortReason())
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+  })
+
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    removeAbortListener?.()
+  }
 }
