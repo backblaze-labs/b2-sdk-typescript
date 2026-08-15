@@ -492,6 +492,128 @@ export class ChecksumMismatchError extends B2Error {
   }
 }
 
+/** Thrown when a Partner group has reached its maximum member count. */
+export class TooManyGroupMembersError extends B2Error {
+  /**
+   * Creates a new TooManyGroupMembersError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'TooManyGroupMembersError'
+  }
+}
+
+/** Thrown when a Partner group ID is malformed or does not identify a valid group. */
+export class InvalidGroupIdError extends B2Error {
+  /**
+   * Creates a new InvalidGroupIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidGroupIdError'
+  }
+}
+
+/** Thrown when a Partner member email address fails validation. */
+export class InvalidEmailError extends B2Error {
+  /**
+   * Creates a new InvalidEmailError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidEmailError'
+  }
+}
+
+/** Thrown when a Partner API region value is unsupported or malformed. */
+export class InvalidRegionError extends B2Error {
+  /**
+   * Creates a new InvalidRegionError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidRegionError'
+  }
+}
+
+/** Thrown when Partner account setup requires a valid SMS phone number. */
+export class MissingSmsPhoneError extends B2Error {
+  /**
+   * Creates a new MissingSmsPhoneError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'MissingSmsPhoneError'
+  }
+}
+
+/**
+ * Thrown when Partner group-member creation fails after the request is accepted.
+ *
+ * Backblaze documents a background rollback before callers retry this failure,
+ * so the SDK exposes it as a typed non-retryable API error.
+ */
+export class GroupMemberCreationFailedError extends B2Error {
+  /**
+   * Creates a new GroupMemberCreationFailedError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'GroupMemberCreationFailedError'
+  }
+}
+
+/** Thrown when a Partner group member account ID fails validation. */
+export class InvalidMemberAccountIdError extends B2Error {
+  /**
+   * Creates a new InvalidMemberAccountIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidMemberAccountIdError'
+  }
+}
+
+/** Thrown when an account ID fails Partner or Computer Backup API validation. */
+export class InvalidAccountIdError extends B2Error {
+  /**
+   * Creates a new InvalidAccountIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidAccountIdError'
+  }
+}
+
+/** Thrown when a Computer Backup computer ID fails validation. */
+export class InvalidComputerIdError extends B2Error {
+  /**
+   * Creates a new InvalidComputerIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidComputerIdError'
+  }
+}
+
 /**
  * Thrown by client-side capability checks when the application key is missing
  * capabilities required by an operation. Not raised by the server.
@@ -755,6 +877,8 @@ function classifyKnownError(
       return new TooManyBucketsError(response, options)
     case 'too_many_files':
       return new TooManyFilesError(response, options)
+    case 'too_many_members':
+      return new TooManyGroupMembersError(response, options)
     case 'cap_exceeded':
     case 'storage_cap_exceeded':
     case 'transaction_cap_exceeded':
@@ -768,10 +892,24 @@ function classifyKnownError(
       return new InternalError(response, options)
     case 'bad_json':
       return new BadJsonError(response, options)
+    case 'invalid_account_id':
+      return new InvalidAccountIdError(response, options)
     case 'invalid_bucket_id':
       return new InvalidBucketIdError(response, options)
     case 'invalid_bucket_info':
       return new InvalidBucketInfoError(response, options)
+    case 'invalid_computer_id':
+      return new InvalidComputerIdError(response, options)
+    case 'invalid_email':
+      return new InvalidEmailError(response, options)
+    case 'invalid_group_id':
+      return new InvalidGroupIdError(response, options)
+    case 'invalid_member_account_id':
+      return new InvalidMemberAccountIdError(response, options)
+    case 'invalid_region':
+      return new InvalidRegionError(response, options)
+    case 'invalid_sms_phone':
+      return new MissingSmsPhoneError(response, options)
     case 'file_not_present':
     case 'no_such_file':
       return new FileNotPresentError(response, options)
@@ -787,6 +925,8 @@ function classifyKnownError(
       return new InvalidFileInfoError(response, options)
     case 'invalid_part_number':
       return new InvalidPartNumberError(response, options)
+    case 'method_failure':
+      return new GroupMemberCreationFailedError(response, options)
     case 'bad_sha1_checksum':
       return new ChecksumMismatchError(response, options)
     default:

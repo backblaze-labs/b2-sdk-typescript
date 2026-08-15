@@ -4,7 +4,13 @@ import {
   B2RedirectError,
   ExpiredAuthTokenError,
   FinishLargeFileResponseBodyError,
+  GroupMemberCreationFailedError,
+  InvalidEmailError,
+  InvalidGroupIdError,
+  InvalidRegionError,
+  MissingSmsPhoneError,
   NetworkError,
+  TooManyGroupMembersError,
   UploadResponseBodyError,
 } from '../errors/index.ts'
 import { RawClient } from '../raw/index.ts'
@@ -1258,6 +1264,31 @@ describe('RetryTransport', () => {
           url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).not.toHaveBeenCalled()
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it.each([
+      ['too_many_members', TooManyGroupMembersError],
+      ['invalid_group_id', InvalidGroupIdError],
+      ['invalid_email', InvalidEmailError],
+      ['invalid_region', InvalidRegionError],
+      ['invalid_sms_phone', MissingSmsPhoneError],
+      ['method_failure', GroupMemberCreationFailedError],
+    ] as const)('does not reauth Partner 401 %s responses', async (code, ctor) => {
+      const errorBody = { status: 401, code, message: 'Partner validation failed' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('fresh-token')
+
+      innerTransport.send.mockResolvedValueOnce(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow(ctor)
       expect(onReauth).not.toHaveBeenCalled()
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })

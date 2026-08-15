@@ -24,15 +24,23 @@ import {
   ExpiredAuthTokenError,
   FileNotPresentError,
   FinishLargeFileResponseBodyError,
+  GroupMemberCreationFailedError,
   InternalError,
+  InvalidAccountIdError,
   InvalidBucketIdError,
   InvalidBucketInfoError,
   InvalidBucketNameError,
+  InvalidComputerIdError,
+  InvalidEmailError,
   InvalidFileIdError,
   InvalidFileInfoError,
   InvalidFileNameError,
+  InvalidGroupIdError,
+  InvalidMemberAccountIdError,
   InvalidPartNumberError,
+  InvalidRegionError,
   MethodNotAllowedError,
+  MissingSmsPhoneError,
   NetworkError,
   NotFoundError,
   OutOfRangeError,
@@ -41,6 +49,7 @@ import {
   ServiceUnavailableError,
   TooManyBucketsError,
   TooManyFilesError,
+  TooManyGroupMembersError,
   TooManyRequestsError,
   UploadResponseBodyError,
 } from './index.ts'
@@ -464,6 +473,60 @@ const newSubclassCases = [
     response: makeResponse({ status: 400, code: 'invalid_part_number' }),
     retryable: false,
   },
+  {
+    label: 'TooManyGroupMembersError',
+    ctor: TooManyGroupMembersError,
+    response: makeResponse({ status: 401, code: 'too_many_members' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidGroupIdError',
+    ctor: InvalidGroupIdError,
+    response: makeResponse({ status: 401, code: 'invalid_group_id' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidEmailError',
+    ctor: InvalidEmailError,
+    response: makeResponse({ status: 401, code: 'invalid_email' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidRegionError',
+    ctor: InvalidRegionError,
+    response: makeResponse({ status: 401, code: 'invalid_region' }),
+    retryable: false,
+  },
+  {
+    label: 'MissingSmsPhoneError',
+    ctor: MissingSmsPhoneError,
+    response: makeResponse({ status: 401, code: 'invalid_sms_phone' }),
+    retryable: false,
+  },
+  {
+    label: 'GroupMemberCreationFailedError',
+    ctor: GroupMemberCreationFailedError,
+    response: makeResponse({ status: 401, code: 'method_failure' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidMemberAccountIdError',
+    ctor: InvalidMemberAccountIdError,
+    response: makeResponse({ status: 400, code: 'invalid_member_account_id' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidAccountIdError',
+    ctor: InvalidAccountIdError,
+    response: makeResponse({ status: 400, code: 'invalid_account_id' }),
+    retryable: false,
+  },
+  {
+    label: 'InvalidComputerIdError',
+    ctor: InvalidComputerIdError,
+    response: makeResponse({ status: 400, code: 'invalid_computer_id' }),
+    retryable: false,
+  },
 ] satisfies Array<{
   label: string
   ctor: B2ErrorClass
@@ -671,6 +734,7 @@ describe('classifyError', () => {
       duplicate_bucket_name: { status: 400, ctor: DuplicateBucketNameError },
       too_many_buckets: { status: 400, ctor: TooManyBucketsError },
       too_many_files: { status: 400, ctor: TooManyFilesError },
+      too_many_members: { status: 401, ctor: TooManyGroupMembersError },
       cap_exceeded: { status: 403, ctor: CapExceededError },
       storage_cap_exceeded: { status: 403, ctor: CapExceededError },
       transaction_cap_exceeded: { status: 403, ctor: CapExceededError },
@@ -678,9 +742,16 @@ describe('classifyError', () => {
       service_unavailable: { status: 503, ctor: ServiceUnavailableError },
       internal_error: { status: 500, ctor: InternalError },
       bad_json: { status: 400, ctor: BadJsonError },
+      invalid_account_id: { status: 400, ctor: InvalidAccountIdError },
       invalid_bucket_id: { status: 400, ctor: InvalidBucketIdError },
       invalid_bucket_name: { status: 400, ctor: InvalidBucketNameError },
       invalid_bucket_info: { status: 400, ctor: InvalidBucketInfoError },
+      invalid_computer_id: { status: 400, ctor: InvalidComputerIdError },
+      invalid_email: { status: 401, ctor: InvalidEmailError },
+      invalid_group_id: { status: 401, ctor: InvalidGroupIdError },
+      invalid_member_account_id: { status: 400, ctor: InvalidMemberAccountIdError },
+      invalid_region: { status: 401, ctor: InvalidRegionError },
+      invalid_sms_phone: { status: 401, ctor: MissingSmsPhoneError },
       file_not_present: { status: 404, ctor: FileNotPresentError },
       no_such_file: { status: 404, ctor: FileNotPresentError },
       out_of_range: { status: 400, ctor: OutOfRangeError },
@@ -689,6 +760,7 @@ describe('classifyError', () => {
       invalid_file_name: { status: 400, ctor: InvalidFileNameError },
       invalid_file_info: { status: 400, ctor: InvalidFileInfoError },
       invalid_part_number: { status: 400, ctor: InvalidPartNumberError },
+      method_failure: { status: 401, ctor: GroupMemberCreationFailedError },
       bad_sha1_checksum: { status: 400, ctor: ChecksumMismatchError },
       download_cap_exceeded: { status: 403, ctor: CapExceededError },
     } satisfies Record<KnownB2ErrorCode, { status: number; ctor: B2ErrorClass }>
@@ -707,6 +779,38 @@ describe('classifyError', () => {
 
       expect(err).toBeInstanceOf(ctor)
       expect(err.constructor).not.toBe(B2Error)
+    })
+
+    it('maps Partner 401 overload codes to non-auth subclasses', () => {
+      const partnerCases = [
+        ['too_many_members', TooManyGroupMembersError],
+        ['invalid_group_id', InvalidGroupIdError],
+        ['invalid_email', InvalidEmailError],
+        ['invalid_region', InvalidRegionError],
+        ['invalid_sms_phone', MissingSmsPhoneError],
+        ['method_failure', GroupMemberCreationFailedError],
+      ] as const
+
+      for (const [code, ctor] of partnerCases) {
+        const err = classifyError(makeResponse({ status: 401, code }))
+
+        expect(err).toBeInstanceOf(ctor)
+        expect(err).not.toBeInstanceOf(ExpiredAuthTokenError)
+        expect(err).not.toBeInstanceOf(BadAuthTokenError)
+        expect(err.retryable).toBe(false)
+      }
+    })
+
+    it('maps Computer Backup 400 codes to specific subclasses', () => {
+      expect(
+        classifyError(makeResponse({ status: 400, code: 'invalid_account_id' })),
+      ).toBeInstanceOf(InvalidAccountIdError)
+      expect(
+        classifyError(makeResponse({ status: 400, code: 'invalid_computer_id' })),
+      ).toBeInstanceOf(InvalidComputerIdError)
+      expect(classifyError(makeResponse({ status: 400, code: 'out_of_range' }))).toBeInstanceOf(
+        OutOfRangeError,
+      )
     })
   })
 
