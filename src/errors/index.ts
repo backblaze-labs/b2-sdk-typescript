@@ -505,6 +505,14 @@ export class TooManyMembersError extends B2Error {
   }
 }
 
+/**
+ * Compatibility alias for the issue #167 Partner member-limit error name.
+ * @deprecated Use {@link TooManyMembersError}.
+ */
+export const TooManyGroupMembersError = TooManyMembersError
+/** @deprecated Use {@link TooManyMembersError}. */
+export type TooManyGroupMembersError = TooManyMembersError
+
 /** Thrown when a Partner group ID is malformed or does not identify a valid group. */
 export class InvalidGroupIdError extends B2Error {
   /**
@@ -558,6 +566,14 @@ export class InvalidSmsPhoneError extends B2Error {
 }
 
 /**
+ * Compatibility alias for the issue #167 Partner SMS-phone error name.
+ * @deprecated Use {@link InvalidSmsPhoneError}.
+ */
+export const MissingSmsPhoneError = InvalidSmsPhoneError
+/** @deprecated Use {@link InvalidSmsPhoneError}. */
+export type MissingSmsPhoneError = InvalidSmsPhoneError
+
+/**
  * Thrown when B2 returns `method_failure`.
  *
  * The documented Partner group-member creation flow uses this code after
@@ -578,6 +594,14 @@ export class MethodFailureError extends B2Error {
     this.name = 'MethodFailureError'
   }
 }
+
+/**
+ * Compatibility alias for the issue #167 Partner group-member failure name.
+ * @deprecated Use {@link MethodFailureError}.
+ */
+export const GroupMemberCreationFailedError = MethodFailureError
+/** @deprecated Use {@link MethodFailureError}. */
+export type GroupMemberCreationFailedError = MethodFailureError
 
 /** Thrown when a Partner group member account ID fails validation. */
 export class InvalidMemberAccountIdError extends B2Error {

@@ -24,6 +24,7 @@ import {
   ExpiredAuthTokenError,
   FileNotPresentError,
   FinishLargeFileResponseBodyError,
+  GroupMemberCreationFailedError,
   InternalError,
   InvalidAccountIdError,
   InvalidBucketIdError,
@@ -41,6 +42,7 @@ import {
   InvalidSmsPhoneError,
   MethodFailureError,
   MethodNotAllowedError,
+  MissingSmsPhoneError,
   NetworkError,
   NotFoundError,
   OutOfRangeError,
@@ -49,6 +51,7 @@ import {
   ServiceUnavailableError,
   TooManyBucketsError,
   TooManyFilesError,
+  TooManyGroupMembersError,
   TooManyMembersError,
   TooManyRequestsError,
   UploadResponseBodyError,
@@ -560,6 +563,22 @@ describe('MethodFailureError retryable override', () => {
     const err = new MethodFailureError(makeResponse({ status: 503, code: 'method_failure' }))
 
     expect(err.retryable).toBe(false)
+  })
+})
+
+describe('Partner error compatibility aliases', () => {
+  it.each([
+    ['TooManyGroupMembersError', TooManyGroupMembersError, TooManyMembersError, 'too_many_members'],
+    ['MissingSmsPhoneError', MissingSmsPhoneError, InvalidSmsPhoneError, 'invalid_sms_phone'],
+    [
+      'GroupMemberCreationFailedError',
+      GroupMemberCreationFailedError,
+      MethodFailureError,
+      'method_failure',
+    ],
+  ] as const)('%s points at the preferred constructor', (_label, alias, preferred, code) => {
+    expect(alias).toBe(preferred)
+    expect(classifyError(makeResponse({ status: 401, code }))).toBeInstanceOf(alias)
   })
 })
 

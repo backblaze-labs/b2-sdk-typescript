@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InvalidMemberAccountIdError`, `InvalidAccountIdError`, and
   `InvalidComputerIdError` classify Partner API and Computer Backup error
   codes; Partner 401 overload codes map to non-auth subclasses so they do not
-  trigger reauth.
+  trigger reauth. Compatibility aliases preserve the issue-specified
+  `TooManyGroupMembersError`, `MissingSmsPhoneError`, and
+  `GroupMemberCreationFailedError` names.
 - **Partner API and Computer Backup type layer.** Public exports now include
   Partner API and Computer Backup request/response types, branded
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
