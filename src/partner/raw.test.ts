@@ -1,4 +1,3 @@
-import { inspect } from 'node:util'
 import { describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import {
@@ -28,6 +27,12 @@ import {
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
+
+const runtimeGlobals = globalThis as Record<string, unknown>
+const runtimeProcess = runtimeGlobals['process'] as
+  | { readonly versions?: { readonly node?: string } }
+  | undefined
+const isNode = typeof runtimeProcess?.versions?.node === 'string'
 
 function partnerAuthorizeResponse(
   overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
@@ -731,13 +736,29 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(String(account)).not.toContain(secret)
     expect(JSON.stringify(result)).not.toContain(secret)
     expect(JSON.stringify(account)).not.toContain(secret)
-    expect(inspect(result)).not.toContain(secret)
-    expect(inspect(account)).not.toContain(secret)
     expect(JSON.stringify(inspectedResult)).not.toContain(secret)
     expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
     expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
     )
+  })
+
+  it.skipIf(!isNode)('redacts reserve trial application keys through Node inspect', async () => {
+    const { inspect } = await import(/* @vite-ignore */ 'node:util')
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-node-inspect-redaction@example.com',
+      term: 7,
+      storage: 1,
+    })
+    const [account] = result
+    if (account === undefined) throw new Error('expected reserve trial result')
+
+    expect(inspect(result)).not.toContain(account.applicationKey)
+    expect(inspect(account)).not.toContain(account.applicationKey)
+    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(inspect(account)).toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('rejects non-array reserve trial response bodies with a typed SDK error', async () => {
