@@ -330,6 +330,279 @@ describe('B2Simulator partner endpoints', () => {
     })
   })
 
+  it('reports partner request validation failures', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const auth = await authorizePartner(sim)
+    const group = await firstGroup(sim, auth)
+
+    const invalidReserveTrialBodies: readonly {
+      readonly body: unknown
+      readonly message: string
+    }[] = [
+      { body: {}, message: 'request body must be an array' },
+      { body: [], message: 'request body must include at least one account' },
+      { body: [null], message: 'trial account request must be an object' },
+      { body: [{}], message: 'email is required' },
+      {
+        body: [
+          { email: 'duplicate-trial@example.com', term: 7, storage: 1 },
+          { email: 'DUPLICATE-TRIAL@example.com', term: 7, storage: 1 },
+        ],
+        message: 'email must not already exist as a Backblaze account',
+      },
+      {
+        body: [{ email: 'term-error@example.com', term: 6, storage: 1 }],
+        message: 'term must be between 7 and 30 days',
+      },
+      {
+        body: [{ email: 'storage-error@example.com', term: 7, storage: 51 }],
+        message: 'storage must be between 1 and 50 TB',
+      },
+      {
+        body: [{ email: 'region-error@example.com', term: 7, storage: 1, region: 'antarctica' }],
+        message: 'region is not supported',
+      },
+    ]
+    for (const { body, message } of invalidReserveTrialBodies) {
+      const result = await simulatorRequest<ErrorBody>(sim, {
+        url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body,
+      })
+      expect(result.status).toBe(400)
+      expect(result.body.message).toBe(message)
+    }
+
+    const missingAdminAccount = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { groupId: group.groupId, memberEmail: 'missing-admin@example.com' },
+    })
+    expect(missingAdminAccount.status).toBe(400)
+    expect(missingAdminAccount.body.code).toBe('bad_request')
+
+    const missingGroupId = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { adminAccountId: auth.accountId, memberEmail: 'missing-group@example.com' },
+    })
+    expect(missingGroupId.status).toBe(401)
+    expect(missingGroupId.body.code).toBe('invalid_group_id')
+
+    const missingMemberEmail = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { adminAccountId: auth.accountId, groupId: group.groupId },
+    })
+    expect(missingMemberEmail.status).toBe(401)
+    expect(missingMemberEmail.body.code).toBe('invalid_email')
+
+    const invalidCreateGroup = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: 'missing-group',
+        memberEmail: 'missing-group@example.com',
+      },
+    })
+    expect(invalidCreateGroup.status).toBe(401)
+    expect(invalidCreateGroup.body.code).toBe('invalid_group_id')
+
+    const listGroupsMissingAdmin = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups',
+      authorization: auth.authorizationToken,
+    })
+    expect(listGroupsMissingAdmin.status).toBe(400)
+    expect(listGroupsMissingAdmin.body.code).toBe('bad_request')
+
+    const listGroupsOutOfRange = await simulatorRequest<ErrorBody>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${auth.accountId}&maxGroupCount=101`,
+      authorization: auth.authorizationToken,
+    })
+    expect(listGroupsOutOfRange.status).toBe(401)
+    expect(listGroupsOutOfRange.body.code).toBe('out_of_range')
+
+    const filteredGroups = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${auth.accountId}&groupName=${encodeURIComponent('Simulator Group 2')}`,
+      authorization: auth.authorizationToken,
+    })
+    expect(filteredGroups.status).toBe(200)
+    expect(filteredGroups.body.groups.map((entry) => entry.groupName)).toEqual([
+      'Simulator Group 2',
+    ])
+
+    const secondGroupsPage = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${auth.accountId}&maxGroupCount=1&startGroupId=${filteredGroups.body.groups[0]?.groupId}`,
+      authorization: auth.authorizationToken,
+    })
+    expect(secondGroupsPage.status).toBe(200)
+    expect(secondGroupsPage.body.groups[0]?.groupName).toBe('Simulator Group 2')
+
+    const invalidStartGroup = await simulatorRequest<ErrorBody>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${auth.accountId}&startGroupId=missing-group`,
+      authorization: auth.authorizationToken,
+    })
+    expect(invalidStartGroup.status).toBe(401)
+    expect(invalidStartGroup.body.code).toBe('invalid_group_id')
+
+    const invalidStartEmail = await sim.handleRequest(
+      'GET',
+      'http://localhost:0',
+      '/partner/b2api/v3/b2_list_group_members',
+      { authorization: auth.authorizationToken },
+      { adminAccountId: auth.accountId, groupId: group.groupId, startEmail: 1 },
+    )
+    expect(invalidStartEmail.status).toBe(400)
+    expect((invalidStartEmail.body as ErrorBody).message).toBe('startEmail must be a string')
+
+    const listedWithMissingGroupId = await simulatorRequest<ErrorBody>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_group_members?adminAccountId=${auth.accountId}`,
+      authorization: auth.authorizationToken,
+    })
+    expect(listedWithMissingGroupId.status).toBe(401)
+    expect(listedWithMissingGroupId.body.code).toBe('invalid_group_id')
+
+    const invalidEjectGroup = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: 'missing-group',
+        memberAccountId: auth.accountId,
+      },
+    })
+    expect(invalidEjectGroup.status).toBe(401)
+    expect(invalidEjectGroup.body.code).toBe('invalid_group_id')
+
+    const invalidMember = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId: auth.accountId,
+      },
+    })
+    expect(invalidMember.status).toBe(401)
+    expect(invalidMember.body.code).toBe('invalid_member_account_id')
+
+    const invalidEjectEmailType = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId: auth.accountId,
+        email: 123,
+      },
+    })
+    expect(invalidEjectEmailType.status).toBe(401)
+    expect(invalidEjectEmailType.body.code).toBe('invalid_email')
+
+    const createdForEject = await simulatorRequest<CreateGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberEmail: 'invalid-eject-email@example.com',
+      },
+    })
+    const memberAccountId = createdForEject.body[0]?.groupMember.accountId
+    if (memberAccountId === undefined) throw new Error('expected member account id')
+
+    const invalidEjectEmail = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId,
+        email: 'invalid-email',
+      },
+    })
+    expect(invalidEjectEmail.status).toBe(401)
+    expect(invalidEjectEmail.body.code).toBe('invalid_email')
+
+    const sameEmailEject = await simulatorRequest<EjectGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId,
+        email: 'invalid-eject-email@example.com',
+      },
+    })
+    expect(sameEmailEject.status).toBe(200)
+
+    const createdWithoutRename = await simulatorRequest<CreateGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberEmail: 'no-rename@example.com',
+      },
+    })
+    const noRenameAccountId = createdWithoutRename.body[0]?.groupMember.accountId
+    if (noRenameAccountId === undefined) throw new Error('expected member account id')
+    const noRenameEject = await simulatorRequest<EjectGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId: noRenameAccountId,
+      },
+    })
+    expect(noRenameEject.status).toBe(200)
+  })
+
+  it('rejects unauthenticated partner and backup requests before parsing', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const unauthenticatedRequests: readonly {
+      readonly url: string
+      readonly method?: 'GET' | 'POST'
+      readonly body?: unknown
+    }[] = [
+      { url: 'http://localhost:0/partner/b2api/v3/b2_list_groups' },
+      { url: 'http://localhost:0/partner/b2api/v3/b2_list_group_members' },
+      {
+        url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+        method: 'POST',
+        body: {},
+      },
+      {
+        url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+        method: 'POST',
+        body: {},
+      },
+      { url: 'http://localhost:0/api/backup/v1/bz_list_computers' },
+      { url: 'http://localhost:0/api/backup/v1/bz_delete_computer', method: 'POST', body: {} },
+    ]
+
+    for (const request of unauthenticatedRequests) {
+      const result = await simulatorRequest<ErrorBody>(sim, request)
+      expect(result.status).toBe(403)
+      expect(result.body.code).toBe('access_denied')
+    }
+  })
+
   it('rejects cross-account Partner and Backup requests in strict auth mode', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true, strictAuth: true })
     const auth = await authorizePartner(sim)

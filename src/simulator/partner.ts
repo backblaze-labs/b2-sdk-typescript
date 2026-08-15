@@ -599,8 +599,7 @@ export class PartnerSimulator {
     if (startComputerId !== undefined) {
       const start = computers.get(startComputerId)
       if (start === undefined || start.deleted) {
-        // Backup API documents invalid cursor IDs as 400 here, while
-        // bz_delete_computer reports the same code as 401 below.
+        // Backup API invalid computer identifiers are validation failures.
         return this.host.error(400, 'invalid_computer_id', 'computer ID is invalid or deleted')
       }
     }
