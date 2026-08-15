@@ -488,6 +488,8 @@ function isTerminalTransportError(err: unknown): boolean {
  * retry so account-level throttling does not trigger extra upload URL fetches.
  */
 export class RetryTransport implements HttpTransport {
+  /** URL guard from the wrapped transport, when the transport exposes one. */
+  readonly urlGuard: UrlGuard | undefined
   /** The wrapped transport that performs actual HTTP requests. */
   private readonly inner: HttpTransport
   /** Resolved retry options (defaults merged with user overrides). */
@@ -503,6 +505,7 @@ export class RetryTransport implements HttpTransport {
    */
   constructor(opts: RetryTransportOptions) {
     this.inner = opts.transport
+    this.urlGuard = (opts.transport as Partial<{ readonly urlGuard: UrlGuard }>).urlGuard
     this.options = { ...DEFAULT_RETRY_OPTIONS, ...opts.retry }
     if (opts.onReauth !== undefined) this.onReauth = opts.onReauth
     this.sleepImpl = opts.sleepImpl ?? sleep

@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
-import { FetchTransport, type HttpRequest, type HttpTransport } from '../http/transport.ts'
+import {
+  FetchTransport,
+  type HttpRequest,
+  type HttpTransport,
+  RetryTransport,
+} from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
-import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
@@ -42,16 +47,24 @@ function requestJsonBody(request: HttpRequest): unknown {
 function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown>>): {
   readonly raw: PartnerRawClient
   readonly seenRequests: HttpRequest[]
+  readonly urlGuard: UrlGuard
 } {
   const seenRequests: HttpRequest[] = []
-  const transport: HttpTransport = {
+  const urlGuard = new UrlGuard()
+  urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+  const transport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+    urlGuard,
     async send(request) {
       seenRequests.push(request)
       const endpoint = new URL(request.url).pathname.split('/').at(-1) ?? ''
       return jsonResponse(responses[endpoint] ?? {})
     },
   }
-  return { raw: new PartnerRawClient({ transport }), seenRequests }
+  return { raw: new PartnerRawClient({ transport }), seenRequests, urlGuard }
+}
+
+function noSleep(): Promise<void> {
+  return Promise.resolve()
 }
 
 describe('PartnerRawClient group management endpoints', () => {
@@ -109,6 +122,7 @@ describe('PartnerRawClient group management endpoints', () => {
         Authorization: authToken,
         'Content-Type': 'application/json',
       },
+      retry: { maxRetries: 0 },
     })
     expect(requestJsonBody(createRequest)).toEqual({
       adminAccountId,
@@ -123,6 +137,7 @@ describe('PartnerRawClient group management endpoints', () => {
         Authorization: authToken,
         'Content-Type': 'application/json',
       },
+      retry: { maxRetries: 0 },
     })
     expect(requestJsonBody(ejectRequest)).toEqual({
       adminAccountId,
@@ -165,7 +180,7 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(members.nextEmail).toBe('next@example.com')
     expect(seenRequests).toEqual([
       {
-        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account&groupName=Example+Group&startGroupId=254&maxGroupCount=10',
+        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account&groupName=Example%20Group&startGroupId=254&maxGroupCount=10',
         method: 'GET',
         headers: { Authorization: authToken },
       },
@@ -224,6 +239,213 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(seenRequests[3]?.url).toBe(
       'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_group_members?adminAccountId=admin-account&groupId=254',
     )
+  })
+
+  it('forwards request signal and retry options for Partner endpoints', async () => {
+    const controller = new AbortController()
+    const retry = { maxRetries: 2 }
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [],
+      b2_eject_group_member: groupMember,
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
+    })
+
+    await raw.createGroupMember(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group, memberEmail: 'member@example.com' },
+      { signal: controller.signal, retry },
+    )
+    await raw.ejectGroupMember(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group, memberAccountId },
+      { signal: controller.signal, retry },
+    )
+    await raw.listGroups(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId },
+      { signal: controller.signal, retry },
+    )
+    await raw.listGroupMembers(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group },
+      { signal: controller.signal, retry },
+    )
+
+    expect(seenRequests.map((request) => request.signal)).toEqual([
+      controller.signal,
+      controller.signal,
+      controller.signal,
+      controller.signal,
+    ])
+    expect(seenRequests.map((request) => request.retry)).toEqual([retry, retry, retry, retry])
+  })
+
+  it('keeps mutation retries disabled when only timeout retry options are supplied', async () => {
+    const retry = { requestTimeoutMs: 1000 }
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [],
+      b2_eject_group_member: groupMember,
+    })
+
+    await raw.createGroupMember(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group, memberEmail: 'member@example.com' },
+      { retry },
+    )
+    await raw.ejectGroupMember(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group, memberAccountId },
+      { retry },
+    )
+
+    expect(seenRequests.map((request) => request.retry)).toEqual([
+      { maxRetries: 0, requestTimeoutMs: 1000 },
+      { maxRetries: 0, requestTimeoutMs: 1000 },
+    ])
+  })
+
+  it.each([
+    ['plaintext HTTP', 'http://groups.backblazeb2.com/partner'],
+    ['userinfo', 'https://user:secret@groups.backblazeb2.com/partner'],
+    ['query string', 'https://groups.backblazeb2.com/partner?token=secret'],
+    ['fragment', 'https://groups.backblazeb2.com/partner#token'],
+    ['literal metadata IP', 'https://169.254.169.254/latest/meta-data'],
+    ['localhost', 'https://localhost/partner'],
+    ['metadata hostname', 'https://metadata.google.internal/partner'],
+    ['off-realm attacker host', 'https://attacker.example/partner'],
+  ])('rejects unsafe groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+    })
+
+    await expect(raw.listGroups(unsafeGroupsApiUrl, authToken, { adminAccountId })).rejects.toThrow(
+      B2PartnerAuthorizationError,
+    )
+
+    expect(seenRequests).toEqual([])
+  })
+
+  it('fails closed before a transport URL guard is locked', async () => {
+    const noGuard = recordingTransport()
+    const rawWithoutGuard = new PartnerRawClient({ transport: noGuard.transport })
+    const seenUnlockedRequests: HttpRequest[] = []
+    const unlockedTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+      urlGuard: new UrlGuard(),
+      async send(request) {
+        seenUnlockedRequests.push(request)
+        return jsonResponse({ accountId: adminAccountId, groups: [], nextGroupId: null })
+      },
+    }
+    const rawWithUnlockedGuard = new PartnerRawClient({ transport: unlockedTransport })
+
+    await expect(
+      rawWithoutGuard.listGroups(groupsApiUrl, authToken, { adminAccountId }),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+    await expect(
+      rawWithUnlockedGuard.listGroups(groupsApiUrl, authToken, { adminAccountId }),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+
+    expect(noGuard.seenRequests).toEqual([])
+    expect(seenUnlockedRequests).toEqual([])
+  })
+
+  it('does not retry mutation POSTs through RetryTransport by default', async () => {
+    const responseFailureRequests: HttpRequest[] = []
+    const responseFailureGuard = new UrlGuard()
+    responseFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const responseFailureTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+      urlGuard: responseFailureGuard,
+      async send(request) {
+        responseFailureRequests.push(request)
+        return jsonErrorResponse(503, 'service_unavailable', 'try again')
+      },
+    }
+    const responseFailureRaw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport: responseFailureTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      responseFailureRaw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberEmail: 'member@example.com',
+      }),
+    ).rejects.toThrow()
+    expect(responseFailureRequests).toHaveLength(1)
+
+    const networkFailureRequests: HttpRequest[] = []
+    const networkFailureGuard = new UrlGuard()
+    networkFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const networkFailureTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+      urlGuard: networkFailureGuard,
+      async send(request) {
+        networkFailureRequests.push(request)
+        throw new TypeError('network down')
+      },
+    }
+    const networkFailureRaw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport: networkFailureTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      networkFailureRaw.ejectGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberAccountId,
+      }),
+    ).rejects.toThrow()
+    expect(networkFailureRequests).toHaveLength(1)
+  })
+
+  it('retries mutation POSTs only when the caller explicitly opts in', async () => {
+    const seenRequests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+      urlGuard,
+      async send(request) {
+        seenRequests.push(request)
+        return seenRequests.length === 1
+          ? jsonErrorResponse(503, 'service_unavailable', 'try again')
+          : jsonResponse([])
+      },
+    }
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await raw.createGroupMember(
+      groupsApiUrl,
+      authToken,
+      { adminAccountId, groupId: group, memberEmail: 'member@example.com' },
+      { retry: { maxRetries: 1 } },
+    )
+
+    expect(seenRequests).toHaveLength(2)
   })
 })
 
