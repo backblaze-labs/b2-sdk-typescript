@@ -2,7 +2,7 @@ import type { Capability } from './auth.ts'
 import type { AccountId, ApplicationKeyId, BucketId, GroupId, PartnerToken } from './ids.ts'
 
 export type { ComputerId, GroupId, PartnerToken } from './ids.ts'
-export { computerId, groupId } from './ids.ts'
+export { computerId, groupId, partnerToken } from './ids.ts'
 
 /**
  * Named constants for Partner API and Computer Backup API capabilities.
@@ -80,7 +80,13 @@ export interface PartnerStorageApiInfo {
   readonly s3ApiUrl: string
 }
 
-/** API-specific information needed by Partner and Computer Backup API clients. */
+/**
+ * API-specific information needed by Partner and Computer Backup API clients.
+ * At least one of `groupsApi` or `backupApi` is present in a normalized
+ * Partner authorization response. Suite URLs and capabilities in this object
+ * are the authoritative values; flattened fields on
+ * {@link PartnerAuthorizeResponse} are convenience mirrors.
+ */
 export interface PartnerApiInfo {
   /** B2 Native API configuration returned with Partner authorization details when storage is enabled. */
   readonly storageApi?: PartnerStorageApiInfo
@@ -96,13 +102,25 @@ export interface PartnerAuthorizeResponse {
   readonly accountId: AccountId
   /** Authorization token to use for Partner API and Computer Backup API requests. Do not log this secret value. */
   readonly authorizationToken: PartnerToken
-  /** API-specific endpoint and capability information. */
+  /** Suite-shaped API information returned by `b2_authorize_account`; authoritative for suite URLs and capabilities. */
   readonly apiInfo: PartnerApiInfo
+  /** Convenience mirror of `apiInfo.groupsApi.groupsApiUrl` when the Partner suite is enabled. */
+  readonly groupsApiUrl?: string
+  /** Convenience mirror of `apiInfo.backupApi.backupApiUrl` when the Backup suite is enabled. */
+  readonly backupApiUrl?: string
+  /** Convenience mirror of `apiInfo.groupsApi.capabilities` when the Partner suite is enabled. */
+  readonly groupsCapabilities?: readonly PartnerCapability[]
+  /** Convenience mirror of `apiInfo.backupApi.capabilities` when the Backup suite is enabled. */
+  readonly backupCapabilities?: readonly PartnerCapability[]
   /** Expiration timestamp of the application key in milliseconds, or null if the key does not expire. */
   readonly applicationKeyExpirationTimestamp: number | null
 }
 
-/** Request parameters for `b2_create_group_member`. */
+/**
+ * Request parameters for `b2_create_group_member`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface CreateGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
@@ -114,7 +132,11 @@ export interface CreateGroupMemberRequest {
   readonly region?: Region | null
 }
 
-/** Group member fields returned by Partner API membership operations. */
+/**
+ * Group member fields returned by Partner API membership operations.
+ *
+ * @experimental Provisional until the corresponding client methods are implemented and exercised.
+ */
 export interface PartnerGroupMember {
   /** Account ID for the group member. Group member account IDs reuse the SDK's existing AccountId brand. */
   readonly accountId: AccountId
@@ -134,6 +156,8 @@ export interface PartnerGroupMember {
  * Single result element returned by `b2_create_group_member`.
  *
  * The `b2_create_group_member` wire response is a JSON array of these objects.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
 export interface CreateGroupMemberResult {
   /** Application key ID for the new group member account. */
@@ -144,10 +168,18 @@ export interface CreateGroupMemberResult {
   readonly groupMember: PartnerGroupMember
 }
 
-/** Array-shaped wire response from `b2_create_group_member`. */
+/**
+ * Array-shaped wire response from `b2_create_group_member`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type CreateGroupMemberResponse = readonly CreateGroupMemberResult[]
 
-/** Request parameters for `b2_eject_group_member`. */
+/**
+ * Request parameters for `b2_eject_group_member`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface EjectGroupMemberRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
@@ -159,13 +191,25 @@ export interface EjectGroupMemberRequest {
   readonly email?: string | null
 }
 
-/** Single result element returned by `b2_eject_group_member`. */
+/**
+ * Single result element returned by `b2_eject_group_member`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type EjectGroupMemberResult = PartnerGroupMember
 
-/** Array-shaped wire response from `b2_eject_group_member`. */
+/**
+ * Array-shaped wire response from `b2_eject_group_member`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type EjectGroupMemberResponse = readonly EjectGroupMemberResult[]
 
-/** Request parameters for `b2_list_groups`. */
+/**
+ * Request parameters for `b2_list_groups`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ListGroupsRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
@@ -183,6 +227,8 @@ export interface ListGroupsRequest {
  * The Partner API currently returns count fields as JSON strings even though
  * they are numeric-looking values. The SDK preserves those decimal strings
  * instead of normalizing them to numbers.
+ *
+ * @experimental Provisional until the corresponding client methods are implemented and exercised.
  */
 export interface PartnerB2Stats {
   /** Total bytes stored as a decimal string. */
@@ -195,13 +241,21 @@ export interface PartnerB2Stats {
   readonly bucketCount: string
 }
 
-/** Account standing information for a partner group. */
+/**
+ * Account standing information for a partner group.
+ *
+ * @experimental Provisional until the corresponding client methods are implemented and exercised.
+ */
 export interface PartnerAccountStandingDetails {
   /** Account standing state reported by the Partner API. */
   readonly state: string
 }
 
-/** Daily group statistics returned by `b2_list_groups`. */
+/**
+ * Daily group statistics returned by `b2_list_groups`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface PartnerGroupStats {
   /** ISO 8601 UTC date-time string for when the group was created. */
   readonly createdTimestamp: string
@@ -211,7 +265,11 @@ export interface PartnerGroupStats {
   readonly memberCount: number
 }
 
-/** Group record returned by `b2_list_groups`. */
+/**
+ * Group record returned by `b2_list_groups`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface PartnerGroup {
   /** Account standing information for the group. */
   readonly accountStandingDetails: PartnerAccountStandingDetails
@@ -227,7 +285,11 @@ export interface PartnerGroup {
   readonly groupStats: PartnerGroupStats
 }
 
-/** Single result element returned by `b2_list_groups`. */
+/**
+ * Single result element returned by `b2_list_groups`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ListGroupsResult {
   /** Account ID for the group administrator whose groups were listed. */
   readonly accountId: AccountId
@@ -237,10 +299,18 @@ export interface ListGroupsResult {
   readonly nextGroupId: GroupId | null
 }
 
-/** Array-shaped wire response from `b2_list_groups`. */
+/**
+ * Array-shaped wire response from `b2_list_groups`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type ListGroupsResponse = readonly ListGroupsResult[]
 
-/** Request parameters for `b2_list_group_members`. */
+/**
+ * Request parameters for `b2_list_group_members`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ListGroupMembersRequest {
   /** Account ID of the group administrator authorized for the Partner API. */
   readonly adminAccountId: AccountId
@@ -252,13 +322,21 @@ export interface ListGroupMembersRequest {
   readonly maxMemberCount?: number
 }
 
-/** Group member record returned by `b2_list_group_members`. */
+/**
+ * Group member record returned by `b2_list_group_members`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ListedGroupMember extends PartnerGroupMember {
   /** B2 storage statistics for the member. Count fields are preserved as decimal strings. */
   readonly b2Stats: PartnerB2Stats
 }
 
-/** Single result element returned by `b2_list_group_members`. */
+/**
+ * Single result element returned by `b2_list_group_members`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ListGroupMembersResult {
   /** Group ID whose members were listed. */
   readonly groupId: GroupId
@@ -270,10 +348,18 @@ export interface ListGroupMembersResult {
   readonly groupMembers: readonly ListedGroupMember[]
 }
 
-/** Array-shaped wire response from `b2_list_group_members`. */
+/**
+ * Array-shaped wire response from `b2_list_group_members`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
 
-/** Single request element accepted by `b2_reserve_trial_create_account`. */
+/**
+ * Single request element accepted by `b2_reserve_trial_create_account`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export interface ReserveTrialCreateAccountRequestEntry {
   /** Email address for the new B2 reserve trial account. */
   readonly email: string
@@ -285,7 +371,11 @@ export interface ReserveTrialCreateAccountRequestEntry {
   readonly storage: number
 }
 
-/** Array-shaped wire request body for `b2_reserve_trial_create_account`. */
+/**
+ * Array-shaped wire request body for `b2_reserve_trial_create_account`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccountRequestEntry[]
 
 /**
@@ -293,6 +383,8 @@ export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccoun
  *
  * The `b2_reserve_trial_create_account` wire response is a JSON array of
  * these objects.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
 export interface ReserveTrialCreateAccountResult {
   /** Account ID of the newly created B2 reserve trial account. */
@@ -315,5 +407,9 @@ export interface ReserveTrialCreateAccountResult {
   readonly bucketId: BucketId
 }
 
-/** Array-shaped wire response from `b2_reserve_trial_create_account`. */
+/**
+ * Array-shaped wire response from `b2_reserve_trial_create_account`.
+ *
+ * @experimental Provisional until the corresponding client method is implemented and exercised.
+ */
 export type ReserveTrialCreateAccountResponse = readonly ReserveTrialCreateAccountResult[]

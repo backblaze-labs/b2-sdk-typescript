@@ -7,6 +7,7 @@
 export type B2ApiVersion = `v${number}`
 
 const SLASH = '/'
+const BACKSLASH = '\\'
 const VERSION_PREFIX = 'v'
 const VERSION_DIGITS = '0123456789'
 const URL_DELIMITERS = ['?', '#'] as const
@@ -24,6 +25,9 @@ export interface B2UrlOptions {
   /** Endpoint name appended after the prefix and optional version. */
   readonly endpoint: string
 }
+
+/** URL path options for a B2 API surface before the endpoint is selected. */
+export type B2EndpointUrlOptions = Omit<B2UrlOptions, 'endpoint'>
 
 /**
  * Returns true when `value` is a B2 API version segment of the form `vN`.
@@ -72,7 +76,12 @@ function hasUrlDelimiter(value: string): boolean {
 
 function hasEncodedPathDelimiter(value: string): boolean {
   const lowerValue = value.toLowerCase()
-  return lowerValue.includes('%2f') || lowerValue.includes('%3f') || lowerValue.includes('%23')
+  return (
+    lowerValue.includes('%2f') ||
+    lowerValue.includes('%3f') ||
+    lowerValue.includes('%23') ||
+    lowerValue.includes('%5c')
+  )
 }
 
 function withDotEscapesDecoded(value: string): string {
@@ -104,9 +113,12 @@ function validatePathComponent(component: string, optionName: string): void {
   if (hasUrlDelimiter(component)) {
     throw new TypeError(`Invalid ${optionName}: path components must not contain "?" or "#"`)
   }
+  if (component.includes(BACKSLASH)) {
+    throw new TypeError(`Invalid ${optionName}: path components must not contain "\\"`)
+  }
   if (hasEncodedPathDelimiter(component)) {
     throw new TypeError(
-      `Invalid ${optionName}: path components must not contain encoded "/", "?", or "#"`,
+      `Invalid ${optionName}: path components must not contain encoded "/", "\\", "?", or "#"`,
     )
   }
   if (isTraversalComponent(component)) {

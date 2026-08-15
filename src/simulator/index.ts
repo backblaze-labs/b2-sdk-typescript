@@ -3979,6 +3979,32 @@ function buildFaultResponse(fault: FaultSpec): HttpResponse {
   }
 }
 
+function rawUrlPathContainsLiteralBackslash(rawUrl: string): boolean {
+  const schemeEnd = rawUrl.indexOf('://')
+  const authorityStart = schemeEnd === -1 ? 0 : schemeEnd + 3
+
+  const queryStart = rawUrl.indexOf('?', authorityStart)
+  const hashStart = rawUrl.indexOf('#', authorityStart)
+  const urlEndCandidates = [queryStart, hashStart].filter((index) => index !== -1)
+  const urlEnd = urlEndCandidates.length === 0 ? rawUrl.length : Math.min(...urlEndCandidates)
+
+  const slashStart = rawUrl.indexOf('/', authorityStart)
+  const backslashStart = rawUrl.indexOf('\\', authorityStart)
+  const pathStartCandidates = [slashStart, backslashStart].filter(
+    (index) => index !== -1 && index < urlEnd,
+  )
+  if (pathStartCandidates.length === 0) return false
+
+  const pathStart = Math.min(...pathStartCandidates)
+  const queryStartAfterPath = rawUrl.indexOf('?', pathStart)
+  const hashStartAfterPath = rawUrl.indexOf('#', pathStart)
+  const pathEndCandidates = [queryStartAfterPath, hashStartAfterPath].filter(
+    (index) => index !== -1,
+  )
+  const pathEnd = pathEndCandidates.length === 0 ? rawUrl.length : Math.min(...pathEndCandidates)
+  return rawUrl.slice(pathStart, pathEnd).includes('\\')
+}
+
 class SimulatorTransport implements HttpTransport {
   constructor(private readonly sim: B2Simulator) {}
 
@@ -3993,6 +4019,15 @@ class SimulatorTransport implements HttpTransport {
     const fault = this.sim.consumeMatchingFault(url)
     if (fault !== null) {
       return buildFaultResponse(fault)
+    }
+
+    if (rawUrlPathContainsLiteralBackslash(url)) {
+      return buildFaultResponse({
+        on: '\\',
+        status: 400,
+        code: 'bad_request',
+        message: 'URL path must not contain literal backslashes',
+      })
     }
 
     const headers: Record<string, string> = {}

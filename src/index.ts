@@ -31,6 +31,7 @@ export {
   AccessDeniedError,
   B2Error,
   B2InsufficientCapabilityError,
+  B2PartnerAuthorizationError,
   B2RealmConfigurationError,
   B2RedirectError,
   B2SsrfError,
@@ -127,6 +128,7 @@ export {
   groupId,
   keyId,
   largeFileId,
+  partnerToken,
 } from './types/ids.ts'
 export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'

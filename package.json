@@ -60,6 +60,16 @@
         "default": "./dist/auth/file.cjs"
       }
     },
+    "./partner": {
+      "import": {
+        "types": "./dist/partner/index.d.ts",
+        "default": "./dist/partner/index.js"
+      },
+      "require": {
+        "types": "./dist/partner/index.d.cts",
+        "default": "./dist/partner/index.cjs"
+      }
+    },
     "./streams": {
       "import": {
         "types": "./dist/streams/index.d.ts",

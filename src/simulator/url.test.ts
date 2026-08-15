@@ -30,6 +30,40 @@ describe('B2Simulator API URL routing', () => {
     await expect(response.json()).resolves.toEqual({ buckets: [] })
   })
 
+  it('rejects literal backslash path smuggling before route dispatch', async () => {
+    const sim = new B2Simulator()
+
+    const response = await sim.transport().send({
+      url: 'http://localhost:0/api/backup/v1/ignored\\b2_list_buckets',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: 'account' }),
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'URL path must not contain literal backslashes',
+    })
+  })
+
+  it('rejects authority-adjacent backslash path smuggling before route dispatch', async () => {
+    const sim = new B2Simulator()
+
+    const response = await sim.transport().send({
+      url: 'http://localhost:0\\api/backup/v1/b2_list_buckets',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountId: 'account' }),
+    })
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'URL path must not contain literal backslashes',
+    })
+  })
+
   it('reads the API version from non-b2api paths', async () => {
     const sim = new B2Simulator()
 
