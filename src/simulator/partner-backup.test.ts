@@ -312,6 +312,24 @@ describe('B2Simulator partner endpoints', () => {
     expect(recreated.body[0]?.groupMember.email).toBe('reuse@example.com')
   })
 
+  it('reports invalid reserve trial email values clearly', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const auth = await authorizePartner(sim)
+
+    const result = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: [{ email: 'invalid-email', term: 7, storage: 1 }],
+    })
+
+    expect(result.status).toBe(400)
+    expect(result.body).toMatchObject({
+      code: 'bad_request',
+      message: 'email address is invalid',
+    })
+  })
+
   it('rejects cross-account Partner and Backup requests in strict auth mode', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true, strictAuth: true })
     const auth = await authorizePartner(sim)
@@ -520,7 +538,7 @@ describe('B2Simulator backup endpoints', () => {
         computerId: firstComputer.computerId,
       },
     })
-    expect(deletedAgain.status).toBe(401)
+    expect(deletedAgain.status).toBe(400)
     expect(deletedAgain.body.code).toBe('invalid_computer_id')
 
     const deletedCursor = await simulatorRequest<ErrorBody>(sim, {

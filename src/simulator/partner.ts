@@ -641,9 +641,9 @@ export class PartnerSimulator {
     const auth = this.authorizeRequest(authToken, { checkPhone: false })
     if ('status' in auth) return auth
     const record = requestObject(body)
-    const accountId = this.requiredString(record, 'accountId', 401, 'invalid_account_id')
+    const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
     if ('error' in accountId) return accountId.error
-    const computerId = this.requiredString(record, 'computerId', 401, 'invalid_computer_id')
+    const computerId = this.requiredString(record, 'computerId', 400, 'invalid_computer_id')
     if ('error' in computerId) return computerId.error
     const accountError = this.authorizeAccount(auth, accountId.value)
     if (accountError !== null) return accountError
@@ -651,7 +651,7 @@ export class PartnerSimulator {
     const computers = this.computersByAccount.get(accountId.value)
     const computer = computers?.get(computerId.value)
     if (computer === undefined || computer.deleted) {
-      return this.host.error(401, 'invalid_computer_id', 'computer ID is invalid or deleted')
+      return this.host.error(400, 'invalid_computer_id', 'computer ID is invalid or deleted')
     }
     computer.deleted = true
     return { status: 200, body: [this.publicComputer(computer)] }
@@ -716,8 +716,11 @@ export class PartnerSimulator {
     }
     const record = value as Record<string, unknown>
     const email = record['email']
-    if (typeof email !== 'string' || !isValidEmailAddress(email)) {
+    if (typeof email !== 'string') {
       return { error: this.host.error(400, 'bad_request', 'email is required') }
+    }
+    if (!isValidEmailAddress(email)) {
+      return { error: this.host.error(400, 'bad_request', 'email address is invalid') }
     }
     const normalizedEmail = normalizeEmail(email)
     if (this.knownEmails.has(normalizedEmail) || requestEmails.has(normalizedEmail)) {
