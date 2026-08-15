@@ -492,6 +492,156 @@ export class ChecksumMismatchError extends B2Error {
   }
 }
 
+/** Thrown when a Partner group has reached its maximum member count. */
+export class TooManyMembersError extends B2Error {
+  /**
+   * Creates a new TooManyMembersError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'TooManyMembersError'
+  }
+}
+
+/**
+ * Compatibility alias for the issue #167 Partner member-limit error name.
+ * @deprecated Use {@link TooManyMembersError}.
+ */
+export const TooManyGroupMembersError = TooManyMembersError
+/** @deprecated Use {@link TooManyMembersError}. */
+export type TooManyGroupMembersError = TooManyMembersError
+
+/** Thrown when a Partner group ID is malformed or does not identify a valid group. */
+export class InvalidGroupIdError extends B2Error {
+  /**
+   * Creates a new InvalidGroupIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidGroupIdError'
+  }
+}
+
+/** Thrown when a Partner member email address fails validation. */
+export class InvalidEmailError extends B2Error {
+  /**
+   * Creates a new InvalidEmailError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidEmailError'
+  }
+}
+
+/** Thrown when a Partner API region value is unsupported or malformed. */
+export class InvalidRegionError extends B2Error {
+  /**
+   * Creates a new InvalidRegionError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidRegionError'
+  }
+}
+
+/** Thrown when a Partner account SMS phone number fails validation. */
+export class InvalidSmsPhoneError extends B2Error {
+  /**
+   * Creates a new InvalidSmsPhoneError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidSmsPhoneError'
+  }
+}
+
+/**
+ * Compatibility alias for the issue #167 Partner SMS-phone error name.
+ * @deprecated Use {@link InvalidSmsPhoneError}.
+ */
+export const MissingSmsPhoneError = InvalidSmsPhoneError
+/** @deprecated Use {@link InvalidSmsPhoneError}. */
+export type MissingSmsPhoneError = InvalidSmsPhoneError
+
+/**
+ * Thrown when B2 returns `method_failure`.
+ *
+ * The documented Partner group-member creation flow uses this code after
+ * server-side creation fails and Backblaze rolls back before callers retry.
+ * The code itself is classified globally, so this class stays endpoint-neutral.
+ */
+export class MethodFailureError extends B2Error {
+  /** Always `false` because callers should decide when a documented operation-level retry is safe. */
+  override readonly retryable = false
+
+  /**
+   * Creates a new MethodFailureError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'MethodFailureError'
+  }
+}
+
+/**
+ * Compatibility alias for the issue #167 Partner group-member failure name.
+ * @deprecated Use {@link MethodFailureError}.
+ */
+export const GroupMemberCreationFailedError = MethodFailureError
+/** @deprecated Use {@link MethodFailureError}. */
+export type GroupMemberCreationFailedError = MethodFailureError
+
+/** Thrown when a Partner group member account ID fails validation. */
+export class InvalidMemberAccountIdError extends B2Error {
+  /**
+   * Creates a new InvalidMemberAccountIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidMemberAccountIdError'
+  }
+}
+
+/** Thrown when an account ID fails Partner or Computer Backup API validation. */
+export class InvalidAccountIdError extends B2Error {
+  /**
+   * Creates a new InvalidAccountIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidAccountIdError'
+  }
+}
+
+/** Thrown when a Computer Backup computer ID fails validation. */
+export class InvalidComputerIdError extends B2Error {
+  /**
+   * Creates a new InvalidComputerIdError instance.
+   * @param response - Parsed B2 error response body.
+   * @param options - Optional metadata from response headers.
+   */
+  constructor(response: B2ErrorResponse, options?: B2ErrorOptions) {
+    super(response, options)
+    this.name = 'InvalidComputerIdError'
+  }
+}
+
 /**
  * Thrown by client-side capability checks when the application key is missing
  * capabilities required by an operation. Not raised by the server.
@@ -755,6 +905,8 @@ function classifyKnownError(
       return new TooManyBucketsError(response, options)
     case 'too_many_files':
       return new TooManyFilesError(response, options)
+    case 'too_many_members':
+      return new TooManyMembersError(response, options)
     case 'cap_exceeded':
     case 'storage_cap_exceeded':
     case 'transaction_cap_exceeded':
@@ -768,10 +920,24 @@ function classifyKnownError(
       return new InternalError(response, options)
     case 'bad_json':
       return new BadJsonError(response, options)
+    case 'invalid_account_id':
+      return new InvalidAccountIdError(response, options)
     case 'invalid_bucket_id':
       return new InvalidBucketIdError(response, options)
     case 'invalid_bucket_info':
       return new InvalidBucketInfoError(response, options)
+    case 'invalid_computer_id':
+      return new InvalidComputerIdError(response, options)
+    case 'invalid_email':
+      return new InvalidEmailError(response, options)
+    case 'invalid_group_id':
+      return new InvalidGroupIdError(response, options)
+    case 'invalid_member_account_id':
+      return new InvalidMemberAccountIdError(response, options)
+    case 'invalid_region':
+      return new InvalidRegionError(response, options)
+    case 'invalid_sms_phone':
+      return new InvalidSmsPhoneError(response, options)
     case 'file_not_present':
     case 'no_such_file':
       return new FileNotPresentError(response, options)
@@ -787,6 +953,8 @@ function classifyKnownError(
       return new InvalidFileInfoError(response, options)
     case 'invalid_part_number':
       return new InvalidPartNumberError(response, options)
+    case 'method_failure':
+      return new MethodFailureError(response, options)
     case 'bad_sha1_checksum':
       return new ChecksumMismatchError(response, options)
     default:
