@@ -5,6 +5,7 @@ import {
   type HttpRequest,
   type HttpTransport,
   RetryTransport,
+  type UrlGuardedTransport,
 } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
@@ -52,7 +53,7 @@ function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown
   const seenRequests: HttpRequest[] = []
   const urlGuard = new UrlGuard()
   urlGuard.setAllowedSuffixes(['backblazeb2.com'])
-  const transport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+  const transport: UrlGuardedTransport = {
     urlGuard,
     async send(request) {
       seenRequests.push(request)
@@ -91,7 +92,7 @@ describe('PartnerRawClient group management endpoints', () => {
           groupMember,
         },
       ],
-      b2_eject_group_member: groupMember,
+      b2_eject_group_member: [groupMember],
     })
 
     const created = await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -108,7 +109,7 @@ describe('PartnerRawClient group management endpoints', () => {
     })
 
     expect(created[0]?.groupMember.accountId).toBe(memberAccountId)
-    expect(ejected.accountId).toBe(memberAccountId)
+    expect(ejected[0]?.accountId).toBe(memberAccountId)
     expect(seenRequests).toHaveLength(2)
     const createRequest = seenRequests[0]
     const ejectRequest = seenRequests[1]
@@ -150,17 +151,21 @@ describe('PartnerRawClient group management endpoints', () => {
   it('sends Partner list endpoints as canonical GET query requests', async () => {
     const nextGroup = groupId('255')
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_list_groups: {
-        accountId: adminAccountId,
-        groups: [],
-        nextGroupId: nextGroup,
-      },
-      b2_list_group_members: {
-        groupId: group,
-        groupName: 'Example Group',
-        groupMembers: [],
-        nextEmail: 'next@example.com',
-      },
+      b2_list_groups: [
+        {
+          accountId: adminAccountId,
+          groups: [],
+          nextGroupId: nextGroup,
+        },
+      ],
+      b2_list_group_members: [
+        {
+          groupId: group,
+          groupName: 'Example Group',
+          groupMembers: [],
+          nextEmail: 'next@example.com',
+        },
+      ],
     })
 
     const groups = await raw.listGroups(groupsApiUrl, authToken, {
@@ -176,8 +181,8 @@ describe('PartnerRawClient group management endpoints', () => {
       maxMemberCount: 1000,
     })
 
-    expect(groups.nextGroupId).toBe(nextGroup)
-    expect(members.nextEmail).toBe('next@example.com')
+    expect(groups[0]?.nextGroupId).toBe(nextGroup)
+    expect(members[0]?.nextEmail).toBe('next@example.com')
     expect(seenRequests).toEqual([
       {
         url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account&groupName=Example%20Group&startGroupId=254&maxGroupCount=10',
@@ -192,17 +197,49 @@ describe('PartnerRawClient group management endpoints', () => {
     ])
   })
 
+  it('surfaces empty list pages with null cursors from array responses', async () => {
+    const { raw } = makePartnerEndpointRawClient({
+      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_list_group_members: [
+        {
+          groupId: group,
+          groupName: 'Example Group',
+          groupMembers: [],
+          nextEmail: null,
+        },
+      ],
+    })
+
+    const groups = await raw.listGroups(groupsApiUrl, authToken, { adminAccountId })
+    const members = await raw.listGroupMembers(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+    })
+
+    expect(groups).toEqual([{ accountId: adminAccountId, groups: [], nextGroupId: null }])
+    expect(members).toEqual([
+      {
+        groupId: group,
+        groupMembers: [],
+        groupName: 'Example Group',
+        nextEmail: null,
+      },
+    ])
+  })
+
   it('omits undefined optional Partner request fields', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: groupMember,
-      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: {
-        groupId: group,
-        groupName: 'Example Group',
-        groupMembers: [],
-        nextEmail: null,
-      },
+      b2_eject_group_member: [groupMember],
+      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_list_group_members: [
+        {
+          groupId: group,
+          groupName: 'Example Group',
+          groupMembers: [],
+          nextEmail: null,
+        },
+      ],
     })
 
     await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -241,19 +278,21 @@ describe('PartnerRawClient group management endpoints', () => {
     )
   })
 
-  it('forwards request signal and retry options for Partner endpoints', async () => {
+  it('forwards request signal and safe retry options for Partner endpoints', async () => {
     const controller = new AbortController()
     const retry = { maxRetries: 2 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: groupMember,
-      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: {
-        groupId: group,
-        groupName: 'Example Group',
-        groupMembers: [],
-        nextEmail: null,
-      },
+      b2_eject_group_member: [groupMember],
+      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
+      b2_list_group_members: [
+        {
+          groupId: group,
+          groupName: 'Example Group',
+          groupMembers: [],
+          nextEmail: null,
+        },
+      ],
     })
 
     await raw.createGroupMember(
@@ -287,14 +326,19 @@ describe('PartnerRawClient group management endpoints', () => {
       controller.signal,
       controller.signal,
     ])
-    expect(seenRequests.map((request) => request.retry)).toEqual([retry, retry, retry, retry])
+    expect(seenRequests.map((request) => request.retry)).toEqual([
+      { maxRetries: 0 },
+      { maxRetries: 0 },
+      retry,
+      retry,
+    ])
   })
 
   it('keeps mutation retries disabled when only timeout retry options are supplied', async () => {
     const retry = { requestTimeoutMs: 1000 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [],
-      b2_eject_group_member: groupMember,
+      b2_eject_group_member: [groupMember],
     })
 
     await raw.createGroupMember(
@@ -327,7 +371,7 @@ describe('PartnerRawClient group management endpoints', () => {
     ['off-realm attacker host', 'https://attacker.example/partner'],
   ])('rejects unsafe groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+      b2_list_groups: [{ accountId: adminAccountId, groups: [], nextGroupId: null }],
     })
 
     await expect(raw.listGroups(unsafeGroupsApiUrl, authToken, { adminAccountId })).rejects.toThrow(
@@ -337,11 +381,32 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(seenRequests).toEqual([])
   })
 
+  it.each([
+    ['plaintext HTTP', 'http://groups.backblazeb2.com/partner'],
+    ['literal metadata IP', 'https://169.254.169.254/latest/meta-data'],
+    ['localhost', 'https://localhost/partner'],
+    ['off-realm attacker host', 'https://attacker.example/partner'],
+  ])('rejects unsafe POST groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [],
+    })
+
+    await expect(
+      raw.createGroupMember(unsafeGroupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberEmail: 'member@example.com',
+      }),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+
+    expect(seenRequests).toEqual([])
+  })
+
   it('fails closed before a transport URL guard is locked', async () => {
     const noGuard = recordingTransport()
     const rawWithoutGuard = new PartnerRawClient({ transport: noGuard.transport })
     const seenUnlockedRequests: HttpRequest[] = []
-    const unlockedTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+    const unlockedTransport: UrlGuardedTransport = {
       urlGuard: new UrlGuard(),
       async send(request) {
         seenUnlockedRequests.push(request)
@@ -365,7 +430,7 @@ describe('PartnerRawClient group management endpoints', () => {
     const responseFailureRequests: HttpRequest[] = []
     const responseFailureGuard = new UrlGuard()
     responseFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
-    const responseFailureTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+    const responseFailureTransport: UrlGuardedTransport = {
       urlGuard: responseFailureGuard,
       async send(request) {
         responseFailureRequests.push(request)
@@ -392,7 +457,7 @@ describe('PartnerRawClient group management endpoints', () => {
     const networkFailureRequests: HttpRequest[] = []
     const networkFailureGuard = new UrlGuard()
     networkFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
-    const networkFailureTransport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+    const networkFailureTransport: UrlGuardedTransport = {
       urlGuard: networkFailureGuard,
       async send(request) {
         networkFailureRequests.push(request)
@@ -417,17 +482,15 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(networkFailureRequests).toHaveLength(1)
   })
 
-  it('retries mutation POSTs only when the caller explicitly opts in', async () => {
+  it('does not retry mutation POSTs when the caller passes maxRetries', async () => {
     const seenRequests: HttpRequest[] = []
     const urlGuard = new UrlGuard()
     urlGuard.setAllowedSuffixes(['backblazeb2.com'])
-    const transport: HttpTransport & { readonly urlGuard: UrlGuard } = {
+    const transport: UrlGuardedTransport = {
       urlGuard,
       async send(request) {
         seenRequests.push(request)
-        return seenRequests.length === 1
-          ? jsonErrorResponse(503, 'service_unavailable', 'try again')
-          : jsonResponse([])
+        return jsonErrorResponse(503, 'service_unavailable', 'try again')
       },
     }
     const raw = new PartnerRawClient({
@@ -438,14 +501,17 @@ describe('PartnerRawClient group management endpoints', () => {
       }),
     })
 
-    await raw.createGroupMember(
-      groupsApiUrl,
-      authToken,
-      { adminAccountId, groupId: group, memberEmail: 'member@example.com' },
-      { retry: { maxRetries: 1 } },
-    )
+    await expect(
+      raw.createGroupMember(
+        groupsApiUrl,
+        authToken,
+        { adminAccountId, groupId: group, memberEmail: 'member@example.com' },
+        { retry: { maxRetries: 1 } },
+      ),
+    ).rejects.toThrow()
 
-    expect(seenRequests).toHaveLength(2)
+    expect(seenRequests).toHaveLength(1)
+    expect(seenRequests[0]?.retry?.maxRetries).toBe(0)
   })
 })
 
@@ -667,6 +733,47 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(urlGuard.getAllowedSuffixes()).toEqual(['backblazeb2.com'])
     expect(() => urlGuard.check('https://evil.example/collect')).toThrow()
     fetchMock.mockRestore()
+  })
+
+  it('uses authorizePartner suffixes through transports that do not expose urlGuard', async () => {
+    const seenRequests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    const guardedInner: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        seenRequests.push(request)
+        const endpoint = new URL(request.url).pathname.split('/').at(-1)
+        return endpoint === 'b2_authorize_account'
+          ? jsonResponse(partnerAuthorizeResponse())
+          : jsonResponse([
+              { accountId: accountId('partner-account'), groups: [], nextGroupId: null },
+            ])
+      },
+    }
+    const retry = new RetryTransport({
+      transport: guardedInner,
+      retry: { maxRetries: 0 },
+      sleepImpl: noSleep,
+    })
+    const wrapper: HttpTransport = {
+      async send(request) {
+        return retry.send(request)
+      },
+    }
+    const raw = new PartnerRawClient({ transport: wrapper })
+
+    const auth = await raw.authorizePartner('master-key-id', 'master-key')
+    if (auth.groupsApiUrl === undefined) throw new Error('expected Partner groups API URL')
+    const groups = await raw.listGroups(auth.groupsApiUrl, auth.authorizationToken, {
+      adminAccountId: auth.accountId,
+    })
+
+    expect(groups[0]?.nextGroupId).toBeNull()
+    expect(seenRequests.map((request) => new URL(request.url).pathname.split('/').at(-1))).toEqual([
+      'b2_authorize_account',
+      'b2_list_groups',
+    ])
+    expect(urlGuard.getAllowedSuffixes()).toEqual([])
   })
 
   it('merges Partner endpoint hosts with existing FetchTransport guard suffixes', async () => {

@@ -941,6 +941,30 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
+    it.each([
+      'b2_create_group_member',
+      'b2_eject_group_member',
+    ] as const)('does not retry %s transient responses in place', async (endpoint) => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(503, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+        }),
+      ).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
     // Retryable upload pod failures are not retried in place. Upload endpoints
     // are URL-pinned, so pod failures bubble to the upload layer for fresh-URL
     // retry. HTTP 429 is covered separately because it is account-level
@@ -1214,6 +1238,30 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
+    it('does not reauth and resend Partner group mutation POSTs', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('storage-token')
+
+      innerTransport.send.mockResolvedValueOnce(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+        }),
+      ).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).not.toHaveBeenCalled()
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
     it('throws expired auth token error when no onReauth callback is provided', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
@@ -1386,6 +1434,29 @@ describe('RetryTransport', () => {
 
       expect(result).toBe(okResponse)
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
+    })
+
+    it.each([
+      'b2_create_group_member',
+      'b2_eject_group_member',
+    ] as const)('does not retry network errors for %s', async (endpoint) => {
+      innerTransport.send
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+        }),
+      ).rejects.toThrow(NetworkError)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
     it('retries request timeout aborts as network failures', async () => {
