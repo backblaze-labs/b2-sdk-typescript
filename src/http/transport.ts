@@ -456,14 +456,20 @@ function isStartLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_start_large_file'
 }
 
-function isPartnerGroupMutationEndpoint(url: string): boolean {
+function isPartnerMutationEndpoint(url: string): boolean {
   const endpoint = b2ApiEndpointName(url)
-  return endpoint === 'b2_create_group_member' || endpoint === 'b2_eject_group_member'
+  return (
+    endpoint === 'b2_create_group_member' ||
+    endpoint === 'b2_eject_group_member' ||
+    endpoint === 'b2_reserve_trial_create_account'
+  )
 }
 
 function b2ApiEndpointName(url: string): string | undefined {
   const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
-  const apiRootIndex = segments.indexOf('b2api')
+  // Partner endpoint base URLs can themselves contain a b2api-looking segment
+  // before the SDK appends the real API route. Classify the terminal route.
+  const apiRootIndex = segments.lastIndexOf('b2api')
   if (apiRootIndex === -1) return undefined
   return segments[apiRootIndex + 2]
 }
@@ -473,7 +479,7 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
     isUploadEndpoint(url) ||
     isStartLargeFileEndpoint(url) ||
     isFinishLargeFileEndpoint(url) ||
-    isPartnerGroupMutationEndpoint(url)
+    isPartnerMutationEndpoint(url)
   )
 }
 
@@ -490,7 +496,7 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
-  if (isPartnerGroupMutationEndpoint(url)) return false
+  if (isPartnerMutationEndpoint(url)) return false
   if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
   if (isUploadEndpoint(url)) return false
@@ -607,7 +613,7 @@ export class RetryTransport implements HttpTransport {
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
           !isUploadEndpoint(request.url) &&
-          !isPartnerGroupMutationEndpoint(request.url) &&
+          !isPartnerMutationEndpoint(request.url) &&
           !didReauth
         ) {
           // Reauth returns the FRESH token; build a new request with a

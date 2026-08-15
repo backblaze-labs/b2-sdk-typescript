@@ -13,13 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subpath exports `PartnerRawClient.authorizePartner()`, `PartnerAccountInfo`,
   and `InMemoryPartnerAccountInfo` for Master Application Key authorization
   against the Partner and Computer Backup suites.
+- **Partner API runtime bindings.** `PartnerRawClient` now includes
+  `createGroupMember()`, `ejectGroupMember()`, `listGroups()`,
+  `listGroupMembers()`, and `reserveTrialCreateAccount()` bindings for Partner
+  API group management and B2 Reserve trial-account creation.
 - **Partner API and Computer Backup type layer.** Public exports now include
   Partner API and Computer Backup request/response types, branded
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
   The response types document the Partner and Backup array-shaped wire
   responses and preserve numeric-looking group IDs and B2 statistics counts as
-  strings. Endpoint types without runtime methods are marked experimental until
-  those methods are implemented and exercised.
+  strings. Endpoint types still awaiting runtime methods are marked
+  experimental until those methods are implemented and exercised.
 
 ### Fixed
 

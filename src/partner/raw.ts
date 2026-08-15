@@ -22,8 +22,14 @@ import type {
   PartnerAuthorizeResponse,
   PartnerBackupApiInfo,
   PartnerGroupsApiInfo,
+  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
+  ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
-import { redactPartnerAuthorizeResponse } from './redaction.ts'
+import {
+  redactPartnerAuthorizeResponse,
+  redactReserveTrialCreateAccountResponse,
+} from './redaction.ts'
 
 const PARTNER_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
@@ -40,7 +46,7 @@ export interface PartnerRawClientOptions {
   /**
    * The HTTP transport used to send requests.
    *
-   * Group-management calls validate endpoint URLs against suffixes recorded by
+   * Partner endpoint calls validate URLs against suffixes recorded by
    * `authorizePartner()`. A rehydrated client that skips authorization must use
    * a {@link UrlGuardedTransport} with a locked `urlGuard`.
    */
@@ -313,8 +319,20 @@ function withQueryString(url: string, query: QueryParams): string {
   return queryString.length === 0 ? url : `${url}?${queryString}`
 }
 
+function reserveTrialCreateAccountRequestBody(
+  request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
+): readonly ReserveTrialCreateAccountRequestEntry[] {
+  const entries = Array.isArray(request) ? request : [request]
+  return entries.map((entry) => ({
+    email: entry.email,
+    term: entry.term,
+    storage: entry.storage,
+    ...(entry.region != null ? { region: entry.region } : {}),
+  }))
+}
+
 /**
- * Low-level client for Partner API authorization and group-management endpoints.
+ * Low-level client for Partner API authorization and endpoint bindings.
  */
 export class PartnerRawClient {
   /** @internal */
@@ -401,7 +419,7 @@ export class PartnerRawClient {
         adminAccountId: request.adminAccountId,
         groupId: request.groupId,
         memberEmail: request.memberEmail,
-        ...(request.region !== undefined ? { region: request.region } : {}),
+        ...(request.region != null ? { region: request.region } : {}),
       },
       mutationRequestOptions(options),
     )
@@ -438,6 +456,54 @@ export class PartnerRawClient {
       },
       mutationRequestOptions(options),
     )
+  }
+
+  /**
+   * Calls {@link https://www.backblaze.com/apidocs/b2-reserve-trial-create-account | b2_reserve_trial_create_account}.
+   *
+   * The Partner API creates one or more new Backblaze B2 accounts and starts
+   * B2 Reserve trials for them. Backblaze documents both the wire request and
+   * the success response as JSON arrays. The array form must include at least
+   * one request entry. For convenience, this raw binding intentionally accepts
+   * one request entry for the one-account case and always sends an array on the
+   * wire.
+   *
+   * Each email address must not already be a Backblaze account. `term` is the
+   * trial duration in days, documented as 7 through 30 inclusive. `storage` is
+   * the requested storage in TB, documented as 1 through 50 inclusive.
+   *
+   * This operation is non-idempotent and creates billable accounts. Automatic
+   * retries and expired-token reauthorization are disabled; long-lived batch
+   * callers must catch auth expiry, reauthorize, and then decide whether to
+   * issue a new request. A network or timeout failure after the server has
+   * processed the request may still have created one or more accounts, and the
+   * application keys from a lost response are not recoverable from B2. Bulk
+   * callers should reconcile account state out of band, such as through Partner
+   * account listing, before re-issuing the same batch.
+   *
+   * @param groupsApiUrl - The Partner API base URL from `authorizePartner`. The authorize response currently exposes the shared Partner endpoint base as `groupsApiUrl`.
+   * @param authToken - The Partner API authorization token.
+   * @param request - One reserve-trial account request, or one or more entries.
+   * @param options - Optional abort and per-request retry settings.
+   *
+   * @returns The created reserve-trial account result array.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+   */
+  async reserveTrialCreateAccount(
+    groupsApiUrl: string,
+    authToken: string,
+    request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
+    options?: PartnerRawRequestOptions,
+  ): Promise<ReserveTrialCreateAccountResponse> {
+    const response = await this.postJson<ReserveTrialCreateAccountResponse>(
+      groupsApiUrl,
+      authToken,
+      'b2_reserve_trial_create_account',
+      reserveTrialCreateAccountRequestBody(request),
+      mutationRequestOptions(options),
+    )
+    return redactReserveTrialCreateAccountResponse(response)
   }
 
   /**

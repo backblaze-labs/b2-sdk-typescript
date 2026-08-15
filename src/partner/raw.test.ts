@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
+import { B2Client } from '../client.ts'
+import {
+  AccessDeniedError,
+  B2PartnerAuthorizationError,
+  B2RealmConfigurationError,
+  BadAuthTokenError,
+  ExpiredAuthTokenError,
+} from '../errors/index.ts'
 import {
   FetchTransport,
   type HttpRequest,
@@ -8,13 +15,24 @@ import {
   type UrlGuardedTransport,
 } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
+import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import type { PartnerToken } from '../types/ids.ts'
-import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
+import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient } from './raw.ts'
-import { redactPartnerAuthorizeResponse } from './redaction.ts'
+import {
+  APPLICATION_KEY_REDACTED,
+  redactPartnerAuthorizeResponse,
+  reserveTrialCreateAccountResponseToRedactedJson,
+} from './redaction.ts'
+
+const runtimeGlobals = globalThis as Record<string, unknown>
+const runtimeProcess = runtimeGlobals['process'] as
+  | { readonly versions?: { readonly node?: string } }
+  | undefined
+const isNode = typeof runtimeProcess?.versions?.node === 'string'
 
 function partnerAuthorizeResponse(
   overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
@@ -62,6 +80,50 @@ function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown
     },
   }
   return { raw: new PartnerRawClient({ transport }), seenRequests, urlGuard }
+}
+
+function makeRecordingSimulatorTransport(sim: B2Simulator): {
+  readonly transport: HttpTransport
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  const inner = sim.transport()
+  return {
+    seenRequests,
+    transport: {
+      async send(request) {
+        seenRequests.push(request)
+        return inner.send(request)
+      },
+    },
+  }
+}
+
+async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Promise<{
+  readonly raw: PartnerRawClient
+  readonly sim: B2Simulator
+  readonly seenRequests: HttpRequest[]
+  readonly groupsApiUrl: string
+  readonly authToken: PartnerToken
+}> {
+  const sim = new B2Simulator({ ...options, partnerAuthorize: true })
+  const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
+  const raw = new PartnerRawClient({
+    transport: new RetryTransport({
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+      sleepImpl: noSleep,
+    }),
+  })
+  const auth = await raw.authorizePartner('master-key-id', 'master-key')
+  if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
+  return {
+    raw,
+    sim,
+    seenRequests,
+    groupsApiUrl: auth.groupsApiUrl,
+    authToken: auth.authorizationToken,
+  }
 }
 
 function noSleep(): Promise<void> {
@@ -510,6 +572,425 @@ describe('PartnerRawClient group management endpoints', () => {
 
     expect(seenRequests).toHaveLength(1)
     expect(seenRequests[0]?.retry?.maxRetries).toBe(0)
+  })
+})
+
+describe('PartnerRawClient reserve trial endpoint', () => {
+  const authToken = partnerToken('partner-token')
+
+  it('creates one reserve trial account from a single request through the simulator', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-one@example.com',
+      term: 15,
+      storage: 12,
+      region: Region.UsEast,
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      email: 'trial-one@example.com',
+      s3Endpoint: 's3.us-east-001.backblazeb2.com',
+      startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    })
+    expect(result[0]?.accountId).toEqual(expect.any(String))
+    expect(result[0]?.applicationKey).toEqual(expect.any(String))
+    expect(result[0]?.applicationKeyId).toEqual(expect.any(String))
+    expect(result[0]?.bucketId).toEqual(expect.any(String))
+    expect(result[0]?.applicationKey).not.toBe('')
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(reserveRequest).toMatchObject({
+      url: `${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`,
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      retry: expect.objectContaining({ maxRetries: 0 }),
+    })
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-one@example.com',
+        term: 15,
+        storage: 12,
+        region: Region.UsEast,
+      },
+    ])
+  })
+
+  it('authorizes storage clients as the created trial account', async () => {
+    const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-storage-auth@example.com',
+      term: 7,
+      storage: 1,
+    })
+    if (trial === undefined) throw new Error('expected reserve trial result')
+
+    const client = new B2Client({
+      applicationKeyId: trial.applicationKeyId,
+      applicationKey: trial.applicationKey,
+      transport: sim.transport(),
+    })
+    const auth = await client.authorize()
+
+    expect(auth.accountId).toBe(trial.accountId)
+  })
+
+  it('creates multiple reserve trial accounts from an array request through the simulator', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, [
+      {
+        email: 'trial-two@example.com',
+        term: 7,
+        storage: 1,
+      },
+      {
+        email: 'trial-three@example.com',
+        term: 30,
+        storage: 50,
+        region: Region.EuCentral,
+      },
+    ])
+
+    expect(result).toHaveLength(2)
+    expect(result.map((account) => account.email)).toEqual([
+      'trial-two@example.com',
+      'trial-three@example.com',
+    ])
+    expect(result.map((account) => account.s3Endpoint)).toEqual([
+      's3.us-west-001.backblazeb2.com',
+      's3.eu-central-001.backblazeb2.com',
+    ])
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-two@example.com',
+        term: 7,
+        storage: 1,
+      },
+      {
+        email: 'trial-three@example.com',
+        term: 30,
+        storage: 50,
+        region: Region.EuCentral,
+      },
+    ])
+  })
+
+  it('omits null region values from the reserve trial wire request', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-default-region@example.com',
+      term: 7,
+      storage: 1,
+      region: null,
+    })
+
+    expect(result[0]?.s3Endpoint).toBe('s3.us-west-001.backblazeb2.com')
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-default-region@example.com',
+        term: 7,
+        storage: 1,
+      },
+    ])
+  })
+
+  it('redacts reserve trial application keys through SDK safe serialization paths', async () => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-redaction@example.com',
+      term: 7,
+      storage: 1,
+    })
+    const [account] = result
+    if (account === undefined) throw new Error('expected reserve trial result')
+    const secret = account.applicationKey
+    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+    const inspectedResult = (account as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
+    const inspectedResponse = (result as unknown as Record<symbol, () => unknown>)[
+      inspectSymbol
+    ]?.()
+    const redactedResponseJson = JSON.stringify(result)
+    const redactedResultJson = JSON.stringify(account)
+
+    expect(secret).not.toBe(APPLICATION_KEY_REDACTED)
+    expect(account.applicationKeyId).not.toBe('')
+    expect(account.accountId).not.toBe('')
+    expect(redactedResponseJson).toContain(APPLICATION_KEY_REDACTED)
+    expect(redactedResponseJson).toContain(account.applicationKeyId)
+    expect(redactedResultJson).toContain(APPLICATION_KEY_REDACTED)
+    expect(redactedResultJson).toContain(account.accountId)
+    expect(String(result)).not.toContain(secret)
+    expect(String(account)).not.toContain(secret)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(JSON.stringify(account)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResult)).not.toContain(secret)
+    expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
+    expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
+      APPLICATION_KEY_REDACTED,
+    )
+  })
+
+  it.skipIf(!isNode)('redacts reserve trial application keys through Node inspect', async () => {
+    const { inspect } = await import(/* @vite-ignore */ 'node:util')
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-node-inspect-redaction@example.com',
+      term: 7,
+      storage: 1,
+    })
+    const [account] = result
+    if (account === undefined) throw new Error('expected reserve trial result')
+
+    expect(inspect(result)).not.toContain(account.applicationKey)
+    expect(inspect(account)).not.toContain(account.applicationKey)
+    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(inspect(account)).toContain(APPLICATION_KEY_REDACTED)
+  })
+
+  it('rejects non-array reserve trial response bodies with a typed SDK error', async () => {
+    const { raw } = makePartnerEndpointRawClient({
+      b2_reserve_trial_create_account: { accountId: 'not-an-array' },
+    })
+
+    await expect(
+      raw.reserveTrialCreateAccount('https://groups.backblazeb2.com/partner', authToken, {
+        email: 'trial-bad-response@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+  })
+
+  it('does not retry reserve trial failures with an embedded b2api base segment', async () => {
+    const requests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        requests.push(request)
+        return jsonErrorResponse(503, 'service_unavailable', 'try again')
+      },
+    }
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+    const groupsApiUrl = 'https://groups.backblazeb2.com/partner/b2api/v3/proxy'
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-embedded-b2api-retry@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow()
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.url).toBe(`${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`)
+  })
+
+  it('does not reauthorize reserve trial failures with an embedded b2api base segment', async () => {
+    const requests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        requests.push(request)
+        return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+      },
+    }
+    const onReauth = vi.fn().mockResolvedValue('fresh-partner-token')
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        onReauth,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      raw.reserveTrialCreateAccount(
+        'https://groups.backblazeb2.com/partner/b2api/v3/proxy',
+        authToken,
+        {
+          email: 'trial-embedded-b2api-reauth@example.com',
+          term: 7,
+          storage: 1,
+        },
+      ),
+    ).rejects.toThrow(ExpiredAuthTokenError)
+
+    expect(onReauth).not.toHaveBeenCalled()
+    expect(requests).toHaveLength(1)
+  })
+
+  it.each([
+    ['missing Authorization header', '', AccessDeniedError, 403, 'access_denied'],
+    [
+      'malformed Authorization header',
+      'Bearer partner-token',
+      AccessDeniedError,
+      403,
+      'access_denied',
+    ],
+    ['leading whitespace Authorization header', ' 000', AccessDeniedError, 403, 'access_denied'],
+    ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
+    ['interior whitespace Authorization header', '0 0 0', AccessDeniedError, 403, 'access_denied'],
+    ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
+  ])('surfaces the documented reserve trial auth error path: %s', async (_label, token, errorClass, status, code) => {
+    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code,
+      status,
+    })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth-2@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(errorClass)
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['empty', { Authorization: '' }],
+    ['non-Basic', { Authorization: 'Bearer partner-token' }],
+    ['malformed Basic', { Authorization: `Basic ${btoa('not-a-key-pair')}` }],
+    ['empty Basic credentials', { Authorization: `Basic ${btoa(':')}` }],
+  ] satisfies readonly (readonly [
+    string,
+    Record<string, string> | undefined,
+  ])[])('does not mint simulator Partner tokens with %s authorize credentials', async (_label, headers) => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const transport = sim.transport()
+
+    const authResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      ...(headers !== undefined ? { headers } : {}),
+    })
+    expect(authResponse.status).toBe(401)
+    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+    expect(authBody.authorizationToken).toBeUndefined()
+
+    const reserveResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: authBody.authorizationToken ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+    })
+
+    expect(reserveResponse.status).toBe(403)
+    await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'access_denied' })
+  })
+
+  it('does not mint simulator Partner tokens for a known application key secret mismatch', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const transport = sim.transport()
+    const keyResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      method: 'POST',
+      headers: {
+        Authorization: 'sim-auth-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        capabilities: [],
+        keyName: 'partner-authorize-negative',
+      }),
+    })
+    const key = (await keyResponse.json()) as { applicationKeyId: string }
+
+    const authResponse = await transport.send({
+      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+      method: 'GET',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:wrong-secret`)}`,
+      },
+    })
+
+    expect(authResponse.status).toBe(401)
+    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+    expect(authBody.authorizationToken).toBeUndefined()
+
+    const reserveResponse = await transport.send({
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      headers: {
+        Authorization: authBody.authorizationToken ?? '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify([{ email: 'mismatch@example.com', term: 7, storage: 1 }]),
+    })
+    expect(reserveResponse.status).toBe(403)
+  })
+
+  it.each([
+    ['Partner API disabled', { partnerApiEnabled: false }],
+    ['missing valid phone number', { partnerAccountHasValidPhone: false }],
+    ['account not in good standing', { partnerAccountInGoodStanding: false }],
+  ] satisfies readonly (readonly [
+    string,
+    B2SimulatorOptions,
+  ])[])('surfaces reserve trial access_denied when %s', async (_label, options) => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient(options)
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-prereq@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: 'access_denied',
+      status: 403,
+    })
+  })
+
+  it('models the reserve trial account result shape with branded IDs', async () => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const [result] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-shape@example.com',
+      term: 7,
+      storage: 1,
+    })
+
+    if (result === undefined) throw new Error('expected reserve trial result')
+    expect(result.bucketId).toEqual(bucketId(result.bucketId))
+    expect(result.applicationKeyId).toEqual(applicationKeyId(result.applicationKeyId))
   })
 })
 
