@@ -29,6 +29,24 @@ export type RedactedReserveTrialCreateAccountResponseJson =
 
 const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
 
+// Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
+// honors own hooks. Install both shapes so SDK safe serialization is portable.
+function installPortableJsonHook<T extends object>(target: T, toJson: () => unknown): void {
+  const originalPrototype = Object.getPrototypeOf(target)
+  const redactionPrototype = Object.create(originalPrototype) as object
+  Object.defineProperty(redactionPrototype, 'toJSON', {
+    value: toJson,
+    enumerable: false,
+    configurable: true,
+  })
+  Object.setPrototypeOf(target, redactionPrototype)
+  Object.defineProperty(target, 'toJSON', {
+    value: toJson,
+    enumerable: false,
+    configurable: true,
+  })
+}
+
 /**
  * Returns a redacted copy for log serializers that intentionally hide tokens.
  *
@@ -128,12 +146,8 @@ export function redactReserveTrialCreateAccountResult(
   const toRedactedString = (): string =>
     `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`
 
+  installPortableJsonHook(target, toRedactedJson)
   Object.defineProperties(target, {
-    toJSON: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
     toString: {
       value: toRedactedString,
       enumerable: false,
