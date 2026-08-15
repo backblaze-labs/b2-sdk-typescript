@@ -25,18 +25,27 @@ import { FileAction, type FileVersion } from '../types/file.ts'
 import {
   type AuthToken,
   accountId as accountIdOf,
+  applicationKeyId as applicationKeyIdOf,
   type BucketId,
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import {
+  PartnerCapability,
+  Region,
+  type ReserveTrialCreateAccountRequestEntry,
+  type ReserveTrialCreateAccountResult,
+} from '../types/partner.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+const DAY_MS = 24 * 60 * 60 * 1000
+const PARTNER_TRIAL_REGIONS = new Set<string>(Object.values(Region))
 
 function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
@@ -45,6 +54,19 @@ function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion }
     endpoint: segments.at(-1) ?? '',
     version: candidate !== undefined && isB2ApiVersion(candidate) ? candidate : 'v3',
   }
+}
+
+function isPartnerApiEndpoint(endpoint: string): boolean {
+  return endpoint === 'b2_reserve_trial_create_account'
+}
+
+function utcDateString(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10)
+}
+
+function utcDayStartMs(ms: number): number {
+  const date = new Date(ms)
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -336,6 +358,10 @@ interface IssuedToken {
    * deleted keys keep working until the token TTL expires.
    */
   readonly applicationKeyId: string | null
+}
+
+interface IssuedPartnerToken {
+  readonly expiresAt: number
 }
 
 type UploadTokenKind = 'file' | 'part'
@@ -879,6 +905,28 @@ export interface B2SimulatorOptions {
    * rejected at the exact expiry boundary.
    */
   authTokenTtlMs?: number
+  /**
+   * When `true`, v3 `b2_authorize_account` responses include Partner and
+   * Computer Backup suites and issue Partner authorization tokens. Defaults
+   * to `false` so storage-oriented v3 simulator tests keep native auth shape.
+   */
+  partnerAuthorize?: boolean
+  /**
+   * Whether Partner API endpoints should accept issued Partner authorization
+   * tokens. Defaults to `true`. Set to `false` to exercise documented
+   * `403 access_denied` prerequisite failures.
+   */
+  partnerApiEnabled?: boolean
+  /**
+   * Whether the simulated partner administrator has a valid phone number.
+   * Defaults to `true`; `false` produces `403 access_denied` on Partner calls.
+   */
+  partnerAccountHasValidPhone?: boolean
+  /**
+   * Whether the simulated partner administrator account is in good standing.
+   * Defaults to `true`; `false` produces `403 access_denied` on Partner calls.
+   */
+  partnerAccountInGoodStanding?: boolean
 }
 
 /**
@@ -912,6 +960,10 @@ export class B2Simulator {
   private readonly onHookError?: B2SimulatorOptions['onHookError']
   private readonly strictAuth: boolean
   private readonly authTokenTtlMs: number
+  private readonly partnerAuthorize: boolean
+  private readonly partnerApiEnabled: boolean
+  private readonly partnerAccountHasValidPhone: boolean
+  private readonly partnerAccountInGoodStanding: boolean
   /**
    * Issued auth tokens with their associated grant scope + expiry. In
    * permissive mode (`strictAuth: false`) this is still populated by
@@ -919,6 +971,8 @@ export class B2Simulator {
    * mode each request looks up its `Authorization` header here.
    */
   private readonly issuedTokens = new Map<string, IssuedToken>()
+  private readonly issuedPartnerTokens = new Map<string, IssuedPartnerToken>()
+  private readonly partnerTrialEmails = new Set<string>()
   /**
    * Mutable upload-token overrides for tokens minted by `b2_get_upload_url`
    * and `b2_get_upload_part_url`. The token string is self-describing
@@ -976,6 +1030,10 @@ export class B2Simulator {
     // Real B2 tokens last 24h. Default matches production; tests that
     // want to exercise the reauth path can lower this knob.
     this.authTokenTtlMs = options.authTokenTtlMs ?? 24 * 60 * 60 * 1000
+    this.partnerAuthorize = options.partnerAuthorize ?? false
+    this.partnerApiEnabled = options.partnerApiEnabled ?? true
+    this.partnerAccountHasValidPhone = options.partnerAccountHasValidPhone ?? true
+    this.partnerAccountInGoodStanding = options.partnerAccountInGoodStanding ?? true
   }
 
   /**
@@ -1890,7 +1948,7 @@ export class B2Simulator {
     // Strict-mode auth gate runs BEFORE the dispatch so even endpoints
     // that don't otherwise consult headers (e.g. b2_list_buckets) get
     // capability and scope checks.
-    if (this.strictAuth) {
+    if (this.strictAuth && !isPartnerApiEndpoint(endpoint)) {
       const authError = this.authorizeRequest(
         headers['authorization'],
         endpoint,
@@ -1901,7 +1959,15 @@ export class B2Simulator {
 
     switch (endpoint) {
       case 'b2_authorize_account':
+        if (version === 'v3' && this.partnerAuthorize) {
+          return this.authorizePartner(headers['authorization'], origin)
+        }
         return this.authorize(headers['authorization'], origin)
+      case 'b2_reserve_trial_create_account':
+        return this.reserveTrialCreateAccount(
+          body as readonly ReserveTrialCreateAccountRequestEntry[],
+          headers['authorization'],
+        )
       case 'b2_create_bucket':
         return this.createBucket(
           body as { bucketName: string; bucketType: BucketType; accountId: string },
@@ -2642,6 +2708,219 @@ export class B2Simulator {
         },
         applicationKeyExpirationTimestamp: null,
       },
+    }
+  }
+
+  private authorizePartner(
+    _authzHeader?: string,
+    origin = 'http://localhost:0',
+  ): SimulatorJsonResponse {
+    const tokenStr = `sim_partner_auth_token_${this.nextId++}`
+    this.issuedPartnerTokens.set(tokenStr, { expiresAt: this.now() + this.authTokenTtlMs })
+    return {
+      status: 200,
+      body: {
+        accountId: accountIdOf(this.accountId),
+        authorizationToken: tokenStr,
+        apiInfo: {
+          storageApi: {
+            absoluteMinimumPartSize: this.minimumPartSize,
+            apiUrl: origin,
+            bucketId: null,
+            bucketName: null,
+            capabilities: [
+              Capability.ListBuckets,
+              Capability.ReadBuckets,
+              Capability.WriteBuckets,
+              Capability.DeleteBuckets,
+              Capability.ListFiles,
+              Capability.ReadFiles,
+              Capability.WriteFiles,
+              Capability.DeleteFiles,
+            ],
+            downloadUrl: origin,
+            infoType: 'storageApi',
+            namePrefix: null,
+            recommendedPartSize: this.recommendedPartSize,
+            s3ApiUrl: origin,
+          },
+          groupsApi: {
+            capabilities: [PartnerCapability.All],
+            groupsApiUrl: `${origin}/partner`,
+            infoType: 'groupsApi',
+          },
+          backupApi: {
+            backupApiUrl: `${origin}/backup`,
+            capabilities: [PartnerCapability.All],
+            infoType: 'backupApi',
+          },
+        },
+        applicationKeyExpirationTimestamp: null,
+      },
+    }
+  }
+
+  private authorizePartnerRequest(authToken: string | undefined): SimulatorJsonResponse | null {
+    if (authToken === undefined || authToken.trim() === '' || /^[A-Za-z]+[ \t]+/.test(authToken)) {
+      return this.error(
+        403,
+        'access_denied',
+        'missing or malformed Partner API Authorization header',
+      )
+    }
+
+    const token = this.issuedPartnerTokens.get(authToken)
+    if (token === undefined || this.now() > token.expiresAt) {
+      return this.error(401, 'unauthorized', 'invalid Partner API authorization token')
+    }
+    if (!this.partnerApiEnabled) {
+      return this.error(403, 'access_denied', 'account is not enabled for Partner API')
+    }
+    if (!this.partnerAccountHasValidPhone) {
+      return this.error(403, 'access_denied', 'account does not have a valid phone number')
+    }
+    if (!this.partnerAccountInGoodStanding) {
+      return this.error(403, 'access_denied', 'account is not in good standing')
+    }
+    return null
+  }
+
+  private reserveTrialCreateAccount(body: unknown, authToken?: string): SimulatorJsonResponse {
+    const authError = this.authorizePartnerRequest(authToken)
+    if (authError !== null) return authError
+    if (!Array.isArray(body)) {
+      return this.error(400, 'bad_request', 'request body must be an array')
+    }
+    if (body.length === 0) {
+      return this.error(400, 'bad_request', 'request body must include at least one account')
+    }
+
+    const entries: {
+      readonly entry: ReserveTrialCreateAccountRequestEntry
+      readonly normalizedEmail: string
+    }[] = []
+    const requestEmails = new Set<string>()
+    for (const item of body) {
+      const parsed = this.parseReserveTrialCreateAccountEntry(item, requestEmails)
+      if (parsed.error !== null) return parsed.error
+      entries.push(parsed)
+    }
+
+    const startDayMs = utcDayStartMs(this.now())
+    const results = entries.map(({ entry, normalizedEmail }) =>
+      this.createReserveTrialAccount(entry, normalizedEmail, startDayMs),
+    )
+    return { status: 200, body: results }
+  }
+
+  private parseReserveTrialCreateAccountEntry(
+    value: unknown,
+    requestEmails: Set<string>,
+  ):
+    | {
+        readonly entry: ReserveTrialCreateAccountRequestEntry
+        readonly normalizedEmail: string
+        readonly error: null
+      }
+    | {
+        readonly error: SimulatorJsonResponse
+      } {
+    if (typeof value !== 'object' || value === null) {
+      return { error: this.error(400, 'bad_request', 'trial account request must be an object') }
+    }
+    const record = value as Record<string, unknown>
+    const email = record['email']
+    if (typeof email !== 'string' || email.trim() === '') {
+      return { error: this.error(400, 'bad_request', 'email is required') }
+    }
+    const normalizedEmail = email.toLowerCase()
+    if (this.partnerTrialEmails.has(normalizedEmail) || requestEmails.has(normalizedEmail)) {
+      return {
+        error: this.error(
+          400,
+          'bad_request',
+          'email must not already exist as a Backblaze account',
+        ),
+      }
+    }
+    const term = record['term']
+    if (typeof term !== 'number' || !Number.isInteger(term) || term < 7 || term > 30) {
+      return { error: this.error(400, 'bad_request', 'term must be between 7 and 30 days') }
+    }
+    const storage = record['storage']
+    if (typeof storage !== 'number' || !Number.isInteger(storage) || storage < 1 || storage > 50) {
+      return { error: this.error(400, 'bad_request', 'storage must be between 1 and 50 TB') }
+    }
+    const region = record['region']
+    if (
+      region !== undefined &&
+      region !== null &&
+      (typeof region !== 'string' || !PARTNER_TRIAL_REGIONS.has(region))
+    ) {
+      return { error: this.error(400, 'bad_request', 'region is not supported') }
+    }
+
+    requestEmails.add(normalizedEmail)
+    return {
+      entry: {
+        email,
+        term,
+        storage,
+        ...(region !== undefined ? { region: region as Region | null } : {}),
+      },
+      normalizedEmail,
+      error: null,
+    }
+  }
+
+  private createReserveTrialAccount(
+    request: ReserveTrialCreateAccountRequestEntry,
+    normalizedEmail: string,
+    startDayMs: number,
+  ): ReserveTrialCreateAccountResult {
+    const accountId = accountIdOf(this.genId('sim_trial_account'))
+    const bucketName = `trial-${this.nextId.toString(36).padStart(8, '0')}`
+    const bucketResponse = this.createBucket({
+      accountId,
+      bucketName,
+      bucketType: 'allPrivate',
+    })
+    if (bucketResponse.status !== 200) {
+      throw new Error('failed to create simulator reserve trial bucket')
+    }
+    const bucket = bucketResponse.body as BucketInfo
+    const keyId = applicationKeyIdOf(this.genId('sim_key'))
+    const applicationKey = this.genId('sim_secret')
+    this.keys.set(keyId, {
+      applicationKeyId: keyId,
+      keyName: `reserve-trial-${bucketName}`,
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.ReadBuckets,
+        Capability.WriteBuckets,
+        Capability.ListFiles,
+        Capability.ReadFiles,
+        Capability.WriteFiles,
+        Capability.DeleteFiles,
+      ],
+      accountId,
+      applicationKey,
+      bucketIds: [bucket.bucketId],
+      namePrefix: null,
+      expirationTimestamp: null,
+    })
+    this.partnerTrialEmails.add(normalizedEmail)
+    const region = request.region ?? Region.UsWest
+    return {
+      accountId,
+      applicationKey,
+      applicationKeyId: keyId,
+      s3Endpoint: `s3.${region}-001.backblazeb2.com`,
+      startDate: utcDateString(startDayMs),
+      endDate: utcDateString(startDayMs + request.term * DAY_MS),
+      email: request.email,
+      bucketName: bucket.bucketName,
+      bucketId: bucket.bucketId,
     }
   }
 

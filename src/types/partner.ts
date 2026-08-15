@@ -364,7 +364,7 @@ export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
 /**
  * Single request element accepted by `b2_reserve_trial_create_account`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ReserveTrialCreateAccountRequestEntry {
   /** Email address for the new B2 reserve trial account. */
@@ -380,7 +380,7 @@ export interface ReserveTrialCreateAccountRequestEntry {
 /**
  * Array-shaped wire request body for `b2_reserve_trial_create_account`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccountRequestEntry[]
 
@@ -390,7 +390,7 @@ export type ReserveTrialCreateAccountRequest = readonly ReserveTrialCreateAccoun
  * The `b2_reserve_trial_create_account` wire response is a JSON array of
  * these objects.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ReserveTrialCreateAccountResult {
   /** Account ID of the newly created B2 reserve trial account. */
@@ -416,6 +416,6 @@ export interface ReserveTrialCreateAccountResult {
 /**
  * Array-shaped wire response from `b2_reserve_trial_create_account`.
  *
- * @experimental Provisional until the corresponding client method is implemented and exercised.
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type ReserveTrialCreateAccountResponse = readonly ReserveTrialCreateAccountResult[]

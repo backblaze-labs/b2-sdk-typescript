@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
+import {
+  AccessDeniedError,
+  B2PartnerAuthorizationError,
+  B2RealmConfigurationError,
+  BadAuthTokenError,
+} from '../errors/index.ts'
 import {
   FetchTransport,
   type HttpRequest,
@@ -8,9 +13,10 @@ import {
   type UrlGuardedTransport,
 } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
+import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import type { PartnerToken } from '../types/ids.ts'
-import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
+import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient } from './raw.ts'
@@ -62,6 +68,48 @@ function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown
     },
   }
   return { raw: new PartnerRawClient({ transport }), seenRequests, urlGuard }
+}
+
+function makeRecordingSimulatorTransport(sim: B2Simulator): {
+  readonly transport: HttpTransport
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  const inner = sim.transport()
+  return {
+    seenRequests,
+    transport: {
+      async send(request) {
+        seenRequests.push(request)
+        return inner.send(request)
+      },
+    },
+  }
+}
+
+async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Promise<{
+  readonly raw: PartnerRawClient
+  readonly seenRequests: HttpRequest[]
+  readonly groupsApiUrl: string
+  readonly authToken: PartnerToken
+}> {
+  const sim = new B2Simulator({ ...options, partnerAuthorize: true })
+  const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
+  const raw = new PartnerRawClient({
+    transport: new RetryTransport({
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+      sleepImpl: noSleep,
+    }),
+  })
+  const auth = await raw.authorizePartner('master-key-id', 'master-key')
+  if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
+  return {
+    raw,
+    seenRequests,
+    groupsApiUrl: auth.groupsApiUrl,
+    authToken: auth.authorizationToken,
+  }
 }
 
 function noSleep(): Promise<void> {
@@ -510,6 +558,161 @@ describe('PartnerRawClient group management endpoints', () => {
 
     expect(seenRequests).toHaveLength(1)
     expect(seenRequests[0]?.retry?.maxRetries).toBe(0)
+  })
+})
+
+describe('PartnerRawClient reserve trial endpoint', () => {
+  it('creates one reserve trial account from a single request through the simulator', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-one@example.com',
+      term: 15,
+      storage: 12,
+      region: Region.UsEast,
+    })
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      email: 'trial-one@example.com',
+      s3Endpoint: 's3.us-east-001.backblazeb2.com',
+      startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    })
+    expect(result[0]?.accountId).toEqual(expect.stringMatching(/^sim_trial_account_/))
+    expect(result[0]?.applicationKey).toEqual(expect.stringMatching(/^sim_secret_/))
+    expect(result[0]?.applicationKeyId).toEqual(expect.stringMatching(/^sim_key_/))
+    expect(result[0]?.bucketId).toEqual(expect.stringMatching(/^b2_bucket_/))
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(reserveRequest).toMatchObject({
+      url: `${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`,
+      method: 'POST',
+      headers: {
+        Authorization: authToken,
+        'Content-Type': 'application/json',
+      },
+      retry: expect.objectContaining({ maxRetries: 0 }),
+    })
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-one@example.com',
+        term: 15,
+        storage: 12,
+        region: Region.UsEast,
+      },
+    ])
+  })
+
+  it('creates multiple reserve trial accounts from an array request through the simulator', async () => {
+    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, [
+      {
+        email: 'trial-two@example.com',
+        term: 7,
+        storage: 1,
+      },
+      {
+        email: 'trial-three@example.com',
+        term: 30,
+        storage: 50,
+        region: Region.EuCentral,
+      },
+    ])
+
+    expect(result).toHaveLength(2)
+    expect(result.map((account) => account.email)).toEqual([
+      'trial-two@example.com',
+      'trial-three@example.com',
+    ])
+    expect(result.map((account) => account.s3Endpoint)).toEqual([
+      's3.us-west-001.backblazeb2.com',
+      's3.eu-central-001.backblazeb2.com',
+    ])
+    const reserveRequest = seenRequests.at(-1)
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(requestJsonBody(reserveRequest)).toEqual([
+      {
+        email: 'trial-two@example.com',
+        term: 7,
+        storage: 1,
+      },
+      {
+        email: 'trial-three@example.com',
+        term: 30,
+        storage: 50,
+        region: Region.EuCentral,
+      },
+    ])
+  })
+
+  it.each([
+    ['missing Authorization header', '', AccessDeniedError, 403, 'access_denied'],
+    [
+      'malformed Authorization header',
+      'Bearer partner-token',
+      AccessDeniedError,
+      403,
+      'access_denied',
+    ],
+    ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
+  ])('surfaces the documented reserve trial auth error path: %s', async (_label, token, errorClass, status, code) => {
+    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code,
+      status,
+    })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+        email: 'trial-auth-2@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(errorClass)
+  })
+
+  it.each([
+    ['Partner API disabled', { partnerApiEnabled: false }],
+    ['missing valid phone number', { partnerAccountHasValidPhone: false }],
+    ['account not in good standing', { partnerAccountInGoodStanding: false }],
+  ] satisfies readonly (readonly [
+    string,
+    B2SimulatorOptions,
+  ])[])('surfaces reserve trial access_denied when %s', async (_label, options) => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient(options)
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-prereq@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toMatchObject({
+      code: 'access_denied',
+      status: 403,
+    })
+  })
+
+  it('models the reserve trial account result shape with branded IDs', async () => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    const [result] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-shape@example.com',
+      term: 7,
+      storage: 1,
+    })
+
+    if (result === undefined) throw new Error('expected reserve trial result')
+    expect(result.bucketId).toEqual(bucketId(result.bucketId))
+    expect(result.applicationKeyId).toEqual(applicationKeyId(result.applicationKeyId))
   })
 })
 
