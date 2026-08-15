@@ -259,7 +259,7 @@ describe('B2Simulator partner endpoints', () => {
     ])
   })
 
-  it('keeps simulator wire response application keys unredacted', async () => {
+  it('keeps simulator wire response application keys not redacted', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true })
     const auth = await authorizePartner(sim)
     const group = await firstGroup(sim, auth)
