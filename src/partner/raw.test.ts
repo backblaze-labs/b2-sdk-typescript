@@ -21,7 +21,7 @@ import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
-import { PartnerRawClient } from './raw.ts'
+import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
@@ -56,6 +56,30 @@ function partnerAuthorizeResponse(
       },
     },
     applicationKeyExpirationTimestamp: 1_786_662_000_000,
+  }
+}
+
+function cachedPartnerAuth(): PartnerAuthorizeResponse {
+  return {
+    accountId: accountId('partner-account'),
+    authorizationToken: partnerToken('partner-token'),
+    apiInfo: {
+      groupsApi: {
+        groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+        capabilities: [PartnerCapability.All],
+        infoType: 'groupsApi',
+      },
+      backupApi: {
+        backupApiUrl: 'https://backup.backblazeb2.com/backup',
+        capabilities: [PartnerCapability.All],
+        infoType: 'backupApi',
+      },
+    },
+    groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+    backupApiUrl: 'https://backup.backblazeb2.com/backup',
+    groupsCapabilities: [PartnerCapability.All],
+    backupCapabilities: [PartnerCapability.All],
+    applicationKeyExpirationTimestamp: null,
   }
 }
 
@@ -1167,6 +1191,33 @@ describe('PartnerRawClient authorizePartner', () => {
     const restoredAccountInfo = new InMemoryPartnerAccountInfo()
     restoredAccountInfo.setAuth(rehydrated)
     expect(restoredAccountInfo.getPartnerToken()).toBe('partner-token')
+  })
+
+  it('rejects cached auth whose endpoint mirrors drift from apiInfo', () => {
+    const auth = cachedPartnerAuth()
+    const backupApi = auth.apiInfo.backupApi
+    if (backupApi === undefined) throw new Error('test fixture must include Backup suite')
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(
+        { ...auth, groupsApiUrl: 'https://attacker.example/partner' },
+        'https://api.backblazeb2.com',
+        false,
+      ),
+    ).toThrow(B2PartnerAuthorizationError)
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(
+        {
+          ...auth,
+          apiInfo: { backupApi },
+          groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+          groupsCapabilities: [PartnerCapability.All],
+        },
+        'https://api.backblazeb2.com',
+        false,
+      ),
+    ).toThrow(B2PartnerAuthorizationError)
   })
 
   it('supports Partner-only authorize responses without Backup fields', async () => {

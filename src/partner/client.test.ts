@@ -18,6 +18,7 @@ import {
   type PartnerGroup,
   Region,
 } from '../types/partner.ts'
+import type { PartnerAccountInfo } from './account-info.ts'
 import { PartnerClient, type PartnerClientOptions } from './client.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 
@@ -563,6 +564,42 @@ describe('PartnerClient facade', () => {
         groupsApiUrl: 'https://attacker.example/partner',
       }),
     )
+    const seenRequests: HttpRequest[] = []
+
+    expect(
+      () =>
+        new PartnerClient({
+          masterKeyId: 'master-key-id',
+          masterKey: 'master-key',
+          partnerAccountInfo,
+          transport: {
+            async send(request) {
+              seenRequests.push(request)
+              return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+            },
+          },
+        }),
+    ).toThrow(B2PartnerAuthorizationError)
+
+    expect(seenRequests).toEqual([])
+  })
+
+  it('rejects cached auth whose endpoint mirror points away from apiInfo', () => {
+    const cachedAuth = {
+      ...partnerAuthorizeResponse('victim-partner-token'),
+      groupsApiUrl: 'https://attacker.example/partner',
+    }
+    const partnerAccountInfo: PartnerAccountInfo = {
+      setAuth() {},
+      getAuth: () => cachedAuth,
+      clear() {},
+      getPartnerToken: () => cachedAuth.authorizationToken,
+      getGroupsApiUrl: () => cachedAuth.groupsApiUrl ?? null,
+      getBackupApiUrl: () => cachedAuth.backupApiUrl ?? null,
+      getAccountId: () => cachedAuth.accountId,
+      getGroupsCapabilities: () => cachedAuth.groupsCapabilities ?? null,
+      getBackupCapabilities: () => cachedAuth.backupCapabilities ?? null,
+    }
     const seenRequests: HttpRequest[] = []
 
     expect(

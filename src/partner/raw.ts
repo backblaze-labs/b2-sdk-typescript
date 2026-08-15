@@ -26,6 +26,7 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
+import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
 import {
   redactCreateGroupMemberResponse,
   redactPartnerAuthorizeResponse,
@@ -294,13 +295,9 @@ export function validatePartnerAuthorizeResponseEndpoints(
   realmUrl: string,
   allowCustomAuthorizeRealm: boolean,
 ): readonly string[] {
-  const { groupsApi, backupApi } = auth.apiInfo
-  if (groupsApi === undefined && backupApi === undefined) {
-    throw new B2PartnerAuthorizationError(
-      'Partner authorize response did not include apiInfo.groupsApi or apiInfo.backupApi',
-    )
-  }
+  validatePartnerAuthorizeResponseShape(auth)
 
+  const { groupsApi, backupApi } = auth.apiInfo
   const allowedSuffixes = endpointAllowedSuffixesForRealm(realmUrl, allowCustomAuthorizeRealm)
   if (groupsApi !== undefined) {
     validatePartnerEndpointUrl(groupsApi.groupsApiUrl, 'groupsApiUrl', allowedSuffixes)
