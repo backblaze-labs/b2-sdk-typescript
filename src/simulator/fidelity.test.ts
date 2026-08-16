@@ -1136,6 +1136,73 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('rejects unknown capabilities during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.createKey({
+        capabilities: ['doEverything'] as unknown as Capability[],
+        keyName: 'unknown-capability-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('unknown capabilities: doEverything'),
+    })
+  })
+
+  it('rejects keys that request capabilities outside the creator grant', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'delegated-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+        keyName: 'too-broad-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('listBuckets'),
+    })
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys],
+        keyName: 'same-grant-key',
+      }),
+    ).resolves.toMatchObject({ capabilities: [Capability.WriteKeys] })
+  })
+
+  it('enforces B2 keyName length limits during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    for (const keyName of ['', 'k'.repeat(101)]) {
+      await expect(
+        client.createKey({
+          capabilities: [Capability.ListBuckets],
+          keyName,
+        }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'bad_request',
+        message: expect.stringContaining('keyName must be 1-100 characters'),
+      })
+    }
+    await expect(
+      client.createKey({
+        capabilities: [Capability.ListBuckets],
+        keyName: 'k'.repeat(100),
+      }),
+    ).resolves.toMatchObject({ keyName: 'k'.repeat(100) })
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()
