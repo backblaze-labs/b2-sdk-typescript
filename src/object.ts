@@ -250,7 +250,7 @@ export class B2Object {
    * Creates a parallel-download ReadableStream that fetches the file in concurrent ranged chunks.
    * @param fileId - The file version ID to download.
    * @param totalSize - Total file size in bytes (needed to compute range boundaries).
-   * @param options - Concurrency, range size, and abort signal.
+   * @param options - Concurrency, range size, SSE-C decryption, and abort signal.
    *
    * @returns A Web ReadableStream of file data in sequential order.
    */
@@ -258,10 +258,12 @@ export class B2Object {
     fileId: FileId,
     totalSize: number,
     options?: {
-      /** Size of each ranged GET request in bytes. Defaults to 8 MB. */
+      /** Size of each ranged GET request in bytes. Defaults to 10 MB. */
       rangeSize?: number
       /** Number of concurrent range requests. Defaults to 4. */
       concurrency?: number
+      /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
+      serverSideEncryption?: SseCDownloadKey
       /** Abort signal for cancelling the download. */
       signal?: AbortSignal
     },

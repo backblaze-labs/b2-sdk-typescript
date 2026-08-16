@@ -1,12 +1,13 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { B2Error, classifyError, NetworkError } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
-import type { RawClient } from '../raw/index.ts'
+import type { RawClient, SseCDownloadKey } from '../raw/index.ts'
 import { collectStream } from '../streams/collect.ts'
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { redactSseCKeyMaterial } from '../types/encryption.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import type { FileId } from '../types/ids.ts'
-import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
+import { DEFAULT_DOWNLOAD_RANGE_SIZE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 import { normalizeVerifiableSha1 } from '../util/sha1.ts'
@@ -24,6 +25,13 @@ export interface ParallelDownloadOptions {
   /** Maximum number of chunks fetched in parallel. Defaults to 4. */
   readonly concurrency?: number
   /**
+   * SSE-C decryption parameters, required if the file was uploaded with SSE-C.
+   * Internal diagnostics redact the copied options object, but the key is still
+   * sent in plaintext SSE-C HTTP headers. Custom transports should not log
+   * request headers that may contain customer-provided keys.
+   */
+  readonly serverSideEncryption?: SseCDownloadKey
+  /**
    * Extra retry attempts per range on transient failures. Defaults to 0 because
    * `B2Client` already applies `RetryTransport`; set this only when supplying a
    * raw client that does not already retry transport failures.
@@ -36,6 +44,18 @@ export interface ParallelDownloadOptions {
 interface RangeDownloadResult {
   readonly data: Uint8Array
   readonly contentSha1: string | null
+}
+
+interface FetchRangeWithRetryParams {
+  readonly raw: RawClient
+  readonly accountInfo: AccountInfo
+  readonly fileId: FileId
+  readonly start: number
+  readonly end: number
+  readonly totalSize: number
+  readonly serverSideEncryption: SseCDownloadKey | undefined
+  readonly retryOptions: RetryOptions
+  readonly signal: AbortSignal | undefined
 }
 
 /**
@@ -65,9 +85,13 @@ export function createParallelDownloadStream(
   accountInfo: AccountInfo,
   options: ParallelDownloadOptions,
 ): ReadableStream<Uint8Array> {
-  const rangeSize = options.rangeSize ?? 10 * 1024 * 1024
+  const rangeSize = options.rangeSize ?? DEFAULT_DOWNLOAD_RANGE_SIZE
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
+  const serverSideEncryption =
+    options.serverSideEncryption !== undefined
+      ? redactSseCKeyMaterial(options.serverSideEncryption, { label: 'SseCDownloadKey' })
+      : undefined
   // The high-level B2Client already wraps the raw transport in RetryTransport.
   // Keep the parallel-download outer retry disabled by default so each range
   // has one retry budget unless callers explicitly opt into an extra raw-client
@@ -76,7 +100,19 @@ export function createParallelDownloadStream(
     ...DEFAULT_RETRY_OPTIONS,
     maxRetries: options.maxRetries ?? 0,
   }
-  const abort = options.signal
+  const internalAbort = new AbortController()
+  const abort = internalAbort.signal
+  let removeCallerAbortListener: (() => void) | undefined
+  if (options.signal !== undefined) {
+    if (options.signal.aborted) {
+      internalAbort.abort(options.signal.reason)
+    } else {
+      const callerSignal = options.signal
+      const abortFromCaller = () => internalAbort.abort(callerSignal.reason)
+      callerSignal.addEventListener('abort', abortFromCaller, { once: true })
+      removeCallerAbortListener = () => callerSignal.removeEventListener('abort', abortFromCaller)
+    }
+  }
 
   const ranges = planRanges(totalSize, rangeSize)
 
@@ -93,6 +129,15 @@ export function createParallelDownloadStream(
   let nextToEmit = 0
   let expectedSha1: string | null | undefined
   let firstError: unknown = null
+
+  function abortInflight(reason?: unknown): void {
+    if (!abort.aborted) internalAbort.abort(reason)
+  }
+
+  function cleanupCallerAbortListener(): void {
+    removeCallerAbortListener?.()
+    removeCallerAbortListener = undefined
+  }
 
   function scheduleNext(): void {
     while (
@@ -111,19 +156,23 @@ export function createParallelDownloadStream(
       nextToSchedule++
       const task = (async () => {
         try {
-          const result = await fetchRangeWithRetry(
+          const result = await fetchRangeWithRetry({
             raw,
             accountInfo,
-            options.fileId,
-            range.start,
-            range.end,
+            fileId: options.fileId,
+            start: range.start,
+            end: range.end,
             totalSize,
+            serverSideEncryption,
             retryOptions,
-            abort,
-          )
+            signal: abort,
+          })
           buffer.set(idx, result)
         } catch (err) {
-          if (firstError === null) firstError = err
+          if (firstError === null) {
+            firstError = err
+            abortInflight(err)
+          }
         } finally {
           inflight.delete(idx)
         }
@@ -142,6 +191,7 @@ export function createParallelDownloadStream(
         abort?.throwIfAborted()
         scheduleNext()
       } catch (err) {
+        cleanupCallerAbortListener()
         controller.error(err)
       }
     },
@@ -155,6 +205,7 @@ export function createParallelDownloadStream(
           // non-empty downloads, this guard prevents a future refactor from
           // stalling the stream if it leaves both maps empty mid-stream.
           if (inflight.size === 0) {
+            cleanupCallerAbortListener()
             controller.close()
             return
           }
@@ -192,13 +243,18 @@ export function createParallelDownloadStream(
           if (expectedSha1 !== undefined && expectedSha1 !== null && assembledSha1 !== null) {
             assertDownloadSha1(expectedSha1, await assembledSha1.digest())
           }
+          cleanupCallerAbortListener()
           controller.close()
         }
       } catch (err) {
+        abortInflight(err)
+        cleanupCallerAbortListener()
         controller.error(err)
       }
     },
-    cancel() {
+    cancel(reason) {
+      abortInflight(reason)
+      cleanupCallerAbortListener()
       // Abort propagation handles in-flight requests; just drop buffered
       // data so it can be GC'd promptly.
       buffer.clear()
@@ -208,27 +264,24 @@ export function createParallelDownloadStream(
 
 /**
  * Fetches a single byte range with bounded retry on transient failures.
- * @param raw - Low-level B2 API client.
- * @param accountInfo - Authorized account state.
- * @param fileId - ID of the file being downloaded.
- * @param start - Inclusive byte offset where the range begins.
- * @param end - Inclusive byte offset where the range ends.
- * @param totalSize - Expected complete file size.
- * @param retryOptions - Retry settings controlling attempts and backoff.
- * @param signal - Optional abort signal that cancels the range and any pending retry.
+ * @param params - Range request parameters, retry settings, and cancellation.
  *
  * @returns The range's bytes, or throws after exhausting all retry attempts.
  */
 async function fetchRangeWithRetry(
-  raw: RawClient,
-  accountInfo: AccountInfo,
-  fileId: FileId,
-  start: number,
-  end: number,
-  totalSize: number,
-  retryOptions: RetryOptions,
-  signal: AbortSignal | undefined,
+  params: FetchRangeWithRetryParams,
 ): Promise<RangeDownloadResult> {
+  const {
+    raw,
+    accountInfo,
+    fileId,
+    start,
+    end,
+    totalSize,
+    serverSideEncryption,
+    retryOptions,
+    signal,
+  } = params
   let lastError: unknown
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     if (attempt > 0) {
@@ -247,6 +300,7 @@ async function fetchRangeWithRetry(
         fileId,
         {
           range: byteRangeHeader(start, end),
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
           ...(signal !== undefined ? { signal } : {}),
         },
       )
