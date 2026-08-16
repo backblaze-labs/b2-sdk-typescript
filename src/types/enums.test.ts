@@ -105,7 +105,7 @@ describe('const-object enums', () => {
     ])
   })
 
-  it('Capability covers the documented v4 allowed.capabilities set', () => {
+  it('Capability covers every Capability value', () => {
     expectEnumMatches(Capability, [
       'listKeys',
       'writeKeys',

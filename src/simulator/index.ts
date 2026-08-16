@@ -2991,18 +2991,10 @@ export class B2Simulator {
     // handler and reauth with that key.
     const capabilities: readonly Capability[] = [
       Capability.ListBuckets,
+      Capability.ListAllBucketNames,
       Capability.ReadBuckets,
       Capability.WriteBuckets,
       Capability.DeleteBuckets,
-      Capability.ListFiles,
-      Capability.ReadFiles,
-      Capability.WriteFiles,
-      Capability.DeleteFiles,
-      Capability.ListKeys,
-      Capability.WriteKeys,
-      Capability.DeleteKeys,
-      Capability.ShareFiles,
-      Capability.ListAllBucketNames,
       Capability.ReadBucketEncryption,
       Capability.WriteBucketEncryption,
       Capability.ReadBucketReplications,
@@ -3013,6 +3005,14 @@ export class B2Simulator {
       Capability.WriteBucketLogging,
       Capability.ReadBucketLifecycleRules,
       Capability.WriteBucketLifecycleRules,
+      Capability.ListFiles,
+      Capability.ReadFiles,
+      Capability.WriteFiles,
+      Capability.DeleteFiles,
+      Capability.ListKeys,
+      Capability.WriteKeys,
+      Capability.DeleteKeys,
+      Capability.ShareFiles,
     ]
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
     // If a key was previously authorized via `authorizeAsKey` (test

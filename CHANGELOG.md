@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bucket lifecycle-rule capabilities.** `Capability` now exports
+  `ReadBucketLifecycleRules` and `WriteBucketLifecycleRules`.
 - **Partner authorize runtime surface.** New `@backblaze-labs/b2-sdk/partner`
   subpath exports `PartnerRawClient.authorizePartner()`, `PartnerAccountInfo`,
   and `InMemoryPartnerAccountInfo` for Master Application Key authorization
