@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Capability } from '../types/auth.ts'
+import { BucketRetentionMode, CorsOperation } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
@@ -13,12 +14,17 @@ import {
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
+  validateBucketTypes,
+  validateCorsRules,
+  validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
   validateFileInfo,
   validateFileName,
+  validateLifecycleRules,
   validateMaxCount,
   validateNotificationRules,
+  validateReplicationConfiguration,
 } from './validation.ts'
 
 /**
@@ -166,6 +172,390 @@ describe('validateDownloadAuthorizationPrefix', () => {
   })
 })
 
+describe('validateBucketTypes', () => {
+  it('accepts undefined and known bucket type arrays', () => {
+    expect(validateBucketTypes(undefined)).toBeNull()
+    expect(validateBucketTypes(['allPrivate', 'allPublic'])).toBeNull()
+  })
+
+  it('rejects non-array and unknown bucket type values', () => {
+    expect(validateBucketTypes(null)?.code).toBe('bad_request')
+    expect(validateBucketTypes({})?.code).toBe('bad_request')
+    expect(validateBucketTypes('allPrivate')?.code).toBe('bad_request')
+    expect(validateBucketTypes(['allPrivate', 'not-real'])?.code).toBe('bad_request')
+  })
+})
+
+describe('validateCorsRules', () => {
+  const validRule = {
+    allowedHeaders: null,
+    allowedOperations: [CorsOperation.B2DownloadFileByName],
+    allowedOrigins: ['https://example.com'],
+    corsRuleName: 'downloads',
+    exposeHeaders: ['x-bz-content-sha1'],
+    maxAgeSeconds: 3600,
+  }
+
+  it('returns null for an empty list and valid CORS rules', () => {
+    expect(validateCorsRules([])).toBeNull()
+    expect(validateCorsRules([validRule])).toBeNull()
+  })
+
+  it('rejects malformed CORS rule fields', () => {
+    expect(validateCorsRules('not-rules')?.code).toBe('bad_request')
+    expect(validateCorsRules([null])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, extra: true }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, corsRuleName: '' }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, allowedOrigins: 'https://example.com' }])?.code).toBe(
+      'bad_request',
+    )
+    expect(validateCorsRules([{ ...validRule, allowedOrigins: [] }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, allowedOrigins: [42] }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, allowedOperations: [] }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, allowedOperations: ['not_real'] }])?.code).toBe(
+      'bad_request',
+    )
+    expect(validateCorsRules([{ ...validRule, allowedHeaders: 'x-bz-info-test' }])?.code).toBe(
+      'bad_request',
+    )
+    expect(validateCorsRules([{ ...validRule, allowedHeaders: [42] }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, exposeHeaders: [42] }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: -1 }])?.code).toBe('bad_request')
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: 86_400 }])).toBeNull()
+    expect(validateCorsRules([{ ...validRule, maxAgeSeconds: 86_401 }])?.code).toBe('bad_request')
+    expect(validateCorsRules([validRule, { ...validRule }])?.message).toMatch(/unique/)
+  })
+})
+
+describe('validateLifecycleRules', () => {
+  const validRule = {
+    daysFromHidingToDeleting: 30,
+    daysFromUploadingToHiding: null,
+    fileNamePrefix: 'tmp/',
+  }
+
+  it('returns null for an empty list and valid lifecycle rules', () => {
+    expect(validateLifecycleRules([])).toBeNull()
+    expect(validateLifecycleRules([validRule])).toBeNull()
+    expect(
+      validateLifecycleRules([{ daysFromHidingToDeleting: 30, fileNamePrefix: 'tmp/' }]),
+    ).toBeNull()
+    expect(
+      validateLifecycleRules([
+        {
+          daysFromStartingToCancelingUnfinishedLargeFiles: 3,
+          fileNamePrefix: 'uploads/',
+        },
+      ]),
+    ).toBeNull()
+  })
+
+  it('rejects malformed lifecycle rule fields', () => {
+    expect(validateLifecycleRules('not-rules')?.code).toBe('bad_request')
+    expect(validateLifecycleRules([null])?.code).toBe('bad_request')
+    expect(validateLifecycleRules([{ ...validRule, extra: true }])?.code).toBe('bad_request')
+    expect(validateLifecycleRules([{ ...validRule, daysFromHidingToDeleting: 1.5 }])?.code).toBe(
+      'bad_request',
+    )
+    expect(validateLifecycleRules([{ ...validRule, daysFromUploadingToHiding: 1.5 }])?.code).toBe(
+      'bad_request',
+    )
+    expect(
+      validateLifecycleRules([
+        {
+          ...validRule,
+          daysFromStartingToCancelingUnfinishedLargeFiles: 0,
+        },
+      ])?.code,
+    ).toBe('bad_request')
+    expect(
+      validateLifecycleRules([
+        {
+          ...validRule,
+          daysFromStartingToCancelingUnfinishedLargeFiles: null,
+          daysFromHidingToDeleting: null,
+          daysFromUploadingToHiding: null,
+        },
+      ])?.code,
+    ).toBe('bad_request')
+    expect(validateLifecycleRules([{ ...validRule, fileNamePrefix: 42 }])?.code).toBe('bad_request')
+  })
+})
+
+describe('validateDefaultRetention', () => {
+  it('returns null for valid none and retention-mode policies', () => {
+    expect(validateDefaultRetention({ mode: BucketRetentionMode.None, period: null })).toBeNull()
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 7, unit: 'days' },
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects malformed default retention policies', () => {
+    expect(validateDefaultRetention(null)?.code).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        extra: true,
+        mode: BucketRetentionMode.None,
+        period: null,
+      })?.code,
+    ).toBe('bad_request')
+    expect(validateDefaultRetention({ mode: 'temporary', period: null })?.code).toBe('bad_request')
+    expect(
+      validateDefaultRetention({ mode: BucketRetentionMode.None, period: { duration: 1 } })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({ mode: BucketRetentionMode.Compliance, period: null })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 0, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 7, extra: true, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 7, unit: 'months' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: Number.MAX_SAFE_INTEGER + 1, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 3001, unit: 'days' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateDefaultRetention({
+        mode: BucketRetentionMode.Compliance,
+        period: { duration: 1e308, unit: 'years' },
+      })?.code,
+    ).toBe('bad_request')
+  })
+})
+
+describe('validateReplicationConfiguration', () => {
+  const validConfig = {
+    asReplicationDestination: null,
+    asReplicationSource: {
+      replicationRules: [
+        {
+          destinationBucketId: 'dest-bucket-id',
+          fileNamePrefix: '',
+          includeExistingFiles: false,
+          isEnabled: true,
+          priority: 1,
+          replicationRuleName: 'replicate-all',
+        },
+      ],
+      sourceApplicationKeyId: 'source-key-id',
+    },
+  }
+
+  it('returns null for empty and valid replication configurations', () => {
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: null,
+        asReplicationSource: null,
+      }),
+    ).toBeNull()
+    expect(validateReplicationConfiguration(validConfig)).toBeNull()
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: {
+          sourceToDestinationKeyMapping: { 'source-key-id': 'destination-key-id' },
+        },
+        asReplicationSource: null,
+      }),
+    ).toBeNull()
+  })
+
+  it('rejects malformed replication configuration fields', () => {
+    expect(validateReplicationConfiguration(null)?.code).toBe('bad_request')
+    expect(validateReplicationConfiguration({})?.code).toBe('bad_request')
+    expect(validateReplicationConfiguration({ extra: true })?.code).toBe('bad_request')
+    expect(validateReplicationConfiguration({ asReplicationSource: 42 })?.code).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationSource: {
+          extra: true,
+          replicationRules: [],
+          sourceApplicationKeyId: 'source-key-id',
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationSource: { replicationRules: [], sourceApplicationKeyId: '' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationSource: { sourceApplicationKeyId: 'source-key-id' },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationSource: {
+          replicationRules: [null],
+          sourceApplicationKeyId: 'source-key-id',
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            { ...validConfig.asReplicationSource.replicationRules[0], extra: true },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              destinationBucketId: '',
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              fileNamePrefix: 42,
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              includeExistingFiles: 'false',
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              isEnabled: 'true',
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              priority: 0,
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            {
+              ...validConfig.asReplicationSource.replicationRules[0],
+              replicationRuleName: '',
+            },
+          ],
+        },
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        ...validConfig,
+        asReplicationSource: {
+          ...validConfig.asReplicationSource,
+          replicationRules: [
+            validConfig.asReplicationSource.replicationRules[0],
+            { ...validConfig.asReplicationSource.replicationRules[0] },
+          ],
+        },
+      })?.message,
+    ).toMatch(/unique/)
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: 42,
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: { extra: true, sourceToDestinationKeyMapping: {} },
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: { sourceToDestinationKeyMapping: null },
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: { sourceToDestinationKeyMapping: { '': 'destination-key-id' } },
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
+    expect(
+      validateReplicationConfiguration({
+        asReplicationDestination: { sourceToDestinationKeyMapping: { source: 42 } },
+        asReplicationSource: null,
+      })?.code,
+    ).toBe('bad_request')
+  })
+})
+
 describe('validateNotificationRules', () => {
   const validRule = {
     eventTypes: [EventType.ObjectCreatedAll],
@@ -191,6 +581,10 @@ describe('validateNotificationRules', () => {
   })
 
   it('rejects unknown event types', () => {
+    expect(
+      validateNotificationRules([{ ...validRule, eventTypes: 'b2:ObjectCreated:*' }])?.code,
+    ).toBe('bad_request')
+    expect(validateNotificationRules([{ ...validRule, eventTypes: [] }])?.code).toBe('bad_request')
     expect(
       validateNotificationRules([{ ...validRule, eventTypes: ['b2:ObjectCreated:Typo'] }])?.message,
     ).toMatch(/unknown event type/)
@@ -219,6 +613,11 @@ describe('validateNotificationRules', () => {
   })
 
   it('rejects non-webhook targets and non-https URLs', () => {
+    expect(validateNotificationRules('not-rules')?.code).toBe('bad_request')
+    expect(validateNotificationRules([null])?.code).toBe('bad_request')
+    expect(validateNotificationRules([{ ...validRule, targetConfiguration: null }])?.code).toBe(
+      'bad_request',
+    )
     expect(
       validateNotificationRules([
         {
@@ -227,6 +626,22 @@ describe('validateNotificationRules', () => {
         },
       ])?.message,
     ).toMatch(/targetType/)
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'webhook', url: 42 },
+        },
+      ])?.message,
+    ).toMatch(/https URL/)
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: { targetType: 'webhook', url: 'not a url' },
+        },
+      ])?.message,
+    ).toMatch(/https URL/)
     expect(
       validateNotificationRules([
         {

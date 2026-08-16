@@ -31,9 +31,11 @@ export type BucketType = (typeof BucketType)[keyof typeof BucketType]
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
   /** Days after hiding before automatic deletion, or null to never auto-delete hidden files. */
-  readonly daysFromHidingToDeleting: number | null
+  readonly daysFromHidingToDeleting?: number | null
   /** Days after upload before automatic hiding, or null to never auto-hide. */
-  readonly daysFromUploadingToHiding: number | null
+  readonly daysFromUploadingToHiding?: number | null
+  /** Days after starting before automatic cancellation of unfinished large files, or null to never auto-cancel. */
+  readonly daysFromStartingToCancelingUnfinishedLargeFiles?: number | null
   /** File name prefix this rule applies to. Empty string matches all files. */
   readonly fileNamePrefix: string
 }
