@@ -1094,14 +1094,46 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
   it('grants the master credential the documented capability set by default', async () => {
     const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
-    // Master credential has all the common file/bucket caps.
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
-    expect(allowed?.capabilities).toContain(Capability.WriteFiles)
-    expect(allowed?.capabilities).toContain(Capability.ListBuckets)
+    const capabilities = allowed?.capabilities ?? []
+
+    expect(capabilities).toEqual([
+      Capability.ListBuckets,
+      Capability.ListAllBucketNames,
+      Capability.ReadBuckets,
+      Capability.WriteBuckets,
+      Capability.DeleteBuckets,
+      Capability.ReadBucketEncryption,
+      Capability.WriteBucketEncryption,
+      Capability.ReadBucketReplications,
+      Capability.WriteBucketReplications,
+      Capability.ReadBucketNotifications,
+      Capability.WriteBucketNotifications,
+      Capability.ReadBucketLogging,
+      Capability.WriteBucketLogging,
+      Capability.ReadBucketLifecycleRules,
+      Capability.WriteBucketLifecycleRules,
+      Capability.ListFiles,
+      Capability.ReadFiles,
+      Capability.WriteFiles,
+      Capability.DeleteFiles,
+      Capability.ListKeys,
+      Capability.WriteKeys,
+      Capability.DeleteKeys,
+      Capability.ShareFiles,
+    ])
     expect(allowed?.buckets).toBeNull()
-    // Master does NOT have BypassGovernance — tests that need it must
-    // mint a key with that cap explicitly.
-    expect(allowed?.capabilities).not.toContain(Capability.BypassGovernance)
+    expect(capabilities).not.toEqual(
+      expect.arrayContaining([
+        Capability.ReadBucketRetentions,
+        Capability.WriteBucketRetentions,
+        Capability.ReadFileLegalHolds,
+        Capability.WriteFileLegalHolds,
+        Capability.ReadFileRetentions,
+        Capability.WriteFileRetentions,
+        Capability.BypassGovernance,
+      ]),
+    )
   })
 
   it('rejects with 401 when the auth token is unknown', async () => {

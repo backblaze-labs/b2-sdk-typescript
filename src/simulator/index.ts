@@ -2983,17 +2983,27 @@ export class B2Simulator {
     // authorize-with-that-key (today's simulator returns this full
     // set regardless — strict-mode test seam is in `authorizeRequest`
     // which consults the issued-token map, not the response body).
-    // Note: object-lock-related capabilities (BypassGovernance,
-    // WriteFileLegalHolds, WriteFileRetentions) are intentionally
-    // omitted from the master grant. Real B2 doesn't auto-grant these
-    // either — they're opt-in scopes set via b2_create_key. Tests that
-    // need them explicit-issue a key via the simulator's createKey
-    // handler and reauth with that key.
+    // Note: Object Lock capabilities (bucket/file retention, file legal hold,
+    // and bypassGovernance) are intentionally omitted from the master grant.
+    // Real B2 doesn't auto-grant these either; they're opt-in scopes set via
+    // b2_create_key. Tests that need them explicit-issue a key via the
+    // simulator's createKey handler and reauth with that key.
     const capabilities: readonly Capability[] = [
       Capability.ListBuckets,
+      Capability.ListAllBucketNames,
       Capability.ReadBuckets,
       Capability.WriteBuckets,
       Capability.DeleteBuckets,
+      Capability.ReadBucketEncryption,
+      Capability.WriteBucketEncryption,
+      Capability.ReadBucketReplications,
+      Capability.WriteBucketReplications,
+      Capability.ReadBucketNotifications,
+      Capability.WriteBucketNotifications,
+      Capability.ReadBucketLogging,
+      Capability.WriteBucketLogging,
+      Capability.ReadBucketLifecycleRules,
+      Capability.WriteBucketLifecycleRules,
       Capability.ListFiles,
       Capability.ReadFiles,
       Capability.WriteFiles,
@@ -3002,8 +3012,6 @@ export class B2Simulator {
       Capability.WriteKeys,
       Capability.DeleteKeys,
       Capability.ShareFiles,
-      Capability.ReadBucketNotifications,
-      Capability.WriteBucketNotifications,
     ]
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
     // If a key was previously authorized via `authorizeAsKey` (test

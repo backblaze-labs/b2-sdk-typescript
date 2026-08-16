@@ -125,6 +125,8 @@ describe('const-object enums', () => {
       'writeBucketNotifications',
       'readBucketLogging',
       'writeBucketLogging',
+      'readBucketLifecycleRules',
+      'writeBucketLifecycleRules',
       'listFiles',
       'readFiles',
       'shareFiles',
