@@ -34,8 +34,9 @@ export interface BackupClientOptions {
   /**
    * B2 realm to authenticate against. Accepts a known realm-map key
    * (`"production"` or `"staging"`) or a direct base URL. Custom HTTPS hosts
-   * are trusted with the Master Application Key during Partner authorize, so
-   * never derive `realm` from untrusted input. Defaults to `"production"`.
+   * and loopback IP literal HTTP URLs for local testing are trusted with the
+   * Master Application Key during Partner authorize, so never derive `realm`
+   * from untrusted input. Defaults to `"production"`.
    */
   readonly realm?: string
   /**
