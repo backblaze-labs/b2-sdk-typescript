@@ -576,6 +576,69 @@ describe('PartnerClient facade', () => {
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
   })
 
+  it('keeps shared expired-token reauthorization alive for non-aborted waiters', async () => {
+    let authorizeCount = 0
+    let releaseReauth: (() => void) | undefined
+    let reauthorizeSignal: AbortSignal | undefined
+    const reauthGate = new Promise<void>((resolve) => {
+      releaseReauth = resolve
+    })
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 1) {
+            return jsonResponse(partnerAuthorizeResponse('partner-token-1'))
+          }
+          reauthorizeSignal = request.signal
+          await reauthGate
+          return jsonResponse(partnerAuthorizeResponse('partner-token-2'))
+        }
+        if (endpoint === 'b2_list_groups') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+          }
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+
+    await client.authorize()
+    const first = client.listGroups({ signal: firstController.signal })
+    const second = client.listGroups({ signal: secondController.signal })
+    await waitUntil(() => authorizeCount === 2 && listAuthorizations.length === 2)
+    firstController.abort(new DOMException('first caller canceled', 'AbortError'))
+
+    await expect(first).rejects.toThrow('first caller canceled')
+    expect(reauthorizeSignal?.aborted).toBe(false)
+
+    releaseReauth?.()
+    const page = await second
+
+    expect(page.groups).toEqual([])
+    expect(authorizeCount).toBe(2)
+    expect(reauthorizeSignal?.aborted).toBe(false)
+    expect(listAuthorizations).toEqual(['partner-token-1', 'partner-token-1', 'partner-token-2'])
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
+  })
+
   it('does not reauthorize recursively when authorize returns expired_auth_token', async () => {
     let authorizeCount = 0
     const client = new PartnerClient({

@@ -1224,6 +1224,33 @@ describe('PartnerRawClient authorizePartner', () => {
     ).toThrow(B2PartnerAuthorizationError)
   })
 
+  it('rejects cached auth for custom authorize realms without explicit opt-in', () => {
+    const auth: PartnerAuthorizeResponse = {
+      ...cachedPartnerAuth(),
+      apiInfo: {
+        groupsApi: {
+          groupsApiUrl: 'https://groups.auth.custom.example/partner',
+          capabilities: [PartnerCapability.All],
+          infoType: 'groupsApi',
+        },
+        backupApi: {
+          backupApiUrl: 'https://backup.auth.custom.example/backup',
+          capabilities: [PartnerCapability.All],
+          infoType: 'backupApi',
+        },
+      },
+      groupsApiUrl: 'https://groups.auth.custom.example/partner',
+      backupApiUrl: 'https://backup.auth.custom.example/backup',
+    }
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(auth, 'https://auth.custom.example', false),
+    ).toThrow(B2RealmConfigurationError)
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(auth, 'https://auth.custom.example', true),
+    ).not.toThrow()
+  })
+
   it('supports Partner-only authorize responses without Backup fields', async () => {
     const transport: HttpTransport = {
       async send() {

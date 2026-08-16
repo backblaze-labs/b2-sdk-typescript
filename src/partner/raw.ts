@@ -315,6 +315,8 @@ export function validatePartnerAuthorizeResponseEndpoints(
   realmUrl: string,
   allowCustomAuthorizeRealm: boolean,
 ): readonly string[] {
+  assertSecureRealmUrl(realmUrl)
+  assertVerifiedPartnerAuthorizeRealm(realmUrl, allowCustomAuthorizeRealm)
   validatePartnerAuthorizeResponseShape(auth)
 
   const { groupsApi, backupApi } = auth.apiInfo

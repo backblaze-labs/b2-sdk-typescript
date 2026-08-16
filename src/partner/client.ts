@@ -18,7 +18,7 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
-import { raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { paginateItems } from '../util/paginator.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
@@ -216,6 +216,13 @@ interface PartnerGroupsCoordinates {
   readonly adminAccountId: AccountId
 }
 
+interface InflightPartnerReauth {
+  readonly controller: AbortController
+  readonly promise: Promise<string>
+  waiters: number
+  settled: boolean
+}
+
 /** Redacted JSON diagnostic shape emitted by {@link PartnerClient.toJSON}. */
 export interface PartnerClientJson {
   /** Object kind for log consumers. */
@@ -263,7 +270,7 @@ export class PartnerClient {
   private readonly realmUrl: string
   private readonly additionalAllowedSuffixes: readonly string[] | undefined
   private readonly disableSsrfGuard: boolean
-  #inflightReauth: Promise<string> | null = null
+  #inflightReauth: InflightPartnerReauth | null = null
 
   /**
    * Creates a new PartnerClient. Call {@link authorize} before making API requests.
@@ -562,14 +569,35 @@ export class PartnerClient {
 
   private reauthorize(signal: AbortSignal | undefined): Promise<string> {
     throwIfSignalAborted(signal)
-    this.#inflightReauth ??= this.doReauthorize(signal).finally(() => {
-      this.#inflightReauth = null
+    const inflight = this.#inflightReauth ?? this.startReauthorize()
+    inflight.waiters += 1
+    return raceWithAbort(inflight.promise, signal).finally(() => {
+      inflight.waiters -= 1
+      if (inflight.waiters === 0 && !inflight.settled && !inflight.controller.signal.aborted) {
+        inflight.controller.abort(signal?.aborted === true ? abortReason(signal) : undefined)
+      }
     })
-    return raceWithAbort(this.#inflightReauth, signal)
   }
 
-  private async doReauthorize(signal: AbortSignal | undefined): Promise<string> {
-    const auth = await this.authorize(signal !== undefined ? { signal } : undefined)
+  private startReauthorize(): InflightPartnerReauth {
+    const controller = new AbortController()
+    let inflight: InflightPartnerReauth
+    const promise = this.doReauthorize(controller.signal).finally(() => {
+      inflight.settled = true
+      if (this.#inflightReauth === inflight) this.#inflightReauth = null
+    })
+    inflight = {
+      controller,
+      promise,
+      waiters: 0,
+      settled: false,
+    }
+    this.#inflightReauth = inflight
+    return inflight
+  }
+
+  private async doReauthorize(signal: AbortSignal): Promise<string> {
+    const auth = await this.authorize({ signal })
     return auth.authorizationToken
   }
 
