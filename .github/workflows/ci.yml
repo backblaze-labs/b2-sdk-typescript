@@ -32,9 +32,12 @@ jobs:
       - run: pnpm lint:spelling
       - run: pnpm typecheck
       - run: pnpm run docs
+      # Build before metadata verification so the version-only package metadata
+      # guard inspects the real emitted dist artifacts in PR CI.
+      - run: pnpm run build
       # Cross-file metadata consistency check: package name, version, tarball
-      # name in RELEASE.md, README h1 + install snippets, CHANGELOG entry.
-      # Cheap (<100 ms) and catches the kind of drift only a human review would.
+      # name in RELEASE.md, README h1 + install snippets, CHANGELOG entry, and
+      # generated version-only dist metadata.
       - run: pnpm run verify:metadata
       # Release workflow trust-boundary checks: artifact build isolation,
       # pinned package-type analysis, npm integrity comparison, and gh repo context.
