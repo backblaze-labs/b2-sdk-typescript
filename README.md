@@ -89,9 +89,7 @@ import { PartnerClient } from '@backblaze-labs/b2-sdk/partner'
 import { BackupClient } from '@backblaze-labs/b2-sdk/backup'
 ```
 
-Both clients authorize with a Master Application Key through the Partner authorization flow. Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Reserve trial account creation also requires the partner account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
-
-See [examples/README.md](examples/README.md#partner-and-computer-backup-examples) for runnable examples.
+Both clients authorize with a Master Application Key through the Partner authorization flow. See [examples/README.md](examples/README.md#partner-and-computer-backup-examples) for current prerequisites and runnable examples.
 
 ### Uploads
 

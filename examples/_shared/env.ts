@@ -1,7 +1,4 @@
-import { BackupClient } from '@backblaze-labs/b2-sdk/backup'
-import { PartnerClient, Region, type Region as RegionValue } from '@backblaze-labs/b2-sdk/partner'
-
-const REGION_VALUES = new Set<string>(Object.values(Region))
+const PRINT_APPLICATION_KEY_ENV = 'B2_PRINT_APPLICATION_KEY'
 
 export function fail(message: string): never {
   console.error(message)
@@ -19,7 +16,7 @@ export function optionalEnv(name: string): string | undefined {
   return value === undefined || value === '' ? undefined : value
 }
 
-function masterKeyOptions(): {
+export function masterKeyOptions(): {
   readonly masterKeyId: string
   readonly masterKey: string
   readonly realm?: string
@@ -30,14 +27,6 @@ function masterKeyOptions(): {
     masterKey: requireEnv('B2_MASTER_KEY'),
     ...(realm !== undefined ? { realm } : {}),
   }
-}
-
-export function partnerClientFromEnv(): PartnerClient {
-  return new PartnerClient(masterKeyOptions())
-}
-
-export function backupClientFromEnv(): BackupClient {
-  return new BackupClient(masterKeyOptions())
 }
 
 export function positiveInteger(raw: string | undefined, name: string): number {
@@ -61,16 +50,22 @@ export function optionalPositiveInteger(
   return positiveInteger(raw, name)
 }
 
-export function parseRegion(raw: string | undefined): RegionValue | undefined {
-  if (raw === undefined || raw.trim() === '') return undefined
-  if (REGION_VALUES.has(raw)) return raw as RegionValue
-
-  fail(`Region must be one of: ${Object.values(Region).join(', ')}.`)
-}
-
 export function requireConfirmation(envName: string, action: string): void {
   if (process.env[envName] === '1') return
   fail(`${action} Set ${envName}=1 to confirm.`)
+}
+
+export function printApplicationKeySecret(applicationKey: string): void {
+  console.log(
+    `Application key secret: [redacted; set ${PRINT_APPLICATION_KEY_ENV}=1 to reveal on stderr]`,
+  )
+
+  if (process.env[PRINT_APPLICATION_KEY_ENV] !== '1') return
+
+  console.error(
+    'Application key secret (shown once, keep private; do not enable this in CI or logged shells):',
+  )
+  console.error(applicationKey)
 }
 
 export function formatTimestamp(timestampMillis: number): string {

@@ -6,7 +6,8 @@
  */
 
 import { accountId, computerId } from '@backblaze-labs/b2-sdk/backup'
-import { backupClientFromEnv, fail, requireConfirmation } from './_partner/env.ts'
+import { backupClientFromEnv } from './_shared/backup.ts'
+import { fail, formatTimestamp, requireConfirmation } from './_shared/env.ts'
 
 async function main() {
   const rawComputerId = process.argv[2]
@@ -32,7 +33,7 @@ async function main() {
 
   for (const computer of deleted) {
     console.log(`Deleted: ${computer.computerName} (${computer.computerId})`)
-    console.log(`Last uploaded file: ${computer.lastFileUploadedTimestamp}`)
+    console.log(`Last uploaded file: ${formatTimestamp(computer.lastFileUploadedTimestamp)}`)
   }
 }
 

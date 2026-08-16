@@ -7,11 +7,11 @@
 
 import {
   fail,
-  parseRegion,
-  partnerClientFromEnv,
   positiveInteger,
+  printApplicationKeySecret,
   requireConfirmation,
-} from './_partner/env.ts'
+} from './_shared/env.ts'
+import { parseRegion, partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
   const email = process.argv[2]
@@ -47,7 +47,7 @@ async function main() {
   console.log(`Bucket: ${trial.bucketName} (${trial.bucketId})`)
   console.log(`Trial dates: ${trial.startDate} to ${trial.endDate}`)
   console.log(`Application key ID: ${trial.applicationKeyId}`)
-  console.log(`Application key secret: ${trial.applicationKey}`)
+  printApplicationKeySecret(trial.applicationKey)
 }
 
 main().catch((err) => {

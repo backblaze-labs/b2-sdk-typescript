@@ -6,12 +6,8 @@
  */
 
 import { accountId } from '@backblaze-labs/b2-sdk/backup'
-import {
-  backupClientFromEnv,
-  formatTimestamp,
-  optionalEnv,
-  optionalPositiveInteger,
-} from './_partner/env.ts'
+import { backupClientFromEnv } from './_shared/backup.ts'
+import { formatTimestamp, optionalEnv, optionalPositiveInteger } from './_shared/env.ts'
 
 async function main() {
   const rawAccountId = process.argv[2]?.trim() || undefined

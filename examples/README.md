@@ -30,12 +30,14 @@ Runnable examples demonstrating `@backblaze-labs/b2-sdk` usage patterns.
 
 ## Prerequisites
 
-All examples require B2 credentials via environment variables:
+Storage examples use B2 application key credentials:
 
 ```bash
 export B2_APPLICATION_KEY_ID=your-key-id
 export B2_APPLICATION_KEY=your-application-key
 ```
+
+Partner and Computer Backup examples use Master Application Key credentials; see [Partner and Computer Backup examples](#partner-and-computer-backup-examples).
 
 Run from the SDK root directory. Examples use `npx tsx` for direct TypeScript execution, but thanks to the SDK's [source-level isomorphism](../README.md#source-isomorphism), the `node-*` scripts also run unchanged in Bun and Deno:
 
@@ -143,6 +145,8 @@ export B2_MASTER_KEY=your-master-application-key
 
 Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Reserve trial account creation also requires the account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
 
+Create-member and single-account reservation examples redact one-time application key secrets from stdout. Set `B2_PRINT_APPLICATION_KEY=1` only in a private terminal to reveal the secret on stderr; do not enable it in CI, logged shells, or support captures. The batch reservation example writes secrets to the restricted batch results file instead.
+
 ### Authorize Partner API access
 
 Authorize with a Master Application Key and print the Partner and Computer Backup endpoints returned by the API.
@@ -190,11 +194,14 @@ Reserve multiple trial accounts with shared term, storage, and optional region s
 
 ```bash
 B2_CONFIRM_RESERVE_TRIAL=1 \
+B2_TRIAL_BATCH_FILE=./trial-batch-results.json \
 B2_TRIAL_EMAILS=a@example.com,b@example.com \
 B2_TRIAL_TERM_DAYS=7 \
 B2_TRIAL_STORAGE_TB=1 \
   npx tsx examples/partner-reserve-trial-accounts.ts
 ```
+
+The batch example creates `B2_TRIAL_BATCH_FILE` with mode `0600`, stores the requested batch before issuing the non-idempotent reservation call, and writes completed results, including one-time application key secrets, to the same file after success. If the file is left with `status: "pending"`, reconcile each requested email in your Partner account before archiving or removing the file and choosing a new batch file. Set `B2_RECONCILE_TRIAL_BATCH=1` to print the pending emails without issuing another reservation call.
 
 ### List Computer Backup records
 

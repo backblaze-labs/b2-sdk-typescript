@@ -5,7 +5,7 @@
  *   B2_MASTER_KEY_ID=xxx B2_MASTER_KEY=yyy npx tsx examples/partner-authorize.ts
  */
 
-import { partnerClientFromEnv } from './_partner/env.ts'
+import { partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
   const partner = partnerClientFromEnv()

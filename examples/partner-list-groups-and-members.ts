@@ -5,7 +5,8 @@
  *   B2_MASTER_KEY_ID=xxx B2_MASTER_KEY=yyy npx tsx examples/partner-list-groups-and-members.ts [group-name]
  */
 
-import { optionalEnv, optionalPositiveInteger, partnerClientFromEnv } from './_partner/env.ts'
+import { optionalEnv, optionalPositiveInteger } from './_shared/env.ts'
+import { partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
   const groupName = process.argv[2]?.trim() || undefined

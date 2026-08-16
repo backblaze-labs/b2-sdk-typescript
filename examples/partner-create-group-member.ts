@@ -6,7 +6,8 @@
  */
 
 import { groupId } from '@backblaze-labs/b2-sdk/partner'
-import { fail, parseRegion, partnerClientFromEnv, requireConfirmation } from './_partner/env.ts'
+import { fail, printApplicationKeySecret, requireConfirmation } from './_shared/env.ts'
+import { parseRegion, partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
   const rawGroupId = process.argv[2]
@@ -37,7 +38,7 @@ async function main() {
     console.log(`Email: ${result.groupMember.email}`)
     console.log(`Group: ${result.groupMember.groupName} (${result.groupMember.groupId})`)
     console.log(`Application key ID: ${result.applicationKeyId}`)
-    console.log(`Application key secret: ${result.applicationKey}`)
+    printApplicationKeySecret(result.applicationKey)
   }
 }
 

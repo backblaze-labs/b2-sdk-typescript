@@ -6,7 +6,8 @@
  */
 
 import { accountId, groupId } from '@backblaze-labs/b2-sdk/partner'
-import { fail, partnerClientFromEnv, requireConfirmation } from './_partner/env.ts'
+import { fail, requireConfirmation } from './_shared/env.ts'
+import { partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
   const rawGroupId = process.argv[2]
