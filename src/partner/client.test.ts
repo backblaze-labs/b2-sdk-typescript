@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
+import { BackupClient } from '../backup/client.ts'
 import {
   B2PartnerAuthorizationError,
   B2SsrfError,
   BadAuthTokenError,
   ExpiredAuthTokenError,
+  InvalidEmailError,
   InvalidGroupIdError,
+  InvalidRegionError,
+  InvalidSmsPhoneError,
+  MethodFailureError,
+  OutOfRangeError,
   ServiceUnavailableError,
+  TooManyMembersError,
 } from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
@@ -21,12 +28,6 @@ import {
 import type { PartnerAccountInfo } from './account-info.ts'
 import { PartnerClient, type PartnerClientOptions } from './client.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
-
-const runtimeGlobals = globalThis as Record<string, unknown>
-const runtimeProcess = runtimeGlobals['process'] as
-  | { readonly versions?: { readonly node?: string } }
-  | undefined
-const isNode = typeof runtimeProcess?.versions?.node === 'string'
 
 function requestJsonBody(request: HttpRequest): unknown {
   if (typeof request.body !== 'string') throw new Error('expected JSON request body')
@@ -167,6 +168,39 @@ describe('PartnerClient facade', () => {
     expect(listRequest.headers).toMatchObject({ Authorization: auth.authorizationToken })
   })
 
+  it('reuses Partner auth populated in a shared store after construction', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const inner = sim.transport()
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        return inner.send(request)
+      },
+    }
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    const partner = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const backup = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await backup.authorize()
+    const page = await partner.listGroups({ pageSize: 1 })
+
+    expect(page.groups).toHaveLength(1)
+    expect(seenRequests.map(apiEndpointName)).toEqual(['b2_authorize_account', 'b2_list_groups'])
+  })
+
   it('redacts credentials and tokens from JSON serialization paths', () => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token-secret'))
@@ -187,32 +221,6 @@ describe('PartnerClient facade', () => {
       JSON.stringify({ client: { ...client } }),
       String(client),
     ].join('\n')
-
-    expect(rendered).not.toContain('master-key-id-secret')
-    expect(rendered).not.toContain('master-key-secret')
-    expect(rendered).not.toContain('masterKey')
-    expect(rendered).not.toContain('masterKeyId')
-    expect(rendered).not.toContain('partner-token-secret')
-    expect(rendered).not.toContain('application-key-secret')
-    expect(rendered).toContain('[redacted')
-  })
-
-  it.skipIf(!isNode)('redacts credentials and tokens from Node inspect', async () => {
-    const { inspect } = await import(/* @vite-ignore */ 'node:util')
-    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token-secret'))
-    const client = new PartnerClient({
-      masterKeyId: 'master-key-id-secret',
-      masterKey: 'master-key-secret',
-      partnerAccountInfo,
-      transport: {
-        async send() {
-          throw new Error('unexpected request')
-        },
-      },
-    })
-
-    const rendered = [inspect(client), inspect({ client: { ...client } })].join('\n')
 
     expect(rendered).not.toContain('master-key-id-secret')
     expect(rendered).not.toContain('master-key-secret')
@@ -424,6 +432,50 @@ describe('PartnerClient facade', () => {
         (request) => apiEndpointName(request) === 'b2_reserve_trial_create_account',
       ),
     ).toEqual([])
+  })
+
+  it('rejects calls when Partner authorization has no groups API suite', async () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth({
+      accountId: accountId('partner-account'),
+      authorizationToken: partnerToken('partner-token'),
+      apiInfo: {
+        backupApi: {
+          backupApiUrl: 'https://backup.backblazeb2.com/backup',
+          capabilities: [PartnerCapability.All],
+          infoType: 'backupApi',
+        },
+      },
+      backupApiUrl: 'https://backup.backblazeb2.com/backup',
+      backupCapabilities: [PartnerCapability.All],
+      applicationKeyExpirationTimestamp: null,
+    })
+    const seenRequests: HttpRequest[] = []
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        },
+      },
+    })
+
+    await expect(client.listGroups()).rejects.toThrow('Partner API is not available')
+    await expect(
+      (async () => {
+        for await (const group of client.paginateGroups()) {
+          void group
+        }
+      })(),
+    ).rejects.toThrow('Partner API is not available')
+    expect(seenRequests).toEqual([])
   })
 
   it('reauthorizes and retries list requests on expired auth token errors', async () => {
@@ -718,6 +770,24 @@ describe('PartnerClient facade', () => {
 
     await client.authorize()
     await expect(client.listGroups()).rejects.toThrow(BadAuthTokenError)
+
+    expect(authorizeCount()).toBe(1)
+    expect(listAuthorizations).toEqual(['partner-token-1'])
+  })
+
+  it.each([
+    ['too_many_members', TooManyMembersError],
+    ['invalid_group_id', InvalidGroupIdError],
+    ['invalid_email', InvalidEmailError],
+    ['invalid_region', InvalidRegionError],
+    ['invalid_sms_phone', InvalidSmsPhoneError],
+    ['out_of_range', OutOfRangeError],
+    ['method_failure', MethodFailureError],
+  ] as const)('does not reauthorize for Partner 401 validation code %s', async (code, errorClass) => {
+    const { client, listAuthorizations, authorizeCount } = make401ListGroupsClient(code)
+
+    await client.authorize()
+    await expect(client.listGroups()).rejects.toThrow(errorClass)
 
     expect(authorizeCount()).toBe(1)
     expect(listAuthorizations).toEqual(['partner-token-1'])

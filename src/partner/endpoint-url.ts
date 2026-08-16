@@ -1,4 +1,5 @@
 import { B2PartnerAuthorizationError } from '../errors/index.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import { getTransportUrlGuard, type HttpTransport } from '../http/transport.ts'
 import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
 
@@ -13,8 +14,18 @@ export interface EndpointAllowedSuffixMessages {
   readonly unlockedGuard: string
 }
 
-type QueryValue = string | number
-type QueryParams = Readonly<Record<string, QueryValue>>
+/** Query-string scalar value supported by Partner and Backup endpoint helpers. */
+export type QueryValue = string | number
+/** Query-string parameter map supported by Partner and Backup endpoint helpers. */
+export type QueryParams = Readonly<Record<string, QueryValue>>
+
+/** Shared request options shape for non-idempotent Partner and Backup mutations. */
+export interface MutationRequestOptions {
+  /** Abort signal for cancelling the request. */
+  readonly signal?: AbortSignal
+  /** Per-request retry override. */
+  readonly retry?: Partial<RetryOptions>
+}
 
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
@@ -144,4 +155,22 @@ export function withQueryString(url: string, query: QueryParams): string {
     .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
     .join('&')
   return queryString.length === 0 ? url : `${url}?${queryString}`
+}
+
+/**
+ * Forces non-idempotent mutation calls to opt out of automatic request replay.
+ *
+ * @param options - Caller-provided request options.
+ *
+ * @returns Request options with `retry.maxRetries` set to zero.
+ *
+ * @internal
+ */
+export function nonRetryingMutationRequestOptions(
+  options: MutationRequestOptions | undefined,
+): MutationRequestOptions {
+  return {
+    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
+  }
 }

@@ -2,6 +2,8 @@ import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
   endpointAllowedSuffixes,
+  nonRetryingMutationRequestOptions,
+  type QueryParams,
   validatePartnerEndpointUrl,
   withQueryString,
 } from '../partner/endpoint-url.ts'
@@ -22,9 +24,17 @@ export interface BackupRawClientOptions {
    *
    * Computer Backup endpoint calls validate URLs against suffixes recorded by
    * Partner authorization. A rehydrated client that skips authorization must
-   * use a transport with a locked `urlGuard`.
+   * use `authorizedBackupEndpointSuffixes` or a transport with a locked
+   * `urlGuard`.
    */
   readonly transport: HttpTransport
+  /**
+   * Validated Computer Backup endpoint host suffixes restored from cached
+   * Partner authorization. Facades normally manage this after authorization;
+   * direct raw clients can pass trusted suffixes derived from
+   * `derivePartnerAllowedSuffixes()`.
+   */
+  readonly authorizedBackupEndpointSuffixes?: readonly string[]
 }
 
 /** Optional controls for raw Computer Backup API requests. */
@@ -34,9 +44,6 @@ export interface BackupRawRequestOptions {
   /** Per-request retry override. */
   readonly retry?: Partial<RetryOptions>
 }
-
-type QueryValue = string | number
-type QueryParams = Readonly<Record<string, QueryValue>>
 
 function backupEndpointAllowedSuffixes(
   transport: HttpTransport,
@@ -48,38 +55,6 @@ function backupEndpointAllowedSuffixes(
     unlockedGuard:
       'Computer Backup endpoint requests require a locked URL guard before sending Partner tokens',
   })
-}
-
-function mutationRequestOptions(
-  options: BackupRawRequestOptions | undefined,
-): BackupRawRequestOptions {
-  return {
-    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-    // Backup deletes are destructive and not proven idempotent. Keep automatic
-    // replay disabled even when callers pass retry options intended for GETs.
-    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
-  }
-}
-
-const backupEndpointSuffixesByClient = new WeakMap<BackupRawClient, readonly string[]>()
-
-function authorizedBackupEndpointSuffixes(client: BackupRawClient): readonly string[] {
-  return backupEndpointSuffixesByClient.get(client) ?? []
-}
-
-/**
- * Replaces the validated Computer Backup endpoint host suffixes.
- *
- * @param client - Raw client whose endpoint suffixes should be updated.
- * @param suffixes - Host suffixes derived from Partner authorization.
- *
- * @internal
- */
-export function setAuthorizedBackupEndpointSuffixes(
-  client: BackupRawClient,
-  suffixes: readonly string[],
-): void {
-  backupEndpointSuffixesByClient.set(client, suffixes)
 }
 
 /**
@@ -94,6 +69,7 @@ export function setAuthorizedBackupEndpointSuffixes(
 export class BackupRawClient {
   /** @internal */
   private readonly transport: HttpTransport
+  private authorizedEndpointSuffixes: readonly string[]
 
   /**
    * Creates a new BackupRawClient with the given transport.
@@ -102,20 +78,32 @@ export class BackupRawClient {
    */
   constructor(options: BackupRawClientOptions) {
     this.transport = options.transport
+    this.authorizedEndpointSuffixes = Array.from(options.authorizedBackupEndpointSuffixes ?? [])
+  }
+
+  /**
+   * Replaces the validated Computer Backup endpoint host suffixes.
+   *
+   * @param suffixes - Host suffixes derived from Partner authorization.
+   *
+   * @internal
+   */
+  setAuthorizedEndpointSuffixes(suffixes: readonly string[]): void {
+    this.authorizedEndpointSuffixes = Array.from(suffixes)
   }
 
   /**
    * Calls `bz_list_computers`.
    *
-   * Uses the documented GET form. The response is a single JSON object with a
-   * `nextComputerId` cursor and active computer backup records.
+   * Uses the documented GET form. The wire response is a single JSON object
+   * with a `nextComputerId` cursor and active computer backup records.
    *
    * @param backupApiUrl - The Computer Backup API base URL from `authorizePartner`.
    * @param authToken - The Partner authorization token.
    * @param request - The computer listing query parameters.
    * @param options - Optional abort and per-request retry settings.
    *
-   * @returns The computer backup page object.
+   * @returns The single-object computer backup wire response.
    *
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */
@@ -171,7 +159,7 @@ export class BackupRawClient {
         accountId: request.accountId,
         computerId: request.computerId,
       },
-      mutationRequestOptions(options),
+      nonRetryingMutationRequestOptions(options),
     )
   }
 
@@ -179,7 +167,7 @@ export class BackupRawClient {
     return validatePartnerEndpointUrl(
       backupApiUrl,
       'backupApiUrl',
-      backupEndpointAllowedSuffixes(this.transport, authorizedBackupEndpointSuffixes(this)),
+      backupEndpointAllowedSuffixes(this.transport, this.authorizedEndpointSuffixes),
     )
   }
 

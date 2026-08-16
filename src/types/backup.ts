@@ -29,7 +29,7 @@ export interface ComputerBackup {
 }
 
 /**
- * Single result element returned by `bz_list_computers`.
+ * Result object returned by `bz_list_computers`.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
  */
@@ -43,7 +43,7 @@ export interface ListComputersResult {
 /**
  * Wire response from `bz_list_computers`.
  *
- * The `bz_list_computers` response is a single JSON object containing a
+ * The `bz_list_computers` wire response is a single JSON object containing a
  * pagination cursor and the list of computers.
  *
  * @experimental Provisional until the corresponding client method is implemented and exercised.
