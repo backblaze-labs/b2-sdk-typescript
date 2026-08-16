@@ -75,7 +75,7 @@ export function validateCreateKeyCapabilities(capabilities: unknown): CreateKeyC
       message: `unknown capabilities: ${unknownCapabilities.map(String).join(', ')}`,
     }
   }
-  return { kind: 'ok', capabilities: capabilities as readonly Capability[] }
+  return { kind: 'ok', capabilities: Object.freeze([...(capabilities as Capability[])]) }
 }
 
 export type CreateKeyNameResult =

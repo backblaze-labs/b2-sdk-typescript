@@ -1168,6 +1168,35 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('does not expose stored create-key capabilities by reference', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'defensive-capabilities',
+    })
+
+    ;(key.capabilities as Capability[]).push(Capability.ListBuckets)
+    const listed = await client.listKeys()
+    const listedKey = listed.keys.find(
+      (candidate) => candidate.applicationKeyId === key.applicationKeyId,
+    )
+    expect(listedKey?.capabilities).toEqual([Capability.WriteKeys])
+    if (listedKey === undefined) throw new Error('expected created key to be listed')
+
+    ;(listedKey.capabilities as Capability[]).push(Capability.ListBuckets)
+    const relisted = await client.listKeys()
+    expect(
+      relisted.keys.find((candidate) => candidate.applicationKeyId === key.applicationKeyId)
+        ?.capabilities,
+    ).toEqual([Capability.WriteKeys])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    expect(scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
+      Capability.WriteKeys,
+    ])
+  })
+
   it('rejects keys that request capabilities outside the creator grant', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

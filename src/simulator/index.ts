@@ -447,6 +447,10 @@ function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] 
   return bucketIds === null ? null : [...bucketIds]
 }
 
+function cloneCapabilities(capabilities: readonly Capability[]): readonly Capability[] {
+  return [...capabilities]
+}
+
 function hasOwnField(body: unknown, field: string): boolean {
   return typeof body === 'object' && body !== null && Object.hasOwn(body, field)
 }
@@ -3107,6 +3111,7 @@ export class B2Simulator {
     // seam, see `authorizeAsKey` below), the auth header identifies
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    const authorizedCapabilities = keyForAuth?.capabilities ?? capabilities
     const authorizedAccountId = keyForAuth?.accountId ?? this.accountId
     const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
     const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
@@ -3115,7 +3120,7 @@ export class B2Simulator {
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
       accountId: authorizedAccountId,
-      capabilities: keyForAuth?.capabilities ?? capabilities,
+      capabilities: authorizedCapabilities,
       bucketIds: keyForAuth?.bucketIds ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
@@ -3141,7 +3146,7 @@ export class B2Simulator {
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
-              capabilities: keyForAuth?.capabilities ?? capabilities,
+              capabilities: cloneCapabilities(authorizedCapabilities),
               buckets: allowedBuckets,
               bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
               bucketName: legacyBucketName,
@@ -4182,7 +4187,7 @@ export class B2Simulator {
         keyName: stored.keyName,
         applicationKeyId: stored.applicationKeyId,
         applicationKey: stored.applicationKey,
-        capabilities: stored.capabilities,
+        capabilities: cloneCapabilities(stored.capabilities),
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
         bucketIds: cloneBucketIds(stored.bucketIds),
@@ -4213,7 +4218,7 @@ export class B2Simulator {
     const keys = allKeys.slice(0, max).map((k) => ({
       keyName: k.keyName,
       applicationKeyId: k.applicationKeyId,
-      capabilities: k.capabilities,
+      capabilities: cloneCapabilities(k.capabilities),
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
       bucketIds: cloneBucketIds(k.bucketIds),
@@ -4251,7 +4256,7 @@ export class B2Simulator {
       body: {
         keyName: key.keyName,
         applicationKeyId: key.applicationKeyId,
-        capabilities: key.capabilities,
+        capabilities: cloneCapabilities(key.capabilities),
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
         bucketIds: cloneBucketIds(key.bucketIds),
