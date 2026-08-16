@@ -8,7 +8,7 @@
 import { partnerClientFromEnv } from './_shared/partner.ts'
 
 async function main() {
-  const partner = partnerClientFromEnv()
+  const partner = await partnerClientFromEnv()
   const auth = await partner.authorize()
 
   console.log(`Authorized partner administrator account: ${auth.accountId}`)

@@ -1,0 +1,145 @@
+import { mkdtemp, readFile, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import type {
+  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountResult,
+} from '../src/types/partner.ts'
+import { type ApplicationKeySecretRecord, writeApplicationKeySecretsFile } from './_shared/env.ts'
+import { TrialBatchWriter } from './_shared/trial-batch.ts'
+
+const RAW_SECRET = 'live-application-key-secret'
+
+async function captureStdoutStderr(fn: () => Promise<void>): Promise<{
+  readonly stdout: string
+  readonly stderr: string
+}> {
+  let stdout = ''
+  let stderr = ''
+  const stdoutWrite = vi.spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    _encoding?: unknown,
+    callback?: unknown,
+  ): boolean => {
+    stdout += String(chunk)
+    if (typeof callback === 'function') callback()
+    return true
+  }) as typeof process.stdout.write)
+  const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(((
+    chunk: unknown,
+    _encoding?: unknown,
+    callback?: unknown,
+  ): boolean => {
+    stderr += String(chunk)
+    if (typeof callback === 'function') callback()
+    return true
+  }) as typeof process.stderr.write)
+
+  try {
+    await fn()
+  } finally {
+    stdoutWrite.mockRestore()
+    stderrWrite.mockRestore()
+  }
+
+  return { stdout, stderr }
+}
+
+function secretRecord(): ApplicationKeySecretRecord {
+  return {
+    accountId: 'account-1',
+    applicationKeyId: 'key-id-1',
+    applicationKey: RAW_SECRET,
+    email: 'trial@example.com',
+  }
+}
+
+function trialRequest(): ReserveTrialCreateAccountRequest {
+  return [{ email: 'trial@example.com', term: 7, storage: 1 }]
+}
+
+function trialResult(): ReserveTrialCreateAccountResult {
+  return {
+    accountId: 'account-1',
+    applicationKey: RAW_SECRET,
+    applicationKeyId: 'key-id-1',
+    s3Endpoint: 's3.example.com',
+    startDate: '2026-08-16',
+    endDate: '2026-08-23',
+    email: 'trial@example.com',
+    bucketName: 'trial-bucket',
+    bucketId: 'bucket-1',
+  } as ReserveTrialCreateAccountResult
+}
+
+describe('Partner examples secret handling', () => {
+  it('writes application key secrets only to a restricted file, even with print toggles set', async () => {
+    const previousPrintEnv = process.env['B2_PRINT_APPLICATION_KEY']
+    process.env['B2_PRINT_APPLICATION_KEY'] = '1'
+    const dir = await mkdtemp(join(tmpdir(), 'b2-example-secret-'))
+    const secretPath = join(dir, 'application-key.json')
+
+    try {
+      const output = await captureStdoutStderr(async () => {
+        await writeApplicationKeySecretsFile(secretPath, [secretRecord()])
+      })
+
+      expect(output.stdout).not.toContain(RAW_SECRET)
+      expect(output.stderr).not.toContain(RAW_SECRET)
+      expect(await readFile(secretPath, 'utf8')).toContain(RAW_SECRET)
+      expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
+    } finally {
+      if (previousPrintEnv === undefined) {
+        delete process.env['B2_PRINT_APPLICATION_KEY']
+      } else {
+        process.env['B2_PRINT_APPLICATION_KEY'] = previousPrintEnv
+      }
+    }
+  })
+
+  it('checkpoints each trial result before continuing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2-example-batch-'))
+    const batchPath = join(dir, 'trial-batch.json')
+    const request = trialRequest()
+    const writer = await TrialBatchWriter.create(batchPath, request)
+
+    try {
+      await writer.recordInProgress(request[0])
+      let checkpoint = JSON.parse(await readFile(batchPath, 'utf8'))
+      expect(checkpoint).toMatchObject({
+        status: 'pending',
+        inProgressEmail: 'trial@example.com',
+        results: [],
+      })
+
+      await writer.recordResult(trialResult())
+      checkpoint = JSON.parse(await readFile(batchPath, 'utf8'))
+      expect(checkpoint).toMatchObject({
+        status: 'pending',
+        results: [{ email: 'trial@example.com', applicationKey: RAW_SECRET }],
+      })
+      expect(checkpoint).not.toHaveProperty('inProgressEmail')
+    } finally {
+      await writer.close()
+    }
+  })
+
+  it('refuses to write batch secrets after the batch path is swapped to a symlink', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2-example-batch-symlink-'))
+    const batchPath = join(dir, 'trial-batch.json')
+    const leakPath = join(dir, 'leak.json')
+    const writer = await TrialBatchWriter.create(batchPath, trialRequest())
+
+    try {
+      await writeFile(leakPath, '', { mode: 0o644 })
+      await unlink(batchPath)
+      await symlink(leakPath, batchPath)
+
+      await expect(writer.recordResult(trialResult())).rejects.toThrow(/regular file|changed/)
+      expect(await readFile(leakPath, 'utf8')).not.toContain(RAW_SECRET)
+    } finally {
+      await writer.close()
+    }
+  })
+})

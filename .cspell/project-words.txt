@@ -444,27 +444,22 @@ ptok
 backupApiUrl
 backupCapabilities
 backupClient
-Business
-Computer
 computerId
 computerName
 createGroupMember
 ejectGroupMember
-Enterprise
 groupId
 groupMembers
 groupName
 groupsApiUrl
 memberAccountId
 memberEmail
-Partner
 partnerAccountInfo
 partnerClient
 partnerToken
 reserveTrialAccounts
 reserveTrialCreateAccount
 s3Endpoint
-SMS
 
 # ── 9. Words common to repo docs / CLAUDE.md / README ─────────────────
 adheres

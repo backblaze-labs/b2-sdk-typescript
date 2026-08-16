@@ -1,4 +1,17 @@
-const PRINT_APPLICATION_KEY_ENV = 'B2_PRINT_APPLICATION_KEY'
+import { type FileHandle, open } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+const APPLICATION_KEY_FILE_ENV = 'B2_APPLICATION_KEY_FILE'
+
+export interface ApplicationKeySecretRecord {
+  readonly accountId?: string
+  readonly applicationKeyId: string
+  readonly applicationKey: string
+  readonly email?: string
+  readonly bucketId?: string
+  readonly bucketName?: string
+  readonly s3Endpoint?: string
+}
 
 export function fail(message: string): never {
   console.error(message)
@@ -55,17 +68,56 @@ export function requireConfirmation(envName: string, action: string): void {
   fail(`${action} Set ${envName}=1 to confirm.`)
 }
 
-export function printApplicationKeySecret(applicationKey: string): void {
-  console.log(
-    `Application key secret: [redacted; set ${PRINT_APPLICATION_KEY_ENV}=1 to reveal on stderr]`,
-  )
+export function applicationKeyFilePathFromEnv(): string {
+  return resolve(requireEnv(APPLICATION_KEY_FILE_ENV))
+}
 
-  if (process.env[PRINT_APPLICATION_KEY_ENV] !== '1') return
+export class ApplicationKeySecretsFile {
+  private constructor(
+    readonly filePath: string,
+    private readonly handle: FileHandle,
+  ) {}
 
-  console.error(
-    'Application key secret (shown once, keep private; do not enable this in CI or logged shells):',
-  )
-  console.error(applicationKey)
+  static async create(filePath: string): Promise<ApplicationKeySecretsFile> {
+    const handle = await open(filePath, 'wx', 0o600)
+    await handle.chmod(0o600)
+    return new ApplicationKeySecretsFile(filePath, handle)
+  }
+
+  async write(records: readonly ApplicationKeySecretRecord[]): Promise<void> {
+    if (records.length === 0) {
+      throw new Error('At least one application key secret record is required.')
+    }
+
+    await this.handle.writeFile(
+      `${JSON.stringify({ version: 1, createdAt: new Date().toISOString(), records }, null, 2)}\n`,
+      'utf8',
+    )
+    await this.handle.chmod(0o600)
+    await this.handle.sync()
+  }
+
+  async close(): Promise<void> {
+    await this.handle.close()
+  }
+}
+
+export async function createApplicationKeySecretsFile(
+  filePath: string,
+): Promise<ApplicationKeySecretsFile> {
+  return ApplicationKeySecretsFile.create(filePath)
+}
+
+export async function writeApplicationKeySecretsFile(
+  filePath: string,
+  records: readonly ApplicationKeySecretRecord[],
+): Promise<void> {
+  const secretsFile = await createApplicationKeySecretsFile(filePath)
+  try {
+    await secretsFile.write(records)
+  } finally {
+    await secretsFile.close()
+  }
 }
 
 export function formatTimestamp(timestampMillis: number): string {

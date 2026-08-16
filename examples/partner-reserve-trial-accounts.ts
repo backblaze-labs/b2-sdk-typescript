@@ -5,7 +5,6 @@
  *   B2_CONFIRM_RESERVE_TRIAL=1 B2_TRIAL_BATCH_FILE=./trial-batch.json B2_TRIAL_EMAILS=a@example.com,b@example.com B2_MASTER_KEY_ID=xxx B2_MASTER_KEY=yyy npx tsx examples/partner-reserve-trial-accounts.ts
  */
 
-import { chmod, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type {
   ReserveTrialCreateAccountRequest,
@@ -20,30 +19,7 @@ import {
   requireEnv,
 } from './_shared/env.ts'
 import { parseRegion, partnerClientFromEnv } from './_shared/partner.ts'
-
-interface PendingTrialBatchFile {
-  readonly version: 1
-  readonly status: 'pending'
-  readonly createdAt: string
-  readonly requested: ReserveTrialCreateAccountRequest
-}
-
-interface CompletedTrialBatchFile {
-  readonly version: 1
-  readonly status: 'completed'
-  readonly createdAt: string
-  readonly completedAt: string
-  readonly requested: ReserveTrialCreateAccountRequest
-  readonly results: readonly ReserveTrialCreateAccountResult[]
-}
-
-type TrialBatchFile = PendingTrialBatchFile | CompletedTrialBatchFile
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
-  const code = (error as { readonly code?: unknown }).code
-  return typeof code === 'string' ? code : undefined
-}
+import { refuseExistingTrialBatch, TrialBatchWriter } from './_shared/trial-batch.ts'
 
 function trialRequestsFromEnv(): ReserveTrialCreateAccountRequest {
   const emails = requireEnv('B2_TRIAL_EMAILS')
@@ -76,83 +52,31 @@ function batchFilePathFromEnv(): string {
   return resolve(requireEnv('B2_TRIAL_BATCH_FILE'))
 }
 
-async function existingBatchFile(batchFilePath: string): Promise<TrialBatchFile | null> {
-  try {
-    return JSON.parse(await readFile(batchFilePath, 'utf8')) as TrialBatchFile
-  } catch (err) {
-    if (errorCode(err) === 'ENOENT') return null
-    fail(`Refusing to overwrite unreadable batch file: ${batchFilePath}`)
-  }
-}
-
-async function refuseExistingBatch(batchFilePath: string): Promise<void> {
-  const existing = await existingBatchFile(batchFilePath)
-  if (existing === null) return
-
-  if (existing.status === 'pending') {
-    if (process.env.B2_RECONCILE_TRIAL_BATCH === '1') {
-      console.error(`Pending batch file: ${batchFilePath}`)
-      for (const request of existing.requested) {
-        console.error(`  reconcile ${request.email}`)
-      }
-    }
-    fail(
-      `Batch file ${batchFilePath} is pending. Reconcile those email addresses before archiving or removing the file and choosing a new batch file.`,
-    )
-  }
-
-  if (existing.status === 'completed') {
-    fail(`Batch file ${batchFilePath} already contains completed results. Choose a new file.`)
-  }
-
-  fail(`Batch file ${batchFilePath} has an unknown status. Refusing to continue.`)
-}
-
-async function writePendingBatch(
-  batchFilePath: string,
-  requested: ReserveTrialCreateAccountRequest,
-): Promise<PendingTrialBatchFile> {
-  const pending: PendingTrialBatchFile = {
-    version: 1,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-    requested,
-  }
-  await writeFile(batchFilePath, `${JSON.stringify(pending, null, 2)}\n`, {
-    mode: 0o600,
-    flag: 'wx',
-  })
-  await chmod(batchFilePath, 0o600)
-  return pending
-}
-
-async function writeCompletedBatch(
-  batchFilePath: string,
-  pending: PendingTrialBatchFile,
-  results: readonly ReserveTrialCreateAccountResult[],
-): Promise<void> {
-  const completed: CompletedTrialBatchFile = {
-    ...pending,
-    status: 'completed',
-    completedAt: new Date().toISOString(),
-    results,
-  }
-  await writeFile(batchFilePath, `${JSON.stringify(completed, null, 2)}\n`, { mode: 0o600 })
-  await chmod(batchFilePath, 0o600)
-}
-
 async function main() {
   requireConfirmation('B2_CONFIRM_RESERVE_TRIAL', 'Reserving trials creates new accounts.')
   const batchFilePath = batchFilePathFromEnv()
-  await refuseExistingBatch(batchFilePath)
+  await refuseExistingTrialBatch(batchFilePath)
   const requests = trialRequestsFromEnv()
 
-  const partner = partnerClientFromEnv()
+  const partner = await partnerClientFromEnv()
   await partner.authorize()
 
-  const pending = await writePendingBatch(batchFilePath, requests)
-  const trials = await partner.reserveTrialAccounts(requests)
-  await writeCompletedBatch(batchFilePath, pending, trials)
+  const batch = await TrialBatchWriter.create(batchFilePath, requests)
+  const trials: ReserveTrialCreateAccountResult[] = []
+  try {
+    for (const request of requests) {
+      await batch.recordInProgress(request)
+      const [trial] = await partner.reserveTrialAccounts(request)
+      if (trial === undefined) {
+        throw new Error(`The Partner API returned no trial account result for ${request.email}.`)
+      }
+      await batch.recordResult(trial)
+      trials.push(trial)
+    }
+    await batch.complete()
+  } finally {
+    await batch.close()
+  }
 
   console.log(`Stored ${trials.length} completed trial result(s) in ${batchFilePath}`)
   for (const trial of trials) {

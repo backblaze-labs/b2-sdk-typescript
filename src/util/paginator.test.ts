@@ -78,6 +78,19 @@ describe('paginatePages', () => {
     expect(callCount).toBe(2)
   })
 
+  it('stops when a primitive cursor does not advance', async () => {
+    let callCount = 0
+    const fetcher: PageFetcher<string, string> = async (cursor) => {
+      callCount += 1
+      if (cursor === undefined) return { page: 'first', nextCursor: 'cursor-1' }
+      return { page: 'second', nextCursor: cursor }
+    }
+    const pages: string[] = []
+    for await (const page of paginatePages(fetcher, undefined)) pages.push(page)
+    expect(pages).toEqual(['first', 'second'])
+    expect(callCount).toBe(2)
+  })
+
   it('aborts before the first fetch when the signal is already aborted', async () => {
     const { fetcher, callCount } = arrayFetcher([[1, 2, 3]])
     const controller = new AbortController()

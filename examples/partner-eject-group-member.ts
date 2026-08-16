@@ -21,7 +21,7 @@ async function main() {
   }
   requireConfirmation('B2_CONFIRM_EJECT', 'Ejecting a group member changes the member account.')
 
-  const partner = partnerClientFromEnv()
+  const partner = await partnerClientFromEnv()
   await partner.authorize()
 
   const ejected = await partner.ejectGroupMember({

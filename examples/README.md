@@ -143,9 +143,11 @@ export B2_MASTER_KEY_ID=your-master-key-id
 export B2_MASTER_KEY=your-master-application-key
 ```
 
-Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Reserve trial account creation also requires the account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
+In a source checkout, run `pnpm build` before the Node `npx tsx` commands below so package subpath exports resolve to `dist/` exactly as they do for an installed package.
 
-Create-member and single-account reservation examples redact one-time application key secrets from stdout. Set `B2_PRINT_APPLICATION_KEY=1` only in a private terminal to reveal the secret on stderr; do not enable it in CI, logged shells, or support captures. The batch reservation example writes secrets to the restricted batch results file instead.
+Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Partner operations that create accounts, including creating group members and reserving trial accounts, also require the account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
+
+Examples that create accounts never print one-time application key secrets to stdout or stderr. Set `B2_APPLICATION_KEY_FILE` or `B2_TRIAL_BATCH_FILE` to a caller-controlled path; the examples create these files with mode `0600` and write the live credential material there. Do not point those paths at shared directories, synced folders, CI artifacts, or support bundles.
 
 ### Authorize Partner API access
 
@@ -161,6 +163,7 @@ Create a new account and add it to a Partner group. The optional region must be 
 
 ```bash
 B2_CONFIRM_CREATE_GROUP_MEMBER=1 \
+B2_APPLICATION_KEY_FILE=./member-key.json \
   npx tsx examples/partner-create-group-member.ts <group-id> <member-email> [region]
 ```
 
@@ -187,6 +190,7 @@ Reserve one trial account:
 
 ```bash
 B2_CONFIRM_RESERVE_TRIAL=1 \
+B2_APPLICATION_KEY_FILE=./trial-key.json \
   npx tsx examples/partner-reserve-trial-account.ts <email> <term-days> <storage-tb> [region]
 ```
 
@@ -201,7 +205,7 @@ B2_TRIAL_STORAGE_TB=1 \
   npx tsx examples/partner-reserve-trial-accounts.ts
 ```
 
-The batch example creates `B2_TRIAL_BATCH_FILE` with mode `0600`, stores the requested batch before issuing the non-idempotent reservation call, and writes completed results, including one-time application key secrets, to the same file after success. If the file is left with `status: "pending"`, reconcile each requested email in your Partner account before archiving or removing the file and choosing a new batch file. Set `B2_RECONCILE_TRIAL_BATCH=1` to print the pending emails without issuing another reservation call.
+The batch example creates `B2_TRIAL_BATCH_FILE` with mode `0600`, stores the requested batch before issuing any non-idempotent reservation call, and processes one email at a time. Before each reservation call it records the email in progress, and after each returned result it records that account ID and one-time application key secret before continuing to the next email. If a timeout or process restart leaves the file pending, use `B2_RECONCILE_TRIAL_BATCH=1` to list the unresolved emails, reconcile those accounts in your Partner account, then archive the batch file and choose a new path before retrying.
 
 ### List Computer Backup records
 

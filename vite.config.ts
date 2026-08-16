@@ -92,7 +92,7 @@ export default defineConfig({
     // `pnpm test:coverage` uses `vitest.coverage.config.ts` which runs the
     // union of both tiers under the slow-tier constraints — that's the only
     // config that owns coverage instrumentation and threshold gates.
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'examples/**/*.node.test.ts'],
     exclude: ['src/**/*.slow.test.ts', 'node_modules/**', 'dist/**'],
   },
 })

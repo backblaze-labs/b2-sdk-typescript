@@ -70,7 +70,9 @@ export type PageFetcher<Page, Cursor> = (cursor: Cursor | undefined) => Promise<
 
 /**
  * Async-iterates one page at a time. Stops when `fetcher` returns
- * `nextCursor: undefined`.
+ * `nextCursor: undefined` or a primitive cursor that is identical to the
+ * cursor just used, which prevents non-advancing server cursors from looping
+ * forever.
  *
  * @typeParam Page - The per-page response shape.
  * @typeParam Cursor - The cursor type used to request the next page.
@@ -105,6 +107,7 @@ export async function* paginatePages<Page, Cursor>(
     const { page, nextCursor } = await fetcher(cursor)
     yield page
     if (nextCursor === undefined) return
+    if (cursor !== undefined && Object.is(nextCursor, cursor)) return
     cursor = nextCursor
   }
 }

@@ -110,6 +110,12 @@ jobs:
           B2_APPLICATION_KEY_ID: smoke-id
           B2_APPLICATION_KEY: smoke-key
         run: npx tsx examples/node-download.ts smoke-test smoke-test.txt /tmp/restored.txt
+      - name: examples/partner-authorize.ts
+        env:
+          B2_USE_SIMULATOR: '1'
+          B2_MASTER_KEY_ID: master-key-id
+          B2_MASTER_KEY: master-key
+        run: npx tsx examples/partner-authorize.ts
       - name: examples/node-backup-cli (snapshot)
         env:
           B2_USE_SIMULATOR: '1'

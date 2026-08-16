@@ -27,7 +27,7 @@ async function main() {
     25,
   )
 
-  const partner = partnerClientFromEnv()
+  const partner = await partnerClientFromEnv()
   await partner.authorize()
 
   let groupsSeen = 0

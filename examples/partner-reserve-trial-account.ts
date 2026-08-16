@@ -2,13 +2,14 @@
  * Reserve one B2 trial account through the Partner API.
  *
  * Usage:
- *   B2_CONFIRM_RESERVE_TRIAL=1 B2_MASTER_KEY_ID=xxx B2_MASTER_KEY=yyy npx tsx examples/partner-reserve-trial-account.ts <email> <term-days> <storage-tb> [region]
+ *   B2_CONFIRM_RESERVE_TRIAL=1 B2_APPLICATION_KEY_FILE=./trial-key.json B2_MASTER_KEY_ID=xxx B2_MASTER_KEY=yyy npx tsx examples/partner-reserve-trial-account.ts <email> <term-days> <storage-tb> [region]
  */
 
 import {
+  applicationKeyFilePathFromEnv,
+  createApplicationKeySecretsFile,
   fail,
   positiveInteger,
-  printApplicationKeySecret,
   requireConfirmation,
 } from './_shared/env.ts'
 import { parseRegion, partnerClientFromEnv } from './_shared/partner.ts'
@@ -26,28 +27,46 @@ async function main() {
   const term = positiveInteger(rawTerm, 'term-days')
   const storage = positiveInteger(rawStorage, 'storage-tb')
   const region = parseRegion(process.argv[5])
+  const applicationKeyFilePath = applicationKeyFilePathFromEnv()
   requireConfirmation('B2_CONFIRM_RESERVE_TRIAL', 'Reserving a trial creates a new account.')
+  const secretsFile = await createApplicationKeySecretsFile(applicationKeyFilePath)
 
-  const partner = partnerClientFromEnv()
-  await partner.authorize()
+  try {
+    const partner = await partnerClientFromEnv()
+    await partner.authorize()
 
-  const [trial] = await partner.reserveTrialAccounts({
-    email,
-    term,
-    storage,
-    ...(region !== undefined ? { region } : {}),
-  })
+    const [trial] = await partner.reserveTrialAccounts({
+      email,
+      term,
+      storage,
+      ...(region !== undefined ? { region } : {}),
+    })
 
-  if (trial === undefined) {
-    fail('The Partner API returned no trial account result.')
+    if (trial === undefined) {
+      fail('The Partner API returned no trial account result.')
+    }
+
+    await secretsFile.write([
+      {
+        accountId: trial.accountId,
+        applicationKeyId: trial.applicationKeyId,
+        applicationKey: trial.applicationKey,
+        email: trial.email,
+        bucketId: trial.bucketId,
+        bucketName: trial.bucketName,
+        s3Endpoint: trial.s3Endpoint,
+      },
+    ])
+
+    console.log(`Reserved trial account: ${trial.accountId}`)
+    console.log(`Email: ${trial.email}`)
+    console.log(`Bucket: ${trial.bucketName} (${trial.bucketId})`)
+    console.log(`Trial dates: ${trial.startDate} to ${trial.endDate}`)
+    console.log(`Application key ID: ${trial.applicationKeyId}`)
+    console.log(`Application key secret: written to ${applicationKeyFilePath}`)
+  } finally {
+    await secretsFile.close()
   }
-
-  console.log(`Reserved trial account: ${trial.accountId}`)
-  console.log(`Email: ${trial.email}`)
-  console.log(`Bucket: ${trial.bucketName} (${trial.bucketId})`)
-  console.log(`Trial dates: ${trial.startDate} to ${trial.endDate}`)
-  console.log(`Application key ID: ${trial.applicationKeyId}`)
-  printApplicationKeySecret(trial.applicationKey)
 }
 
 main().catch((err) => {

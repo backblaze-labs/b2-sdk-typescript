@@ -89,7 +89,7 @@ import { PartnerClient } from '@backblaze-labs/b2-sdk/partner'
 import { BackupClient } from '@backblaze-labs/b2-sdk/backup'
 ```
 
-Both clients authorize with a Master Application Key through the Partner authorization flow. See [examples/README.md](examples/README.md#partner-and-computer-backup-examples) for current prerequisites and runnable examples.
+Both clients authorize with a Master Application Key through the Partner authorization flow. Account-creating Partner operations, including group member creation and trial reservation, require a valid SMS phone number on the administrator account. See [examples/README.md](examples/README.md#partner-and-computer-backup-examples) for current prerequisites and runnable examples.
 
 ### Uploads
 
