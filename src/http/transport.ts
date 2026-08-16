@@ -7,6 +7,7 @@ import {
   NetworkError,
 } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
+import { abortReason, racePromiseWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
@@ -675,50 +676,16 @@ export class RetryTransport implements HttpTransport {
   }
 }
 
-function throwIfSignalAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) {
-    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
-  }
-}
-
 async function throwIfSignalAbortedAfterResponse(
   signal: AbortSignal | undefined,
   response: HttpResponse,
 ): Promise<void> {
   if (signal?.aborted !== true) return
-  const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+  const reason = abortReason(signal)
   try {
     await response.body?.cancel(reason)
   } catch {
     // Best-effort cleanup before preserving the caller's abort reason.
   }
   throw reason
-}
-
-async function racePromiseWithAbort<T>(
-  promise: Promise<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
-  if (signal === undefined) return promise
-  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
-  if (signal.aborted) {
-    void promise.catch(() => {})
-    throw abortReason()
-  }
-
-  let removeAbortListener: (() => void) | undefined
-  const aborted = new Promise<never>((_, reject) => {
-    const onAbort = (): void => {
-      void promise.catch(() => {})
-      reject(abortReason())
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
-  })
-
-  try {
-    return await Promise.race([promise, aborted])
-  } finally {
-    removeAbortListener?.()
-  }
 }

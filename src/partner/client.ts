@@ -18,6 +18,7 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
+import { racePromiseWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { paginateItems } from '../util/paginator.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
@@ -227,40 +228,6 @@ export interface PartnerClientJson {
   readonly authorized: boolean
   /** Current default URL guard suffixes, or null when a custom transport owns guarding. */
   readonly urlGuardAllowedSuffixes: readonly string[] | null
-}
-
-function throwIfSignalAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) {
-    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
-  }
-}
-
-async function racePromiseWithAbort<T>(
-  promise: Promise<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
-  if (signal === undefined) return promise
-  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
-  if (signal.aborted) {
-    void promise.catch(() => {})
-    throw abortReason()
-  }
-
-  let removeAbortListener: (() => void) | undefined
-  const aborted = new Promise<never>((_, reject) => {
-    const onAbort = (): void => {
-      void promise.catch(() => {})
-      reject(abortReason())
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-    removeAbortListener = () => signal.removeEventListener('abort', onAbort)
-  })
-
-  try {
-    return await Promise.race([promise, aborted])
-  } finally {
-    removeAbortListener?.()
-  }
 }
 
 /**
