@@ -3002,8 +3002,17 @@ export class B2Simulator {
       Capability.WriteKeys,
       Capability.DeleteKeys,
       Capability.ShareFiles,
+      Capability.ListAllBucketNames,
+      Capability.ReadBucketEncryption,
+      Capability.WriteBucketEncryption,
+      Capability.ReadBucketReplications,
+      Capability.WriteBucketReplications,
       Capability.ReadBucketNotifications,
       Capability.WriteBucketNotifications,
+      Capability.ReadBucketLogging,
+      Capability.WriteBucketLogging,
+      Capability.ReadBucketLifecycleRules,
+      Capability.WriteBucketLifecycleRules,
     ]
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
     // If a key was previously authorized via `authorizeAsKey` (test

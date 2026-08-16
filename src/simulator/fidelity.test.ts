@@ -1098,6 +1098,8 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     const allowed = client.accountInfo.getAuth()?.apiInfo.storageApi.allowed
     expect(allowed?.capabilities).toContain(Capability.WriteFiles)
     expect(allowed?.capabilities).toContain(Capability.ListBuckets)
+    expect(allowed?.capabilities).toContain(Capability.ReadBucketLifecycleRules)
+    expect(allowed?.capabilities).toContain(Capability.WriteBucketLifecycleRules)
     expect(allowed?.buckets).toBeNull()
     // Master does NOT have BypassGovernance — tests that need it must
     // mint a key with that cap explicitly.

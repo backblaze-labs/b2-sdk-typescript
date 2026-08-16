@@ -105,7 +105,7 @@ describe('const-object enums', () => {
     ])
   })
 
-  it('Capability covers every Capability value', () => {
+  it('Capability covers the documented v4 allowed.capabilities set', () => {
     expectEnumMatches(Capability, [
       'listKeys',
       'writeKeys',
@@ -125,6 +125,8 @@ describe('const-object enums', () => {
       'writeBucketNotifications',
       'readBucketLogging',
       'writeBucketLogging',
+      'readBucketLifecycleRules',
+      'writeBucketLifecycleRules',
       'listFiles',
       'readFiles',
       'shareFiles',
