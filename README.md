@@ -80,6 +80,19 @@ await bucket.delete()
 
 > The `BucketType`, `RetentionMode`, `LegalHoldValue`, `Capability`, `EventType`, and `EncryptionMode` `as const` objects exported from the main entry give you type-safe alternatives to the raw string literals — pick whichever style you prefer; both are accepted at the type level.
 
+### Partner and Computer Backup APIs
+
+Partner API and Computer Backup API helpers are exported from dedicated subpaths:
+
+```ts
+import { PartnerClient } from '@backblaze-labs/b2-sdk/partner'
+import { BackupClient } from '@backblaze-labs/b2-sdk/backup'
+```
+
+Both clients authorize with a Master Application Key through the Partner authorization flow. Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Reserve trial account creation also requires the partner account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
+
+See [examples/README.md](examples/README.md#partner-and-computer-backup-examples) for runnable examples.
+
 ### Uploads
 
 Small files (under the recommended part size, typically 100 MB) are uploaded in a single request. Larger files automatically use multipart upload with parallel part uploads.

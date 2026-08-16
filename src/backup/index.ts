@@ -1,4 +1,14 @@
-/** @packageDocumentation */
+/**
+ * Computer Backup API client, raw bindings, and types for listing and deleting
+ * backup records.
+ *
+ * Use this subpath when your account has sales-approved Partner API access,
+ * a Master Application Key, and Enterprise Controls enabled for the target
+ * group. The Backup client shares the Partner authorization model and uses the
+ * `backupApiUrl` returned by Partner authorization.
+ *
+ * @packageDocumentation
+ */
 
 export type { PartnerAccountInfo } from '../partner/account-info.ts'
 export { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'

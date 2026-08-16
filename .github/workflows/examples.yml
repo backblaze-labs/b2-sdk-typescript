@@ -144,6 +144,14 @@ jobs:
             node-download.ts \
             node-sync-cli.ts \
             node-with-progress.ts \
+            partner-authorize.ts \
+            partner-create-group-member.ts \
+            partner-list-groups-and-members.ts \
+            partner-eject-group-member.ts \
+            partner-reserve-trial-account.ts \
+            partner-reserve-trial-accounts.ts \
+            backup-list-computers.ts \
+            backup-delete-computer.ts \
             node-backup-cli/backup.ts \
             node-backup-cli/crypto.ts \
             node-backup-cli/manifest.ts \

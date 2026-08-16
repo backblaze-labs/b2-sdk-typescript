@@ -1,4 +1,15 @@
-/** @packageDocumentation */
+/**
+ * Partner API client, raw bindings, and types for groups, group members, and
+ * B2 Reserve trial account creation.
+ *
+ * Use this subpath when your account has Business Groups enabled,
+ * sales-approved Partner API access, a Master Application Key, and the account
+ * prerequisites required by the Partner API operation you are calling. Partner
+ * authorization is separate from storage authorization and returns Partner API
+ * and Computer Backup endpoint information through {@link PartnerAccountInfo}.
+ *
+ * @packageDocumentation
+ */
 
 export type {
   AccountId,
