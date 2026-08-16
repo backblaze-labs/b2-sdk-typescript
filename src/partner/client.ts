@@ -581,14 +581,14 @@ export class PartnerClient {
 
   private startReauthorize(): InflightPartnerReauth {
     const controller = new AbortController()
-    let inflight: InflightPartnerReauth
     const promise = raceWithAbort(this.doReauthorize(controller.signal), controller.signal).finally(
       () => {
-        inflight.settled = true
-        if (this.#inflightReauth === inflight) this.#inflightReauth = null
+        if (this.#inflightReauth?.controller !== controller) return
+        this.#inflightReauth.settled = true
+        this.#inflightReauth = null
       },
     )
-    inflight = {
+    const inflight: InflightPartnerReauth = {
       controller,
       promise,
       waiters: 0,
