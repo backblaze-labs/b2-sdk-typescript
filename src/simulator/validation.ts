@@ -46,57 +46,67 @@ export const KEY_NAME_MAX = 100
 
 const VALID_CAPABILITIES = new Set<string>(Object.values(Capability))
 
-export type CreateKeyCapabilitiesResult =
-  | { readonly kind: 'ok'; readonly capabilities: readonly Capability[] }
-  | { readonly kind: 'error'; readonly message: string }
-
 /**
  * Validates application-key capabilities against B2's supported capability set.
  *
  * @param capabilities - Caller-supplied capabilities array.
  *
- * @returns A discriminated validation result.
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
  *
  * @see https://www.backblaze.com/apidocs/b2-create-key
  */
-export function validateCreateKeyCapabilities(capabilities: unknown): CreateKeyCapabilitiesResult {
+export function validateCreateKeyCapabilities(capabilities: unknown): ValidationError | null {
   if (!Array.isArray(capabilities)) {
-    return { kind: 'error', message: 'capabilities must be an array' }
+    return { code: 'bad_request', message: 'capabilities must be an array' }
   }
   if (capabilities.length === 0) {
-    return { kind: 'error', message: 'capabilities must not be empty' }
+    return { code: 'bad_request', message: 'capabilities must not be empty' }
   }
   const unknownCapabilities = capabilities.filter(
     (capability) => typeof capability !== 'string' || !VALID_CAPABILITIES.has(capability),
   )
   if (unknownCapabilities.length > 0) {
     return {
-      kind: 'error',
+      code: 'bad_request',
       message: `unknown capabilities: ${unknownCapabilities.map(String).join(', ')}`,
     }
   }
-  return { kind: 'ok', capabilities: Object.freeze([...(capabilities as Capability[])]) }
+  return null
 }
 
-export type CreateKeyNameResult =
-  | { readonly kind: 'ok'; readonly keyName: string }
-  | { readonly kind: 'error'; readonly message: string }
+/**
+ * Returns a frozen copy of a previously validated application-key capability list.
+ *
+ * @param capabilities - Validated caller-supplied capabilities.
+ *
+ * @returns An immutable capability list safe to store internally.
+ */
+export function normalizeCreateKeyCapabilities(
+  capabilities: readonly Capability[],
+): readonly Capability[] {
+  return Object.freeze([...capabilities])
+}
 
 /**
  * Validates application-key names against B2's documented length limits.
  *
  * @param keyName - Caller-supplied keyName.
  *
- * @returns A discriminated validation result.
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
  *
  * @see https://www.backblaze.com/apidocs/b2-create-key
  */
-export function validateCreateKeyName(keyName: unknown): CreateKeyNameResult {
-  if (typeof keyName !== 'string') return { kind: 'error', message: 'keyName must be a string' }
-  if (keyName.length < KEY_NAME_MIN || keyName.length > KEY_NAME_MAX) {
-    return { kind: 'error', message: `keyName must be ${KEY_NAME_MIN}-${KEY_NAME_MAX} characters` }
+export function validateCreateKeyName(keyName: unknown): ValidationError | null {
+  if (typeof keyName !== 'string') {
+    return { code: 'bad_request', message: 'keyName must be a string' }
   }
-  return { kind: 'ok', keyName }
+  if (keyName.length < KEY_NAME_MIN || keyName.length > KEY_NAME_MAX) {
+    return {
+      code: 'bad_request',
+      message: `keyName must be ${KEY_NAME_MIN}-${KEY_NAME_MAX} characters`,
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------

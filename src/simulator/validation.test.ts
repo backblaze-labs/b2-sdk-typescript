@@ -13,6 +13,7 @@ import {
   FILE_NAME_MAX_BYTES,
   KEY_NAME_MAX,
   LIST_ENDPOINT_CAPS,
+  normalizeCreateKeyCapabilities,
   validateBucketInfo,
   validateBucketName,
   validateBucketTypes,
@@ -42,27 +43,37 @@ import {
  */
 
 describe('validateCreateKeyCapabilities', () => {
-  it('returns ok for valid capabilities', () => {
-    expect(validateCreateKeyCapabilities([Capability.ListBuckets])).toEqual({
-      kind: 'ok',
-      capabilities: [Capability.ListBuckets],
-    })
+  it('returns null for valid capabilities', () => {
+    expect(validateCreateKeyCapabilities([Capability.ListBuckets])).toBeNull()
   })
 
-  it('rejects empty and unknown capabilities', () => {
-    expect(validateCreateKeyCapabilities([]).kind).toBe('error')
-    expect(validateCreateKeyCapabilities(['notReal']).kind).toBe('error')
+  it('rejects empty, non-array, and unknown capabilities', () => {
+    expect(validateCreateKeyCapabilities([])?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities('listBuckets')?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities(['notReal'])?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities([123])?.code).toBe('bad_request')
+  })
+
+  it('normalizes capabilities to a frozen defensive copy', () => {
+    const original: Capability[] = [Capability.ListBuckets]
+    const normalized = normalizeCreateKeyCapabilities(original)
+
+    original.push(Capability.DeleteBuckets)
+    expect(normalized).toEqual([Capability.ListBuckets])
+    expect(Object.isFrozen(normalized)).toBe(true)
   })
 })
 
 describe('validateCreateKeyName', () => {
-  it('returns ok with the validated keyName', () => {
-    expect(validateCreateKeyName('valid-key')).toEqual({ kind: 'ok', keyName: 'valid-key' })
+  it('returns null for valid keyName', () => {
+    expect(validateCreateKeyName('valid-key')).toBeNull()
   })
 
-  it('rejects key names outside the B2 length range', () => {
-    expect(validateCreateKeyName('').kind).toBe('error')
-    expect(validateCreateKeyName('k'.repeat(KEY_NAME_MAX + 1)).kind).toBe('error')
+  it('rejects non-string keyName and names outside the B2 length range', () => {
+    expect(validateCreateKeyName(42)?.code).toBe('bad_request')
+    expect(validateCreateKeyName(null)?.code).toBe('bad_request')
+    expect(validateCreateKeyName('')?.code).toBe('bad_request')
+    expect(validateCreateKeyName('k'.repeat(KEY_NAME_MAX + 1))?.code).toBe('bad_request')
   })
 })
 

@@ -223,6 +223,7 @@ function compareB2FileNames(a: string, b: string): number {
 
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
+  normalizeCreateKeyCapabilities,
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
@@ -4093,6 +4094,9 @@ export class B2Simulator {
     authToken: string | undefined,
     requested: readonly Capability[],
   ): readonly Capability[] {
+    // In default mode, unknown auth tokens keep the simulator permissive. When the
+    // token is known, preserve the creator's real grant so delegated keys cannot
+    // exceed it even without full strict-auth request enforcement.
     const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
     if (creator === undefined) return this.strictAuth ? requested : []
     // The simulator's implicit master credential may mint any valid capability.
@@ -4138,16 +4142,12 @@ export class B2Simulator {
     if (req.accountId !== creatorAccountId) {
       return this.error(400, 'bad_request', 'accountId must match authorized account')
     }
-    const nameValidation = validateCreateKeyName(req.keyName)
-    if (nameValidation.kind === 'error') {
-      return this.error(400, 'bad_request', nameValidation.message)
-    }
-    const keyName = nameValidation.keyName
-    const capabilityValidation = validateCreateKeyCapabilities(req.capabilities)
-    if (capabilityValidation.kind === 'error') {
-      return this.error(400, 'bad_request', capabilityValidation.message)
-    }
-    const capabilities = capabilityValidation.capabilities
+    const keyNameError = validateCreateKeyName(req.keyName)
+    if (keyNameError) return this.error(400, keyNameError.code, keyNameError.message)
+    const keyName = req.keyName as string
+    const capabilitiesError = validateCreateKeyCapabilities(req.capabilities)
+    if (capabilitiesError) return this.error(400, capabilitiesError.code, capabilitiesError.message)
+    const capabilities = normalizeCreateKeyCapabilities(req.capabilities as readonly Capability[])
     const unauthorizedCapabilities = this.createKeyCapabilitiesOutsideGrant(authToken, capabilities)
     if (unauthorizedCapabilities.length > 0) {
       return this.error(
@@ -4173,7 +4173,7 @@ export class B2Simulator {
       applicationKeyId: kid,
       keyName,
       capabilities,
-      accountId: req.accountId,
+      accountId: creatorAccountId,
       applicationKey: appKey,
       bucketIds,
       namePrefix,

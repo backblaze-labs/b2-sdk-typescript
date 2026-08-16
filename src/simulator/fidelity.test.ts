@@ -1168,6 +1168,39 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('rejects malformed create-key fields in default mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const transport = sim.transport()
+    const base = {
+      accountId: client.accountInfo.getAccountId(),
+      capabilities: [Capability.ListBuckets],
+      keyName: 'malformed-create-key',
+    }
+
+    for (const body of [
+      { ...base, capabilities: 'listBuckets' },
+      { ...base, capabilities: [123] },
+      { ...base, capabilities: ['doEverything'] },
+      { ...base, capabilities: [] },
+      { ...base, keyName: 42 },
+      { ...base, keyName: null },
+      { ...base, keyName: 'k'.repeat(101) },
+    ]) {
+      const resp = await transport.send({
+        method: 'POST',
+        url: 'http://localhost:0/b2api/v4/b2_create_key',
+        headers: {
+          Authorization: client.accountInfo.getAuthToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      expect(resp.status).toBe(400)
+      await expect(resp.json()).resolves.toMatchObject({ code: 'bad_request' })
+    }
+  })
+
   it('does not expose stored create-key capabilities by reference', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -1193,6 +1226,32 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
 
     const scopedClient = await authorizeWithKey(sim, key)
     expect(scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
+      Capability.WriteKeys,
+    ])
+
+    const requestCapabilities: Capability[] = [Capability.WriteKeys]
+    const direct = await sim.handleRequest(
+      'POST',
+      'http://localhost:0',
+      '/b2api/v4/b2_create_key',
+      { authorization: client.accountInfo.getAuthToken() },
+      {
+        accountId: client.accountInfo.getAccountId(),
+        capabilities: requestCapabilities,
+        keyName: 'direct-defensive-capabilities',
+      },
+    )
+    expect(direct.status).toBe(200)
+    const directKey = direct.body as {
+      applicationKeyId: string
+      applicationKey: string
+      capabilities: readonly Capability[]
+    }
+    requestCapabilities.push(Capability.ListBuckets)
+    ;(directKey.capabilities as Capability[]).push(Capability.DeleteBuckets)
+
+    const directClient = await authorizeWithKey(sim, directKey)
+    expect(directClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
       Capability.WriteKeys,
     ])
   })
@@ -1290,6 +1349,14 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       code: 'bad_request',
       message: 'accountId must match authorized account',
     })
+
+    const afterMismatches = await client.listKeys()
+    expect(afterMismatches.keys).not.toContainEqual(
+      expect.objectContaining({ keyName: 'cross-account-master' }),
+    )
+    expect(afterMismatches.keys).not.toContainEqual(
+      expect.objectContaining({ keyName: 'cross-account-restricted' }),
+    )
   })
 
   it('enforces B2 keyName length limits during key creation', async () => {
