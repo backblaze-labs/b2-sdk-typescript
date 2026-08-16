@@ -177,7 +177,7 @@ export class TrialBatchWriter {
     const fdStat = await this.handle.stat()
     assertOriginalBatchPath(this.filePath, fdStat, this.originalStat)
 
-    const body = Buffer.from(`${JSON.stringify(checkpoint, null, 2)}\n`, 'utf8')
+    const body = new TextEncoder().encode(`${JSON.stringify(checkpoint, null, 2)}\n`)
     await this.handle.truncate(0)
     const { bytesWritten } = await this.handle.write(body, 0, body.byteLength, 0)
     if (bytesWritten !== body.byteLength) {
