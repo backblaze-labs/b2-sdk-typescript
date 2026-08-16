@@ -195,6 +195,10 @@ const publicExportProbes = [
         "typeof entry.InMemoryPartnerAccountInfo === 'function'",
         'InMemoryPartnerAccountInfo export missing',
       ],
+      ["entry.PartnerCapability?.All === 'all'", 'PartnerCapability enum export drifted'],
+      ["typeof entry.accountId === 'function'", 'accountId export missing'],
+      ["typeof entry.computerId === 'function'", 'computerId export missing'],
+      ["typeof entry.partnerToken === 'function'", 'partnerToken export missing'],
     ],
   },
   {

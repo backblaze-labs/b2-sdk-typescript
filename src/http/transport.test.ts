@@ -950,6 +950,7 @@ describe('RetryTransport', () => {
     it.each([
       'b2_create_group_member',
       'b2_eject_group_member',
+      'b2_reserve_trial_create_account',
     ] as const)('does not retry %s transient responses in place', async (endpoint) => {
       const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
       innerTransport.send
@@ -966,6 +967,27 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+        }),
+      ).rejects.toBeInstanceOf(B2Error)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry bz_delete_computer transient responses in place', async () => {
+      const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
+      innerTransport.send
+        .mockResolvedValueOnce(mockResponse(503, errorBody))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
         }),
       ).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
@@ -1306,6 +1328,30 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+        }),
+      ).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).not.toHaveBeenCalled()
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not reauth and resend Backup delete mutation POSTs', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('backup-token')
+
+      innerTransport.send.mockResolvedValueOnce(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
       expect(onReauth).not.toHaveBeenCalled()

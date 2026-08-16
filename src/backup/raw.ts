@@ -1,7 +1,10 @@
-import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
-import { getTransportUrlGuard, type HttpTransport } from '../http/transport.ts'
-import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
+import type { HttpTransport } from '../http/transport.ts'
+import {
+  endpointAllowedSuffixes,
+  validatePartnerEndpointUrl,
+  withQueryString,
+} from '../partner/endpoint-url.ts'
 import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import type {
   DeleteComputerRequest,
@@ -42,95 +45,27 @@ export interface BackupRawRequestOptions {
 type QueryValue = string | number
 type QueryParams = Readonly<Record<string, QueryValue>>
 
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase()
-  if (host === '[::1]' || host === '::1') return true
-
-  const parts = host.split('.')
-  return (
-    parts.length === 4 &&
-    parts[0] === '127' &&
-    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
-  )
-}
-
-function hostAllowedBySuffixes(hostname: string, allowedSuffixes: readonly string[]): boolean {
-  return allowedSuffixes.some((suffix) => hostMatchesAllowedSuffix(hostname, suffix))
-}
-
 function backupEndpointAllowedSuffixes(
   transport: HttpTransport,
   authorizedSuffixes: readonly string[],
 ): readonly string[] {
-  if (authorizedSuffixes.length > 0) return authorizedSuffixes
-
-  const guard = getTransportUrlGuard(transport)
-  if (guard === undefined) {
-    throw new B2PartnerAuthorizationError(
+  return endpointAllowedSuffixes(transport, authorizedSuffixes, {
+    missingGuard:
       'Computer Backup endpoint requests require BackupClient.authorize() or a locked URL guard before sending Partner tokens',
-    )
-  }
-
-  const suffixes = guard.getAllowedSuffixes()
-  if (suffixes.length === 0) {
-    throw new B2PartnerAuthorizationError(
+    unlockedGuard:
       'Computer Backup endpoint requests require a locked URL guard before sending Partner tokens',
-    )
-  }
-
-  return suffixes
+  })
 }
 
-function validateBackupEndpointUrl(rawUrl: string, allowedSuffixes: readonly string[]): string {
-  let url: URL
-  try {
-    url = new URL(rawUrl)
-  } catch {
-    throw new B2PartnerAuthorizationError(
-      'Partner authorize response included malformed backupApiUrl',
-    )
+function mutationRequestOptions(
+  options: BackupRawRequestOptions | undefined,
+): BackupRawRequestOptions {
+  return {
+    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    // Backup deletes are destructive and not proven idempotent. Keep automatic
+    // replay disabled even when callers pass retry options intended for GETs.
+    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
   }
-
-  const host = url.hostname.toLowerCase()
-  const isAllowedLoopbackHttp =
-    url.protocol === 'http:' && isLoopbackHost(host) && hostAllowedBySuffixes(host, allowedSuffixes)
-
-  if (url.protocol !== 'https:' && !isAllowedLoopbackHttp) {
-    throw new B2PartnerAuthorizationError('Partner authorize response backupApiUrl must use HTTPS')
-  }
-  if (url.username !== '' || url.password !== '') {
-    throw new B2PartnerAuthorizationError(
-      'Partner authorize response backupApiUrl must not include userinfo',
-    )
-  }
-  if (url.search !== '' || url.hash !== '') {
-    throw new B2PartnerAuthorizationError(
-      'Partner authorize response backupApiUrl must not include query or fragment',
-    )
-  }
-
-  if (isAllowedLoopbackHttp) return rawUrl
-
-  const guard = new UrlGuard()
-  guard.setAllowedSuffixes(allowedSuffixes)
-  try {
-    guard.check(rawUrl)
-  } catch (err) {
-    throw new B2PartnerAuthorizationError(
-      err instanceof Error
-        ? `Partner authorize response included unsafe backupApiUrl: ${err.message}`
-        : 'Partner authorize response included unsafe backupApiUrl',
-    )
-  }
-
-  return rawUrl
-}
-
-function withQueryString(url: string, query: QueryParams): string {
-  const queryString = Object.entries(query)
-    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
-    .join('&')
-  return queryString.length === 0 ? url : `${url}?${queryString}`
 }
 
 /**
@@ -209,7 +144,8 @@ export class BackupRawClient {
   /**
    * Calls `bz_delete_computer`.
    *
-   * The documented wire response is a JSON array of deletion records.
+   * The documented wire response is a JSON array of deletion records. This
+   * destructive mutation is not automatically retried or reauthorized in place.
    *
    * @param backupApiUrl - The Computer Backup API base URL from `authorizePartner`.
    * @param authToken - The Partner authorization token.
@@ -234,13 +170,14 @@ export class BackupRawClient {
         accountId: request.accountId,
         computerId: request.computerId,
       },
-      options,
+      mutationRequestOptions(options),
     )
   }
 
   private safeBackupApiUrl(backupApiUrl: string): string {
-    return validateBackupEndpointUrl(
+    return validatePartnerEndpointUrl(
       backupApiUrl,
+      'backupApiUrl',
       backupEndpointAllowedSuffixes(this.transport, this.backupEndpointSuffixes),
     )
   }

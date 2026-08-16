@@ -3,7 +3,12 @@ import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
 import { B2Simulator } from '../simulator/index.ts'
-import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import {
+  deferred,
+  jsonErrorResponse,
+  jsonResponse,
+  recordingTransport,
+} from '../test-utils/index.ts'
 import type { ComputerBackup } from '../types/backup.ts'
 import { accountId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
@@ -168,6 +173,116 @@ describe('BackupClient facade', () => {
     expect(authorizeCount).toBe(2)
     expect(listAuthorizations).toEqual(['partner-token-1', 'partner-token-2'])
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
+  })
+
+  it('coalesces concurrent expired-token backup reauthorization', async () => {
+    let authorizeCount = 0
+    let expiredListCount = 0
+    const reauthStarted = deferred<void>()
+    const releaseReauth = deferred<void>()
+    const allExpiredLists = deferred<void>()
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 2) {
+            reauthStarted.resolve()
+            await releaseReauth.promise
+          }
+          return jsonResponse(partnerAuthorizeResponse(`partner-token-${authorizeCount}`))
+        }
+        if (endpoint === 'bz_list_computers') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            expiredListCount += 1
+            if (expiredListCount === 3) allExpiredLists.resolve()
+            return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
+          }
+          return jsonResponse({ nextComputerId: null, computers: [] })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await client.authorize()
+    const lists = [client.listComputers(), client.listComputers(), client.listComputers()]
+    await allExpiredLists.promise
+    await reauthStarted.promise
+    releaseReauth.resolve()
+
+    await expect(Promise.all(lists)).resolves.toEqual([
+      { nextComputerId: null, computers: [] },
+      { nextComputerId: null, computers: [] },
+      { nextComputerId: null, computers: [] },
+    ])
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations.filter((token) => token === 'partner-token-1')).toHaveLength(3)
+    expect(listAuthorizations.filter((token) => token === 'partner-token-2')).toHaveLength(3)
+  })
+
+  it('does not cancel shared backup reauthorization when one waiter aborts', async () => {
+    let authorizeCount = 0
+    let expiredListCount = 0
+    const reauthStarted = deferred<void>()
+    const releaseReauth = deferred<void>()
+    const allExpiredLists = deferred<void>()
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 2) {
+            reauthStarted.resolve()
+            await releaseReauth.promise
+          }
+          return jsonResponse(partnerAuthorizeResponse(`partner-token-${authorizeCount}`))
+        }
+        if (endpoint === 'bz_list_computers') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            expiredListCount += 1
+            if (expiredListCount === 2) allExpiredLists.resolve()
+            return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
+          }
+          return jsonResponse({ nextComputerId: null, computers: [] })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const controller = new AbortController()
+    const abortReason = new DOMException('stop waiting', 'AbortError')
+
+    await client.authorize()
+    const abortedList = client.listComputers({ signal: controller.signal })
+    const survivingList = client.listComputers()
+    await allExpiredLists.promise
+    await reauthStarted.promise
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort(abortReason)
+    releaseReauth.resolve()
+
+    await expect(abortedList).rejects.toBe(abortReason)
+    await expect(survivingList).resolves.toEqual({ nextComputerId: null, computers: [] })
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations.filter((token) => token === 'partner-token-2')).toHaveLength(1)
   })
 
   it('rejects calls before authorization', async () => {

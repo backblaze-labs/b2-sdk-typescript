@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { B2PartnerAuthorizationError } from '../errors/index.ts'
-import { FetchTransport, type HttpRequest, type HttpTransport } from '../http/transport.ts'
+import {
+  FetchTransport,
+  type HttpRequest,
+  type HttpTransport,
+  RetryTransport,
+  type UrlGuardedTransport,
+} from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
-import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
 import { BackupRawClient } from './raw.ts'
+
+const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.resolve()
 
 function okTransport(body: unknown = { nextComputerId: null, computers: [] }): {
   readonly transport: HttpTransport
@@ -106,10 +114,94 @@ describe('BackupRawClient', () => {
       Authorization: 'partner-token',
       'Content-Type': 'application/json',
     })
+    expect(request?.retry).toEqual({ maxRetries: 0 })
     expect(request === undefined ? null : requestJsonBody(request)).toEqual({
       accountId: 'account-1',
       computerId: 'computer-1',
     })
+  })
+
+  it('keeps delete retries disabled when the caller passes maxRetries', async () => {
+    const retry = { maxRetries: 4, requestTimeoutMs: 1000 }
+    const { transport, seenRequests } = okTransport([])
+    const raw = new BackupRawClient({
+      transport,
+      authorizedBackupEndpointSuffixes: ['backblazeb2.com', 'backblaze.com'],
+    })
+
+    await raw.deleteComputer(
+      'https://backup.backblazeb2.com/backup',
+      partnerToken('partner-token'),
+      {
+        accountId: accountId('account-1'),
+        computerId: computerId('computer-1'),
+      },
+      { retry },
+    )
+
+    expect(seenRequests[0]?.retry).toEqual({ maxRetries: 0, requestTimeoutMs: 1000 })
+  })
+
+  it('does not retry delete POSTs through RetryTransport by default', async () => {
+    const responseFailureRequests: HttpRequest[] = []
+    const responseFailureGuard = new UrlGuard()
+    responseFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const responseFailureTransport: UrlGuardedTransport = {
+      urlGuard: responseFailureGuard,
+      async send(request) {
+        responseFailureRequests.push(request)
+        return jsonErrorResponse(503, 'service_unavailable', 'try again')
+      },
+    }
+    const responseFailureRaw = new BackupRawClient({
+      transport: new RetryTransport({
+        transport: responseFailureTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      responseFailureRaw.deleteComputer(
+        'https://backup.backblazeb2.com/backup',
+        partnerToken('partner-token'),
+        {
+          accountId: accountId('account-1'),
+          computerId: computerId('computer-1'),
+        },
+      ),
+    ).rejects.toThrow()
+    expect(responseFailureRequests).toHaveLength(1)
+
+    const networkFailureRequests: HttpRequest[] = []
+    const networkFailureGuard = new UrlGuard()
+    networkFailureGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const networkFailureTransport: UrlGuardedTransport = {
+      urlGuard: networkFailureGuard,
+      async send(request) {
+        networkFailureRequests.push(request)
+        throw new TypeError('network down')
+      },
+    }
+    const networkFailureRaw = new BackupRawClient({
+      transport: new RetryTransport({
+        transport: networkFailureTransport,
+        retry: { maxRetries: 5, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      networkFailureRaw.deleteComputer(
+        'https://backup.backblazeb2.com/backup',
+        partnerToken('partner-token'),
+        {
+          accountId: accountId('account-1'),
+          computerId: computerId('computer-1'),
+        },
+      ),
+    ).rejects.toThrow()
+    expect(networkFailureRequests).toHaveLength(1)
   })
 
   it('accepts a locked transport URL guard when explicit suffixes are omitted', async () => {

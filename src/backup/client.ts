@@ -1,14 +1,11 @@
-import { getRealmUrl } from '../auth/realms.ts'
 import { B2PartnerAuthorizationError } from '../errors/index.ts'
-import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from '../http/retry.ts'
+import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
-import { FetchTransport, RetryTransport } from '../http/transport.ts'
-import { UrlGuard } from '../http/url-guard.ts'
+import type { UrlGuard } from '../http/url-guard.ts'
 import type { PartnerAccountInfo } from '../partner/account-info.ts'
-import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
+import { PartnerAuthCore } from '../partner/auth-core.ts'
 import {
   derivePartnerAllowedSuffixes,
-  PartnerRawClient,
   validatePartnerAuthorizeResponseEndpoints,
 } from '../partner/raw.ts'
 import { PARTNER_TOKEN_REDACTED } from '../partner/redaction.ts'
@@ -19,7 +16,6 @@ import type {
 } from '../types/backup.ts'
 import type { AccountId, ComputerId, PartnerToken } from '../types/ids.ts'
 import type { PartnerAuthorizeResponse } from '../types/partner.ts'
-import { throwIfSignalAborted } from '../util/abort.ts'
 import { paginateItems } from '../util/paginator.ts'
 import { BackupRawClient } from './raw.ts'
 
@@ -49,7 +45,7 @@ export interface BackupClientOptions {
    * one Partner token.
    */
   readonly partnerAccountInfo?: PartnerAccountInfo
-  /** Custom HTTP transport. Defaults to {@link FetchTransport}. Wrapped by {@link RetryTransport}. */
+  /** Custom HTTP transport. Defaults to `FetchTransport`. Wrapped by `RetryTransport`. */
   readonly transport?: HttpTransport
   /** Override retry behavior (max retries, backoff, and per-attempt timeout). */
   readonly retry?: Partial<RetryOptions>
@@ -191,18 +187,12 @@ export class BackupClient {
   /** Partner authorization state storage (tokens, URLs, capabilities). */
   readonly partnerAccountInfo: PartnerAccountInfo
   /**
-   * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
+   * SSRF allow-list applied by the default transport. `null` when
    * a custom transport was supplied; in that case the SDK does not own the
    * guard.
    */
   readonly urlGuard: UrlGuard | null
-  readonly #masterKeyId: string
-  readonly #masterKey: string
-  private readonly realmUrl: string
-  private readonly additionalAllowedSuffixes: readonly string[] | undefined
-  private readonly disableSsrfGuard: boolean
-  private readonly allowCustomAuthorizeRealm: boolean
-  private readonly partnerRaw: PartnerRawClient
+  private readonly authCore: PartnerAuthCore
 
   /**
    * Creates a new BackupClient. Call {@link authorize} before making API requests
@@ -211,52 +201,13 @@ export class BackupClient {
    * @param options - Configuration including credentials, realm, and transport settings.
    */
   constructor(options: BackupClientOptions) {
-    this.#masterKeyId = options.masterKeyId
-    this.#masterKey = options.masterKey
-    this.realmUrl = getRealmUrl(options.realm ?? 'production')
-    this.partnerAccountInfo = options.partnerAccountInfo ?? new InMemoryPartnerAccountInfo()
-    this.additionalAllowedSuffixes = options.additionalAllowedHostSuffixes
-    this.disableSsrfGuard = options.disableSsrfGuard ?? false
-    this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
-
-    let baseTransport: HttpTransport
-    if (options.transport !== undefined) {
-      baseTransport = options.transport
-      this.urlGuard = null
-    } else {
-      const urlGuard = new UrlGuard()
-      baseTransport = new FetchTransport({
-        urlGuard,
-        ...(options.userAgent !== undefined ? { userAgent: options.userAgent } : {}),
-        ...(options.followSameOriginRedirects !== undefined
-          ? { followSameOriginRedirects: options.followSameOriginRedirects }
-          : {}),
-      })
-      this.urlGuard = urlGuard
-    }
-
-    const retryTransport = new RetryTransport({
-      transport: baseTransport,
-      retry: { ...DEFAULT_RETRY_OPTIONS, ...options.retry },
-      onReauth: (signal) => this.reauthorize(signal),
-    })
-
-    const cachedEndpointSuffixes = this.validateCachedAuth()
-    if (cachedEndpointSuffixes !== undefined) this.lockUrlGuardFromSuffixes(cachedEndpointSuffixes)
-
-    this.partnerRaw = new PartnerRawClient({
-      transport: retryTransport,
-      ...(cachedEndpointSuffixes !== undefined
-        ? { authorizedPartnerEndpointSuffixes: cachedEndpointSuffixes }
-        : {}),
-      ...(options.allowCustomAuthorizeRealm !== undefined
-        ? { allowCustomAuthorizeRealm: options.allowCustomAuthorizeRealm }
-        : {}),
-    })
+    this.authCore = new PartnerAuthCore(options)
+    this.partnerAccountInfo = this.authCore.partnerAccountInfo
+    this.urlGuard = this.authCore.urlGuard
     this.raw = new BackupRawClient({
-      transport: retryTransport,
-      ...(cachedEndpointSuffixes !== undefined
-        ? { authorizedBackupEndpointSuffixes: cachedEndpointSuffixes }
+      transport: this.authCore.transport,
+      ...(this.authCore.cachedEndpointSuffixes !== undefined
+        ? { authorizedBackupEndpointSuffixes: this.authCore.cachedEndpointSuffixes }
         : {}),
     })
   }
@@ -271,17 +222,10 @@ export class BackupClient {
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */
   async authorize(options?: BackupAuthorizeOptions): Promise<PartnerAuthorizeResponse> {
-    throwIfSignalAborted(options?.signal)
-    const auth = await this.partnerRaw.authorizePartner(
-      this.#masterKeyId,
-      this.#masterKey,
-      this.realmUrl,
-      options?.signal !== undefined ? { signal: options.signal } : undefined,
+    const auth = await this.authCore.authorize(options)
+    this.raw.setAuthorizedBackupEndpointSuffixes(
+      derivePartnerAllowedSuffixes(auth, this.authCore.realmUrl),
     )
-    throwIfSignalAborted(options?.signal)
-    this.partnerAccountInfo.setAuth(auth)
-    this.lockUrlGuard(auth)
-    this.raw.setAuthorizedBackupEndpointSuffixes(derivePartnerAllowedSuffixes(auth, this.realmUrl))
     return auth
   }
 
@@ -338,6 +282,10 @@ export class BackupClient {
   /**
    * Deletes a Computer Backup record.
    *
+   * This destructive mutation is not automatically retried or reauthorized in
+   * place; callers should reconcile backup state before issuing a new delete
+   * after an ambiguous failure.
+   *
    * @param options - Target account, computer ID, and optional abort signal.
    *
    * @returns The deleted computer backup record array.
@@ -357,58 +305,23 @@ export class BackupClient {
     )
   }
 
-  private validateCachedAuth(): readonly string[] | undefined {
-    const cachedAuth = this.partnerAccountInfo.getAuth()
-    if (cachedAuth === null) return undefined
-    try {
-      return validatePartnerAuthorizeResponseEndpoints(
-        cachedAuth,
-        this.realmUrl,
-        this.allowCustomAuthorizeRealm,
-      )
-    } catch {
-      this.partnerAccountInfo.clear()
-      return undefined
-    }
-  }
-
-  private lockUrlGuard(auth: PartnerAuthorizeResponse): void {
-    this.lockUrlGuardFromSuffixes(derivePartnerAllowedSuffixes(auth, this.realmUrl))
-  }
-
-  private lockUrlGuardFromSuffixes(derived: readonly string[]): void {
-    if (this.urlGuard === null) return
-    const merged =
-      this.disableSsrfGuard === true
-        ? []
-        : this.additionalAllowedSuffixes !== undefined
-          ? Array.from(new Set([...derived, ...this.additionalAllowedSuffixes]))
-          : derived
-    this.urlGuard.setAllowedSuffixes(merged)
-  }
-
-  private reauthorize(signal: AbortSignal | undefined): Promise<string> {
-    throwIfSignalAborted(signal)
-    this.partnerAccountInfo.clear()
-    return this.authorize(signal !== undefined ? { signal } : undefined).then(
-      (auth) => auth.authorizationToken,
-    )
-  }
-
   private backupCoordinates(accountIdOverride: AccountId | undefined): BackupCoordinates {
     const auth = this.partnerAccountInfo.getAuth()
     if (auth === null) {
       throw new B2PartnerAuthorizationError('Not authorized. Call BackupClient.authorize() first.')
     }
+    // A BackupClient can share PartnerAccountInfo with a PartnerClient that
+    // authorizes after this instance is constructed. Re-validate the shared auth
+    // snapshot here before locking this client's guard and raw endpoint suffixes.
     const suffixes = validatePartnerAuthorizeResponseEndpoints(
       auth,
-      this.realmUrl,
-      this.allowCustomAuthorizeRealm,
+      this.authCore.realmUrl,
+      this.authCore.allowCustomAuthorizeRealm,
     )
-    this.lockUrlGuardFromSuffixes(suffixes)
+    this.authCore.lockUrlGuardFromSuffixes(suffixes)
     this.raw.setAuthorizedBackupEndpointSuffixes(suffixes)
 
-    const backupApiUrl = auth.apiInfo.backupApi?.backupApiUrl ?? auth.backupApiUrl ?? null
+    const backupApiUrl = this.partnerAccountInfo.getBackupApiUrl()
     if (backupApiUrl === null) {
       throw new B2PartnerAuthorizationError(
         'Computer Backup API is not available; Partner authorization did not return apiInfo.backupApi.',
