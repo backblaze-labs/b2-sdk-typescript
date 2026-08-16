@@ -1,23 +1,21 @@
-import { B2PartnerAuthorizationError } from '../errors/index.ts'
+import { B2PartnerAuthorizationError, BadJsonError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import type { UrlGuard } from '../http/url-guard.ts'
 import type { PartnerAccountInfo } from '../partner/account-info.ts'
 import { PartnerAuthCore } from '../partner/auth-core.ts'
-import {
-  derivePartnerAllowedSuffixes,
-  validatePartnerAuthorizeResponseEndpoints,
-} from '../partner/raw.ts'
+import { derivePartnerAllowedSuffixes } from '../partner/raw.ts'
 import { PARTNER_TOKEN_REDACTED } from '../partner/redaction.ts'
 import type {
   ComputerBackup,
   DeleteComputerResponse,
   ListComputersResponse,
+  ListComputersResult,
 } from '../types/backup.ts'
-import type { AccountId, ComputerId, PartnerToken } from '../types/ids.ts'
+import { type AccountId, type ComputerId, computerId, type PartnerToken } from '../types/ids.ts'
 import type { PartnerAuthorizeResponse } from '../types/partner.ts'
 import { paginateItems } from '../util/paginator.ts'
-import { BackupRawClient, setAuthorizedBackupEndpointSuffixes } from './raw.ts'
+import { BackupRawClient } from './raw.ts'
 
 const MASTER_KEY_REDACTED = '[redacted Master Application Key]'
 
@@ -147,6 +145,57 @@ interface BackupCoordinates {
   readonly accountId: AccountId
 }
 
+function badListComputersResponse(message: string): BadJsonError {
+  return new BadJsonError({
+    status: 400,
+    code: 'bad_json',
+    message: `bz_list_computers response did not match documented wire shape: ${message}`,
+  })
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null
+}
+
+function normalizeListComputersResponse(response: ListComputersResponse): ListComputersResult {
+  if (!Array.isArray(response)) {
+    throw badListComputersResponse('expected a JSON array')
+  }
+  if (response.length === 0) {
+    throw badListComputersResponse('expected one or more result objects')
+  }
+
+  const computers: ComputerBackup[] = []
+  let nextComputerId: ComputerId | null = null
+
+  for (const [index, result] of response.entries()) {
+    if (!isRecord(result)) {
+      throw badListComputersResponse(`result ${index} must be an object`)
+    }
+    const resultComputers = result['computers']
+    if (!Array.isArray(resultComputers)) {
+      throw badListComputersResponse(`result ${index} must include a computers array`)
+    }
+    const cursor = result['nextComputerId']
+    if (cursor !== null && typeof cursor !== 'string') {
+      throw badListComputersResponse(
+        `result ${index} must include nextComputerId as string or null`,
+      )
+    }
+    if (cursor !== null) {
+      if (index !== response.length - 1 || nextComputerId !== null) {
+        throw badListComputersResponse(
+          'multiple result objects must expose at most one final continuation cursor',
+        )
+      }
+      nextComputerId = computerId(cursor)
+    }
+    computers.push(...(resultComputers as readonly ComputerBackup[]))
+  }
+
+  return { nextComputerId, computers }
+}
+
 /** Redacted JSON diagnostic shape emitted by {@link BackupClient.toJSON}. */
 export interface BackupClientJson {
   /** Object kind for log consumers. */
@@ -209,10 +258,10 @@ export class BackupClient {
     this.urlGuard = this.authCore.urlGuard
     this.raw = new BackupRawClient({
       transport: this.authCore.transport,
+      ...(this.authCore.cachedEndpointSuffixes !== undefined
+        ? { authorizedBackupEndpointSuffixes: this.authCore.cachedEndpointSuffixes }
+        : {}),
     })
-    if (this.authCore.cachedEndpointSuffixes !== undefined) {
-      setAuthorizedBackupEndpointSuffixes(this.raw, this.authCore.cachedEndpointSuffixes)
-    }
   }
 
   /**
@@ -226,8 +275,7 @@ export class BackupClient {
    */
   async authorize(options?: BackupAuthorizeOptions): Promise<PartnerAuthorizeResponse> {
     const auth = await this.authCore.authorize(options)
-    setAuthorizedBackupEndpointSuffixes(
-      this.raw,
+    this.raw.setAuthorizedEndpointSuffixes(
       derivePartnerAllowedSuffixes(auth, this.authCore.realmUrl),
     )
     return auth
@@ -238,13 +286,14 @@ export class BackupClient {
    *
    * @param options - Optional target account and pagination settings.
    *
-   * @returns A page of computer backup records with an optional continuation cursor.
+   * @returns A normalized page of computer backup records with an optional continuation cursor.
    *
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */
-  async listComputers(options?: ListComputersOptions): Promise<ListComputersResponse> {
-    const { backupApiUrl, authToken, accountId } = this.backupCoordinates(options?.accountId)
-    return this.raw.listComputers(
+  async listComputers(options?: ListComputersOptions): Promise<ListComputersResult> {
+    const auth = this.ensureBackupAuthorization()
+    const { backupApiUrl, authToken, accountId } = this.backupCoordinates(auth, options?.accountId)
+    const response = await this.raw.listComputers(
       backupApiUrl,
       authToken,
       {
@@ -256,6 +305,7 @@ export class BackupClient {
       },
       options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
+    return normalizeListComputersResponse(response)
   }
 
   /**
@@ -297,7 +347,8 @@ export class BackupClient {
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */
   async deleteComputer(options: DeleteComputerOptions): Promise<DeleteComputerResponse> {
-    const { backupApiUrl, authToken, accountId } = this.backupCoordinates(options.accountId)
+    const auth = this.ensureBackupAuthorization()
+    const { backupApiUrl, authToken, accountId } = this.backupCoordinates(auth, options.accountId)
     return this.raw.deleteComputer(
       backupApiUrl,
       authToken,
@@ -309,24 +360,23 @@ export class BackupClient {
     )
   }
 
-  private backupCoordinates(accountIdOverride: AccountId | undefined): BackupCoordinates {
+  private ensureBackupAuthorization(): PartnerAuthorizeResponse {
     const auth = this.partnerAccountInfo.getAuth()
     if (auth === null) {
       throw new B2PartnerAuthorizationError('Not authorized. Call BackupClient.authorize() first.')
     }
-    // A BackupClient can share PartnerAccountInfo with a PartnerClient that
-    // authorizes after this instance is constructed. Re-validate the shared auth
-    // snapshot here before locking this client's guard and raw endpoint suffixes.
-    const suffixes = validatePartnerAuthorizeResponseEndpoints(
-      auth,
-      this.authCore.realmUrl,
-      this.authCore.allowCustomAuthorizeRealm,
-    )
+    const suffixes = this.authCore.validateEndpointSuffixes(auth)
     this.authCore.lockUrlGuardFromSuffixes(suffixes)
-    setAuthorizedBackupEndpointSuffixes(this.raw, suffixes)
+    this.raw.setAuthorizedEndpointSuffixes(suffixes)
+    return auth
+  }
 
-    const backupApiUrl = this.partnerAccountInfo.getBackupApiUrl()
-    if (backupApiUrl === null) {
+  private backupCoordinates(
+    auth: PartnerAuthorizeResponse,
+    accountIdOverride: AccountId | undefined,
+  ): BackupCoordinates {
+    const backupApiUrl = auth.apiInfo.backupApi?.backupApiUrl
+    if (backupApiUrl === undefined) {
       throw new B2PartnerAuthorizationError(
         'Computer Backup API is not available; Partner authorization did not return apiInfo.backupApi.',
       )

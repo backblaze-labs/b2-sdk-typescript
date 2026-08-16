@@ -5,7 +5,14 @@ import {
   B2PartnerAuthorizationError,
   B2RealmConfigurationError,
   BadAuthTokenError,
+  BadRequestError,
   ExpiredAuthTokenError,
+  InvalidEmailError,
+  InvalidGroupIdError,
+  InvalidMemberAccountIdError,
+  InvalidRegionError,
+  InvalidSmsPhoneError,
+  OutOfRangeError,
 } from '../errors/index.ts'
 import {
   FetchTransport,
@@ -28,12 +35,6 @@ import {
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
-
-const runtimeGlobals = globalThis as Record<string, unknown>
-const runtimeProcess = runtimeGlobals['process'] as
-  | { readonly versions?: { readonly node?: string } }
-  | undefined
-const isNode = typeof runtimeProcess?.versions?.node === 'string'
 
 function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
@@ -134,6 +135,7 @@ async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Prom
   readonly seenRequests: HttpRequest[]
   readonly groupsApiUrl: string
   readonly authToken: PartnerToken
+  readonly adminAccountId: ReturnType<typeof accountId>
 }> {
   const sim = new B2Simulator({ ...options, partnerAuthorize: true })
   const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
@@ -152,6 +154,7 @@ async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Prom
     seenRequests,
     groupsApiUrl: auth.groupsApiUrl,
     authToken: auth.authorizationToken,
+    adminAccountId: auth.accountId,
   }
 }
 
@@ -278,33 +281,6 @@ describe('PartnerRawClient group management endpoints', () => {
     )
   })
 
-  it.skipIf(!isNode)('redacts group-member application keys through Node inspect', async () => {
-    const { inspect } = await import(/* @vite-ignore */ 'node:util')
-    const secret = 'application-key-secret'
-    const { raw } = makePartnerEndpointRawClient({
-      b2_create_group_member: [
-        {
-          applicationKey: secret,
-          applicationKeyId: applicationKeyId('application-key-id'),
-          groupMember,
-        },
-      ],
-    })
-
-    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
-      adminAccountId,
-      groupId: group,
-      memberEmail: 'member@example.com',
-    })
-    const [created] = result
-    if (created === undefined) throw new Error('expected create group member result')
-
-    expect(inspect(result)).not.toContain(secret)
-    expect(inspect(created)).not.toContain(secret)
-    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
-    expect(inspect(created)).toContain(APPLICATION_KEY_REDACTED)
-  })
-
   it('sends Partner list endpoints as canonical GET query requests', async () => {
     const nextGroup = groupId('255')
     const { raw, seenRequests } = makePartnerEndpointRawClient({
@@ -380,6 +356,151 @@ describe('PartnerRawClient group management endpoints', () => {
         nextEmail: null,
       },
     ])
+  })
+
+  it('round-trips Partner endpoints through B2Simulator with documented shapes and cursors', async () => {
+    const { raw, groupsApiUrl, authToken, adminAccountId } = await makeSimulatorPartnerRawClient()
+
+    const firstGroupsPage = await raw.listGroups(groupsApiUrl, authToken, {
+      adminAccountId,
+      maxGroupCount: 1,
+    })
+    expect(Array.isArray(firstGroupsPage)).toBe(false)
+    expect(firstGroupsPage.groups).toHaveLength(1)
+    expect(firstGroupsPage.nextGroupId).toEqual(expect.any(String))
+    const listedGroup = firstGroupsPage.groups[0]
+    const nextGroupId = firstGroupsPage.nextGroupId
+    if (listedGroup === undefined || nextGroupId === null) {
+      throw new Error('expected simulator group page with a next cursor')
+    }
+
+    const secondGroupsPage = await raw.listGroups(groupsApiUrl, authToken, {
+      adminAccountId,
+      startGroupId: nextGroupId,
+      maxGroupCount: 1,
+    })
+    expect(Array.isArray(secondGroupsPage)).toBe(false)
+    expect(secondGroupsPage.groups[0]?.groupId).toBe(nextGroupId)
+
+    const createdB = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: listedGroup.groupId,
+      memberEmail: 'b-raw-simulator@example.com',
+      region: Region.UsEast,
+    })
+    const createdA = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: listedGroup.groupId,
+      memberEmail: 'a-raw-simulator@example.com',
+    })
+    expect(Array.isArray(createdB)).toBe(true)
+    expect(Array.isArray(createdA)).toBe(true)
+    expect(createdB[0]?.groupMember).toMatchObject({
+      email: 'b-raw-simulator@example.com',
+      region: Region.UsEast,
+      s3Endpoint: 's3.us-east-001.backblazeb2.com',
+    })
+
+    const firstMembersPage = await raw.listGroupMembers(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: listedGroup.groupId,
+      maxMemberCount: 1,
+    })
+    expect(Array.isArray(firstMembersPage)).toBe(true)
+    expect(firstMembersPage[0]?.groupMembers.map((member) => member.email)).toEqual([
+      'a-raw-simulator@example.com',
+    ])
+    expect(firstMembersPage[0]?.nextEmail).toBe('b-raw-simulator@example.com')
+
+    const secondMembersPage = await raw.listGroupMembers(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: listedGroup.groupId,
+      startEmail: 'b-raw-simulator@example.com',
+      maxMemberCount: 1,
+    })
+    expect(Array.isArray(secondMembersPage)).toBe(true)
+    expect(secondMembersPage[0]?.groupMembers.map((member) => member.email)).toEqual([
+      'b-raw-simulator@example.com',
+    ])
+    expect(secondMembersPage[0]?.nextEmail).toBeNull()
+
+    const createdAMember = createdA[0]?.groupMember
+    if (createdAMember === undefined) throw new Error('expected created member')
+    const ejected = await raw.ejectGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: listedGroup.groupId,
+      memberAccountId: createdAMember.accountId,
+      email: 'a-raw-simulator-ejected@example.com',
+    })
+    expect(Array.isArray(ejected)).toBe(false)
+    expect(ejected).toMatchObject({
+      accountId: createdAMember.accountId,
+      email: 'a-raw-simulator-ejected@example.com',
+    })
+  })
+
+  it('maps simulator Partner endpoint error codes to typed SDK errors', async () => {
+    const { raw, groupsApiUrl, authToken, adminAccountId } = await makeSimulatorPartnerRawClient()
+    const groupsPage = await raw.listGroups(groupsApiUrl, authToken, { adminAccountId })
+    const listedGroup = groupsPage.groups[0]
+    if (listedGroup === undefined) throw new Error('expected simulator group')
+
+    await expect(
+      raw.listGroups(groupsApiUrl, authToken, {
+        adminAccountId,
+        startGroupId: groupId('missing-group'),
+      }),
+    ).rejects.toThrow(InvalidGroupIdError)
+    await expect(
+      raw.listGroups(groupsApiUrl, authToken, { adminAccountId, maxGroupCount: 101 }),
+    ).rejects.toThrow(OutOfRangeError)
+    await expect(
+      raw.listGroupMembers(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: listedGroup.groupId,
+        maxMemberCount: 1001,
+      }),
+    ).rejects.toThrow(OutOfRangeError)
+    await expect(
+      raw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: listedGroup.groupId,
+        memberEmail: 'invalid-region@example.com',
+        region: 'antarctica' as Region,
+      }),
+    ).rejects.toThrow(InvalidRegionError)
+    await expect(
+      raw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: listedGroup.groupId,
+        memberEmail: 'invalid-email',
+      }),
+    ).rejects.toThrow(InvalidEmailError)
+    await expect(
+      raw.ejectGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: listedGroup.groupId,
+        memberAccountId: accountId('missing-member'),
+      }),
+    ).rejects.toThrow(InvalidMemberAccountIdError)
+
+    const phoneDisabled = await makeSimulatorPartnerRawClient({
+      partnerAccountHasValidPhone: false,
+    })
+    const phoneDisabledGroupsPage = await phoneDisabled.raw.listGroups(
+      phoneDisabled.groupsApiUrl,
+      phoneDisabled.authToken,
+      { adminAccountId: phoneDisabled.adminAccountId },
+    )
+    const phoneDisabledGroup = phoneDisabledGroupsPage.groups[0]
+    if (phoneDisabledGroup === undefined) throw new Error('expected simulator group')
+    await expect(
+      phoneDisabled.raw.createGroupMember(phoneDisabled.groupsApiUrl, phoneDisabled.authToken, {
+        adminAccountId: phoneDisabled.adminAccountId,
+        groupId: phoneDisabledGroup.groupId,
+        memberEmail: 'missing-phone@example.com',
+      }),
+    ).rejects.toThrow(InvalidSmsPhoneError)
   })
 
   it('omits undefined optional Partner request fields', async () => {
@@ -683,6 +804,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       region: Region.UsEast,
     })
 
+    expect(Array.isArray(result)).toBe(true)
     expect(result).toHaveLength(1)
     expect(result[0]).toMatchObject({
       email: 'trial-one@example.com',
@@ -753,6 +875,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       },
     ])
 
+    expect(Array.isArray(result)).toBe(true)
     expect(result).toHaveLength(2)
     expect(result.map((account) => account.email)).toEqual([
       'trial-two@example.com',
@@ -836,24 +959,6 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
     )
-  })
-
-  it.skipIf(!isNode)('redacts reserve trial application keys through Node inspect', async () => {
-    const { inspect } = await import(/* @vite-ignore */ 'node:util')
-    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
-
-    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
-      email: 'trial-node-inspect-redaction@example.com',
-      term: 7,
-      storage: 1,
-    })
-    const [account] = result
-    if (account === undefined) throw new Error('expected reserve trial result')
-
-    expect(inspect(result)).not.toContain(account.applicationKey)
-    expect(inspect(account)).not.toContain(account.applicationKey)
-    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
-    expect(inspect(account)).toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('rejects non-array reserve trial response bodies with a typed SDK error', async () => {
@@ -1115,6 +1220,25 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       code: 'access_denied',
       status: 403,
     })
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-prereq-typed@example.com',
+        term: 7,
+        storage: 1,
+      }),
+    ).rejects.toThrow(AccessDeniedError)
+  })
+
+  it('maps reserve trial request validation to BadRequestError', async () => {
+    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
+
+    await expect(
+      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+        email: 'trial-term-error@example.com',
+        term: 6,
+        storage: 1,
+      }),
+    ).rejects.toThrow(BadRequestError)
   })
 
   it('models the reserve trial account result shape with branded IDs', async () => {

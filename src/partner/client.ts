@@ -289,7 +289,9 @@ export class PartnerClient {
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async listGroups(options?: ListGroupsOptions): Promise<ListGroupsResponse> {
-    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
+    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates(
+      this.ensureGroupsAuthorization(),
+    )
     return this.raw.listGroups(
       groupsApiUrl,
       authToken,
@@ -338,7 +340,9 @@ export class PartnerClient {
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async listGroupMembers(options: ListGroupMembersOptions): Promise<ListGroupMembersResponse> {
-    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
+    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates(
+      this.ensureGroupsAuthorization(),
+    )
     return this.raw.listGroupMembers(
       groupsApiUrl,
       authToken,
@@ -399,7 +403,9 @@ export class PartnerClient {
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async createGroupMember(options: CreateGroupMemberOptions): Promise<CreateGroupMemberResponse> {
-    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
+    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates(
+      this.ensureGroupsAuthorization(),
+    )
     return this.raw.createGroupMember(
       groupsApiUrl,
       authToken,
@@ -427,7 +433,9 @@ export class PartnerClient {
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async ejectGroupMember(options: EjectGroupMemberOptions): Promise<EjectGroupMemberResponse> {
-    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates()
+    const { groupsApiUrl, authToken, adminAccountId } = this.groupsCoordinates(
+      this.ensureGroupsAuthorization(),
+    )
     return this.raw.ejectGroupMember(
       groupsApiUrl,
       authToken,
@@ -465,7 +473,7 @@ export class PartnerClient {
         'reserveTrialAccounts request array must include at least one account request.',
       )
     }
-    const { groupsApiUrl, authToken } = this.groupsCoordinates()
+    const { groupsApiUrl, authToken } = this.groupsCoordinates(this.ensureGroupsAuthorization())
     return this.raw.reserveTrialCreateAccount(
       groupsApiUrl,
       authToken,
@@ -508,17 +516,28 @@ export class PartnerClient {
     return this.toString()
   }
 
-  private groupsCoordinates(): PartnerGroupsCoordinates {
-    const groupsApiUrl = this.partnerAccountInfo.getGroupsApiUrl()
-    if (groupsApiUrl === null) {
+  private ensureGroupsAuthorization(): PartnerAuthorizeResponse {
+    const auth = this.partnerAccountInfo.getAuth()
+    if (auth === null) {
+      throw new B2PartnerAuthorizationError('Not authorized. Call PartnerClient.authorize() first.')
+    }
+    const suffixes = this.authCore.validateEndpointSuffixes(auth)
+    this.authCore.lockUrlGuardFromSuffixes(suffixes)
+    this.raw.setAuthorizedEndpointSuffixes(suffixes)
+    return auth
+  }
+
+  private groupsCoordinates(auth: PartnerAuthorizeResponse): PartnerGroupsCoordinates {
+    const groupsApiUrl = auth.apiInfo.groupsApi?.groupsApiUrl
+    if (groupsApiUrl === undefined) {
       throw new B2PartnerAuthorizationError(
         'Partner API is not available; PartnerClient.authorize() did not return apiInfo.groupsApi.',
       )
     }
     return {
       groupsApiUrl,
-      authToken: this.partnerAccountInfo.getPartnerToken(),
-      adminAccountId: this.partnerAccountInfo.getAccountId(),
+      authToken: auth.authorizationToken,
+      adminAccountId: auth.accountId,
     }
   }
 }

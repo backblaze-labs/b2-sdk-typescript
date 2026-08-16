@@ -13,8 +13,10 @@ export interface EndpointAllowedSuffixMessages {
   readonly unlockedGuard: string
 }
 
-type QueryValue = string | number
-type QueryParams = Readonly<Record<string, QueryValue>>
+/** Query-string scalar value supported by Partner and Backup endpoint helpers. */
+export type QueryValue = string | number
+/** Query-string parameter map supported by Partner and Backup endpoint helpers. */
+export type QueryParams = Readonly<Record<string, QueryValue>>
 
 function isLoopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase()

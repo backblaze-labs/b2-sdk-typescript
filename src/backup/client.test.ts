@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { B2PartnerAuthorizationError, ServiceUnavailableError } from '../errors/index.ts'
+import {
+  B2PartnerAuthorizationError,
+  BadJsonError,
+  ServiceUnavailableError,
+} from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
 import { B2Simulator } from '../simulator/index.ts'
@@ -10,7 +14,7 @@ import {
   recordingTransport,
 } from '../test-utils/index.ts'
 import type { ComputerBackup } from '../types/backup.ts'
-import { accountId, partnerToken } from '../types/ids.ts'
+import { accountId, computerId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
 import { BackupClient, type BackupClientOptions } from './client.ts'
 
@@ -75,6 +79,24 @@ function partnerAuthorizeResponse(
     ...(includeBackupApi ? { backupCapabilities: [PartnerCapability.All] } : {}),
     applicationKeyExpirationTimestamp: null,
   }
+}
+
+function makeCachedBackupClient(body: unknown): BackupClient {
+  const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+  partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token'))
+  return new BackupClient({
+    masterKeyId: 'master-key-id',
+    masterKey: 'master-key',
+    partnerAccountInfo,
+    transport: {
+      async send(request) {
+        if (apiEndpointName(request) !== 'bz_list_computers') {
+          throw new Error(`unexpected endpoint: ${apiEndpointName(request)}`)
+        }
+        return jsonResponse(body)
+      },
+    },
+  })
 }
 
 describe('BackupClient facade', () => {
@@ -155,7 +177,7 @@ describe('BackupClient facade', () => {
           if (listAuthorizations.length === 1) {
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse({ nextComputerId: null, computers: [] })
+          return jsonResponse([{ nextComputerId: null, computers: [] }])
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -235,7 +257,7 @@ describe('BackupClient facade', () => {
             if (expiredListCount === 3) allExpiredLists.resolve()
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse({ nextComputerId: null, computers: [] })
+          return jsonResponse([{ nextComputerId: null, computers: [] }])
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -289,7 +311,7 @@ describe('BackupClient facade', () => {
             if (expiredListCount === 2) allExpiredLists.resolve()
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse({ nextComputerId: null, computers: [] })
+          return jsonResponse([{ nextComputerId: null, computers: [] }])
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -317,6 +339,82 @@ describe('BackupClient facade', () => {
     await expect(survivingList).resolves.toEqual({ nextComputerId: null, computers: [] })
     expect(authorizeCount).toBe(2)
     expect(listAuthorizations.filter((token) => token === 'partner-token-2')).toHaveLength(1)
+  })
+
+  it.each([
+    ['non-array body', { nextComputerId: 'computer-2', computers: [] }],
+    ['empty array', []],
+    [
+      'conflicting multi-result cursors',
+      [
+        { nextComputerId: computerId('computer-2'), computers: [] },
+        { nextComputerId: computerId('computer-3'), computers: [] },
+      ],
+    ],
+    ['missing computers', [{ nextComputerId: null }]],
+    ['non-array computers', [{ nextComputerId: null, computers: {} }]],
+  ])('rejects malformed bz_list_computers response shape: %s', async (_name, body) => {
+    const client = makeCachedBackupClient(body)
+
+    await expect(client.listComputers()).rejects.toThrow(BadJsonError)
+  })
+
+  it('normalizes multi-result list responses without losing the final cursor', async () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token'))
+    const computerA: ComputerBackup = {
+      computerId: computerId('computer-1'),
+      computerName: 'alpha',
+      lastFileUploadedTimestamp: 100,
+    }
+    const computerB: ComputerBackup = {
+      computerId: computerId('computer-2'),
+      computerName: 'bravo',
+      lastFileUploadedTimestamp: 200,
+    }
+    const computerC: ComputerBackup = {
+      computerId: computerId('computer-3'),
+      computerName: 'charlie',
+      lastFileUploadedTimestamp: 300,
+    }
+    const seenRequests: HttpRequest[] = []
+    let listCount = 0
+    const client = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          if (apiEndpointName(request) !== 'bz_list_computers') {
+            throw new Error(`unexpected endpoint: ${apiEndpointName(request)}`)
+          }
+          listCount += 1
+          if (listCount === 1) {
+            return jsonResponse([
+              { nextComputerId: null, computers: [computerA] },
+              { nextComputerId: computerC.computerId, computers: [computerB] },
+            ])
+          }
+          return jsonResponse([{ nextComputerId: null, computers: [computerC] }])
+        },
+      },
+    })
+
+    const computers: ComputerBackup[] = []
+    for await (const computer of client.paginateComputers()) {
+      computers.push(computer)
+    }
+
+    expect(computers.map((computer) => computer.computerName)).toEqual([
+      'alpha',
+      'bravo',
+      'charlie',
+    ])
+    expect(listCount).toBe(2)
+    expect(new URL(seenRequests[1]?.url ?? '').searchParams.get('startComputerId')).toBe(
+      computerC.computerId,
+    )
   })
 
   it('rejects calls before authorization', async () => {

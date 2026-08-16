@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { B2PartnerAuthorizationError } from '../errors/index.ts'
+import {
+  AccessDeniedError,
+  B2PartnerAuthorizationError,
+  InvalidAccountIdError,
+  InvalidComputerIdError,
+  OutOfRangeError,
+} from '../errors/index.ts'
 import {
   FetchTransport,
   type HttpRequest,
@@ -8,13 +14,15 @@ import {
   type UrlGuardedTransport,
 } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
+import { derivePartnerAllowedSuffixes, PartnerRawClient } from '../partner/raw.ts'
+import { B2Simulator } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
-import { BackupRawClient, setAuthorizedBackupEndpointSuffixes } from './raw.ts'
+import { BackupRawClient } from './raw.ts'
 
 const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.resolve()
 
-function okTransport(body: unknown = { nextComputerId: null, computers: [] }): {
+function okTransport(body: unknown = [{ nextComputerId: null, computers: [] }]): {
   readonly transport: HttpTransport
   readonly seenRequests: HttpRequest[]
 } {
@@ -39,24 +47,74 @@ function authorizedRawClient(
   transport: HttpTransport,
   suffixes: readonly string[] = ['backblazeb2.com', 'backblaze.com'],
 ): BackupRawClient {
-  const raw = new BackupRawClient({ transport })
-  setAuthorizedBackupEndpointSuffixes(raw, suffixes)
-  return raw
+  return new BackupRawClient({ transport, authorizedBackupEndpointSuffixes: suffixes })
+}
+
+function makeRecordingSimulatorTransport(sim: B2Simulator): {
+  readonly transport: HttpTransport
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  const inner = sim.transport()
+  return {
+    seenRequests,
+    transport: {
+      async send(request) {
+        seenRequests.push(request)
+        return inner.send(request)
+      },
+    },
+  }
+}
+
+async function makeSimulatorBackupRawClient(): Promise<{
+  readonly raw: BackupRawClient
+  readonly seenRequests: HttpRequest[]
+  readonly backupApiUrl: string
+  readonly authToken: string
+  readonly accountId: ReturnType<typeof accountId>
+}> {
+  const sim = new B2Simulator({ partnerAuthorize: true })
+  const { seenRequests, transport } = makeRecordingSimulatorTransport(sim)
+  const retryTransport = new RetryTransport({
+    transport,
+    retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    sleepImpl: noSleep,
+  })
+  const partnerRaw = new PartnerRawClient({ transport: retryTransport })
+  const auth = await partnerRaw.authorizePartner('master-key-id', 'master-key')
+  if (auth.backupApiUrl === undefined) throw new Error('expected simulator Backup API URL')
+  const raw = new BackupRawClient({
+    transport: retryTransport,
+    authorizedBackupEndpointSuffixes: derivePartnerAllowedSuffixes(
+      auth,
+      'https://api.backblazeb2.com',
+    ),
+  })
+  return {
+    raw,
+    seenRequests,
+    backupApiUrl: auth.backupApiUrl,
+    authToken: auth.authorizationToken,
+    accountId: auth.accountId,
+  }
 }
 
 describe('BackupRawClient', () => {
   it('builds bz_list_computers GET requests under the backup API path', async () => {
     const controller = new AbortController()
-    const { transport, seenRequests } = okTransport({
-      nextComputerId: computerId('computer-2'),
-      computers: [
-        {
-          computerId: computerId('computer-1'),
-          computerName: 'laptop',
-          lastFileUploadedTimestamp: 123,
-        },
-      ],
-    })
+    const { transport, seenRequests } = okTransport([
+      {
+        nextComputerId: computerId('computer-2'),
+        computers: [
+          {
+            computerId: computerId('computer-1'),
+            computerName: 'laptop',
+            lastFileUploadedTimestamp: 123,
+          },
+        ],
+      },
+    ])
     const raw = authorizedRawClient(transport)
 
     const response = await raw.listComputers(
@@ -70,7 +128,8 @@ describe('BackupRawClient', () => {
       { signal: controller.signal, retry: { maxRetries: 3 } },
     )
 
-    expect(response.nextComputerId).toBe('computer-2')
+    expect(response).toHaveLength(1)
+    expect(response[0]?.nextComputerId).toBe('computer-2')
     expect(seenRequests).toHaveLength(1)
     const request = seenRequests[0]
     expect(request?.method).toBe('GET')
@@ -85,6 +144,90 @@ describe('BackupRawClient', () => {
       startComputerId: 'computer-1',
       maxComputerCount: '2',
     })
+  })
+
+  it('round-trips backup endpoints through B2Simulator with documented shapes and cursors', async () => {
+    const {
+      raw,
+      seenRequests,
+      backupApiUrl,
+      authToken,
+      accountId: adminAccountId,
+    } = await makeSimulatorBackupRawClient()
+
+    const firstPage = await raw.listComputers(backupApiUrl, authToken, {
+      accountId: adminAccountId,
+      maxComputerCount: 1,
+    })
+    expect(Array.isArray(firstPage)).toBe(true)
+    expect(firstPage).toHaveLength(1)
+    expect(firstPage[0]?.computers).toHaveLength(1)
+    expect(firstPage[0]?.nextComputerId).toEqual(expect.any(String))
+    const firstComputer = firstPage[0]?.computers[0]
+    const nextComputerId = firstPage[0]?.nextComputerId
+    if (firstComputer === undefined || nextComputerId === null || nextComputerId === undefined) {
+      throw new Error('expected simulator computer page with a next cursor')
+    }
+
+    const secondPage = await raw.listComputers(backupApiUrl, authToken, {
+      accountId: adminAccountId,
+      startComputerId: nextComputerId,
+      maxComputerCount: 1,
+    })
+    expect(Array.isArray(secondPage)).toBe(true)
+    expect(secondPage[0]?.computers[0]?.computerId).toBe(nextComputerId)
+
+    const deleted = await raw.deleteComputer(backupApiUrl, authToken, {
+      accountId: adminAccountId,
+      computerId: firstComputer.computerId,
+    })
+    expect(Array.isArray(deleted)).toBe(true)
+    expect(deleted).toEqual([firstComputer])
+    expect(seenRequests.map((request) => new URL(request.url).pathname.split('/').at(-1))).toEqual([
+      'b2_authorize_account',
+      'bz_list_computers',
+      'bz_list_computers',
+      'bz_delete_computer',
+    ])
+  })
+
+  it('maps simulator backup endpoint error codes to typed SDK errors', async () => {
+    const {
+      raw,
+      backupApiUrl,
+      authToken,
+      accountId: adminAccountId,
+    } = await makeSimulatorBackupRawClient()
+    const page = await raw.listComputers(backupApiUrl, authToken, { accountId: adminAccountId })
+    const computer = page[0]?.computers[0]
+    if (computer === undefined) throw new Error('expected simulator computer')
+
+    await expect(
+      raw.listComputers(backupApiUrl, authToken, {
+        accountId: adminAccountId,
+        startComputerId: computerId('missing-computer'),
+      }),
+    ).rejects.toThrow(InvalidComputerIdError)
+    await expect(
+      raw.listComputers(backupApiUrl, authToken, {
+        accountId: adminAccountId,
+        maxComputerCount: 0,
+      }),
+    ).rejects.toThrow(OutOfRangeError)
+    await expect(
+      raw.listComputers(backupApiUrl, authToken, {
+        accountId: accountId(''),
+      }),
+    ).rejects.toThrow(InvalidAccountIdError)
+    await expect(
+      raw.deleteComputer(backupApiUrl, authToken, {
+        accountId: adminAccountId,
+        computerId: computerId('missing-computer'),
+      }),
+    ).rejects.toThrow(InvalidComputerIdError)
+    await expect(
+      raw.listComputers(backupApiUrl, '', { accountId: adminAccountId }),
+    ).rejects.toThrow(AccessDeniedError)
   })
 
   it('builds bz_delete_computer POST requests under the backup API path', async () => {

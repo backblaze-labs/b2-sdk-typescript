@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strings. Endpoint types still awaiting runtime methods are marked
   experimental until those methods are implemented and exercised.
 
+### Changed
+
+- **Computer Backup facade normalizes list pages.** `BackupRawClient`
+  preserves the documented array-shaped `bz_list_computers` wire response, while
+  `BackupClient.listComputers()` returns a single page object with `computers`
+  and `nextComputerId` and rejects malformed or ambiguous wire arrays before
+  pagination can silently truncate results.
+- **Partner auth cache validation is non-destructive during construction.**
+  `PartnerClient` and `BackupClient` ignore unsafe cached Partner authorization
+  locally until `authorize()` replaces it, instead of clearing a shared
+  `PartnerAccountInfo` store from a client constructor.
+
 ### Fixed
 
 - **B2 endpoint URL path hardening.** `b2Url()` now rejects literal and

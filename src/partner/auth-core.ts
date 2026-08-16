@@ -10,7 +10,6 @@ import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import {
   derivePartnerAllowedSuffixes,
   PartnerRawClient,
-  setAuthorizedPartnerEndpointSuffixes,
   validatePartnerAuthorizeResponseEndpoints,
 } from './raw.ts'
 
@@ -122,13 +121,13 @@ export class PartnerAuthCore {
 
     this.raw = new PartnerRawClient({
       transport: this.transport,
+      ...(this.cachedEndpointSuffixes !== undefined
+        ? { authorizedPartnerEndpointSuffixes: this.cachedEndpointSuffixes }
+        : {}),
       ...(options.allowCustomAuthorizeRealm !== undefined
         ? { allowCustomAuthorizeRealm: options.allowCustomAuthorizeRealm }
         : {}),
     })
-    if (this.cachedEndpointSuffixes !== undefined) {
-      setAuthorizedPartnerEndpointSuffixes(this.raw, this.cachedEndpointSuffixes)
-    }
   }
 
   /**
@@ -177,15 +176,28 @@ export class PartnerAuthCore {
     this.urlGuard.setAllowedSuffixes(merged)
   }
 
+  /**
+   * Validates a Partner authorization snapshot and returns endpoint suffixes.
+   *
+   * @param auth - Partner authorization response to validate.
+   *
+   * @returns Host suffixes safe for Partner-token endpoint requests.
+   *
+   * @internal
+   */
+  validateEndpointSuffixes(auth: PartnerAuthorizeResponse): readonly string[] {
+    return validatePartnerAuthorizeResponseEndpoints(
+      auth,
+      this.realmUrl,
+      this.allowCustomAuthorizeRealm,
+    )
+  }
+
   private validateCachedAuth(): readonly string[] | undefined {
     const cachedAuth = this.partnerAccountInfo.getAuth()
     if (cachedAuth === null) return undefined
     try {
-      return validatePartnerAuthorizeResponseEndpoints(
-        cachedAuth,
-        this.realmUrl,
-        this.allowCustomAuthorizeRealm,
-      )
+      return this.validateEndpointSuffixes(cachedAuth)
     } catch {
       // Do not mutate a shared PartnerAccountInfo during construction. The
       // facade will ignore this auth locally until authorize() replaces it.

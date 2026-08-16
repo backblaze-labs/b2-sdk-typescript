@@ -29,6 +29,7 @@ import type {
 import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
 import {
   endpointAllowedSuffixes,
+  type QueryParams,
   validatePartnerEndpointUrl,
   withQueryString,
 } from './endpoint-url.ts'
@@ -55,9 +56,17 @@ export interface PartnerRawClientOptions {
    *
    * Partner endpoint calls validate URLs against suffixes recorded by
    * `authorizePartner()`. A rehydrated client that skips authorization must use
-   * a {@link UrlGuardedTransport} with a locked `urlGuard`.
+   * `authorizedPartnerEndpointSuffixes` or a {@link UrlGuardedTransport} with a
+   * locked `urlGuard`.
    */
   readonly transport: HttpTransport
+  /**
+   * Validated Partner endpoint host suffixes restored from cached
+   * authorization. Facades normally manage this after authorization; direct raw
+   * clients can pass suffixes derived from trusted Partner authorization when
+   * rehydrating an auth cache.
+   */
+  readonly authorizedPartnerEndpointSuffixes?: readonly string[]
   /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
@@ -79,9 +88,6 @@ interface WirePartnerAuthorizeResponse {
   readonly apiInfo: PartnerApiInfo
   readonly applicationKeyExpirationTimestamp: number | null
 }
-
-type QueryValue = string | number
-type QueryParams = Readonly<Record<string, QueryValue>>
 
 function assertVerifiedPartnerAuthorizeRealm(realmUrl: string, allowCustomAuthorizeRealm: boolean) {
   if (allowCustomAuthorizeRealm) return
@@ -319,27 +325,6 @@ function reserveTrialCreateAccountRequestBody(
   }))
 }
 
-const partnerEndpointSuffixesByClient = new WeakMap<PartnerRawClient, readonly string[]>()
-
-function authorizedPartnerEndpointSuffixes(client: PartnerRawClient): readonly string[] {
-  return partnerEndpointSuffixesByClient.get(client) ?? []
-}
-
-/**
- * Replaces the validated Partner endpoint host suffixes.
- *
- * @param client - Raw client whose endpoint suffixes should be updated.
- * @param suffixes - Host suffixes derived from Partner authorization.
- *
- * @internal
- */
-export function setAuthorizedPartnerEndpointSuffixes(
-  client: PartnerRawClient,
-  suffixes: readonly string[],
-): void {
-  partnerEndpointSuffixesByClient.set(client, suffixes)
-}
-
 /**
  * Low-level client for Partner API authorization and endpoint bindings.
  */
@@ -347,6 +332,7 @@ export class PartnerRawClient {
   /** @internal */
   private readonly transport: HttpTransport
   private readonly allowCustomAuthorizeRealm: boolean
+  private authorizedEndpointSuffixes: readonly string[]
 
   /**
    * Creates a new PartnerRawClient with the given transport.
@@ -356,6 +342,18 @@ export class PartnerRawClient {
   constructor(options: PartnerRawClientOptions) {
     this.transport = options.transport
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
+    this.authorizedEndpointSuffixes = Array.from(options.authorizedPartnerEndpointSuffixes ?? [])
+  }
+
+  /**
+   * Replaces the validated Partner endpoint host suffixes.
+   *
+   * @param suffixes - Host suffixes derived from Partner authorization.
+   *
+   * @internal
+   */
+  setAuthorizedEndpointSuffixes(suffixes: readonly string[]): void {
+    this.authorizedEndpointSuffixes = Array.from(suffixes)
   }
 
   /**
@@ -399,7 +397,7 @@ export class PartnerRawClient {
       this.allowCustomAuthorizeRealm,
     )
     const suffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
-    setAuthorizedPartnerEndpointSuffixes(this, suffixes)
+    this.setAuthorizedEndpointSuffixes(suffixes)
     lockTransportUrlGuard(this.transport, suffixes)
     return auth
   }
@@ -605,7 +603,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      authorizedPartnerEndpointSuffixes(this),
+      this.authorizedEndpointSuffixes,
       groupsApiUrl,
     )
     const response = await this.transport.send({
@@ -639,7 +637,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      authorizedPartnerEndpointSuffixes(this),
+      this.authorizedEndpointSuffixes,
       groupsApiUrl,
     )
     const response = await this.transport.send({
