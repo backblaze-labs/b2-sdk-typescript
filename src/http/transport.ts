@@ -7,6 +7,7 @@ import {
   NetworkError,
 } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
+import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
@@ -352,10 +353,9 @@ async function raceBodyReadWithAbort<T>(
 ): Promise<T> {
   const signal = timeoutScope.signal
   if (signal === undefined) return read
-  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
   if (signal.aborted) {
     void read.catch(() => {})
-    const reason = abortReason()
+    const reason = abortReason(signal)
     await runAbortCleanup(abortCleanup, reason)
     throw reason
   }
@@ -363,7 +363,7 @@ async function raceBodyReadWithAbort<T>(
   let removeAbortListener: (() => void) | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
-      const reason = abortReason()
+      const reason = abortReason(signal)
       void read.catch(() => {})
       reject(reason)
       void runAbortCleanup(abortCleanup, reason)
@@ -419,13 +419,15 @@ export interface RetryTransportOptions {
   readonly retry?: Partial<RetryOptions>
   /**
    * Callback invoked on expired auth token errors. Must refresh
-   * credentials AND return the fresh auth token. The transport
+   * credentials AND return the fresh auth token. The original request's
+   * abort signal is forwarded so reauthorization can be cancelled with the
+   * operation that triggered it. The transport
    * substitutes the new token into `request.headers.Authorization`
    * before retrying — without this, the retried request would still
    * carry the expired token captured by the original caller and the
    * loop would never make progress.
    */
-  readonly onReauth?: () => Promise<string>
+  readonly onReauth?: (signal?: AbortSignal) => Promise<string>
   /**
    * Sleep implementation used between retry attempts. Defaults to the real
    * `sleep` from `./retry.js`. Test code can inject a no-op to avoid real
@@ -450,6 +452,10 @@ function isUploadEndpoint(url: string): boolean {
 
 function isFinishLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_finish_large_file'
+}
+
+function isAuthorizeEndpoint(url: string): boolean {
+  return b2ApiEndpointName(url) === 'b2_authorize_account'
 }
 
 function isStartLargeFileEndpoint(url: string): boolean {
@@ -496,6 +502,7 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  */
 function shouldRetryInPlace(error: B2Error, url: string): boolean {
   if (!error.retryable) return false
+  if (isAuthorizeEndpoint(url) && error instanceof ExpiredAuthTokenError) return false
   if (isPartnerMutationEndpoint(url)) return false
   if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
   if (isUploadEndpoint(url) && error.status === 429) return true
@@ -536,7 +543,7 @@ export class RetryTransport implements HttpTransport {
   /** Resolved retry options (defaults merged with user overrides). */
   private readonly options: RetryOptions
   /** Optional callback to refresh auth credentials on 401 — returns the fresh token. */
-  private readonly onReauth?: () => Promise<string>
+  private readonly onReauth?: (signal?: AbortSignal) => Promise<string>
   /** Sleep implementation used between retries; injectable for tests. */
   private readonly sleepImpl: (ms: number, signal?: AbortSignal) => Promise<void>
 
@@ -612,6 +619,7 @@ export class RetryTransport implements HttpTransport {
         if (
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
+          !isAuthorizeEndpoint(request.url) &&
           !isUploadEndpoint(request.url) &&
           !isPartnerMutationEndpoint(request.url) &&
           !didReauth
@@ -623,7 +631,8 @@ export class RetryTransport implements HttpTransport {
           // retry would carry the expired token captured at
           // request-build time and bounce off the server again,
           // exhausting the retry budget.
-          const freshToken = await this.onReauth()
+          const freshToken = await raceWithAbort(this.onReauth(request.signal), request.signal)
+          throwIfSignalAborted(request.signal)
           request = {
             ...request,
             headers: { ...(request.headers ?? {}), Authorization: freshToken },
@@ -663,18 +672,12 @@ export class RetryTransport implements HttpTransport {
   }
 }
 
-function throwIfSignalAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted === true) {
-    throw signal.reason ?? new DOMException('Aborted', 'AbortError')
-  }
-}
-
 async function throwIfSignalAbortedAfterResponse(
   signal: AbortSignal | undefined,
   response: HttpResponse,
 ): Promise<void> {
   if (signal?.aborted !== true) return
-  const reason = signal.reason ?? new DOMException('Aborted', 'AbortError')
+  const reason = abortReason(signal)
   try {
     await response.body?.cancel(reason)
   } catch {

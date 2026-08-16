@@ -1226,6 +1226,50 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
+    it('passes the original abort signal to expired-token reauth', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const okResponse = mockResponse(200, { ok: true })
+      const controller = new AbortController()
+      const onReauth = vi.fn().mockResolvedValue('fresh-token-with-signal')
+
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValueOnce(okResponse)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await transport.send({ ...baseRequest, signal: controller.signal })
+
+      expect(onReauth).toHaveBeenCalledWith(controller.signal)
+    })
+
+    it('does not reauth or retry authorize endpoint expired-token responses', async () => {
+      const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+      const error401 = mockResponse(401, errorBody)
+      const onReauth = vi.fn().mockResolvedValue('fresh-token')
+
+      innerTransport.send.mockResolvedValueOnce(error401)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'GET',
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_authorize_account',
+        }),
+      ).rejects.toThrow(ExpiredAuthTokenError)
+      expect(onReauth).not.toHaveBeenCalled()
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
     it('does not loop forever on repeated reauth failures', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)

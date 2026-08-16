@@ -39,9 +39,26 @@ export type {
 } from '../types/partner.ts'
 export { computerId, groupId, PartnerCapability, Region } from '../types/partner.ts'
 export type { PartnerAccountInfo } from './account-info.ts'
-export { InMemoryPartnerAccountInfo } from './in-memory.ts'
+export {
+  type CreateGroupMemberOptions,
+  type EjectGroupMemberOptions,
+  type ListGroupMembersOptions,
+  type ListGroupsOptions,
+  type PaginateGroupMembersOptions,
+  type PaginateGroupsOptions,
+  type PartnerAuthorizeOptions,
+  PartnerClient,
+  type PartnerClientJson,
+  type PartnerClientOptions,
+  type ReserveTrialAccountsOptions,
+} from './client.ts'
+export {
+  InMemoryPartnerAccountInfo,
+  type InMemoryPartnerAccountInfoJson,
+} from './in-memory.ts'
 export {
   PartnerRawClient,
   type PartnerRawClientOptions,
   type PartnerRawRequestOptions,
 } from './raw.ts'
+export type { RedactedPartnerAuthorizeResponseJson } from './redaction.ts'

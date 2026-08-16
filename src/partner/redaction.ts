@@ -12,10 +12,13 @@ export const PARTNER_TOKEN_REDACTED = '[redacted Partner token]'
 /** Placeholder used when an application key secret is serialized for logs or inspection. */
 export const APPLICATION_KEY_REDACTED = '[redacted application key]'
 
-export type RedactedPartnerAuthorizeResponseJson = Omit<
-  PartnerAuthorizeResponse,
-  'authorizationToken'
-> & {
+/**
+ * JSON-safe Partner authorize response with the Partner token replaced by a
+ * placeholder string.
+ */
+export interface RedactedPartnerAuthorizeResponseJson
+  extends Omit<PartnerAuthorizeResponse, 'authorizationToken'> {
+  /** Redacted Partner authorization token placeholder. */
   readonly authorizationToken: string
 }
 

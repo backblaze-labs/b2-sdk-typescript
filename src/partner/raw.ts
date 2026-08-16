@@ -26,6 +26,7 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
+import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
 import {
   redactCreateGroupMemberResponse,
   redactPartnerAuthorizeResponse,
@@ -52,6 +53,13 @@ export interface PartnerRawClientOptions {
    * a {@link UrlGuardedTransport} with a locked `urlGuard`.
    */
   readonly transport: HttpTransport
+  /**
+   * Partner endpoint host suffixes that have already been validated from a
+   * cached Partner authorize response.
+   *
+   * @internal
+   */
+  readonly authorizedPartnerEndpointSuffixes?: readonly string[]
   /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
@@ -97,7 +105,7 @@ function endpointAllowedSuffixesForRealm(
     return [PRODUCTION_ENDPOINT_HOST_SUFFIX, PRODUCTION_HOST_SUFFIX]
   }
   if (hostMatchesAllowedSuffix(realmHost, STAGING_HOST_SUFFIX)) return [STAGING_HOST_SUFFIX]
-  return allowCustomAuthorizeRealm ? [] : [realmHost]
+  return allowCustomAuthorizeRealm ? [authorizeRealmAllowedSuffix(realmUrl)] : [realmHost]
 }
 
 function authorizeRealmAllowedSuffix(realmUrl: string): string {
@@ -120,6 +128,22 @@ function endpointAllowedSuffix(url: string): string {
   return host
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase()
+  if (host === '[::1]' || host === '::1') return true
+
+  const parts = host.split('.')
+  return (
+    parts.length === 4 &&
+    parts[0] === '127' &&
+    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
+  )
+}
+
+function hostAllowedBySuffixes(hostname: string, allowedSuffixes: readonly string[]): boolean {
+  return allowedSuffixes.some((suffix) => hostMatchesAllowedSuffix(hostname, suffix))
+}
+
 function validatePartnerEndpointUrl(
   rawUrl: string,
   fieldName: 'groupsApiUrl' | 'backupApiUrl',
@@ -134,7 +158,11 @@ function validatePartnerEndpointUrl(
     )
   }
 
-  if (url.protocol !== 'https:') {
+  const host = url.hostname.toLowerCase()
+  const isAllowedLoopbackHttp =
+    url.protocol === 'http:' && isLoopbackHost(host) && hostAllowedBySuffixes(host, allowedSuffixes)
+
+  if (url.protocol !== 'https:' && !isAllowedLoopbackHttp) {
     throw new B2PartnerAuthorizationError(`Partner authorize response ${fieldName} must use HTTPS`)
   }
   if (url.username !== '' || url.password !== '') {
@@ -148,10 +176,10 @@ function validatePartnerEndpointUrl(
     )
   }
 
+  if (isAllowedLoopbackHttp) return rawUrl
+
   const guard = new UrlGuard()
-  guard.setAllowedSuffixes(
-    allowedSuffixes.length === 0 ? [url.hostname.toLowerCase()] : allowedSuffixes,
-  )
+  guard.setAllowedSuffixes(allowedSuffixes)
   try {
     guard.check(rawUrl)
   } catch (err) {
@@ -243,7 +271,18 @@ function normalizePartnerAuthorizeResponse(
   return redactPartnerAuthorizeResponse(normalized)
 }
 
-function derivePartnerAllowedSuffixes(
+/**
+ * Derives the Partner authorize and endpoint host suffixes that may receive
+ * Partner tokens after a trusted authorize response has been validated.
+ *
+ * @param auth - Normalized Partner authorize response.
+ * @param realmUrl - Realm URL used for Partner authorization.
+ *
+ * @returns Sorted list of unique host suffixes to allow.
+ *
+ * @internal
+ */
+export function derivePartnerAllowedSuffixes(
   auth: PartnerAuthorizeResponse,
   realmUrl: string,
 ): readonly string[] {
@@ -255,6 +294,41 @@ function derivePartnerAllowedSuffixes(
     suffixes.add(endpointAllowedSuffix(auth.apiInfo.backupApi.backupApiUrl))
   }
   return Array.from(suffixes).sort()
+}
+
+/**
+ * Validates cached Partner authorize endpoint URLs with the same realm policy
+ * applied to fresh `authorizePartner()` responses and returns guard suffixes.
+ *
+ * @param auth - Cached Partner authorize response to validate.
+ * @param realmUrl - Realm URL used for Partner authorization.
+ * @param allowCustomAuthorizeRealm - Whether custom authorize realms are trusted.
+ *
+ * @returns Sorted list of host suffixes derived from the validated auth state.
+ *
+ * @throws B2PartnerAuthorizationError if the cached auth endpoints are unsafe.
+ *
+ * @internal
+ */
+export function validatePartnerAuthorizeResponseEndpoints(
+  auth: PartnerAuthorizeResponse,
+  realmUrl: string,
+  allowCustomAuthorizeRealm: boolean,
+): readonly string[] {
+  assertSecureRealmUrl(realmUrl)
+  assertVerifiedPartnerAuthorizeRealm(realmUrl, allowCustomAuthorizeRealm)
+  validatePartnerAuthorizeResponseShape(auth)
+
+  const { groupsApi, backupApi } = auth.apiInfo
+  const allowedSuffixes = endpointAllowedSuffixesForRealm(realmUrl, allowCustomAuthorizeRealm)
+  if (groupsApi !== undefined) {
+    validatePartnerEndpointUrl(groupsApi.groupsApiUrl, 'groupsApiUrl', allowedSuffixes)
+  }
+  if (backupApi !== undefined) {
+    validatePartnerEndpointUrl(backupApi.backupApiUrl, 'backupApiUrl', allowedSuffixes)
+  }
+
+  return derivePartnerAllowedSuffixes(auth, realmUrl)
 }
 
 function lockTransportUrlGuard(transport: HttpTransport, allowedSuffixes: readonly string[]): void {
@@ -349,6 +423,7 @@ export class PartnerRawClient {
   constructor(options: PartnerRawClientOptions) {
     this.transport = options.transport
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
+    this.partnerEndpointSuffixes = options.authorizedPartnerEndpointSuffixes ?? []
   }
 
   /**
@@ -362,6 +437,7 @@ export class PartnerRawClient {
    * @param masterKeyId - The Master Application Key ID for authentication.
    * @param masterKey - The Master Application Key secret.
    * @param realmUrl - The B2 realm URL to authenticate against.
+   * @param options - Optional abort and per-request retry settings.
    *
    * @returns The normalized Partner authorization response.
    *
@@ -372,6 +448,7 @@ export class PartnerRawClient {
     masterKeyId: string,
     masterKey: string,
     realmUrl = DEFAULT_PARTNER_REALM_URL,
+    options?: PartnerRawRequestOptions,
   ): Promise<PartnerAuthorizeResponse> {
     assertSecureRealmUrl(realmUrl)
     assertVerifiedPartnerAuthorizeRealm(realmUrl, this.allowCustomAuthorizeRealm)
@@ -381,6 +458,8 @@ export class PartnerRawClient {
       headers: {
         Authorization: `Basic ${btoa(`${masterKeyId}:${masterKey}`)}`,
       },
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     const auth = normalizePartnerAuthorizeResponse(
       await response.json<WirePartnerAuthorizeResponse>(),

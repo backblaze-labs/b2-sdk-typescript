@@ -6,9 +6,10 @@ import { ProgressTracker } from '../streams/progress.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
+import { abortReason, raceWithAbort } from '../util/abort.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { toError } from '../util/to-error.ts'
-import { abortReason, createAbortScope, raceWithAbort } from './abort-scope.ts'
+import { createAbortScope } from './abort-scope.ts'
 import {
   type CleanupFailureOptions,
   cancelLargeFileBestEffort,

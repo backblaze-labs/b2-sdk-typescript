@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `createGroupMember()`, `ejectGroupMember()`, `listGroups()`,
   `listGroupMembers()`, and `reserveTrialCreateAccount()` bindings for Partner
   API group management and B2 Reserve trial-account creation.
+- **High-level Partner facade.** The `@backblaze-labs/b2-sdk/partner` subpath
+  now exports the experimental `PartnerClient` facade plus
+  `PartnerClientOptions`, `PartnerAuthorizeOptions`, `ListGroupsOptions`,
+  `PaginateGroupsOptions`, `ListGroupMembersOptions`,
+  `PaginateGroupMembersOptions`, `CreateGroupMemberOptions`,
+  `EjectGroupMemberOptions`, and `ReserveTrialAccountsOptions` for ergonomic
+  Partner group/member pagination and B2 Reserve trial-account workflows.
 - **Partner API and Computer Backup typed error subclasses.** New exported
   `TooManyMembersError`, `InvalidGroupIdError`, `InvalidEmailError`,
   `InvalidRegionError`, `InvalidSmsPhoneError`, `MethodFailureError`,

@@ -21,7 +21,7 @@ import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
-import { PartnerRawClient } from './raw.ts'
+import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
@@ -34,6 +34,10 @@ const runtimeProcess = runtimeGlobals['process'] as
   | { readonly versions?: { readonly node?: string } }
   | undefined
 const isNode = typeof runtimeProcess?.versions?.node === 'string'
+
+function apiEndpointName(request: HttpRequest): string {
+  return new URL(request.url).pathname.split('/').at(-1) ?? ''
+}
 
 function partnerAuthorizeResponse(
   overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
@@ -56,6 +60,30 @@ function partnerAuthorizeResponse(
       },
     },
     applicationKeyExpirationTimestamp: 1_786_662_000_000,
+  }
+}
+
+function cachedPartnerAuth(): PartnerAuthorizeResponse {
+  return {
+    accountId: accountId('partner-account'),
+    authorizationToken: partnerToken('partner-token'),
+    apiInfo: {
+      groupsApi: {
+        groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+        capabilities: [PartnerCapability.All],
+        infoType: 'groupsApi',
+      },
+      backupApi: {
+        backupApiUrl: 'https://backup.backblazeb2.com/backup',
+        capabilities: [PartnerCapability.All],
+        infoType: 'backupApi',
+      },
+    },
+    groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+    backupApiUrl: 'https://backup.backblazeb2.com/backup',
+    groupsCapabilities: [PartnerCapability.All],
+    backupCapabilities: [PartnerCapability.All],
+    applicationKeyExpirationTimestamp: null,
   }
 }
 
@@ -1169,6 +1197,60 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(restoredAccountInfo.getPartnerToken()).toBe('partner-token')
   })
 
+  it('rejects cached auth whose endpoint mirrors drift from apiInfo', () => {
+    const auth = cachedPartnerAuth()
+    const backupApi = auth.apiInfo.backupApi
+    if (backupApi === undefined) throw new Error('test fixture must include Backup suite')
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(
+        { ...auth, groupsApiUrl: 'https://attacker.example/partner' },
+        'https://api.backblazeb2.com',
+        false,
+      ),
+    ).toThrow(B2PartnerAuthorizationError)
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(
+        {
+          ...auth,
+          apiInfo: { backupApi },
+          groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+          groupsCapabilities: [PartnerCapability.All],
+        },
+        'https://api.backblazeb2.com',
+        false,
+      ),
+    ).toThrow(B2PartnerAuthorizationError)
+  })
+
+  it('rejects cached auth for custom authorize realms without explicit opt-in', () => {
+    const auth: PartnerAuthorizeResponse = {
+      ...cachedPartnerAuth(),
+      apiInfo: {
+        groupsApi: {
+          groupsApiUrl: 'https://groups.auth.custom.example/partner',
+          capabilities: [PartnerCapability.All],
+          infoType: 'groupsApi',
+        },
+        backupApi: {
+          backupApiUrl: 'https://backup.auth.custom.example/backup',
+          capabilities: [PartnerCapability.All],
+          infoType: 'backupApi',
+        },
+      },
+      groupsApiUrl: 'https://groups.auth.custom.example/partner',
+      backupApiUrl: 'https://backup.auth.custom.example/backup',
+    }
+
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(auth, 'https://auth.custom.example', false),
+    ).toThrow(B2RealmConfigurationError)
+    expect(() =>
+      validatePartnerAuthorizeResponseEndpoints(auth, 'https://auth.custom.example', true),
+    ).not.toThrow()
+  })
+
   it('supports Partner-only authorize responses without Backup fields', async () => {
     const transport: HttpTransport = {
       async send() {
@@ -1428,6 +1510,53 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(seenRequests[0]?.url).toBe('https://auth.custom.example/b2api/v3/b2_authorize_account')
     expect(auth.groupsApiUrl).toBe('https://groups.auth.custom.example/partner')
     expect(auth.backupApiUrl).toBe('https://backup.auth.custom.example/backup')
+  })
+
+  it('rejects custom authorize responses pointing at unrelated endpoint hosts', async () => {
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        return jsonResponse(
+          partnerAuthorizeResponse({
+            groupsApiUrl: 'https://attacker.example/partner',
+          }),
+        )
+      },
+    }
+    const raw = new PartnerRawClient({ transport, allowCustomAuthorizeRealm: true })
+
+    await expect(
+      raw.authorizePartner('master-key-id', 'master-key', 'https://auth.custom.example'),
+    ).rejects.toThrow(B2PartnerAuthorizationError)
+
+    expect(seenRequests.map((request) => apiEndpointName(request))).toEqual([
+      'b2_authorize_account',
+    ])
+  })
+
+  it('accepts loopback HTTP Partner endpoints for loopback custom realms', async () => {
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        return jsonResponse(
+          partnerAuthorizeResponse({
+            groupsApiUrl: 'http://127.0.0.1:12345/partner',
+            backupApiUrl: 'http://127.0.0.1:12345/backup',
+          }),
+        )
+      },
+    }
+    const raw = new PartnerRawClient({ transport, allowCustomAuthorizeRealm: true })
+
+    const auth = await raw.authorizePartner('master-key-id', 'master-key', 'http://127.0.0.1:12345')
+
+    expect(auth.groupsApiUrl).toBe('http://127.0.0.1:12345/partner')
+    expect(auth.backupApiUrl).toBe('http://127.0.0.1:12345/backup')
+    expect(seenRequests.map((request) => apiEndpointName(request))).toEqual([
+      'b2_authorize_account',
+    ])
   })
 
   it('allows custom authorize realms to reauthorize after the URL guard is locked', async () => {
