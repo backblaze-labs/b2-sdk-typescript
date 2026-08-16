@@ -6,7 +6,7 @@ import {
   type HttpTransport,
   type UrlGuardedTransport,
 } from '../http/transport.ts'
-import { hostMatchesAllowedSuffix, UrlGuard } from '../http/url-guard.ts'
+import { hostMatchesAllowedSuffix } from '../http/url-guard.ts'
 import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import { accountId, partnerToken } from '../types/ids.ts'
 import type {
@@ -27,6 +27,11 @@ import type {
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
 import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
+import {
+  endpointAllowedSuffixes,
+  validatePartnerEndpointUrl,
+  withQueryString,
+} from './endpoint-url.ts'
 import {
   redactCreateGroupMemberResponse,
   redactPartnerAuthorizeResponse,
@@ -53,13 +58,6 @@ export interface PartnerRawClientOptions {
    * a {@link UrlGuardedTransport} with a locked `urlGuard`.
    */
   readonly transport: HttpTransport
-  /**
-   * Partner endpoint host suffixes that have already been validated from a
-   * cached Partner authorize response.
-   *
-   * @internal
-   */
-  readonly authorizedPartnerEndpointSuffixes?: readonly string[]
   /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
@@ -126,71 +124,6 @@ function endpointAllowedSuffix(url: string): string {
     return PRODUCTION_ENDPOINT_HOST_SUFFIX
   }
   return host
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase()
-  if (host === '[::1]' || host === '::1') return true
-
-  const parts = host.split('.')
-  return (
-    parts.length === 4 &&
-    parts[0] === '127' &&
-    parts.every((part) => /^\d+$/.test(part) && Number(part) <= 255)
-  )
-}
-
-function hostAllowedBySuffixes(hostname: string, allowedSuffixes: readonly string[]): boolean {
-  return allowedSuffixes.some((suffix) => hostMatchesAllowedSuffix(hostname, suffix))
-}
-
-function validatePartnerEndpointUrl(
-  rawUrl: string,
-  fieldName: 'groupsApiUrl' | 'backupApiUrl',
-  allowedSuffixes: readonly string[],
-): string {
-  let url: URL
-  try {
-    url = new URL(rawUrl)
-  } catch {
-    throw new B2PartnerAuthorizationError(
-      `Partner authorize response included malformed ${fieldName}`,
-    )
-  }
-
-  const host = url.hostname.toLowerCase()
-  const isAllowedLoopbackHttp =
-    url.protocol === 'http:' && isLoopbackHost(host) && hostAllowedBySuffixes(host, allowedSuffixes)
-
-  if (url.protocol !== 'https:' && !isAllowedLoopbackHttp) {
-    throw new B2PartnerAuthorizationError(`Partner authorize response ${fieldName} must use HTTPS`)
-  }
-  if (url.username !== '' || url.password !== '') {
-    throw new B2PartnerAuthorizationError(
-      `Partner authorize response ${fieldName} must not include userinfo`,
-    )
-  }
-  if (url.search !== '' || url.hash !== '') {
-    throw new B2PartnerAuthorizationError(
-      `Partner authorize response ${fieldName} must not include query or fragment`,
-    )
-  }
-
-  if (isAllowedLoopbackHttp) return rawUrl
-
-  const guard = new UrlGuard()
-  guard.setAllowedSuffixes(allowedSuffixes)
-  try {
-    guard.check(rawUrl)
-  } catch (err) {
-    throw new B2PartnerAuthorizationError(
-      err instanceof Error
-        ? `Partner authorize response included unsafe ${fieldName}: ${err.message}`
-        : `Partner authorize response included unsafe ${fieldName}`,
-    )
-  }
-
-  return rawUrl
 }
 
 function normalizeGroupsApi(
@@ -343,23 +276,12 @@ function partnerEndpointAllowedSuffixes(
   transport: HttpTransport,
   authorizedSuffixes: readonly string[],
 ): readonly string[] {
-  if (authorizedSuffixes.length > 0) return authorizedSuffixes
-
-  const guard = getTransportUrlGuard(transport)
-  if (guard === undefined) {
-    throw new B2PartnerAuthorizationError(
+  return endpointAllowedSuffixes(transport, authorizedSuffixes, {
+    missingGuard:
       'Partner endpoint requests require authorizePartner() or a UrlGuardedTransport with a locked URL guard before sending Partner tokens',
-    )
-  }
-
-  const suffixes = guard.getAllowedSuffixes()
-  if (suffixes.length === 0) {
-    throw new B2PartnerAuthorizationError(
+    unlockedGuard:
       'Partner endpoint requests require a locked URL guard before sending Partner tokens',
-    )
-  }
-
-  return suffixes
+  })
 }
 
 function validatePartnerRequestGroupsApiUrl(
@@ -385,15 +307,6 @@ function mutationRequestOptions(
   }
 }
 
-function withQueryString(url: string, query: QueryParams): string {
-  // Match the storage raw client's encodeURIComponent query semantics: spaces
-  // are `%20`, not form-style `+`.
-  const queryString = Object.entries(query)
-    .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
-    .join('&')
-  return queryString.length === 0 ? url : `${url}?${queryString}`
-}
-
 function reserveTrialCreateAccountRequestBody(
   request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
 ): readonly ReserveTrialCreateAccountRequestEntry[] {
@@ -406,6 +319,27 @@ function reserveTrialCreateAccountRequestBody(
   }))
 }
 
+const partnerEndpointSuffixesByClient = new WeakMap<PartnerRawClient, readonly string[]>()
+
+function authorizedPartnerEndpointSuffixes(client: PartnerRawClient): readonly string[] {
+  return partnerEndpointSuffixesByClient.get(client) ?? []
+}
+
+/**
+ * Replaces the validated Partner endpoint host suffixes.
+ *
+ * @param client - Raw client whose endpoint suffixes should be updated.
+ * @param suffixes - Host suffixes derived from Partner authorization.
+ *
+ * @internal
+ */
+export function setAuthorizedPartnerEndpointSuffixes(
+  client: PartnerRawClient,
+  suffixes: readonly string[],
+): void {
+  partnerEndpointSuffixesByClient.set(client, suffixes)
+}
+
 /**
  * Low-level client for Partner API authorization and endpoint bindings.
  */
@@ -413,7 +347,6 @@ export class PartnerRawClient {
   /** @internal */
   private readonly transport: HttpTransport
   private readonly allowCustomAuthorizeRealm: boolean
-  private partnerEndpointSuffixes: readonly string[] = []
 
   /**
    * Creates a new PartnerRawClient with the given transport.
@@ -423,7 +356,6 @@ export class PartnerRawClient {
   constructor(options: PartnerRawClientOptions) {
     this.transport = options.transport
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
-    this.partnerEndpointSuffixes = options.authorizedPartnerEndpointSuffixes ?? []
   }
 
   /**
@@ -466,8 +398,9 @@ export class PartnerRawClient {
       realmUrl,
       this.allowCustomAuthorizeRealm,
     )
-    this.partnerEndpointSuffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
-    lockTransportUrlGuard(this.transport, this.partnerEndpointSuffixes)
+    const suffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
+    setAuthorizedPartnerEndpointSuffixes(this, suffixes)
+    lockTransportUrlGuard(this.transport, suffixes)
     return auth
   }
 
@@ -672,7 +605,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      this.partnerEndpointSuffixes,
+      authorizedPartnerEndpointSuffixes(this),
       groupsApiUrl,
     )
     const response = await this.transport.send({
@@ -706,7 +639,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      this.partnerEndpointSuffixes,
+      authorizedPartnerEndpointSuffixes(this),
       groupsApiUrl,
     )
     const response = await this.transport.send({

@@ -63,6 +63,7 @@ export default defineConfig({
         'auth/index': resolve(__dirname, 'src/auth/index.ts'),
         'auth/file': resolve(__dirname, 'src/auth/file.ts'),
         'partner/index': resolve(__dirname, 'src/partner/index.ts'),
+        'backup/index': resolve(__dirname, 'src/backup/index.ts'),
         'streams/index': resolve(__dirname, 'src/streams/index.ts'),
         'sync/index': resolve(__dirname, 'src/sync/index.ts'),
         'simulator/index': resolve(__dirname, 'src/simulator/index.ts'),

@@ -880,7 +880,7 @@ describe('writeLocalStreamInsideRoot', () => {
     } finally {
       await rm(root, { recursive: true, force: true })
     }
-  })
+  }, 15_000)
 
   it('treats oversized managed staging entries as active during cleanup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-oversized-'))

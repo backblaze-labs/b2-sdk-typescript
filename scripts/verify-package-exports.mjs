@@ -177,12 +177,28 @@ const publicExportProbes = [
   {
     subpath: './partner',
     checks: [
+      ["typeof entry.PartnerClient === 'function'", 'PartnerClient export missing'],
       ["typeof entry.PartnerRawClient === 'function'", 'PartnerRawClient export missing'],
       [
         "typeof entry.InMemoryPartnerAccountInfo === 'function'",
         'InMemoryPartnerAccountInfo export missing',
       ],
       ["entry.PartnerCapability?.All === 'all'", 'PartnerCapability enum export drifted'],
+    ],
+  },
+  {
+    subpath: './backup',
+    checks: [
+      ["typeof entry.BackupClient === 'function'", 'BackupClient export missing'],
+      ["typeof entry.BackupRawClient === 'function'", 'BackupRawClient export missing'],
+      [
+        "typeof entry.InMemoryPartnerAccountInfo === 'function'",
+        'InMemoryPartnerAccountInfo export missing',
+      ],
+      ["entry.PartnerCapability?.All === 'all'", 'PartnerCapability enum export drifted'],
+      ["typeof entry.accountId === 'function'", 'accountId export missing'],
+      ["typeof entry.computerId === 'function'", 'computerId export missing'],
+      ["typeof entry.partnerToken === 'function'", 'partnerToken export missing'],
     ],
   },
   {

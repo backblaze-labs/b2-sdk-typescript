@@ -471,6 +471,17 @@ function isPartnerMutationEndpoint(url: string): boolean {
   )
 }
 
+function isBackupMutationEndpoint(url: string): boolean {
+  return backupApiEndpointName(url) === 'bz_delete_computer'
+}
+
+function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
+  return (
+    request.method === 'POST' &&
+    (isPartnerMutationEndpoint(request.url) || isBackupMutationEndpoint(request.url))
+  )
+}
+
 function b2ApiEndpointName(url: string): string | undefined {
   const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
   // Partner endpoint base URLs can themselves contain a b2api-looking segment
@@ -480,12 +491,23 @@ function b2ApiEndpointName(url: string): string | undefined {
   return segments[apiRootIndex + 2]
 }
 
-function isReplayUnsafePostEndpoint(url: string): boolean {
+function backupApiEndpointName(url: string): string | undefined {
+  const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
+  for (let i = segments.length - 4; i >= 0; i--) {
+    if (segments[i] !== 'api' || segments[i + 1] !== 'backup') continue
+    if (!/^v\d+$/.test(segments[i + 2] ?? '')) continue
+    return segments[i + 3]
+  }
+  return undefined
+}
+
+function isReplayUnsafePostRequest(request: HttpRequest): boolean {
+  if (request.method !== 'POST') return false
   return (
-    isUploadEndpoint(url) ||
-    isStartLargeFileEndpoint(url) ||
-    isFinishLargeFileEndpoint(url) ||
-    isPartnerMutationEndpoint(url)
+    isUploadEndpoint(request.url) ||
+    isStartLargeFileEndpoint(request.url) ||
+    isFinishLargeFileEndpoint(request.url) ||
+    isNonIdempotentMutationRequest(request)
   )
 }
 
@@ -496,17 +518,17 @@ function isReplayUnsafePostEndpoint(url: string): boolean {
  * upload URL only amplifies the rate limit.
  *
  * @param error - The classified, retryability-tagged error.
- * @param url - The request URL (used to detect upload endpoints).
+ * @param request - The request being considered for in-place retry.
  *
  * @returns Whether to retry the request in place.
  */
-function shouldRetryInPlace(error: B2Error, url: string): boolean {
+function shouldRetryInPlace(error: B2Error, request: HttpRequest): boolean {
   if (!error.retryable) return false
-  if (isAuthorizeEndpoint(url) && error instanceof ExpiredAuthTokenError) return false
-  if (isPartnerMutationEndpoint(url)) return false
-  if (isStartLargeFileEndpoint(url) || isFinishLargeFileEndpoint(url)) return false
-  if (isUploadEndpoint(url) && error.status === 429) return true
-  if (isUploadEndpoint(url)) return false
+  if (isAuthorizeEndpoint(request.url) && error instanceof ExpiredAuthTokenError) return false
+  if (isNonIdempotentMutationRequest(request)) return false
+  if (isStartLargeFileEndpoint(request.url) || isFinishLargeFileEndpoint(request.url)) return false
+  if (isUploadEndpoint(request.url) && error.status === 429) return true
+  if (isUploadEndpoint(request.url)) return false
   return true
 }
 
@@ -621,7 +643,7 @@ export class RetryTransport implements HttpTransport {
           this.onReauth &&
           !isAuthorizeEndpoint(request.url) &&
           !isUploadEndpoint(request.url) &&
-          !isPartnerMutationEndpoint(request.url) &&
+          !isNonIdempotentMutationRequest(request) &&
           !didReauth
         ) {
           // Reauth returns the FRESH token; build a new request with a
@@ -642,7 +664,7 @@ export class RetryTransport implements HttpTransport {
           continue
         }
 
-        if (!shouldRetryInPlace(error, request.url) || attempt === retryOptions.maxRetries) {
+        if (!shouldRetryInPlace(error, request) || attempt === retryOptions.maxRetries) {
           throw error
         }
 
@@ -659,7 +681,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isReplayUnsafePostEndpoint(request.url) || attempt === retryOptions.maxRetries) {
+        if (isReplayUnsafePostRequest(request) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 

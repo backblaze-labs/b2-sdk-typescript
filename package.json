@@ -70,6 +70,16 @@
         "default": "./dist/partner/index.cjs"
       }
     },
+    "./backup": {
+      "import": {
+        "types": "./dist/backup/index.d.ts",
+        "default": "./dist/backup/index.js"
+      },
+      "require": {
+        "types": "./dist/backup/index.d.cts",
+        "default": "./dist/backup/index.cjs"
+      }
+    },
     "./streams": {
       "import": {
         "types": "./dist/streams/index.d.ts",

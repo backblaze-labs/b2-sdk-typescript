@@ -475,6 +475,10 @@ import {
 import { InMemoryAccountInfo } from '@backblaze-labs/b2-sdk/auth'
 import { FileAccountInfo } from '@backblaze-labs/b2-sdk/auth/file'
 
+// Partner and Computer Backup API surfaces
+import { PartnerClient, PartnerRawClient } from '@backblaze-labs/b2-sdk/partner'
+import { BackupClient, BackupRawClient } from '@backblaze-labs/b2-sdk/backup'
+
 // Streaming utilities + SSE-C key wrapper
 import {
   IncrementalSha1,

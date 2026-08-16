@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaginateGroupMembersOptions`, `CreateGroupMemberOptions`,
   `EjectGroupMemberOptions`, and `ReserveTrialAccountsOptions` for ergonomic
   Partner group/member pagination and B2 Reserve trial-account workflows.
+- **Computer Backup runtime facade.** The new
+  `@backblaze-labs/b2-sdk/backup` subpath exports experimental `BackupClient`
+  and `BackupRawClient` bindings for Partner-authorized Computer Backup
+  listing, pagination, and delete workflows.
 - **Partner API and Computer Backup typed error subclasses.** New exported
   `TooManyMembersError`, `InvalidGroupIdError`, `InvalidEmailError`,
   `InvalidRegionError`, `InvalidSmsPhoneError`, `MethodFailureError`,
