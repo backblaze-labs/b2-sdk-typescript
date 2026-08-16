@@ -1152,6 +1152,22 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     })
   })
 
+  it('rejects empty capabilities during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.createKey({
+        capabilities: [],
+        keyName: 'empty-capability-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('capabilities must not be empty'),
+    })
+  })
+
   it('rejects keys that request capabilities outside the creator grant', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -1177,6 +1193,74 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
         keyName: 'same-grant-key',
       }),
     ).resolves.toMatchObject({ capabilities: [Capability.WriteKeys] })
+  })
+
+  it('rejects broader child grants from restricted creators in default mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'default-delegated-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+        keyName: 'default-too-broad-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('listBuckets'),
+    })
+  })
+
+  it('rejects create-key accountId mismatches for authorized tokens', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const transport = sim.transport()
+    const masterAuthToken = client.accountInfo.getAuthToken()
+
+    const masterMismatch = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: { Authorization: masterAuthToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'victim_account',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'cross-account-master',
+      }),
+    })
+    expect(masterMismatch.status).toBe(400)
+    await expect(masterMismatch.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'accountId must match authorized account',
+    })
+
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+      keyName: 'account-bound-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+    const restrictedMismatch = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: creatorClient.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'victim_account',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'cross-account-restricted',
+      }),
+    })
+    expect(restrictedMismatch.status).toBe(400)
+    await expect(restrictedMismatch.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'accountId must match authorized account',
+    })
   })
 
   it('enforces B2 keyName length limits during key creation', async () => {

@@ -11,11 +11,14 @@ import {
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
+  KEY_NAME_MAX,
   LIST_ENDPOINT_CAPS,
   validateBucketInfo,
   validateBucketName,
   validateBucketTypes,
   validateCorsRules,
+  validateCreateKeyCapabilities,
+  validateCreateKeyName,
   validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
@@ -37,6 +40,31 @@ import {
  * human-readable `.message`, so wording changes don't ripple through
  * these tests.
  */
+
+describe('validateCreateKeyCapabilities', () => {
+  it('returns ok for valid capabilities', () => {
+    expect(validateCreateKeyCapabilities([Capability.ListBuckets])).toEqual({
+      kind: 'ok',
+      capabilities: [Capability.ListBuckets],
+    })
+  })
+
+  it('rejects empty and unknown capabilities', () => {
+    expect(validateCreateKeyCapabilities([]).kind).toBe('error')
+    expect(validateCreateKeyCapabilities(['notReal']).kind).toBe('error')
+  })
+})
+
+describe('validateCreateKeyName', () => {
+  it('returns ok with the validated keyName', () => {
+    expect(validateCreateKeyName('valid-key')).toEqual({ kind: 'ok', keyName: 'valid-key' })
+  })
+
+  it('rejects key names outside the B2 length range', () => {
+    expect(validateCreateKeyName('').kind).toBe('error')
+    expect(validateCreateKeyName('k'.repeat(KEY_NAME_MAX + 1)).kind).toBe('error')
+  })
+})
 
 describe('validateBucketName', () => {
   it('returns null for a valid name', () => {
