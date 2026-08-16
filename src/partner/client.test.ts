@@ -576,6 +576,59 @@ describe('PartnerClient facade', () => {
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
   })
 
+  it('clears shared expired-token reauthorization when the final waiter aborts', async () => {
+    let authorizeCount = 0
+    const listAuthorizations: string[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 1) {
+            return jsonResponse(partnerAuthorizeResponse('partner-token-1'))
+          }
+          if (authorizeCount === 2) {
+            return new Promise(() => {})
+          }
+          return jsonResponse(partnerAuthorizeResponse('partner-token-2'))
+        }
+        if (endpoint === 'b2_list_groups') {
+          const authorization = request.headers?.['Authorization'] ?? ''
+          listAuthorizations.push(authorization)
+          if (authorization === 'partner-token-1') {
+            return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+          }
+          return jsonResponse({
+            accountId: accountId('partner-account'),
+            groups: [],
+            nextGroupId: null,
+          })
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const controller = new AbortController()
+
+    await client.authorize()
+    const first = client.listGroups({ signal: controller.signal })
+    await waitUntil(() => authorizeCount === 2)
+    controller.abort(new DOMException('caller canceled', 'AbortError'))
+
+    await expect(first).rejects.toThrow('caller canceled')
+    const page = await client.listGroups()
+
+    expect(page.groups).toEqual([])
+    expect(authorizeCount).toBe(3)
+    expect(listAuthorizations).toEqual(['partner-token-1', 'partner-token-1', 'partner-token-2'])
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
+  })
+
   it('keeps shared expired-token reauthorization alive for non-aborted waiters', async () => {
     let authorizeCount = 0
     let releaseReauth: (() => void) | undefined
