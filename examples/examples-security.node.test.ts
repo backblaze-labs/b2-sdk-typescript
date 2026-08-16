@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -88,7 +88,9 @@ describe('Partner examples secret handling', () => {
       expect(output.stdout).not.toContain(RAW_SECRET)
       expect(output.stderr).not.toContain(RAW_SECRET)
       expect(await readFile(secretPath, 'utf8')).toContain(RAW_SECRET)
-      expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
+      if (process.platform !== 'win32') {
+        expect((await stat(secretPath)).mode & 0o777).toBe(0o600)
+      }
     } finally {
       if (previousPrintEnv === undefined) {
         delete process.env['B2_PRINT_APPLICATION_KEY']
@@ -125,21 +127,22 @@ describe('Partner examples secret handling', () => {
     }
   })
 
-  it('refuses to write batch secrets after the batch path is swapped to a symlink', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'b2-example-batch-symlink-'))
-    const batchPath = join(dir, 'trial-batch.json')
-    const leakPath = join(dir, 'leak.json')
-    const writer = await TrialBatchWriter.create(batchPath, trialRequest())
+  it.skipIf(process.platform === 'win32')(
+    'refuses to write batch secrets after the batch path is swapped',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'b2-example-batch-swap-'))
+      const batchPath = join(dir, 'trial-batch.json')
+      const writer = await TrialBatchWriter.create(batchPath, trialRequest())
 
-    try {
-      await writeFile(leakPath, '', { mode: 0o644 })
-      await unlink(batchPath)
-      await symlink(leakPath, batchPath)
+      try {
+        await unlink(batchPath)
+        await writeFile(batchPath, '', { mode: 0o644 })
 
-      await expect(writer.recordResult(trialResult())).rejects.toThrow(/regular file|changed/)
-      expect(await readFile(leakPath, 'utf8')).not.toContain(RAW_SECRET)
-    } finally {
-      await writer.close()
-    }
-  })
+        await expect(writer.recordResult(trialResult())).rejects.toThrow(/regular file|changed/)
+        expect(await readFile(batchPath, 'utf8')).not.toContain(RAW_SECRET)
+      } finally {
+        await writer.close()
+      }
+    },
+  )
 })

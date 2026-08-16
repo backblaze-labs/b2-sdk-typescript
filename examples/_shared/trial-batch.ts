@@ -39,11 +39,13 @@ function assertOriginalBatchPath(filePath: string, pathStat: Stats, originalStat
   if (!sameFile(pathStat, originalStat)) {
     throw new Error(`Batch file path changed before secrets could be written: ${filePath}`)
   }
-  if (pathStat.uid !== originalStat.uid) {
-    throw new Error(`Batch file owner changed before secrets could be written: ${filePath}`)
-  }
-  if (fileMode(pathStat) !== BATCH_FILE_MODE) {
-    throw new Error(`Batch file permissions changed before secrets could be written: ${filePath}`)
+  if (process.platform !== 'win32') {
+    if (pathStat.uid !== originalStat.uid) {
+      throw new Error(`Batch file owner changed before secrets could be written: ${filePath}`)
+    }
+    if (fileMode(pathStat) !== BATCH_FILE_MODE) {
+      throw new Error(`Batch file permissions changed before secrets could be written: ${filePath}`)
+    }
   }
 }
 
