@@ -169,6 +169,35 @@ describe('paginatePages', () => {
     for await (const page of paginatePages(fetcher, undefined)) collected.push(...page)
     expect(collected).toEqual(['a', 'b', 'c'])
   })
+
+  it('continues when an object cursor reuses the same mutated reference', async () => {
+    type Cursor = { index: number }
+    const sharedCursor: Cursor = { index: 1 }
+    let calls = 0
+    const fetcher: PageFetcher<string, Cursor> = async (cursor) => {
+      calls += 1
+      if (calls === 1) {
+        expect(cursor).toBeUndefined()
+        return { page: 'first', nextCursor: sharedCursor }
+      }
+      if (cursor === undefined) throw new Error('missing cursor')
+      expect(cursor).toBe(sharedCursor)
+      if (calls === 2) {
+        expect(cursor.index).toBe(1)
+        sharedCursor.index = 2
+        return { page: 'second', nextCursor: sharedCursor }
+      }
+      if (calls === 3) {
+        expect(cursor.index).toBe(2)
+        return { page: 'third', nextCursor: undefined }
+      }
+      throw new Error('overran')
+    }
+    const collected: string[] = []
+    for await (const page of paginatePages(fetcher, undefined)) collected.push(page)
+    expect(collected).toEqual(['first', 'second', 'third'])
+    expect(calls).toBe(3)
+  })
 })
 
 describe('paginateItems', () => {
