@@ -3151,8 +3151,25 @@ export class B2Simulator {
   private deleteBucket(req: { bucketId: string }): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
+    if (this.bucketHasContents(bucket)) {
+      return this.error(
+        400,
+        'cannot_delete_non_empty_bucket',
+        'Bucket is not empty and cannot be deleted',
+      )
+    }
     this.buckets.delete(req.bucketId)
     return { status: 200, body: bucket.info }
+  }
+
+  private bucketHasContents(bucket: StoredBucket): boolean {
+    for (const versions of bucket.files.values()) {
+      if (versions.length > 0) return true
+    }
+    for (const large of this.largeFiles.values()) {
+      if (large.bucketId === bucket.info.bucketId) return true
+    }
+    return false
   }
 
   private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {

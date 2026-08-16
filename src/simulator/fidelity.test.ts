@@ -30,6 +30,7 @@ import {
  * that matches the published B2 docs at https://www.backblaze.com/apidocs:
  *
  * - Input validation (bucket name, file name, file info, max counts)
+ * - Bucket deletion fidelity (non-empty buckets, unfinished large files)
  * - Wire-level edges (Content-Range header, Range header forms)
  * - Pluggable post-upload hooks (webhook delivery, replication)
  * - Strict-auth capability + scope + expiry enforcement
@@ -532,6 +533,86 @@ describe('B2Simulator updateBucket revision guard', () => {
     const [fresh] = await client.listBuckets({ bucketId: bucket.id })
     expect(fresh?.info.bucketInfo).toEqual({ generation: 'first' })
     expect(fresh?.info.revision).toBe(updated.revision)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Bucket deletion
+// ---------------------------------------------------------------------------
+
+// b2_delete_bucket requires an empty bucket:
+// https://www.backblaze.com/apidocs/b2-delete-bucket
+describe('B2Simulator bucket deletion fidelity', () => {
+  let client: B2Client
+
+  beforeEach(async () => {
+    ;({ client } = makeClient())
+    await client.authorize()
+  })
+
+  it('rejects b2_delete_bucket while the bucket still has file versions', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'non-empty-delete',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'still-here.txt',
+      source: new BufferSource(new TextEncoder().encode('data')),
+    })
+
+    await expect(bucket.delete()).rejects.toMatchObject({
+      status: 400,
+      code: 'cannot_delete_non_empty_bucket',
+    })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
+  })
+
+  it('rejects b2_delete_bucket while the bucket has unfinished large files', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unfinished-delete',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const unfinished = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'unfinished.bin',
+      contentType: 'application/octet-stream',
+    })
+
+    await expect(bucket.delete()).rejects.toMatchObject({
+      status: 400,
+      code: 'cannot_delete_non_empty_bucket',
+    })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
+
+    await client.raw.cancelLargeFile(apiUrl, authToken, { fileId: unfinished.fileId })
+    await expect(bucket.delete()).resolves.toMatchObject({ bucketId: bucket.id })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(0)
+  })
+
+  it('deletes the bucket after deleteAll removes every file version', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'delete-after-delete-all',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'versioned.txt',
+      source: new BufferSource(new TextEncoder().encode('v1')),
+    })
+    await bucket.upload({
+      fileName: 'versioned.txt',
+      source: new BufferSource(new TextEncoder().encode('v2')),
+    })
+
+    let deleted = 0
+    for await (const event of bucket.deleteAll()) {
+      if (event.type === 'delete') deleted += 1
+    }
+
+    expect(deleted).toBe(2)
+    await expect(bucket.delete()).resolves.toMatchObject({ bucketId: bucket.id })
+    await expect(client.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(0)
   })
 })
 
