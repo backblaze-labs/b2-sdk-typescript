@@ -52,9 +52,9 @@ export const Capability = {
   ReadBucketLogging: 'readBucketLogging',
   /** Modify bucket logging settings. */
   WriteBucketLogging: 'writeBucketLogging',
-  /** Read bucket lifecycle-rule settings. */
+  /** Read bucket lifecycle rule settings. */
   ReadBucketLifecycleRules: 'readBucketLifecycleRules',
-  /** Modify bucket lifecycle-rule settings. */
+  /** Modify bucket lifecycle rule settings. */
   WriteBucketLifecycleRules: 'writeBucketLifecycleRules',
   /** List file names and versions. */
   ListFiles: 'listFiles',
