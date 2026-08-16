@@ -95,6 +95,7 @@ export async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal)
     const onAbort = (): void => reject(abortReason(signal))
     signal.addEventListener('abort', onAbort, { once: true })
     removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+    if (signal.aborted) onAbort()
   })
 
   try {
