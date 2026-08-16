@@ -114,7 +114,7 @@ export class BackupRawClient {
    * @param request - The computer listing query parameters.
    * @param options - Optional abort and per-request retry settings.
    *
-   * @returns The computer backup page object.
+   * @returns The array-shaped computer backup wire response.
    *
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */
