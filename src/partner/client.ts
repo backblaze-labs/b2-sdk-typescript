@@ -18,7 +18,7 @@ import type {
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
-import { racePromiseWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import { raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { paginateItems } from '../util/paginator.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
@@ -565,7 +565,7 @@ export class PartnerClient {
     this.#inflightReauth ??= this.doReauthorize(signal).finally(() => {
       this.#inflightReauth = null
     })
-    return racePromiseWithAbort(this.#inflightReauth, signal)
+    return raceWithAbort(this.#inflightReauth, signal)
   }
 
   private async doReauthorize(signal: AbortSignal | undefined): Promise<string> {

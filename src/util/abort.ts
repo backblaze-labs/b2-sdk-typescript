@@ -33,12 +33,18 @@ export function throwIfSignalAborted(signal: AbortSignal | undefined): void {
  * reason if the signal fires first, detaching the listener and suppressing the
  * losing promise's rejection so it never surfaces as an unhandled rejection.
  *
+ * The underlying work must still receive the same signal so transports can
+ * cancel their network activity. This helper only makes callers stop waiting
+ * promptly even when a test double or custom transport ignores the signal.
+ *
  * @param promise - The work to await.
  * @param signal - Abort signal, or undefined to await the promise directly.
  *
  * @returns The resolved value of `promise` when it settles before the signal aborts.
+ *
+ * @throws The abort reason if the signal aborts first, or the promise's rejection.
  */
-export async function racePromiseWithAbort<T>(
+export async function raceWithAbort<T>(
   promise: Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {

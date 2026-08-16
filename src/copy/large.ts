@@ -3,11 +3,7 @@ import type { RawClient } from '../raw/index.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import { type FileVersion, MetadataDirective } from '../types/file.ts'
 import { type BucketId, type FileId, fileId as fileIdOf, type LargeFileId } from '../types/ids.ts'
-import {
-  createAbortScope,
-  raceWithAbort,
-  throwRejectedOrAbortReason,
-} from '../upload/abort-scope.ts'
+import { createAbortScope, throwRejectedOrAbortReason } from '../upload/abort-scope.ts'
 import {
   type CleanupFailureListener,
   cancelLargeFileBestEffort,
@@ -15,6 +11,7 @@ import {
 } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
+import { raceWithAbort } from '../util/abort.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
 

@@ -7,7 +7,7 @@ import {
   NetworkError,
 } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
-import { abortReason, racePromiseWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
@@ -353,10 +353,9 @@ async function raceBodyReadWithAbort<T>(
 ): Promise<T> {
   const signal = timeoutScope.signal
   if (signal === undefined) return read
-  const abortReason = (): unknown => signal.reason ?? new DOMException('Aborted', 'AbortError')
   if (signal.aborted) {
     void read.catch(() => {})
-    const reason = abortReason()
+    const reason = abortReason(signal)
     await runAbortCleanup(abortCleanup, reason)
     throw reason
   }
@@ -364,7 +363,7 @@ async function raceBodyReadWithAbort<T>(
   let removeAbortListener: (() => void) | undefined
   const abort = new Promise<never>((_, reject) => {
     const onAbort = (): void => {
-      const reason = abortReason()
+      const reason = abortReason(signal)
       void read.catch(() => {})
       reject(reason)
       void runAbortCleanup(abortCleanup, reason)
@@ -632,10 +631,7 @@ export class RetryTransport implements HttpTransport {
           // retry would carry the expired token captured at
           // request-build time and bounce off the server again,
           // exhausting the retry budget.
-          const freshToken = await racePromiseWithAbort(
-            this.onReauth(request.signal),
-            request.signal,
-          )
+          const freshToken = await raceWithAbort(this.onReauth(request.signal), request.signal)
           throwIfSignalAborted(request.signal)
           request = {
             ...request,
