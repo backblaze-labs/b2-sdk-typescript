@@ -743,7 +743,7 @@ describe('PartnerClient facade', () => {
     ['query string', { groupsApiUrl: 'https://groups.backblazeb2.com/partner?token=secret' }],
     ['fragment', { groupsApiUrl: 'https://groups.backblazeb2.com/partner#token' }],
     ['internal host', { groupsApiUrl: 'https://metadata.google.internal/partner' }],
-  ])('clears unsafe cached auth before Partner tokens can leave: %s', async (_label, overrides) => {
+  ])('rejects unsafe cached auth before Partner tokens can leave: %s', async (_label, overrides) => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     partnerAccountInfo.setAuth(partnerAuthorizeResponse('victim-partner-token', overrides))
     const seenRequests: HttpRequest[] = []
@@ -759,7 +759,7 @@ describe('PartnerClient facade', () => {
       },
     })
 
-    expect(partnerAccountInfo.getAuth()).toBeNull()
+    expect(partnerAccountInfo.getPartnerToken()).toBe('victim-partner-token')
     await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
 
     expect(seenRequests).toEqual([])
@@ -797,7 +797,7 @@ describe('PartnerClient facade', () => {
       },
     })
 
-    expect(cleared).toBe(true)
+    expect(cleared).toBe(false)
     await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
 
     expect(seenRequests).toEqual([])

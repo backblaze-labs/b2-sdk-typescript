@@ -10,7 +10,7 @@ import {
 import { UrlGuard } from '../http/url-guard.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
-import { BackupRawClient } from './raw.ts'
+import { BackupRawClient, setAuthorizedBackupEndpointSuffixes } from './raw.ts'
 
 const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.resolve()
 
@@ -35,6 +35,15 @@ function requestJsonBody(request: HttpRequest): unknown {
   return JSON.parse(request.body) as unknown
 }
 
+function authorizedRawClient(
+  transport: HttpTransport,
+  suffixes: readonly string[] = ['backblazeb2.com', 'backblaze.com'],
+): BackupRawClient {
+  const raw = new BackupRawClient({ transport })
+  setAuthorizedBackupEndpointSuffixes(raw, suffixes)
+  return raw
+}
+
 describe('BackupRawClient', () => {
   it('builds bz_list_computers GET requests under the backup API path', async () => {
     const controller = new AbortController()
@@ -48,10 +57,7 @@ describe('BackupRawClient', () => {
         },
       ],
     })
-    const raw = new BackupRawClient({
-      transport,
-      authorizedBackupEndpointSuffixes: ['backblazeb2.com', 'backblaze.com'],
-    })
+    const raw = authorizedRawClient(transport)
 
     const response = await raw.listComputers(
       'https://backup.backblazeb2.com/backup',
@@ -90,10 +96,7 @@ describe('BackupRawClient', () => {
       },
     ]
     const { transport, seenRequests } = okTransport(deleted)
-    const raw = new BackupRawClient({
-      transport,
-      authorizedBackupEndpointSuffixes: ['backblazeb2.com', 'backblaze.com'],
-    })
+    const raw = authorizedRawClient(transport)
 
     const response = await raw.deleteComputer(
       'https://backup.backblazeb2.com/backup',
@@ -124,10 +127,7 @@ describe('BackupRawClient', () => {
   it('keeps delete retries disabled when the caller passes maxRetries', async () => {
     const retry = { maxRetries: 4, requestTimeoutMs: 1000 }
     const { transport, seenRequests } = okTransport([])
-    const raw = new BackupRawClient({
-      transport,
-      authorizedBackupEndpointSuffixes: ['backblazeb2.com', 'backblaze.com'],
-    })
+    const raw = authorizedRawClient(transport)
 
     await raw.deleteComputer(
       'https://backup.backblazeb2.com/backup',
@@ -227,10 +227,7 @@ describe('BackupRawClient', () => {
 
   it('accepts loopback HTTP backup URLs when the authorized suffix matches', async () => {
     const { transport, seenRequests } = okTransport()
-    const raw = new BackupRawClient({
-      transport,
-      authorizedBackupEndpointSuffixes: ['127.0.0.1'],
-    })
+    const raw = authorizedRawClient(transport, ['127.0.0.1'])
 
     await raw.listComputers('http://127.0.0.1:12345/backup', partnerToken('partner-token'), {
       accountId: accountId('account-1'),
@@ -274,10 +271,7 @@ describe('BackupRawClient', () => {
     ['off-realm host', 'https://attacker.example/backup'],
   ])('rejects unsafe backupApiUrl values: %s', async (_name, backupApiUrl) => {
     const { transport, seenRequests } = recordingTransport()
-    const raw = new BackupRawClient({
-      transport,
-      authorizedBackupEndpointSuffixes: ['backblazeb2.com', 'backblaze.com'],
-    })
+    const raw = authorizedRawClient(transport)
 
     await expect(
       raw.listComputers(backupApiUrl, partnerToken('partner-token'), {

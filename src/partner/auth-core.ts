@@ -10,6 +10,7 @@ import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import {
   derivePartnerAllowedSuffixes,
   PartnerRawClient,
+  setAuthorizedPartnerEndpointSuffixes,
   validatePartnerAuthorizeResponseEndpoints,
 } from './raw.ts'
 
@@ -121,13 +122,13 @@ export class PartnerAuthCore {
 
     this.raw = new PartnerRawClient({
       transport: this.transport,
-      ...(this.cachedEndpointSuffixes !== undefined
-        ? { authorizedPartnerEndpointSuffixes: this.cachedEndpointSuffixes }
-        : {}),
       ...(options.allowCustomAuthorizeRealm !== undefined
         ? { allowCustomAuthorizeRealm: options.allowCustomAuthorizeRealm }
         : {}),
     })
+    if (this.cachedEndpointSuffixes !== undefined) {
+      setAuthorizedPartnerEndpointSuffixes(this.raw, this.cachedEndpointSuffixes)
+    }
   }
 
   /**
@@ -186,7 +187,8 @@ export class PartnerAuthCore {
         this.allowCustomAuthorizeRealm,
       )
     } catch {
-      this.partnerAccountInfo.clear()
+      // Do not mutate a shared PartnerAccountInfo during construction. The
+      // facade will ignore this auth locally until authorize() replaces it.
       return undefined
     }
   }

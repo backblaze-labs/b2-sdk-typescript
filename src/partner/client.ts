@@ -50,8 +50,9 @@ export interface PartnerClientOptions {
   /**
    * Storage backend for Partner authorization state. Defaults to
    * {@link InMemoryPartnerAccountInfo}. Cached authorization whose endpoint
-   * URLs fail the configured realm policy is cleared during construction so
-   * callers can reauthorize before making Partner API requests.
+   * URLs fail the configured realm policy is ignored by this client until
+   * `authorize()` replaces it; shared stores are not cleared during
+   * construction.
    */
   readonly partnerAccountInfo?: PartnerAccountInfo
   /** Custom HTTP transport. Defaults to `FetchTransport`. Wrapped by `RetryTransport`. */

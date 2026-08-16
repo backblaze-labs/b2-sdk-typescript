@@ -59,13 +59,6 @@ export interface PartnerRawClientOptions {
    */
   readonly transport: HttpTransport
   /**
-   * Partner endpoint host suffixes that have already been validated from a
-   * cached Partner authorize response.
-   *
-   * @internal
-   */
-  readonly authorizedPartnerEndpointSuffixes?: readonly string[]
-  /**
    * Allow direct custom authorize realms for tests or private proxies.
    * Leave disabled unless the configured host is trusted with the Master Application Key.
    */
@@ -326,6 +319,27 @@ function reserveTrialCreateAccountRequestBody(
   }))
 }
 
+const partnerEndpointSuffixesByClient = new WeakMap<PartnerRawClient, readonly string[]>()
+
+function authorizedPartnerEndpointSuffixes(client: PartnerRawClient): readonly string[] {
+  return partnerEndpointSuffixesByClient.get(client) ?? []
+}
+
+/**
+ * Replaces the validated Partner endpoint host suffixes.
+ *
+ * @param client - Raw client whose endpoint suffixes should be updated.
+ * @param suffixes - Host suffixes derived from Partner authorization.
+ *
+ * @internal
+ */
+export function setAuthorizedPartnerEndpointSuffixes(
+  client: PartnerRawClient,
+  suffixes: readonly string[],
+): void {
+  partnerEndpointSuffixesByClient.set(client, suffixes)
+}
+
 /**
  * Low-level client for Partner API authorization and endpoint bindings.
  */
@@ -333,7 +347,6 @@ export class PartnerRawClient {
   /** @internal */
   private readonly transport: HttpTransport
   private readonly allowCustomAuthorizeRealm: boolean
-  private partnerEndpointSuffixes: readonly string[] = []
 
   /**
    * Creates a new PartnerRawClient with the given transport.
@@ -343,7 +356,6 @@ export class PartnerRawClient {
   constructor(options: PartnerRawClientOptions) {
     this.transport = options.transport
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
-    this.partnerEndpointSuffixes = options.authorizedPartnerEndpointSuffixes ?? []
   }
 
   /**
@@ -386,8 +398,9 @@ export class PartnerRawClient {
       realmUrl,
       this.allowCustomAuthorizeRealm,
     )
-    this.partnerEndpointSuffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
-    lockTransportUrlGuard(this.transport, this.partnerEndpointSuffixes)
+    const suffixes = derivePartnerAllowedSuffixes(auth, realmUrl)
+    setAuthorizedPartnerEndpointSuffixes(this, suffixes)
+    lockTransportUrlGuard(this.transport, suffixes)
     return auth
   }
 
@@ -592,7 +605,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      this.partnerEndpointSuffixes,
+      authorizedPartnerEndpointSuffixes(this),
       groupsApiUrl,
     )
     const response = await this.transport.send({
@@ -626,7 +639,7 @@ export class PartnerRawClient {
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
-      this.partnerEndpointSuffixes,
+      authorizedPartnerEndpointSuffixes(this),
       groupsApiUrl,
     )
     const response = await this.transport.send({

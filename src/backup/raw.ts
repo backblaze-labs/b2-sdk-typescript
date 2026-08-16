@@ -25,13 +25,6 @@ export interface BackupRawClientOptions {
    * use a transport with a locked `urlGuard`.
    */
   readonly transport: HttpTransport
-  /**
-   * Computer Backup endpoint host suffixes that have already been validated
-   * from a cached Partner authorize response.
-   *
-   * @internal
-   */
-  readonly authorizedBackupEndpointSuffixes?: readonly string[]
 }
 
 /** Optional controls for raw Computer Backup API requests. */
@@ -68,6 +61,27 @@ function mutationRequestOptions(
   }
 }
 
+const backupEndpointSuffixesByClient = new WeakMap<BackupRawClient, readonly string[]>()
+
+function authorizedBackupEndpointSuffixes(client: BackupRawClient): readonly string[] {
+  return backupEndpointSuffixesByClient.get(client) ?? []
+}
+
+/**
+ * Replaces the validated Computer Backup endpoint host suffixes.
+ *
+ * @param client - Raw client whose endpoint suffixes should be updated.
+ * @param suffixes - Host suffixes derived from Partner authorization.
+ *
+ * @internal
+ */
+export function setAuthorizedBackupEndpointSuffixes(
+  client: BackupRawClient,
+  suffixes: readonly string[],
+): void {
+  backupEndpointSuffixesByClient.set(client, suffixes)
+}
+
 /**
  * Low-level client for Computer Backup API endpoint bindings.
  *
@@ -80,7 +94,6 @@ function mutationRequestOptions(
 export class BackupRawClient {
   /** @internal */
   private readonly transport: HttpTransport
-  private backupEndpointSuffixes: readonly string[] = []
 
   /**
    * Creates a new BackupRawClient with the given transport.
@@ -89,18 +102,6 @@ export class BackupRawClient {
    */
   constructor(options: BackupRawClientOptions) {
     this.transport = options.transport
-    this.backupEndpointSuffixes = options.authorizedBackupEndpointSuffixes ?? []
-  }
-
-  /**
-   * Replaces the validated Computer Backup endpoint host suffixes.
-   *
-   * @param suffixes - Host suffixes derived from Partner authorization.
-   *
-   * @internal
-   */
-  setAuthorizedBackupEndpointSuffixes(suffixes: readonly string[]): void {
-    this.backupEndpointSuffixes = suffixes
   }
 
   /**
@@ -178,7 +179,7 @@ export class BackupRawClient {
     return validatePartnerEndpointUrl(
       backupApiUrl,
       'backupApiUrl',
-      backupEndpointAllowedSuffixes(this.transport, this.backupEndpointSuffixes),
+      backupEndpointAllowedSuffixes(this.transport, authorizedBackupEndpointSuffixes(this)),
     )
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { B2PartnerAuthorizationError } from '../errors/index.ts'
+import { B2PartnerAuthorizationError, ServiceUnavailableError } from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
 import { B2Simulator } from '../simulator/index.ts'
@@ -175,6 +175,40 @@ describe('BackupClient facade', () => {
     expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-2')
   })
 
+  it('keeps cached auth when expired-token backup reauthorization fails', async () => {
+    let authorizeCount = 0
+    const transport: HttpTransport = {
+      async send(request) {
+        const endpoint = apiEndpointName(request)
+        if (endpoint === 'b2_authorize_account') {
+          authorizeCount += 1
+          if (authorizeCount === 1) {
+            return jsonResponse(partnerAuthorizeResponse('partner-token-1'))
+          }
+          return jsonErrorResponse(503, 'service_unavailable', 'try again')
+        }
+        if (endpoint === 'bz_list_computers') {
+          return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+        }
+        throw new Error(`unexpected endpoint: ${endpoint}`)
+      },
+    }
+    const client = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport,
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await client.authorize()
+    await expect(client.listComputers()).rejects.toThrow(ServiceUnavailableError)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
+
+    await expect(client.listComputers()).rejects.toThrow(ServiceUnavailableError)
+    expect(authorizeCount).toBe(3)
+    expect(client.partnerAccountInfo.getPartnerToken()).toBe('partner-token-1')
+  })
+
   it('coalesces concurrent expired-token backup reauthorization', async () => {
     let authorizeCount = 0
     let expiredListCount = 0
@@ -314,7 +348,7 @@ describe('BackupClient facade', () => {
     expect(seenRequests).toHaveLength(0)
   })
 
-  it('clears unsafe cached Partner authorization during construction', () => {
+  it('ignores unsafe cached Partner authorization without clearing shared state', async () => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     const auth = partnerAuthorizeResponse('partner-token')
     partnerAccountInfo.setAuth({
@@ -329,14 +363,18 @@ describe('BackupClient facade', () => {
       },
       backupApiUrl: 'https://attacker.example/backup',
     })
+    const { transport, seenRequests } = recordingTransport()
 
-    new BackupClient({
+    const client = new BackupClient({
       masterKeyId: 'master-key-id',
       masterKey: 'master-key',
       partnerAccountInfo,
+      transport,
     })
 
-    expect(partnerAccountInfo.getAuth()).toBeNull()
+    expect(partnerAccountInfo.getPartnerToken()).toBe('partner-token')
+    await expect(client.listComputers()).rejects.toThrow(B2PartnerAuthorizationError)
+    expect(seenRequests).toHaveLength(0)
   })
 
   it('can explicitly disable the default URL guard for controlled tests', () => {

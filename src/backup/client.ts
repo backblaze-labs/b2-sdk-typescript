@@ -17,7 +17,7 @@ import type {
 import type { AccountId, ComputerId, PartnerToken } from '../types/ids.ts'
 import type { PartnerAuthorizeResponse } from '../types/partner.ts'
 import { paginateItems } from '../util/paginator.ts'
-import { BackupRawClient } from './raw.ts'
+import { BackupRawClient, setAuthorizedBackupEndpointSuffixes } from './raw.ts'
 
 const MASTER_KEY_REDACTED = '[redacted Master Application Key]'
 
@@ -43,7 +43,9 @@ export interface BackupClientOptions {
    * Shared Partner authorization state. Defaults to
    * {@link InMemoryPartnerAccountInfo}. Pass the same store to
    * {@link BackupClient} and Partner clients when both surfaces should reuse
-   * one Partner token.
+   * one Partner token. Cached authorization whose endpoints fail this client's
+   * realm policy is ignored locally until `authorize()` replaces it; shared
+   * stores are not cleared during construction.
    */
   readonly partnerAccountInfo?: PartnerAccountInfo
   /** Custom HTTP transport. Defaults to `FetchTransport`. Wrapped by `RetryTransport`. */
@@ -207,10 +209,10 @@ export class BackupClient {
     this.urlGuard = this.authCore.urlGuard
     this.raw = new BackupRawClient({
       transport: this.authCore.transport,
-      ...(this.authCore.cachedEndpointSuffixes !== undefined
-        ? { authorizedBackupEndpointSuffixes: this.authCore.cachedEndpointSuffixes }
-        : {}),
     })
+    if (this.authCore.cachedEndpointSuffixes !== undefined) {
+      setAuthorizedBackupEndpointSuffixes(this.raw, this.authCore.cachedEndpointSuffixes)
+    }
   }
 
   /**
@@ -224,7 +226,8 @@ export class BackupClient {
    */
   async authorize(options?: BackupAuthorizeOptions): Promise<PartnerAuthorizeResponse> {
     const auth = await this.authCore.authorize(options)
-    this.raw.setAuthorizedBackupEndpointSuffixes(
+    setAuthorizedBackupEndpointSuffixes(
+      this.raw,
       derivePartnerAllowedSuffixes(auth, this.authCore.realmUrl),
     )
     return auth
@@ -320,7 +323,7 @@ export class BackupClient {
       this.authCore.allowCustomAuthorizeRealm,
     )
     this.authCore.lockUrlGuardFromSuffixes(suffixes)
-    this.raw.setAuthorizedBackupEndpointSuffixes(suffixes)
+    setAuthorizedBackupEndpointSuffixes(this.raw, suffixes)
 
     const backupApiUrl = this.partnerAccountInfo.getBackupApiUrl()
     if (backupApiUrl === null) {
