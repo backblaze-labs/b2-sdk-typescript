@@ -14,7 +14,7 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     globals: true,
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'examples/**/*.node.test.ts'],
     // No `.slow.test.ts` exclude — `*.slow.test.ts` matches `*.test.ts` so the
     // glob above already picks both up.
     exclude: ['node_modules/**', 'dist/**'],

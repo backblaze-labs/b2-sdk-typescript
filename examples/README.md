@@ -11,6 +11,14 @@ Runnable examples demonstrating `@backblaze-labs/b2-sdk` usage patterns.
   - [Download a file](#download-a-file) (`node-download.ts`)
   - [Sync a directory](#sync-a-directory) (`node-sync-cli.ts`)
   - [Upload with a progress bar](#upload-with-a-progress-bar) (`node-with-progress.ts`)
+- **Partner and Computer Backup examples**
+  - [Authorize Partner API access](#authorize-partner-api-access) (`partner-authorize.ts`)
+  - [Create a group member](#create-a-group-member) (`partner-create-group-member.ts`)
+  - [List groups and members](#list-groups-and-members) (`partner-list-groups-and-members.ts`)
+  - [Eject a group member](#eject-a-group-member) (`partner-eject-group-member.ts`)
+  - [Reserve trial accounts](#reserve-trial-accounts) (`partner-reserve-trial-account.ts`, `partner-reserve-trial-accounts.ts`)
+  - [List Computer Backup records](#list-computer-backup-records) (`backup-list-computers.ts`)
+  - [Delete a Computer Backup record](#delete-a-computer-backup-record) (`backup-delete-computer.ts`)
 - **Browser**
   - [Browser uploader](#browser-uploader) (`browser-uploader/`)
 - **Cookbook** (production-shaped recipes)
@@ -22,12 +30,14 @@ Runnable examples demonstrating `@backblaze-labs/b2-sdk` usage patterns.
 
 ## Prerequisites
 
-All examples require B2 credentials via environment variables:
+Storage examples use B2 application key credentials:
 
 ```bash
 export B2_APPLICATION_KEY_ID=your-key-id
 export B2_APPLICATION_KEY=your-application-key
 ```
+
+Partner and Computer Backup examples use Master Application Key credentials; see [Partner and Computer Backup examples](#partner-and-computer-backup-examples).
 
 Run from the SDK root directory. Examples use `npx tsx` for direct TypeScript execution, but thanks to the SDK's [source-level isomorphism](../README.md#source-isomorphism), the `node-*` scripts also run unchanged in Bun and Deno:
 
@@ -122,6 +132,96 @@ Throttled CLI progress bar (10 Hz, ETA, throughput) wired into the SDK's `onProg
 
 ```bash
 npx tsx examples/node-with-progress.ts my-bucket ./big-file.zip
+```
+
+## Partner and Computer Backup examples
+
+These examples use the `/partner` and `/backup` SDK entry points. They require a Master Application Key:
+
+```bash
+export B2_MASTER_KEY_ID=your-master-key-id
+export B2_MASTER_KEY=your-master-application-key
+```
+
+In a source checkout, run `pnpm build` before the Node `npx tsx` commands below so package subpath exports resolve to `dist/` exactly as they do for an installed package.
+
+Partner group and member operations require Business Groups enabled and sales-approved Partner API access. Partner operations that create accounts, including creating group members and reserving trial accounts, also require the account prerequisites accepted by the API, including a valid SMS phone number. Computer Backup operations require Enterprise Controls for the target group; deleting a backup also requires the admin delete permission in those controls.
+
+Examples that create accounts never print one-time application key secrets to stdout or stderr. Set `B2_APPLICATION_KEY_FILE` or `B2_TRIAL_BATCH_FILE` to a caller-controlled path; the examples create these files with mode `0600` and write the live credential material there. Do not point those paths at shared directories, synced folders, CI artifacts, or support bundles.
+
+### Authorize Partner API access
+
+Authorize with a Master Application Key and print the Partner and Computer Backup endpoints returned by the API.
+
+```bash
+npx tsx examples/partner-authorize.ts
+```
+
+### Create a group member
+
+Create a new account and add it to a Partner group. The optional region must be one of the `Region` values exported by `@backblaze-labs/b2-sdk/partner`.
+
+```bash
+B2_CONFIRM_CREATE_GROUP_MEMBER=1 \
+B2_APPLICATION_KEY_FILE=./member-key.json \
+  npx tsx examples/partner-create-group-member.ts <group-id> <member-email> [region]
+```
+
+### List groups and members
+
+Iterate Partner groups and active members through the SDK paginators. Set `B2_GROUP_PAGE_SIZE`, `B2_MEMBER_PAGE_SIZE`, `B2_MAX_GROUPS`, or `B2_MAX_MEMBERS_PER_GROUP` to tune page sizes and output limits.
+
+```bash
+npx tsx examples/partner-list-groups-and-members.ts [group-name]
+```
+
+### Eject a group member
+
+Eject a member from a Partner group without deleting the account.
+
+```bash
+B2_CONFIRM_EJECT=1 \
+  npx tsx examples/partner-eject-group-member.ts <group-id> <member-account-id> [replacement-email]
+```
+
+### Reserve trial accounts
+
+Reserve one trial account:
+
+```bash
+B2_CONFIRM_RESERVE_TRIAL=1 \
+B2_APPLICATION_KEY_FILE=./trial-key.json \
+  npx tsx examples/partner-reserve-trial-account.ts <email> <term-days> <storage-tb> [region]
+```
+
+Reserve multiple trial accounts with shared term, storage, and optional region settings:
+
+```bash
+B2_CONFIRM_RESERVE_TRIAL=1 \
+B2_TRIAL_BATCH_FILE=./trial-batch-results.json \
+B2_TRIAL_EMAILS=a@example.com,b@example.com \
+B2_TRIAL_TERM_DAYS=7 \
+B2_TRIAL_STORAGE_TB=1 \
+  npx tsx examples/partner-reserve-trial-accounts.ts
+```
+
+The batch example creates `B2_TRIAL_BATCH_FILE` with mode `0600`, stores the requested batch before issuing any non-idempotent reservation call, and processes one email at a time. Before each reservation call it records the email in progress, and after each returned result it records that account ID and one-time application key secret before continuing to the next email. If a timeout or process restart leaves the file pending, use `B2_RECONCILE_TRIAL_BATCH=1` to list the unresolved emails, reconcile those accounts in your Partner account, then archive the batch file and choose a new path before retrying.
+
+### List Computer Backup records
+
+List active Computer Backup records through the SDK paginator. Omit `account-id` to list backups for the authorized partner administrator account. Set `B2_COMPUTER_PAGE_SIZE` or `B2_MAX_COMPUTERS` to tune pagination and output limits.
+
+```bash
+npx tsx examples/backup-list-computers.ts [account-id]
+```
+
+### Delete a Computer Backup record
+
+Delete a Computer Backup record by computer ID. Omit `account-id` when deleting a backup owned by the authorized partner administrator account.
+
+```bash
+B2_CONFIRM_DELETE_COMPUTER=1 \
+  npx tsx examples/backup-delete-computer.ts <computer-id> [account-id]
 ```
 
 ## Browser uploader

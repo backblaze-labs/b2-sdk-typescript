@@ -68,9 +68,15 @@ export type PageFetcher<Page, Cursor> = (cursor: Cursor | undefined) => Promise<
   nextCursor: Cursor | undefined
 }>
 
+function isPrimitiveCursor(cursor: unknown): boolean {
+  return cursor === null || (typeof cursor !== 'object' && typeof cursor !== 'function')
+}
+
 /**
  * Async-iterates one page at a time. Stops when `fetcher` returns
- * `nextCursor: undefined`.
+ * `nextCursor: undefined` or a primitive cursor that is identical to the
+ * cursor just used, which prevents non-advancing server cursors from looping
+ * forever.
  *
  * @typeParam Page - The per-page response shape.
  * @typeParam Cursor - The cursor type used to request the next page.
@@ -105,6 +111,14 @@ export async function* paginatePages<Page, Cursor>(
     const { page, nextCursor } = await fetcher(cursor)
     yield page
     if (nextCursor === undefined) return
+    if (
+      cursor !== undefined &&
+      isPrimitiveCursor(cursor) &&
+      isPrimitiveCursor(nextCursor) &&
+      Object.is(nextCursor, cursor)
+    ) {
+      return
+    }
     cursor = nextCursor
   }
 }

@@ -78,6 +78,19 @@ describe('paginatePages', () => {
     expect(callCount).toBe(2)
   })
 
+  it('stops when a primitive cursor does not advance', async () => {
+    let callCount = 0
+    const fetcher: PageFetcher<string, string> = async (cursor) => {
+      callCount += 1
+      if (cursor === undefined) return { page: 'first', nextCursor: 'cursor-1' }
+      return { page: 'second', nextCursor: cursor }
+    }
+    const pages: string[] = []
+    for await (const page of paginatePages(fetcher, undefined)) pages.push(page)
+    expect(pages).toEqual(['first', 'second'])
+    expect(callCount).toBe(2)
+  })
+
   it('aborts before the first fetch when the signal is already aborted', async () => {
     const { fetcher, callCount } = arrayFetcher([[1, 2, 3]])
     const controller = new AbortController()
@@ -155,6 +168,35 @@ describe('paginatePages', () => {
     const collected: string[] = []
     for await (const page of paginatePages(fetcher, undefined)) collected.push(...page)
     expect(collected).toEqual(['a', 'b', 'c'])
+  })
+
+  it('continues when an object cursor reuses the same mutated reference', async () => {
+    type Cursor = { index: number }
+    const sharedCursor: Cursor = { index: 1 }
+    let calls = 0
+    const fetcher: PageFetcher<string, Cursor> = async (cursor) => {
+      calls += 1
+      if (calls === 1) {
+        expect(cursor).toBeUndefined()
+        return { page: 'first', nextCursor: sharedCursor }
+      }
+      if (cursor === undefined) throw new Error('missing cursor')
+      expect(cursor).toBe(sharedCursor)
+      if (calls === 2) {
+        expect(cursor.index).toBe(1)
+        sharedCursor.index = 2
+        return { page: 'second', nextCursor: sharedCursor }
+      }
+      if (calls === 3) {
+        expect(cursor.index).toBe(2)
+        return { page: 'third', nextCursor: undefined }
+      }
+      throw new Error('overran')
+    }
+    const collected: string[] = []
+    for await (const page of paginatePages(fetcher, undefined)) collected.push(page)
+    expect(collected).toEqual(['first', 'second', 'third'])
+    expect(calls).toBe(3)
   })
 })
 
