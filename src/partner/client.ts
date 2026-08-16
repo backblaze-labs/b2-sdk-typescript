@@ -521,8 +521,7 @@ export class PartnerClient {
     if (auth === null) {
       throw new B2PartnerAuthorizationError('Not authorized. Call PartnerClient.authorize() first.')
     }
-    const suffixes = this.authCore.validateEndpointSuffixes(auth)
-    this.authCore.lockUrlGuardFromSuffixes(suffixes)
+    const suffixes = this.authCore.activateEndpointSuffixes(auth)
     this.raw.setAuthorizedEndpointSuffixes(suffixes)
     return auth
   }

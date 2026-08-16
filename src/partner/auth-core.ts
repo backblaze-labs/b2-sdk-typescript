@@ -66,12 +66,12 @@ export class PartnerAuthCore {
   readonly urlGuard: UrlGuard | null
   /** Retry-wrapped transport shared by facade-specific raw clients. */
   readonly transport: HttpTransport
-  /** Resolved Partner authorize realm URL. */
-  readonly realmUrl: string
-  /** Whether custom authorize realms are trusted. */
-  readonly allowCustomAuthorizeRealm: boolean
   /** Endpoint suffixes validated from cached authorization during construction. */
   readonly cachedEndpointSuffixes: readonly string[] | undefined
+  /** Resolved Partner authorize realm URL. */
+  private readonly realmUrl: string
+  /** Whether custom authorize realms are trusted. */
+  private readonly allowCustomAuthorizeRealm: boolean
   readonly #masterKeyId: string
   readonly #masterKey: string
   private readonly additionalAllowedSuffixes: readonly string[] | undefined
@@ -165,7 +165,7 @@ export class PartnerAuthCore {
    *
    * @param derived - Validated endpoint suffixes.
    */
-  lockUrlGuardFromSuffixes(derived: readonly string[]): void {
+  private lockUrlGuardFromSuffixes(derived: readonly string[]): void {
     if (this.urlGuard === null) return
     const merged =
       this.disableSsrfGuard === true
@@ -185,12 +185,27 @@ export class PartnerAuthCore {
    *
    * @internal
    */
-  validateEndpointSuffixes(auth: PartnerAuthorizeResponse): readonly string[] {
+  private validateEndpointSuffixes(auth: PartnerAuthorizeResponse): readonly string[] {
     return validatePartnerAuthorizeResponseEndpoints(
       auth,
       this.realmUrl,
       this.allowCustomAuthorizeRealm,
     )
+  }
+
+  /**
+   * Validates an auth snapshot, locks the default URL guard, and returns endpoint suffixes.
+   *
+   * @param auth - Partner authorization response to validate and activate.
+   *
+   * @returns Host suffixes safe for Partner-token endpoint requests.
+   *
+   * @internal
+   */
+  activateEndpointSuffixes(auth: PartnerAuthorizeResponse): readonly string[] {
+    const suffixes = this.validateEndpointSuffixes(auth)
+    this.lockUrlGuardFromSuffixes(suffixes)
+    return suffixes
   }
 
   private validateCachedAuth(): readonly string[] | undefined {

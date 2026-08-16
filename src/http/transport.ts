@@ -493,12 +493,10 @@ function b2ApiEndpointName(url: string): string | undefined {
 
 function backupApiEndpointName(url: string): string | undefined {
   const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
-  for (let i = segments.length - 4; i >= 0; i--) {
-    if (segments[i] !== 'api' || segments[i + 1] !== 'backup') continue
-    if (!/^v\d+$/.test(segments[i + 2] ?? '')) continue
-    return segments[i + 3]
-  }
-  return undefined
+  const apiRootIndex = segments.lastIndexOf('api')
+  if (apiRootIndex === -1 || segments[apiRootIndex + 1] !== 'backup') return undefined
+  if (!/^v\d+$/.test(segments[apiRootIndex + 2] ?? '')) return undefined
+  return segments[apiRootIndex + 3]
 }
 
 function isReplayUnsafePostRequest(request: HttpRequest): boolean {

@@ -4,7 +4,6 @@ import type { HttpTransport } from '../http/transport.ts'
 import type { UrlGuard } from '../http/url-guard.ts'
 import type { PartnerAccountInfo } from '../partner/account-info.ts'
 import { PartnerAuthCore } from '../partner/auth-core.ts'
-import { derivePartnerAllowedSuffixes } from '../partner/raw.ts'
 import { PARTNER_TOKEN_REDACTED } from '../partner/redaction.ts'
 import type {
   ComputerBackup,
@@ -161,6 +160,8 @@ function normalizeListComputersResponse(response: ListComputersResponse): ListCo
   if (!Array.isArray(response)) {
     throw badListComputersResponse('expected a JSON array')
   }
+  // Archived Backup API docs model an empty account as one result object with
+  // an empty `computers` array, not a top-level empty array.
   if (response.length === 0) {
     throw badListComputersResponse('expected one or more result objects')
   }
@@ -190,7 +191,9 @@ function normalizeListComputersResponse(response: ListComputersResponse): ListCo
       }
       nextComputerId = computerId(cursor)
     }
-    computers.push(...(resultComputers as readonly ComputerBackup[]))
+    for (const computer of resultComputers as readonly ComputerBackup[]) {
+      computers.push(computer)
+    }
   }
 
   return { nextComputerId, computers }
@@ -275,9 +278,7 @@ export class BackupClient {
    */
   async authorize(options?: BackupAuthorizeOptions): Promise<PartnerAuthorizeResponse> {
     const auth = await this.authCore.authorize(options)
-    this.raw.setAuthorizedEndpointSuffixes(
-      derivePartnerAllowedSuffixes(auth, this.authCore.realmUrl),
-    )
+    this.raw.setAuthorizedEndpointSuffixes(this.authCore.activateEndpointSuffixes(auth))
     return auth
   }
 
@@ -365,8 +366,7 @@ export class BackupClient {
     if (auth === null) {
       throw new B2PartnerAuthorizationError('Not authorized. Call BackupClient.authorize() first.')
     }
-    const suffixes = this.authCore.validateEndpointSuffixes(auth)
-    this.authCore.lockUrlGuardFromSuffixes(suffixes)
+    const suffixes = this.authCore.activateEndpointSuffixes(auth)
     this.raw.setAuthorizedEndpointSuffixes(suffixes)
     return auth
   }

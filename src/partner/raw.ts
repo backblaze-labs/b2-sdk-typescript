@@ -29,6 +29,7 @@ import type {
 import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
 import {
   endpointAllowedSuffixes,
+  nonRetryingMutationRequestOptions,
   type QueryParams,
   validatePartnerEndpointUrl,
   withQueryString,
@@ -302,17 +303,6 @@ function validatePartnerRequestGroupsApiUrl(
   )
 }
 
-function mutationRequestOptions(
-  options: PartnerRawRequestOptions | undefined,
-): PartnerRawRequestOptions {
-  return {
-    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-    // These Partner POSTs create/eject accounts and are not idempotent. Keep
-    // in-place retries disabled even if callers share retry options with GETs.
-    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
-  }
-}
-
 function reserveTrialCreateAccountRequestBody(
   request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
 ): readonly ReserveTrialCreateAccountRequestEntry[] {
@@ -432,7 +422,7 @@ export class PartnerRawClient {
         memberEmail: request.memberEmail,
         ...(request.region != null ? { region: request.region } : {}),
       },
-      mutationRequestOptions(options),
+      nonRetryingMutationRequestOptions(options),
     )
     return redactCreateGroupMemberResponse(response)
   }
@@ -466,7 +456,7 @@ export class PartnerRawClient {
         memberAccountId: request.memberAccountId,
         ...(request.email !== undefined ? { email: request.email } : {}),
       },
-      mutationRequestOptions(options),
+      nonRetryingMutationRequestOptions(options),
     )
   }
 
@@ -513,7 +503,7 @@ export class PartnerRawClient {
       authToken,
       'b2_reserve_trial_create_account',
       reserveTrialCreateAccountRequestBody(request),
-      mutationRequestOptions(options),
+      nonRetryingMutationRequestOptions(options),
     )
     return redactReserveTrialCreateAccountResponse(response)
   }

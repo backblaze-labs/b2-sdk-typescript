@@ -2,6 +2,7 @@ import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
   endpointAllowedSuffixes,
+  nonRetryingMutationRequestOptions,
   type QueryParams,
   validatePartnerEndpointUrl,
   withQueryString,
@@ -54,17 +55,6 @@ function backupEndpointAllowedSuffixes(
     unlockedGuard:
       'Computer Backup endpoint requests require a locked URL guard before sending Partner tokens',
   })
-}
-
-function mutationRequestOptions(
-  options: BackupRawRequestOptions | undefined,
-): BackupRawRequestOptions {
-  return {
-    ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-    // Backup deletes are destructive and not proven idempotent. Keep automatic
-    // replay disabled even when callers pass retry options intended for GETs.
-    retry: { ...(options?.retry ?? {}), maxRetries: 0 },
-  }
 }
 
 /**
@@ -170,7 +160,7 @@ export class BackupRawClient {
         accountId: request.accountId,
         computerId: request.computerId,
       },
-      mutationRequestOptions(options),
+      nonRetryingMutationRequestOptions(options),
     )
   }
 

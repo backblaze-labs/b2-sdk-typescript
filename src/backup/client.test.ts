@@ -4,7 +4,7 @@ import {
   BadJsonError,
   ServiceUnavailableError,
 } from '../errors/index.ts'
-import type { HttpRequest, HttpTransport } from '../http/transport.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import {
@@ -97,6 +97,17 @@ function makeCachedBackupClient(body: unknown): BackupClient {
       },
     },
   })
+}
+
+function inMemoryJsonResponse<T>(data: T): HttpResponse {
+  return {
+    status: 200,
+    headers: new Headers({ 'Content-Type': 'application/json' }),
+    body: null,
+    json: <U>() => Promise.resolve(data as unknown as U),
+    text: () => Promise.resolve(''),
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+  }
 }
 
 describe('BackupClient facade', () => {
@@ -415,6 +426,36 @@ describe('BackupClient facade', () => {
     expect(new URL(seenRequests[1]?.url ?? '').searchParams.get('startComputerId')).toBe(
       computerC.computerId,
     )
+  })
+
+  it('normalizes very large list results without argument-spread limits', async () => {
+    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+    partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token'))
+    const computer: ComputerBackup = {
+      computerId: computerId('computer-1'),
+      computerName: 'large-fleet-computer',
+      lastFileUploadedTimestamp: 100,
+    }
+    const computers = Array.from({ length: 200_001 }, () => computer)
+    const client = new BackupClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          if (apiEndpointName(request) !== 'bz_list_computers') {
+            throw new Error(`unexpected endpoint: ${apiEndpointName(request)}`)
+          }
+          return inMemoryJsonResponse([{ nextComputerId: null, computers }])
+        },
+      },
+    })
+
+    const page = await client.listComputers()
+
+    expect(page.computers).toHaveLength(computers.length)
+    expect(page.computers[0]).toBe(computer)
+    expect(page.computers.at(-1)).toBe(computer)
   })
 
   it('rejects calls before authorization', async () => {
