@@ -95,16 +95,15 @@ export class BackupRawClient {
   /**
    * Calls `bz_list_computers`.
    *
-   * Uses the documented GET form. The wire response is a JSON array whose
-   * result object has a `nextComputerId` cursor and active computer backup
-   * records.
+   * Uses the documented GET form. The wire response is a single JSON object
+   * with a `nextComputerId` cursor and active computer backup records.
    *
    * @param backupApiUrl - The Computer Backup API base URL from `authorizePartner`.
    * @param authToken - The Partner authorization token.
    * @param request - The computer listing query parameters.
    * @param options - Optional abort and per-request retry settings.
    *
-   * @returns The array-shaped computer backup wire response.
+   * @returns The single-object computer backup wire response.
    *
    * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
    */

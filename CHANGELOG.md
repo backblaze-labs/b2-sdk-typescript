@@ -40,17 +40,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Partner API and Computer Backup type layer.** Public exports now include
   Partner API and Computer Backup request/response types, branded
   `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
-  The response types document the Partner and Backup array-shaped wire
-  responses and preserve numeric-looking group IDs and B2 statistics counts as
-  strings. Endpoint types still awaiting runtime methods are marked
-  experimental until those methods are implemented and exercised.
+  The response types document each Partner and Backup endpoint's wire shape
+  (array-shaped or single-object per the API docs) and preserve numeric-looking
+  group IDs and B2 statistics counts as strings. Endpoint types still awaiting
+  runtime methods are marked experimental until those methods are implemented
+  and exercised.
 
 ### Changed
 
-- **Computer Backup facade normalizes list pages.** `BackupRawClient`
-  preserves the documented array-shaped `bz_list_computers` wire response, while
-  `BackupClient.listComputers()` returns a single page object with `computers`
-  and `nextComputerId` and rejects malformed or ambiguous wire arrays before
+- **Computer Backup facade validates list pages.** `BackupRawClient.listComputers()`
+  returns the documented single-object `bz_list_computers` wire response, and
+  `BackupClient.listComputers()` validates that page object and returns its
+  `computers` and `nextComputerId`, rejecting malformed wire shapes before
   pagination can silently truncate results.
 - **Partner auth cache validation is non-destructive during construction.**
   `PartnerClient` and `BackupClient` ignore unsafe cached Partner authorization

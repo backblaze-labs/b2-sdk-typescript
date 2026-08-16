@@ -157,46 +157,25 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 function normalizeListComputersResponse(response: ListComputersResponse): ListComputersResult {
-  if (!Array.isArray(response)) {
-    throw badListComputersResponse('expected a JSON array')
+  // Archived Backup API docs model bz_list_computers as a single result object
+  // with a pagination cursor and a `computers` array (an empty account returns
+  // an empty `computers` array, not a top-level empty array).
+  if (!isRecord(response) || Array.isArray(response)) {
+    throw badListComputersResponse('expected a JSON object')
   }
-  // Archived Backup API docs model an empty account as one result object with
-  // an empty `computers` array, not a top-level empty array.
-  if (response.length === 0) {
-    throw badListComputersResponse('expected one or more result objects')
+  const resultComputers = response['computers']
+  if (!Array.isArray(resultComputers)) {
+    throw badListComputersResponse('response must include a computers array')
   }
-
-  const computers: ComputerBackup[] = []
-  let nextComputerId: ComputerId | null = null
-
-  for (const [index, result] of response.entries()) {
-    if (!isRecord(result)) {
-      throw badListComputersResponse(`result ${index} must be an object`)
-    }
-    const resultComputers = result['computers']
-    if (!Array.isArray(resultComputers)) {
-      throw badListComputersResponse(`result ${index} must include a computers array`)
-    }
-    const cursor = result['nextComputerId']
-    if (cursor !== null && typeof cursor !== 'string') {
-      throw badListComputersResponse(
-        `result ${index} must include nextComputerId as string or null`,
-      )
-    }
-    if (cursor !== null) {
-      if (index !== response.length - 1 || nextComputerId !== null) {
-        throw badListComputersResponse(
-          'multiple result objects must expose at most one final continuation cursor',
-        )
-      }
-      nextComputerId = computerId(cursor)
-    }
-    for (const computer of resultComputers as readonly ComputerBackup[]) {
-      computers.push(computer)
-    }
+  const cursor = response['nextComputerId']
+  if (cursor !== null && typeof cursor !== 'string') {
+    throw badListComputersResponse('response must include nextComputerId as string or null')
   }
 
-  return { nextComputerId, computers }
+  return {
+    nextComputerId: cursor === null ? null : computerId(cursor),
+    computers: resultComputers as readonly ComputerBackup[],
+  }
 }
 
 /** Redacted JSON diagnostic shape emitted by {@link BackupClient.toJSON}. */

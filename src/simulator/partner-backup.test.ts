@@ -110,7 +110,7 @@ describe('B2Simulator partner endpoints', () => {
       authorization,
     })
     expect(computers.status).toBe(200)
-    expect(computers.body[0]?.computers).toHaveLength(3)
+    expect(computers.body.computers).toHaveLength(3)
   })
 
   it('handles prototype-shaped query keys on Partner GET endpoints', async () => {
@@ -789,7 +789,7 @@ describe('B2Simulator partner endpoints', () => {
       url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=${auth.accountId}`,
       authorization: auth.authorizationToken,
     })
-    const computerId = computers.body[0]?.computers[0]?.computerId
+    const computerId = computers.body.computers[0]?.computerId
     if (computerId === undefined) throw new Error('expected simulator computer')
 
     await expectUnauthorized(
@@ -888,7 +888,7 @@ describe('B2Simulator partner endpoints', () => {
       url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=${auth.accountId}`,
       authorization: auth.authorizationToken,
     })
-    const computerId = computers.body[0]?.computers[0]?.computerId
+    const computerId = computers.body.computers[0]?.computerId
     if (computerId === undefined) throw new Error('expected simulator computer')
 
     const deleteComputerViaGet = await simulatorRequest<ErrorBody>(sim, {
@@ -991,11 +991,10 @@ describe('B2Simulator backup endpoints', () => {
     })
 
     expect(firstPage.status).toBe(200)
-    expect(firstPage.body).toHaveLength(1)
-    expect(firstPage.body[0]?.computers).toHaveLength(1)
-    expect(firstPage.body[0]?.nextComputerId).toEqual(expect.any(String))
-    const firstComputer = firstPage.body[0]?.computers[0]
-    const nextComputerId = firstPage.body[0]?.nextComputerId
+    expect(firstPage.body.computers).toHaveLength(1)
+    expect(firstPage.body.nextComputerId).toEqual(expect.any(String))
+    const firstComputer = firstPage.body.computers[0]
+    const nextComputerId = firstPage.body.nextComputerId
     if (firstComputer === undefined || nextComputerId === null) {
       throw new Error('expected paginated simulator computers')
     }
@@ -1005,9 +1004,9 @@ describe('B2Simulator backup endpoints', () => {
       authorization: auth.authorizationToken,
     })
     expect(secondPage.status).toBe(200)
-    expect(secondPage.body[0]?.computers[0]?.computerId).toBe(nextComputerId)
+    expect(secondPage.body.computers[0]?.computerId).toBe(nextComputerId)
 
-    const deleted = await simulatorRequest<ListComputersResponse[number]['computers']>(sim, {
+    const deleted = await simulatorRequest<ListComputersResponse['computers']>(sim, {
       url: 'http://localhost:0/api/backup/v1/bz_delete_computer',
       method: 'POST',
       authorization: auth.authorizationToken,

@@ -22,7 +22,7 @@ import { BackupRawClient } from './raw.ts'
 
 const noSleep = (_ms: number, _signal?: AbortSignal): Promise<void> => Promise.resolve()
 
-function okTransport(body: unknown = [{ nextComputerId: null, computers: [] }]): {
+function okTransport(body: unknown = { nextComputerId: null, computers: [] }): {
   readonly transport: HttpTransport
   readonly seenRequests: HttpRequest[]
 } {
@@ -103,18 +103,16 @@ async function makeSimulatorBackupRawClient(): Promise<{
 describe('BackupRawClient', () => {
   it('builds bz_list_computers GET requests under the backup API path', async () => {
     const controller = new AbortController()
-    const { transport, seenRequests } = okTransport([
-      {
-        nextComputerId: computerId('computer-2'),
-        computers: [
-          {
-            computerId: computerId('computer-1'),
-            computerName: 'laptop',
-            lastFileUploadedTimestamp: 123,
-          },
-        ],
-      },
-    ])
+    const { transport, seenRequests } = okTransport({
+      nextComputerId: computerId('computer-2'),
+      computers: [
+        {
+          computerId: computerId('computer-1'),
+          computerName: 'laptop',
+          lastFileUploadedTimestamp: 123,
+        },
+      ],
+    })
     const raw = authorizedRawClient(transport)
 
     const response = await raw.listComputers(
@@ -128,8 +126,8 @@ describe('BackupRawClient', () => {
       { signal: controller.signal, retry: { maxRetries: 3 } },
     )
 
-    expect(response).toHaveLength(1)
-    expect(response[0]?.nextComputerId).toBe('computer-2')
+    expect(response.nextComputerId).toBe('computer-2')
+    expect(response.computers).toHaveLength(1)
     expect(seenRequests).toHaveLength(1)
     const request = seenRequests[0]
     expect(request?.method).toBe('GET')
@@ -159,13 +157,11 @@ describe('BackupRawClient', () => {
       accountId: adminAccountId,
       maxComputerCount: 1,
     })
-    expect(Array.isArray(firstPage)).toBe(true)
-    expect(firstPage).toHaveLength(1)
-    expect(firstPage[0]?.computers).toHaveLength(1)
-    expect(firstPage[0]?.nextComputerId).toEqual(expect.any(String))
-    const firstComputer = firstPage[0]?.computers[0]
-    const nextComputerId = firstPage[0]?.nextComputerId
-    if (firstComputer === undefined || nextComputerId === null || nextComputerId === undefined) {
+    expect(firstPage.computers).toHaveLength(1)
+    expect(firstPage.nextComputerId).toEqual(expect.any(String))
+    const firstComputer = firstPage.computers[0]
+    const nextComputerId = firstPage.nextComputerId
+    if (firstComputer === undefined || nextComputerId === null) {
       throw new Error('expected simulator computer page with a next cursor')
     }
 
@@ -174,8 +170,7 @@ describe('BackupRawClient', () => {
       startComputerId: nextComputerId,
       maxComputerCount: 1,
     })
-    expect(Array.isArray(secondPage)).toBe(true)
-    expect(secondPage[0]?.computers[0]?.computerId).toBe(nextComputerId)
+    expect(secondPage.computers[0]?.computerId).toBe(nextComputerId)
 
     const deleted = await raw.deleteComputer(backupApiUrl, authToken, {
       accountId: adminAccountId,
@@ -199,7 +194,7 @@ describe('BackupRawClient', () => {
       accountId: adminAccountId,
     } = await makeSimulatorBackupRawClient()
     const page = await raw.listComputers(backupApiUrl, authToken, { accountId: adminAccountId })
-    const computer = page[0]?.computers[0]
+    const computer = page.computers[0]
     if (computer === undefined) throw new Error('expected simulator computer')
 
     await expect(

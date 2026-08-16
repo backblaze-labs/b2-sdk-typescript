@@ -188,7 +188,7 @@ describe('BackupClient facade', () => {
           if (listAuthorizations.length === 1) {
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse([{ nextComputerId: null, computers: [] }])
+          return jsonResponse({ nextComputerId: null, computers: [] })
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -268,7 +268,7 @@ describe('BackupClient facade', () => {
             if (expiredListCount === 3) allExpiredLists.resolve()
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse([{ nextComputerId: null, computers: [] }])
+          return jsonResponse({ nextComputerId: null, computers: [] })
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -322,7 +322,7 @@ describe('BackupClient facade', () => {
             if (expiredListCount === 2) allExpiredLists.resolve()
             return jsonErrorResponse(401, 'expired_auth_token', 'simulated expiry')
           }
-          return jsonResponse([{ nextComputerId: null, computers: [] }])
+          return jsonResponse({ nextComputerId: null, computers: [] })
         }
         throw new Error(`unexpected endpoint: ${endpoint}`)
       },
@@ -353,24 +353,18 @@ describe('BackupClient facade', () => {
   })
 
   it.each([
-    ['non-array body', { nextComputerId: 'computer-2', computers: [] }],
-    ['empty array', []],
-    [
-      'conflicting multi-result cursors',
-      [
-        { nextComputerId: computerId('computer-2'), computers: [] },
-        { nextComputerId: computerId('computer-3'), computers: [] },
-      ],
-    ],
-    ['missing computers', [{ nextComputerId: null }]],
-    ['non-array computers', [{ nextComputerId: null, computers: {} }]],
+    ['array body', [{ nextComputerId: null, computers: [] }]],
+    ['null body', null],
+    ['missing computers', { nextComputerId: null }],
+    ['non-array computers', { nextComputerId: null, computers: {} }],
+    ['non-string cursor', { nextComputerId: 5, computers: [] }],
   ])('rejects malformed bz_list_computers response shape: %s', async (_name, body) => {
     const client = makeCachedBackupClient(body)
 
     await expect(client.listComputers()).rejects.toThrow(BadJsonError)
   })
 
-  it('normalizes multi-result list responses without losing the final cursor', async () => {
+  it('paginates computer lists across requests without losing the cursor', async () => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token'))
     const computerA: ComputerBackup = {
@@ -402,12 +396,12 @@ describe('BackupClient facade', () => {
           }
           listCount += 1
           if (listCount === 1) {
-            return jsonResponse([
-              { nextComputerId: null, computers: [computerA] },
-              { nextComputerId: computerC.computerId, computers: [computerB] },
-            ])
+            return jsonResponse({
+              nextComputerId: computerC.computerId,
+              computers: [computerA, computerB],
+            })
           }
-          return jsonResponse([{ nextComputerId: null, computers: [computerC] }])
+          return jsonResponse({ nextComputerId: null, computers: [computerC] })
         },
       },
     })
@@ -428,7 +422,7 @@ describe('BackupClient facade', () => {
     )
   })
 
-  it('normalizes very large list results without argument-spread limits', async () => {
+  it('returns very large computer list results intact', async () => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token'))
     const computer: ComputerBackup = {
@@ -446,7 +440,7 @@ describe('BackupClient facade', () => {
           if (apiEndpointName(request) !== 'bz_list_computers') {
             throw new Error(`unexpected endpoint: ${apiEndpointName(request)}`)
           }
-          return inMemoryJsonResponse([{ nextComputerId: null, computers }])
+          return inMemoryJsonResponse({ nextComputerId: null, computers })
         },
       },
     })

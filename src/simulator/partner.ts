@@ -629,12 +629,10 @@ export class PartnerSimulator {
     const next = activeComputers[normalizedStartIndex + maxComputerCount.value]
     return {
       status: 200,
-      body: [
-        {
-          nextComputerId: next === undefined ? null : next.computerId,
-          computers: page.map((computer) => this.publicComputer(computer)),
-        },
-      ],
+      body: {
+        nextComputerId: next === undefined ? null : next.computerId,
+        computers: page.map((computer) => this.publicComputer(computer)),
+      },
     }
   }
 

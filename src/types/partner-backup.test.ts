@@ -90,18 +90,16 @@ describe('partner and backup wire response shapes', () => {
   it('models Computer Backup API responses with documented shapes', () => {
     const account = accountId('account-id')
     const computer = computerId('deb0b1bcd412a7759709081c')
-    const listComputers: ListComputersResponse = [
-      {
-        computers: [
-          {
-            computerId: computer,
-            computerName: 'workstation',
-            lastFileUploadedTimestamp: 1_786_662_000_000,
-          },
-        ],
-        nextComputerId: null,
-      },
-    ]
+    const listComputers: ListComputersResponse = {
+      computers: [
+        {
+          computerId: computer,
+          computerName: 'workstation',
+          lastFileUploadedTimestamp: 1_786_662_000_000,
+        },
+      ],
+      nextComputerId: null,
+    }
     const deleteComputer: DeleteComputerResponse = [
       {
         computerId: computer,
@@ -111,7 +109,7 @@ describe('partner and backup wire response shapes', () => {
     ]
 
     expect(account).toBe('account-id')
-    expect(listComputers[0]?.computers[0]?.computerId).toBe(computer)
+    expect(listComputers.computers[0]?.computerId).toBe(computer)
     expect(deleteComputer[0]?.computerName).toBe('workstation')
   })
 })
