@@ -47,6 +47,22 @@ export interface FileRetentionValue {
   readonly retainUntilTimestamp: number | null
 }
 
+/** Object Lock retention settings as returned by readable B2 response metadata. */
+export interface ReadableFileRetention {
+  /** Whether the caller is authorized to read retention settings. */
+  readonly isClientAuthorizedToRead: boolean
+  /** Retention settings, or null when none are set or unreadable. */
+  readonly value: FileRetentionValue | null
+}
+
+/** Legal hold status as returned by readable B2 response metadata. */
+export interface ReadableLegalHold {
+  /** Whether the caller is authorized to read legal hold status. */
+  readonly isClientAuthorizedToRead: boolean
+  /** Legal hold value, or null when none is set or unreadable. */
+  readonly value: LegalHoldValue | null
+}
+
 /**
  * Request parameters for the `b2_update_file_retention` API call.
  * Updates the Object Lock retention settings on a file version.

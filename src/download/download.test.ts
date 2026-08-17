@@ -9,6 +9,7 @@ import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
 import { daysFromNow, makeClient, readStream } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
+import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
   EncryptionAlgorithm,
   EncryptionKey,
@@ -529,25 +530,26 @@ describe('extractDownloadHeaders (via downloadById)', () => {
       async downloadFileById(): Promise<HttpResponse> {
         return {
           ...byteResponse(200, new Uint8Array(0), {
-            'Content-Length': '123',
-            'Content-Type': 'text/plain',
-            'Content-Disposition': 'attachment; filename="report.txt"',
-            'Content-Language': 'en-US',
-            'Content-Encoding': 'gzip',
-            'Cache-Control': 'max-age=60',
-            Expires: 'Wed, 21 Oct 2026 07:28:00 GMT',
-            'Content-Range': 'bytes 0-122/123',
-            'X-Bz-Content-Sha1': 'none',
-            'X-Bz-File-Id': 'optional_header_file_id',
-            'X-Bz-File-Name': encodeFileName('optional headers.txt'),
+            [DownloadHeaderName.ContentLength]: '123',
+            [DownloadHeaderName.ContentType]: 'text/plain',
+            [DownloadHeaderName.ContentDisposition]: 'attachment; filename="report.txt"',
+            [DownloadHeaderName.ContentLanguage]: 'en-US',
+            [DownloadHeaderName.ContentEncoding]: 'gzip',
+            [DownloadHeaderName.CacheControl]: 'max-age=60',
+            [DownloadHeaderName.Expires]: 'Wed, 21 Oct 2026 07:28:00 GMT',
+            [DownloadHeaderName.ContentRange]: 'bytes 0-122/123',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'optional_header_file_id',
+            [DownloadHeaderName.FileName]: encodeFileName('optional headers.txt'),
             'X-Bz-Info-author': 'qa',
-            'X-Bz-Upload-Timestamp': '1700000000000',
-            'X-Bz-Server-Side-Encryption-Customer-Algorithm': 'AES256',
-            'X-Bz-Server-Side-Encryption-Customer-Key-Md5': 'customer-key-md5',
-            'X-Bz-File-Retention-Mode': 'governance',
-            'X-Bz-File-Retention-Retain-Until-Timestamp': '1893456000000',
-            'X-Bz-File-Legal-Hold': 'on',
-            'X-Bz-Client-Unauthorized-To-Read': 'X-Bz-Server-Side-Encryption',
+            [DownloadHeaderName.UploadTimestamp]: '1700000000000',
+            [DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm]: 'AES256',
+            [DownloadHeaderName.ServerSideEncryptionCustomerKeyMd5]: 'customer-key-md5',
+            [DownloadHeaderName.FileRetentionMode]: 'governance',
+            [DownloadHeaderName.FileRetentionRetainUntilTimestamp]: '1893456000000',
+            [DownloadHeaderName.FileLegalHold]: 'on',
+            [DownloadHeaderName.ClientUnauthorizedToRead]:
+              DownloadClientUnauthorizedToReadMarker.ServerSideEncryption,
           }),
           body: null,
         }
@@ -603,17 +605,17 @@ describe('extractDownloadHeaders (via downloadById)', () => {
       async downloadFileById(): Promise<HttpResponse> {
         return {
           ...byteResponse(200, new Uint8Array(0), {
-            'Content-Length': '0',
-            'Content-Type': 'application/octet-stream',
-            'X-Bz-Content-Sha1': 'none',
-            'X-Bz-File-Id': 'malformed_header_file_id',
-            'X-Bz-File-Name': encodeFileName('malformed headers.txt'),
-            'X-Bz-Upload-Timestamp': '1700000000000',
-            'X-Bz-Server-Side-Encryption': 'AES512',
-            'X-Bz-File-Retention-Mode': 'frozen',
-            'X-Bz-File-Retention-Retain-Until-Timestamp': 'not-a-number',
-            'X-Bz-File-Legal-Hold': 'maybe',
-            'X-Bz-Client-Unauthorized-To-Read': ' , , ',
+            [DownloadHeaderName.ContentLength]: '0',
+            [DownloadHeaderName.ContentType]: 'application/octet-stream',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'malformed_header_file_id',
+            [DownloadHeaderName.FileName]: encodeFileName('malformed headers.txt'),
+            [DownloadHeaderName.UploadTimestamp]: '1700000000000',
+            [DownloadHeaderName.ServerSideEncryption]: 'AES512',
+            [DownloadHeaderName.FileRetentionMode]: 'frozen',
+            [DownloadHeaderName.FileRetentionRetainUntilTimestamp]: 'not-a-number',
+            [DownloadHeaderName.FileLegalHold]: 'maybe',
+            [DownloadHeaderName.ClientUnauthorizedToRead]: ' , , ',
           }),
           body: null,
         }
@@ -637,6 +639,15 @@ describe('extractDownloadHeaders (via downloadById)', () => {
       value: null,
     })
     expect(result.headers.clientUnauthorizedToRead).toBeUndefined()
+    expect(result.headers.headerParseIssues).toEqual([
+      { headerName: DownloadHeaderName.ServerSideEncryption, value: 'AES512' },
+      { headerName: DownloadHeaderName.FileRetentionMode, value: 'frozen' },
+      {
+        headerName: DownloadHeaderName.FileRetentionRetainUntilTimestamp,
+        value: 'not-a-number',
+      },
+      { headerName: DownloadHeaderName.FileLegalHold, value: 'maybe' },
+    ])
   })
 
   it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
@@ -760,10 +771,10 @@ describe('extractDownloadHeaders (via downloadById)', () => {
       value: null,
     })
     expect(result.headers.clientUnauthorizedToRead).toEqual([
-      'X-Bz-Server-Side-Encryption',
-      'X-Bz-File-Retention-Mode',
-      'X-Bz-File-Retention-Retain-Until-Timestamp',
-      'X-Bz-File-Legal-Hold',
+      DownloadClientUnauthorizedToReadMarker.ServerSideEncryption,
+      DownloadClientUnauthorizedToReadMarker.FileRetentionMode,
+      DownloadClientUnauthorizedToReadMarker.FileRetentionRetainUntilTimestamp,
+      DownloadClientUnauthorizedToReadMarker.FileLegalHold,
     ])
   })
 })

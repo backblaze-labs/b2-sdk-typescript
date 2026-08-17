@@ -45,9 +45,14 @@ export type {
   DownloadAuthorizationResponse,
   DownloadByIdRequest,
   DownloadByNameRequest,
+  DownloadHeaderParseIssue,
   DownloadHeaders,
   DownloadServerSideEncryption,
+  SseCDownloadSetting,
 } from './download.ts'
+// `DownloadClientUnauthorizedToReadMarker` and `DownloadHeaderName` are forwarded
+// as both type and value.
+export { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from './download.ts'
 export type {
   EncryptionSetting,
   NoEncryption,
@@ -125,6 +130,8 @@ export type {
 } from './key.ts'
 export type {
   FileRetentionValue,
+  ReadableFileRetention,
+  ReadableLegalHold,
   UpdateFileLegalHoldRequest,
   UpdateFileLegalHoldResponse,
   UpdateFileRetentionRequest,
@@ -191,8 +198,6 @@ export type {
   ListUnfinishedLargeFilesRequest,
   ListUnfinishedLargeFilesResponse,
   PartInfo,
-  ReadableFileRetention,
-  ReadableLegalHold,
   StartLargeFileRequest,
   StartLargeFileResponse,
   UnfinishedLargeFile,

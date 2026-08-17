@@ -15,6 +15,7 @@ import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
+import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
   EncryptionAlgorithm,
   EncryptionMode,
@@ -309,21 +310,13 @@ type DownloadResponseOverrideParam = (typeof DOWNLOAD_RESPONSE_OVERRIDE_PARAMS)[
 type DownloadResponseOverrides = Partial<Record<DownloadResponseOverrideParam, string>>
 
 const DOWNLOAD_RESPONSE_OVERRIDE_HEADERS: Record<DownloadResponseOverrideParam, string> = {
-  b2ContentDisposition: 'Content-Disposition',
-  b2ContentLanguage: 'Content-Language',
-  b2ContentEncoding: 'Content-Encoding',
-  b2ContentType: 'Content-Type',
-  b2CacheControl: 'Cache-Control',
-  b2Expires: 'Expires',
+  b2ContentDisposition: DownloadHeaderName.ContentDisposition,
+  b2ContentLanguage: DownloadHeaderName.ContentLanguage,
+  b2ContentEncoding: DownloadHeaderName.ContentEncoding,
+  b2ContentType: DownloadHeaderName.ContentType,
+  b2CacheControl: DownloadHeaderName.CacheControl,
+  b2Expires: DownloadHeaderName.Expires,
 }
-
-const DOWNLOAD_SSE_B2_HEADER = 'X-Bz-Server-Side-Encryption'
-const DOWNLOAD_SSE_C_ALGORITHM_HEADER = 'X-Bz-Server-Side-Encryption-Customer-Algorithm'
-const DOWNLOAD_SSE_C_KEY_MD5_HEADER = 'X-Bz-Server-Side-Encryption-Customer-Key-Md5'
-const DOWNLOAD_FILE_RETENTION_MODE_HEADER = 'X-Bz-File-Retention-Mode'
-const DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER = 'X-Bz-File-Retention-Retain-Until-Timestamp'
-const DOWNLOAD_FILE_LEGAL_HOLD_HEADER = 'X-Bz-File-Legal-Hold'
-const DOWNLOAD_CLIENT_UNAUTHORIZED_TO_READ_HEADER = 'X-Bz-Client-Unauthorized-To-Read'
 
 type DownloadAuthorizationRequestBody = {
   bucketId: string
@@ -3215,7 +3208,7 @@ export class B2Simulator {
     if (!('src_last_modified_millis' in fv.fileInfo)) {
       headers['X-Bz-Info-src_last_modified_millis'] = String(fv.uploadTimestamp)
     }
-    const unauthorizedToRead: string[] = []
+    const unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[] = []
     this.addDownloadEncryptionHeaders(
       headers,
       stored.serverSideEncryption,
@@ -3224,7 +3217,7 @@ export class B2Simulator {
     )
     this.addDownloadObjectLockHeaders(headers, fv, requestHeaders, unauthorizedToRead)
     if (unauthorizedToRead.length > 0) {
-      headers[DOWNLOAD_CLIENT_UNAUTHORIZED_TO_READ_HEADER] = unauthorizedToRead.join(',')
+      headers[DownloadHeaderName.ClientUnauthorizedToRead] = unauthorizedToRead.join(',')
     }
     if (contentRange !== null) {
       // B2 spec-compliance: 206 Partial Content responses MUST carry a
@@ -3241,7 +3234,7 @@ export class B2Simulator {
     headers: Record<string, string>,
     encryption: StoredServerSideEncryption,
     requestHeaders: Record<string, string>,
-    unauthorizedToRead: string[],
+    unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[],
   ): void {
     if (encryption.mode === EncryptionMode.None) return
     if (
@@ -3251,39 +3244,42 @@ export class B2Simulator {
       )
     ) {
       if (encryption.mode === EncryptionMode.SseB2) {
-        unauthorizedToRead.push(DOWNLOAD_SSE_B2_HEADER)
+        unauthorizedToRead.push(DownloadClientUnauthorizedToReadMarker.ServerSideEncryption)
       } else {
-        unauthorizedToRead.push(DOWNLOAD_SSE_C_ALGORITHM_HEADER, DOWNLOAD_SSE_C_KEY_MD5_HEADER)
+        unauthorizedToRead.push(
+          DownloadClientUnauthorizedToReadMarker.ServerSideEncryptionCustomerAlgorithm,
+          DownloadClientUnauthorizedToReadMarker.ServerSideEncryptionCustomerKeyMd5,
+        )
       }
       return
     }
 
     if (encryption.mode === EncryptionMode.SseB2) {
-      headers[DOWNLOAD_SSE_B2_HEADER] = encryption.algorithm
+      headers[DownloadHeaderName.ServerSideEncryption] = encryption.algorithm
       return
     }
-    headers[DOWNLOAD_SSE_C_ALGORITHM_HEADER] = encryption.algorithm
-    headers[DOWNLOAD_SSE_C_KEY_MD5_HEADER] = encryption.customerKeyMd5
+    headers[DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm] = encryption.algorithm
+    headers[DownloadHeaderName.ServerSideEncryptionCustomerKeyMd5] = encryption.customerKeyMd5
   }
 
   private addDownloadObjectLockHeaders(
     headers: Record<string, string>,
     fileVersion: FileVersion,
     requestHeaders: Record<string, string>,
-    unauthorizedToRead: string[],
+    unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[],
   ): void {
     const authToken = requestHeaderValue(requestHeaders, 'authorization')
     const retention = fileVersion.fileRetention.value
     if (retention !== null && retention.mode !== null && retention.retainUntilTimestamp !== null) {
       if (this.requestHasCapability(authToken, Capability.ReadFileRetentions)) {
-        headers[DOWNLOAD_FILE_RETENTION_MODE_HEADER] = retention.mode
-        headers[DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER] = String(
+        headers[DownloadHeaderName.FileRetentionMode] = retention.mode
+        headers[DownloadHeaderName.FileRetentionRetainUntilTimestamp] = String(
           retention.retainUntilTimestamp,
         )
       } else {
         unauthorizedToRead.push(
-          DOWNLOAD_FILE_RETENTION_MODE_HEADER,
-          DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER,
+          DownloadClientUnauthorizedToReadMarker.FileRetentionMode,
+          DownloadClientUnauthorizedToReadMarker.FileRetentionRetainUntilTimestamp,
         )
       }
     }
@@ -3291,10 +3287,10 @@ export class B2Simulator {
     const legalHold = fileVersion.legalHold.value
     if (legalHold === null) return
     if (this.requestHasCapability(authToken, Capability.ReadFileLegalHolds)) {
-      headers[DOWNLOAD_FILE_LEGAL_HOLD_HEADER] = legalHold
+      headers[DownloadHeaderName.FileLegalHold] = legalHold
       return
     }
-    unauthorizedToRead.push(DOWNLOAD_FILE_LEGAL_HOLD_HEADER)
+    unauthorizedToRead.push(DownloadClientUnauthorizedToReadMarker.FileLegalHold)
   }
 
   // --- API handlers ---
