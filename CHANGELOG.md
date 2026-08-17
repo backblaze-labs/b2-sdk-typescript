@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Download response headers.** `DownloadHeaders` now exposes optional
+  `contentDisposition`, `contentLanguage`, `contentEncoding`, `cacheControl`,
+  `expires`, `contentRange`, `serverSideEncryption`, readable
+  `fileRetention`/`legalHold`, and `clientUnauthorizedToRead`; new
+  `DownloadServerSideEncryption` type exported.
 - **Large-file part metadata.** Raw large-file response types now expose
   documented v4 metadata fields: `contentMd5` on `UploadPartResponse` and
   `PartInfo`, `serverSideEncryption` and `uploadTimestamp` on

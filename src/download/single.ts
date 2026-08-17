@@ -3,7 +3,9 @@ import { parseFileInfoHeaders } from '../raw/encoding.ts'
 import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
 import type { DownloadHeaders, DownloadServerSideEncryption } from '../types/download.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { bestEffort } from '../util/best-effort.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
 import { verifyDownloadStream } from './checksum.ts'
@@ -360,6 +362,7 @@ function instrumentProgress(
  */
 function extractDownloadHeaders(headers: Headers): DownloadHeaders {
   const fileInfo = parseFileInfoHeaders(headers)
+  const clientUnauthorizedToRead = parseClientUnauthorizedToRead(headers)
   const contentDisposition = optionalHeader(headers, 'Content-Disposition')
   const contentLanguage = optionalHeader(headers, 'Content-Language')
   const contentEncoding = optionalHeader(headers, 'Content-Encoding')
@@ -367,11 +370,8 @@ function extractDownloadHeaders(headers: Headers): DownloadHeaders {
   const expires = optionalHeader(headers, 'Expires')
   const contentRange = optionalHeader(headers, 'Content-Range')
   const serverSideEncryption = parseDownloadServerSideEncryption(headers)
-  const fileRetention = parseDownloadFileRetention(headers)
-  const legalHold = optionalHeader(headers, 'X-Bz-File-Legal-Hold') as
-    | DownloadHeaders['legalHold']
-    | undefined
-  const clientUnauthorizedToRead = parseClientUnauthorizedToRead(headers)
+  const fileRetention = parseDownloadFileRetention(headers, clientUnauthorizedToRead)
+  const legalHold = parseDownloadLegalHold(headers, clientUnauthorizedToRead)
 
   return {
     contentType: headers.get('Content-Type') ?? 'application/octet-stream',
@@ -405,7 +405,8 @@ function parseDownloadServerSideEncryption(
 ): DownloadServerSideEncryption | undefined {
   const managedAlgorithm = optionalHeader(headers, 'X-Bz-Server-Side-Encryption')
   if (managedAlgorithm !== undefined) {
-    return { mode: 'SSE-B2', algorithm: managedAlgorithm as 'AES256' }
+    if (managedAlgorithm !== EncryptionAlgorithm.Aes256) return undefined
+    return { mode: EncryptionMode.SseB2, algorithm: managedAlgorithm }
   }
 
   const customerAlgorithm = optionalHeader(
@@ -414,20 +415,65 @@ function parseDownloadServerSideEncryption(
   )
   const customerKeyMd5 = optionalHeader(headers, 'X-Bz-Server-Side-Encryption-Customer-Key-Md5')
   if (customerAlgorithm === undefined || customerKeyMd5 === undefined) return undefined
-  return { mode: 'SSE-C', algorithm: customerAlgorithm as 'AES256', customerKeyMd5 }
+  if (customerAlgorithm !== EncryptionAlgorithm.Aes256) return undefined
+  return { mode: EncryptionMode.SseC, algorithm: customerAlgorithm, customerKeyMd5 }
 }
 
-function parseDownloadFileRetention(headers: Headers): DownloadHeaders['fileRetention'] {
-  const mode = optionalHeader(headers, 'X-Bz-File-Retention-Mode') as
-    | NonNullable<DownloadHeaders['fileRetention']>['mode']
-    | undefined
-  const retainUntilTimestamp = optionalHeader(headers, 'X-Bz-File-Retention-Retain-Until-Timestamp')
-  if (mode === undefined && retainUntilTimestamp === undefined) return undefined
-  return {
-    mode: mode ?? null,
-    retainUntilTimestamp:
-      retainUntilTimestamp === undefined ? null : Number.parseInt(retainUntilTimestamp, 10),
+function parseDownloadFileRetention(
+  headers: Headers,
+  clientUnauthorizedToRead: DownloadHeaders['clientUnauthorizedToRead'],
+): DownloadHeaders['fileRetention'] {
+  if (
+    clientUnauthorizedToRead?.includes('X-Bz-File-Retention-Mode') === true ||
+    clientUnauthorizedToRead?.includes('X-Bz-File-Retention-Retain-Until-Timestamp') === true
+  ) {
+    return { isClientAuthorizedToRead: false, value: null }
   }
+
+  const rawMode = optionalHeader(headers, 'X-Bz-File-Retention-Mode')
+  const rawRetainUntilTimestamp = optionalHeader(
+    headers,
+    'X-Bz-File-Retention-Retain-Until-Timestamp',
+  )
+  if (rawMode === undefined && rawRetainUntilTimestamp === undefined) return undefined
+  return {
+    isClientAuthorizedToRead: true,
+    value: {
+      mode: parseRetentionMode(rawMode),
+      retainUntilTimestamp: parseRetentionTimestamp(rawRetainUntilTimestamp),
+    },
+  }
+}
+
+function parseRetentionMode(rawMode: string | undefined): FileRetentionValue['mode'] {
+  if (rawMode === undefined) return null
+  if (rawMode === RetentionMode.Compliance || rawMode === RetentionMode.Governance) {
+    return rawMode
+  }
+  return null
+}
+
+function parseRetentionTimestamp(rawTimestamp: string | undefined): number | null {
+  if (rawTimestamp === undefined) return null
+  if (!/^\d+$/.test(rawTimestamp)) return null
+  const parsed = Number.parseInt(rawTimestamp, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function parseDownloadLegalHold(
+  headers: Headers,
+  clientUnauthorizedToRead: DownloadHeaders['clientUnauthorizedToRead'],
+): DownloadHeaders['legalHold'] {
+  if (clientUnauthorizedToRead?.includes('X-Bz-File-Legal-Hold') === true) {
+    return { isClientAuthorizedToRead: false, value: null }
+  }
+
+  const rawLegalHold = optionalHeader(headers, 'X-Bz-File-Legal-Hold')
+  if (rawLegalHold === undefined) return undefined
+  if (rawLegalHold === LegalHoldValue.On || rawLegalHold === LegalHoldValue.Off) {
+    return { isClientAuthorizedToRead: true, value: rawLegalHold }
+  }
+  return { isClientAuthorizedToRead: true, value: null }
 }
 
 function parseClientUnauthorizedToRead(

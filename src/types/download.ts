@@ -1,5 +1,6 @@
+import type { SseB2Setting, SseCPublicSetting } from './encryption.ts'
 import type { BucketId, FileId } from './ids.ts'
-import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
+import type { ReadableFileRetention, ReadableLegalHold } from './upload.ts'
 
 /** Request parameters for downloading a file by its ID via `b2_download_file_by_id`. */
 export interface DownloadByIdRequest {
@@ -98,20 +99,11 @@ export interface DownloadAuthorizationResponse {
 
 /** Server-side encryption metadata echoed in B2 download response headers. */
 export type DownloadServerSideEncryption =
-  | {
-      /** B2-managed server-side encryption. */
-      readonly mode: 'SSE-B2'
-      /** Encryption algorithm echoed by `X-Bz-Server-Side-Encryption`. */
-      readonly algorithm: 'AES256'
-    }
-  | {
-      /** Customer-managed server-side encryption. */
-      readonly mode: 'SSE-C'
-      /** Encryption algorithm echoed by `X-Bz-Server-Side-Encryption-Customer-Algorithm`. */
-      readonly algorithm: 'AES256'
+  | SseB2Setting
+  | (SseCPublicSetting & {
       /** MD5 digest echoed by `X-Bz-Server-Side-Encryption-Customer-Key-Md5`. */
       readonly customerKeyMd5: string
-    }
+    })
 
 /** Parsed headers from a B2 file download response. */
 export interface DownloadHeaders {
@@ -143,10 +135,10 @@ export interface DownloadHeaders {
   readonly uploadTimestamp: number
   /** Server-side encryption metadata echoed by B2, when the caller is authorized to read it. */
   readonly serverSideEncryption?: DownloadServerSideEncryption
-  /** Object Lock retention metadata, when present and the caller is authorized to read it. */
-  readonly fileRetention?: FileRetentionValue
-  /** Object Lock legal hold metadata, when present and the caller is authorized to read it. */
-  readonly legalHold?: LegalHoldValue
+  /** Object Lock retention metadata, including whether the caller may read it. */
+  readonly fileRetention?: ReadableFileRetention
+  /** Object Lock legal hold metadata, including whether the caller may read it. */
+  readonly legalHold?: ReadableLegalHold
   /** Header names B2 omitted because the caller lacks capability to read them. */
   readonly clientUnauthorizedToRead?: readonly string[]
 }

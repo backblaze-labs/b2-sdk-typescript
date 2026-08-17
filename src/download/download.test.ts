@@ -547,7 +547,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
             'X-Bz-File-Retention-Mode': 'governance',
             'X-Bz-File-Retention-Retain-Until-Timestamp': '1893456000000',
             'X-Bz-File-Legal-Hold': 'on',
-            'X-Bz-Client-Unauthorized-To-Read': 'X-Bz-Server-Side-Encryption,X-Bz-File-Legal-Hold',
+            'X-Bz-Client-Unauthorized-To-Read': 'X-Bz-Server-Side-Encryption',
           }),
           body: null,
         }
@@ -563,7 +563,6 @@ describe('extractDownloadHeaders (via downloadById)', () => {
         "cacheControl": "max-age=60",
         "clientUnauthorizedToRead": [
           "X-Bz-Server-Side-Encryption",
-          "X-Bz-File-Legal-Hold",
         ],
         "contentDisposition": "attachment; filename="report.txt"",
         "contentEncoding": "gzip",
@@ -579,10 +578,16 @@ describe('extractDownloadHeaders (via downloadById)', () => {
         },
         "fileName": "optional headers.txt",
         "fileRetention": {
-          "mode": "governance",
-          "retainUntilTimestamp": 1893456000000,
+          "isClientAuthorizedToRead": true,
+          "value": {
+            "mode": "governance",
+            "retainUntilTimestamp": 1893456000000,
+          },
         },
-        "legalHold": "on",
+        "legalHold": {
+          "isClientAuthorizedToRead": true,
+          "value": "on",
+        },
         "serverSideEncryption": {
           "algorithm": "AES256",
           "customerKeyMd5": "customer-key-md5",
@@ -591,6 +596,45 @@ describe('extractDownloadHeaders (via downloadById)', () => {
         "uploadTimestamp": 1700000000000,
       }
     `)
+  })
+
+  it('normalizes malformed typed download metadata headers', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          ...byteResponse(200, new Uint8Array(0), {
+            'Content-Length': '0',
+            'Content-Type': 'application/octet-stream',
+            'X-Bz-Content-Sha1': 'none',
+            'X-Bz-File-Id': 'malformed_header_file_id',
+            'X-Bz-File-Name': encodeFileName('malformed headers.txt'),
+            'X-Bz-Upload-Timestamp': '1700000000000',
+            'X-Bz-Server-Side-Encryption': 'AES512',
+            'X-Bz-File-Retention-Mode': 'frozen',
+            'X-Bz-File-Retention-Retain-Until-Timestamp': 'not-a-number',
+            'X-Bz-File-Legal-Hold': 'maybe',
+          }),
+          body: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'malformed_header_file_id' as FileId,
+    })
+
+    expect(result.headers.serverSideEncryption).toBeUndefined()
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: {
+        mode: null,
+        retainUntilTimestamp: null,
+      },
+    })
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: true,
+      value: null,
+    })
   })
 
   it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
@@ -622,10 +666,16 @@ describe('extractDownloadHeaders (via downloadById)', () => {
     expect(await readStream(result.body)).toEqual(data)
     expect(result.headers.serverSideEncryption).toEqual(SSE_B2)
     expect(result.headers.fileRetention).toEqual({
-      mode: RetentionMode.Governance,
-      retainUntilTimestamp,
+      isClientAuthorizedToRead: true,
+      value: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp,
+      },
     })
-    expect(result.headers.legalHold).toBe(LegalHoldValue.On)
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: true,
+      value: LegalHoldValue.On,
+    })
     expect(result.headers.clientUnauthorizedToRead).toBeUndefined()
   })
 
@@ -699,8 +749,14 @@ describe('extractDownloadHeaders (via downloadById)', () => {
     })
     expect(await readStream(result.body)).toEqual(data)
     expect(result.headers.serverSideEncryption).toBeUndefined()
-    expect(result.headers.fileRetention).toBeUndefined()
-    expect(result.headers.legalHold).toBeUndefined()
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
     expect(result.headers.clientUnauthorizedToRead).toEqual([
       'X-Bz-Server-Side-Encryption',
       'X-Bz-File-Retention-Mode',
