@@ -1,5 +1,5 @@
 import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
-import type { FileAction, FileVersion } from './file.ts'
+import type { FileAction, ReplicationStatus } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
@@ -118,7 +118,7 @@ export interface UnfinishedLargeFileMetadata {
   /** Legal hold status for this unfinished file, when readable. */
   readonly legalHold?: ReadableLegalHold
   /** Replication status for this unfinished file, when available. */
-  readonly replicationStatus?: FileVersion['replicationStatus']
+  readonly replicationStatus?: ReplicationStatus
   /** Server-side encryption applied to this unfinished file. */
   readonly serverSideEncryption?: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this unfinished upload was started. */

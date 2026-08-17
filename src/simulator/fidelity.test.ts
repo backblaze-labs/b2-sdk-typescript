@@ -4053,6 +4053,38 @@ describe('B2Simulator upload write-path validation', () => {
       uploadTimestamp: uploaded.uploadTimestamp,
     })
 
+    const encryptedLarge = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'encrypted-part-metadata.bin',
+      contentType: 'application/octet-stream',
+      serverSideEncryption: SSE_B2,
+    })
+    const encryptedUploadUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: encryptedLarge.fileId,
+    })
+    const encryptedPartData = new TextEncoder().encode('encrypted listed part metadata')
+    const encryptedUploaded = await client.raw.uploadPart(
+      encryptedUploadUrl.uploadUrl,
+      {
+        authorization: encryptedUploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: encryptedPartData.byteLength,
+        contentSha1: await sha1Hex(encryptedPartData),
+      },
+      encryptedPartData as BodyInit,
+    )
+    const encryptedListed = await client.raw.listParts(apiUrl, authToken, {
+      fileId: encryptedLarge.fileId,
+    })
+    expect(encryptedListed.parts[0]).toMatchObject({
+      contentMd5: null,
+      contentSha1: encryptedUploaded.contentSha1,
+      fileId: encryptedLarge.fileId,
+      partNumber: 1,
+      serverSideEncryption: SSE_B2,
+      uploadTimestamp: encryptedUploaded.uploadTimestamp,
+    })
+
     const source = await bucket.upload({
       fileName: 'copy-part-metadata-source.bin',
       source: new BufferSource(new TextEncoder().encode('copied part metadata')),
