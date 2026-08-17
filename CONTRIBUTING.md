@@ -123,7 +123,7 @@ doThing({
 IDs are branded for type safety. Use factory functions:
 
 ```ts
-import { bucketId, fileId } from './types/ids.js'
+import { bucketId, fileId } from './types/ids.ts'
 
 const bid = bucketId('raw-string')  // BucketId
 const fid = fileId('raw-string')    // FileId
@@ -134,8 +134,8 @@ const fid = fileId('raw-string')    // FileId
 Use `import type` for type-only imports. If you need a class at runtime (e.g., for `instanceof`), use a regular import.
 
 ```ts
-import type { FileVersion } from './types/file.js'  // type only
-import { B2Error } from './errors/index.js'          // used with instanceof
+import type { FileVersion } from './types/file.ts'  // type only
+import { B2Error } from './errors/index.ts'          // used with instanceof
 ```
 
 ## Architecture overview
@@ -147,7 +147,7 @@ compatibility, simulator behavior, or security posture are recorded under
 ```
 src/
   types/         Pure type definitions (no runtime code) + EncryptionKey class
-  errors/        Error hierarchy: B2Error base + 30 subclasses + classifyError() + B2InsufficientCapabilityError
+  errors/        Error hierarchy: B2Error base + typed subclasses + classifyError() + B2InsufficientCapabilityError
   http/          Transport layer: HttpTransport, FetchTransport, RetryTransport (with injectable sleepImpl)
   raw/           RawClient: 1:1 bindings for the 31 B2 native API endpoints the SDK uses
   auth/          AccountInfo (in-memory + JSON-file backends), upload URL pool, realm URLs
@@ -157,6 +157,8 @@ src/
   copy/          copyLargeFile orchestrator (server-side multipart copy)
   sync/          synchronize() async generator, LocalFolder + B2Folder scanners, policies, actions
   s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl)
+  partner/       Partner API: PartnerClient + PartnerRawClient, authorizePartner + PartnerAccountInfo, redaction
+  backup/        Computer Backup (bz_): BackupClient + BackupRawClient
   simulator/     In-memory B2 server for testing
   client.ts      B2Client: high-level facade over RawClient + hasCapabilities
   bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhideFile)

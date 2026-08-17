@@ -8,9 +8,10 @@
  * appropriate subclass.
  *
  * Convention: most `B2Error` subclasses represent failures returned by the B2
- * API. The client-side exception is {@link B2RealmConfigurationError}; it
- * extends `B2Error` so realm-validation failures can be handled with the SDK
- * error hierarchy before credentials are sent.
+ * API. The client-side exceptions are {@link B2RealmConfigurationError} and
+ * {@link B2PartnerAuthorizationError}; they extend `B2Error` so realm- and
+ * Partner-authorization failures can be handled with the SDK error hierarchy
+ * before or without a server round-trip.
  *
  * Other programming errors and SDK preconditions, such as "not yet authorized",
  * "stream consumed twice", or "called before init", use the native `Error`

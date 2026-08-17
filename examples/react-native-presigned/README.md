@@ -62,7 +62,8 @@ Returns something like:
 {
   "uploadUrl": "https://pod-000-1024-08.backblaze.com/b2api/v3/b2_upload_file?bucketId=…",
   "authorizationToken": "4_…",
-  "fileName": "photos/2026/snap.jpg"
+  "fileName": "photos/2026/snap.jpg",
+  "contentType": "image/jpeg"
 }
 ```
 

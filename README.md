@@ -508,6 +508,9 @@ import {
   presignS3PutObjectUrl,
 } from '@backblaze-labs/b2-sdk/s3'
 
+// Webhook signature verification for B2 event notifications
+import { verifyWebhookSignature, requireValidWebhook } from '@backblaze-labs/b2-sdk/notifications'
+
 // In-memory B2 server for tests (no network required)
 import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
@@ -703,7 +706,7 @@ describe('my app', () => {
 
 ## Error handling
 
-All B2 API errors are thrown as typed `B2Error` subclasses (30 in total). Client-side capability checks throw `B2InsufficientCapabilityError`.
+All B2 API errors are thrown as typed `B2Error` subclasses. Client-side capability checks throw `B2InsufficientCapabilityError`.
 
 ```ts
 import { BucketType } from '@backblaze-labs/b2-sdk'

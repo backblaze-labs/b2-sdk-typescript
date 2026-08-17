@@ -9,7 +9,7 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 ## Commands
 
 ```bash
-pnpm build           # Vite library mode: ESM + CJS + DTS for all 9 subpath exports
+pnpm build           # Vite library mode: ESM + CJS + DTS for all 11 subpath exports
 pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator (Node)
 pnpm test:watch      # Vitest in watch mode
 pnpm test:coverage   # Vitest with v8 coverage (gates: 97% statements, 98% lines, 97% functions, 91% branches)
@@ -42,7 +42,7 @@ Single npm package with subpath exports:
 |---|---|---|
 | `@backblaze-labs/b2-sdk` | `src/index.ts` | B2Client, Bucket, B2Object (high-level facade) |
 | `@backblaze-labs/b2-sdk/raw` | `src/raw/index.ts` | 1:1 wire-protocol bindings for the 31 B2 native API endpoints the SDK exposes |
-| `@backblaze-labs/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + 30 subclasses + classifyError() |
+| `@backblaze-labs/b2-sdk/errors` | `src/errors/index.ts` | B2Error base + typed subclasses + classifyError() |
 | `@backblaze-labs/b2-sdk/auth` | `src/auth/index.ts` | AccountInfo interface, InMemoryAccountInfo, UploadUrlPool, realms |
 | `@backblaze-labs/b2-sdk/auth/file` | `src/auth/file.ts` | FileAccountInfo: JSON-file-backed persistent auth (Node-only) |
 | `@backblaze-labs/b2-sdk/streams` | `src/streams/index.ts` | IncrementalSha1, ContentSource adapters, ProgressTracker, EncryptionKey |
@@ -50,6 +50,8 @@ Single npm package with subpath exports:
 | `@backblaze-labs/b2-sdk/simulator` | `src/simulator/index.ts` | In-memory B2 server for tests |
 | `@backblaze-labs/b2-sdk/notifications` | `src/notifications/index.ts` | Webhook signature verification: `verifyWebhookSignature`, `requireValidWebhook`, `B2_WEBHOOK_SIGNATURE_HEADER` |
 | `@backblaze-labs/b2-sdk/s3` | `src/s3/index.ts` | S3-compatible helpers: createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl |
+| `@backblaze-labs/b2-sdk/partner` | `src/partner/index.ts` | Partner API: PartnerClient, PartnerRawClient, authorizePartner, PartnerAccountInfo, PartnerCapability, Region |
+| `@backblaze-labs/b2-sdk/backup` | `src/backup/index.ts` | Computer Backup (`bz_`): BackupClient, BackupRawClient |
 
 ## Source layout
 
@@ -66,10 +68,14 @@ src/
   copy/          copyLargeFile orchestrator (server-side multipart copy via b2_copy_part)
   sync/          synchronize() async generator + LocalFolder + B2Folder scanners
   s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl)
+  partner/       PartnerClient + PartnerRawClient, authorizePartner + PartnerAccountInfo, reserve-trial + redaction
+  backup/        BackupClient + BackupRawClient (Computer Backup bz_ endpoints)
   simulator/     B2Simulator + SimulatorTransport for testing
   client.ts      B2Client high-level facade + hasCapabilities + CapabilityCheckResult
   bucket.ts      Bucket: upload/download/head/list/copy/copyLargeFile/deleteMany/deleteAll/unhideFile/...
   object.ts      B2Object: upload, download, head, createReadStream, createWriteStream, getFileInfo
+  internal/      Shared internals (b2-naming, url-redaction, upload-retry-options)
+  util/          Small helpers (abort, best-effort, bytes, crypto, defaults, error-reason, ...)
   index.ts       Public API re-exports
   version.ts     VERSION constant
 ```

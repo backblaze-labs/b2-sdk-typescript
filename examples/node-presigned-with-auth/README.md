@@ -9,10 +9,10 @@ Browser ─── GET /file/<id> ───►  Your backend
                                  ├─ check user permission
                                  ├─ if OK, mint a short-lived B2 download
                                  │  authorization scoped to the file's prefix
-                                 ├─ return a 302 to the signed B2 URL
+                                 ├─ return a 307 to the signed B2 URL
                                  │  (or proxy the bytes through)
                                  ▼
-Browser ◄─── 302 to B2 ────── B2 serves the file
+Browser ◄─── 307 to B2 ────── B2 serves the file
 ```
 
 This example shows the safe shape using `@backblaze-labs/b2-sdk` — the application key never leaves the backend, the signed URL is scoped to a single file-name prefix, and the token is short-lived enough that a leak's blast radius is bounded.
@@ -45,7 +45,7 @@ curl -i 'http://localhost:8787/files/photos/cat.jpg' -H 'x-user: bob'
 - **The application key never leaves the server.** Only short-lived download tokens reach the client.
 - **The token is scoped to a file-name prefix**, so even if it leaks, the blast radius is one prefix, not the entire bucket.
 - **The token is short-lived** (60 seconds by default: long enough to follow a redirect, short enough to be useless if logged).
-- **The 302 redirect** means B2 serves the bytes, not your backend: egress doesn't flow through your server.
+- **The 307 redirect** means B2 serves the bytes, not your backend: egress doesn't flow through your server.
 - **No client-side B2 SDK needed.** The browser just follows a redirect.
 
 ## What to add for production
@@ -54,4 +54,4 @@ curl -i 'http://localhost:8787/files/photos/cat.jpg' -H 'x-user: bob'
 - Cache the B2 client's authorization token (the SDK's `accountInfo` already does; survives `setAuth` calls). For multi-instance deployments, share via `FileAccountInfo` or a Redis-backed `AccountInfo`.
 - Rate-limit the `/files/*` route.
 - Log `request_id` from any B2 error (`err.requestId`) so you can correlate with B2 support.
-- For the higher-security tier, **proxy the bytes** through your backend instead of redirecting. Lower egress savings but lets you audit-log every byte served. The `bucket.download()` method returns a `ReadableStream` you can pipe straight into the response.
+- For the higher-security tier, **proxy the bytes** through your backend instead of redirecting. Lower egress savings but lets you audit-log every byte served. `bucket.download()` returns a `DownloadResult`; pipe its `body` (a `ReadableStream<Uint8Array>`) straight into the response.

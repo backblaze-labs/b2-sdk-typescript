@@ -41,6 +41,8 @@ Partner and Computer Backup examples use Master Application Key credentials; see
 
 Run from the SDK root directory. Examples use `npx tsx` for direct TypeScript execution, but thanks to the SDK's [source-level isomorphism](../README.md#source-isomorphism), the `node-*` scripts also run unchanged in Bun and Deno:
 
+Build the SDK once first (`pnpm build`) for the Node and Bun commands — they import the package by its bare specifier, which resolves to `dist/`. The Deno command reads `../src` directly via `examples/deno.json` and needs no build.
+
 ```bash
 # Node 22.3+ (with tsx)
 npx tsx examples/node-list-buckets.ts

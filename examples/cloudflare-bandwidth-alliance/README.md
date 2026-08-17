@@ -11,7 +11,6 @@ For any read-heavy workload, the savings can be substantial — Cloudflare's edg
 - Sets `Cache-Control: public, max-age=3600` so Cloudflare's edge cache absorbs repeat requests.
 - Strips B2-internal response headers (`x-bz-*`) before responding to the client.
 - Honors `Range` requests for byte-range downloads.
-- Surfaces typed B2 errors with their `request_id` for support correlation.
 
 The Worker uses the **S3-compatible** B2 endpoint because S3 over HTTPS works seamlessly in the Workers runtime via `fetch`. The SDK's `@backblaze-labs/b2-sdk/s3` subpath also works inside a Worker if you need richer control (presigning, custom retry, typed errors).
 
@@ -51,4 +50,4 @@ The Worker runtime supports `fetch` directly: you don't strictly need the SDK to
 - The same upload code that works in Node/browsers also works here: you can write upload-to-B2 Workers without rewriting client code.
 - The in-memory `B2Simulator` for unit tests (Workers tests via Miniflare).
 
-This example shows both flavors: a bare-`fetch` proxy and an SDK-backed alternative.
+This example ships the bare-`fetch` proxy (`worker.ts`) shown above; the SDK-backed alternative is described here but not included as a separate file.
