@@ -105,6 +105,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **B2Simulator bucket-deletion fidelity.** `b2_delete_bucket` now rejects
   buckets that still contain file versions or unfinished large files with
   `400 cannot_delete_non_empty_bucket`, matching real B2.
+- **B2Simulator bucket-configuration fidelity.** `b2_create_bucket` and
+  `b2_update_bucket` now validate CORS, lifecycle, replication, and default
+  retention rule shapes; `b2_list_buckets` honors the `bucketName`, `bucketId`,
+  and `bucketTypes` filters; and `b2_update_bucket` enforces `ifRevisionIs` with
+  a `409 conflict`. Closes #22.
+- **B2Simulator create_key validation.** `b2_create_key` now rejects unknown or
+  empty capabilities and out-of-range key names, and rejects capabilities that
+  exceed the creating key's grant, matching real B2. Closes #18.
+- **B2Simulator authorize grant fidelity.** `b2_authorize_account` now derives
+  the response `allowed` capabilities and bucket/name-prefix scope from the
+  authorizing key instead of always returning the full master grant, so a
+  restricted key reports its real scope. Closes #19.
 
 ## [0.2.0] - 2026-07-08
 
