@@ -481,8 +481,9 @@ function parseClientUnauthorizedToRead(
 ): DownloadHeaders['clientUnauthorizedToRead'] {
   const value = optionalHeader(headers, 'X-Bz-Client-Unauthorized-To-Read')
   if (value === undefined) return undefined
-  return value
+  const headerNames = value
     .split(',')
     .map((header) => header.trim())
     .filter((header) => header.length > 0)
+  return headerNames.length > 0 ? headerNames : undefined
 }

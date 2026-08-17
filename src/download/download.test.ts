@@ -613,6 +613,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
             'X-Bz-File-Retention-Mode': 'frozen',
             'X-Bz-File-Retention-Retain-Until-Timestamp': 'not-a-number',
             'X-Bz-File-Legal-Hold': 'maybe',
+            'X-Bz-Client-Unauthorized-To-Read': ' , , ',
           }),
           body: null,
         }
@@ -635,6 +636,7 @@ describe('extractDownloadHeaders (via downloadById)', () => {
       isClientAuthorizedToRead: true,
       value: null,
     })
+    expect(result.headers.clientUnauthorizedToRead).toBeUndefined()
   })
 
   it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
