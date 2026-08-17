@@ -223,11 +223,14 @@ function compareB2FileNames(a: string, b: string): number {
 
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
+  normalizeCreateKeyCapabilities,
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
   validateBucketTypes,
   validateCorsRules,
+  validateCreateKeyCapabilities,
+  validateCreateKeyName,
   validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
@@ -252,6 +255,8 @@ export {
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
+  KEY_NAME_MAX,
+  KEY_NAME_MIN,
   LIST_ENDPOINT_CAPS,
 } from './validation.ts'
 
@@ -361,7 +366,7 @@ interface StoredLargeFilePart {
 interface StoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
-  readonly capabilities: readonly string[]
+  readonly capabilities: readonly Capability[]
   readonly accountId: string
   readonly applicationKey: string
   readonly bucketIds: readonly string[] | null
@@ -370,6 +375,7 @@ interface StoredKey {
 }
 
 interface IssuedToken {
+  readonly accountId: string
   readonly capabilities: readonly Capability[]
   readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
@@ -440,6 +446,10 @@ function singleBucketId(bucketIds: readonly string[] | null | undefined): string
 
 function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] | null {
   return bucketIds === null ? null : [...bucketIds]
+}
+
+function cloneCapabilities(capabilities: readonly Capability[]): readonly Capability[] {
+  return [...capabilities]
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -651,7 +661,7 @@ function storedNotificationRulePrefixes(
   )
 }
 
-function hasKeyManagementCapability(capabilities: readonly string[]): boolean {
+function hasKeyManagementCapability(capabilities: readonly Capability[]): boolean {
   return capabilities.some(
     (capability) =>
       capability === Capability.ListKeys ||
@@ -2161,7 +2171,7 @@ export class B2Simulator {
     const stored = this.keys.get(credentials.applicationKeyId)
     if (!stored || stored.applicationKey !== credentials.applicationKey) return null
     return {
-      capabilities: stored.capabilities as readonly Capability[],
+      capabilities: stored.capabilities,
       bucketIds: stored.bucketIds,
       namePrefix: stored.namePrefix,
       applicationKeyId: credentials.applicationKeyId,
@@ -2451,14 +2461,15 @@ export class B2Simulator {
         return this.createKey(
           body as {
             accountId: string
-            capabilities: string[]
-            keyName: string
+            capabilities: unknown
+            keyName: unknown
             validDurationInSeconds?: number
             bucketIds?: readonly string[] | null
             bucketId?: string
             namePrefix?: string
           },
           version,
+          headers['authorization'],
         )
       case 'b2_list_keys':
         return this.listKeys(
@@ -3101,6 +3112,7 @@ export class B2Simulator {
     // seam, see `authorizeAsKey` below), the auth header identifies
     // it and the issued token inherits that key's scope.
     const keyForAuth = this.findKeyForAuthHeader(authzHeader)
+    const authorizedCapabilities = keyForAuth?.capabilities ?? capabilities
     const authorizedAccountId = keyForAuth?.accountId ?? this.accountId
     const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
     const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
@@ -3108,7 +3120,8 @@ export class B2Simulator {
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
-      capabilities: keyForAuth?.capabilities ?? capabilities,
+      accountId: authorizedAccountId,
+      capabilities: authorizedCapabilities,
       bucketIds: keyForAuth?.bucketIds ?? null,
       namePrefix: keyForAuth?.namePrefix ?? null,
       expiresAt: this.now() + this.authTokenTtlMs,
@@ -3134,7 +3147,7 @@ export class B2Simulator {
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
-              capabilities: keyForAuth?.capabilities ?? capabilities,
+              capabilities: cloneCapabilities(authorizedCapabilities),
               buckets: allowedBuckets,
               bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
               bucketName: legacyBucketName,
@@ -4077,17 +4090,38 @@ export class B2Simulator {
 
   // --- Keys ---
 
+  private createKeyCapabilitiesOutsideGrant(
+    authToken: string | undefined,
+    requested: readonly Capability[],
+  ): readonly Capability[] {
+    // In default mode, unknown auth tokens keep the simulator permissive. When the
+    // token is known, preserve the creator's real grant so delegated keys cannot
+    // exceed it even without full strict-auth request enforcement.
+    const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
+    if (creator === undefined) return this.strictAuth ? requested : []
+    // The simulator's implicit master credential may mint any valid capability.
+    if (creator.applicationKeyId === null) return []
+    const granted = new Set(creator.capabilities)
+    return requested.filter((capability) => !granted.has(capability))
+  }
+
+  private createKeyCreatorAccountId(authToken: string | undefined): string {
+    const creator = authToken === undefined ? undefined : this.issuedTokens.get(authToken)
+    return creator?.accountId ?? this.accountId
+  }
+
   private createKey(
     req: {
       accountId: string
-      capabilities: string[]
-      keyName: string
+      capabilities: unknown
+      keyName: unknown
       validDurationInSeconds?: number
       bucketIds?: readonly string[] | null
       bucketId?: string
       namePrefix?: string
     },
     version: B2ApiVersion,
+    authToken: string | undefined,
   ): SimulatorJsonResponse {
     if (version === 'v4' && hasOwnField(req, 'bucketId')) {
       return this.error(
@@ -4104,10 +4138,25 @@ export class B2Simulator {
         ? Object.freeze([req.bucketId])
         : normalizeKeyBucketIds(req)
     const namePrefix = req.namePrefix === undefined || req.namePrefix === '' ? null : req.namePrefix
-    if (
-      hasKeyManagementCapability(req.capabilities) &&
-      (bucketIds !== null || namePrefix !== null)
-    ) {
+    const creatorAccountId = this.createKeyCreatorAccountId(authToken)
+    if (req.accountId !== creatorAccountId) {
+      return this.error(400, 'bad_request', 'accountId must match authorized account')
+    }
+    const keyNameError = validateCreateKeyName(req.keyName)
+    if (keyNameError) return this.error(400, keyNameError.code, keyNameError.message)
+    const keyName = req.keyName as string
+    const capabilitiesError = validateCreateKeyCapabilities(req.capabilities)
+    if (capabilitiesError) return this.error(400, capabilitiesError.code, capabilitiesError.message)
+    const capabilities = normalizeCreateKeyCapabilities(req.capabilities as readonly Capability[])
+    const unauthorizedCapabilities = this.createKeyCapabilitiesOutsideGrant(authToken, capabilities)
+    if (unauthorizedCapabilities.length > 0) {
+      return this.error(
+        400,
+        'bad_request',
+        `requested capabilities exceed creator grant: ${unauthorizedCapabilities.join(', ')}`,
+      )
+    }
+    if (hasKeyManagementCapability(capabilities) && (bucketIds !== null || namePrefix !== null)) {
       return this.error(
         400,
         'bad_request',
@@ -4122,9 +4171,9 @@ export class B2Simulator {
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
-      keyName: req.keyName,
-      capabilities: req.capabilities,
-      accountId: req.accountId,
+      keyName,
+      capabilities,
+      accountId: creatorAccountId,
       applicationKey: appKey,
       bucketIds,
       namePrefix,
@@ -4138,7 +4187,7 @@ export class B2Simulator {
         keyName: stored.keyName,
         applicationKeyId: stored.applicationKeyId,
         applicationKey: stored.applicationKey,
-        capabilities: stored.capabilities,
+        capabilities: cloneCapabilities(stored.capabilities),
         accountId: stored.accountId,
         expirationTimestamp: stored.expirationTimestamp,
         bucketIds: cloneBucketIds(stored.bucketIds),
@@ -4169,7 +4218,7 @@ export class B2Simulator {
     const keys = allKeys.slice(0, max).map((k) => ({
       keyName: k.keyName,
       applicationKeyId: k.applicationKeyId,
-      capabilities: k.capabilities,
+      capabilities: cloneCapabilities(k.capabilities),
       accountId: k.accountId,
       expirationTimestamp: k.expirationTimestamp,
       bucketIds: cloneBucketIds(k.bucketIds),
@@ -4207,7 +4256,7 @@ export class B2Simulator {
       body: {
         keyName: key.keyName,
         applicationKeyId: key.applicationKeyId,
-        capabilities: key.capabilities,
+        capabilities: cloneCapabilities(key.capabilities),
         accountId: key.accountId,
         expirationTimestamp: key.expirationTimestamp,
         bucketIds: cloneBucketIds(key.bucketIds),

@@ -11,11 +11,15 @@ import {
   FILE_INFO_TOTAL_MAX,
   FILE_INFO_VALUE_MAX,
   FILE_NAME_MAX_BYTES,
+  KEY_NAME_MAX,
   LIST_ENDPOINT_CAPS,
+  normalizeCreateKeyCapabilities,
   validateBucketInfo,
   validateBucketName,
   validateBucketTypes,
   validateCorsRules,
+  validateCreateKeyCapabilities,
+  validateCreateKeyName,
   validateDefaultRetention,
   validateDownloadAuthorizationDuration,
   validateDownloadAuthorizationPrefix,
@@ -37,6 +41,41 @@ import {
  * human-readable `.message`, so wording changes don't ripple through
  * these tests.
  */
+
+describe('validateCreateKeyCapabilities', () => {
+  it('returns null for valid capabilities', () => {
+    expect(validateCreateKeyCapabilities([Capability.ListBuckets])).toBeNull()
+  })
+
+  it('rejects empty, non-array, and unknown capabilities', () => {
+    expect(validateCreateKeyCapabilities([])?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities('listBuckets')?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities(['notReal'])?.code).toBe('bad_request')
+    expect(validateCreateKeyCapabilities([123])?.code).toBe('bad_request')
+  })
+
+  it('normalizes capabilities to a frozen defensive copy', () => {
+    const original: Capability[] = [Capability.ListBuckets]
+    const normalized = normalizeCreateKeyCapabilities(original)
+
+    original.push(Capability.DeleteBuckets)
+    expect(normalized).toEqual([Capability.ListBuckets])
+    expect(Object.isFrozen(normalized)).toBe(true)
+  })
+})
+
+describe('validateCreateKeyName', () => {
+  it('returns null for valid keyName', () => {
+    expect(validateCreateKeyName('valid-key')).toBeNull()
+  })
+
+  it('rejects non-string keyName and names outside the B2 length range', () => {
+    expect(validateCreateKeyName(42)?.code).toBe('bad_request')
+    expect(validateCreateKeyName(null)?.code).toBe('bad_request')
+    expect(validateCreateKeyName('')?.code).toBe('bad_request')
+    expect(validateCreateKeyName('k'.repeat(KEY_NAME_MAX + 1))?.code).toBe('bad_request')
+  })
+})
 
 describe('validateBucketName', () => {
   it('returns null for a valid name', () => {

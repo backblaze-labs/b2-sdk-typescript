@@ -24,6 +24,7 @@ import {
 import { UrlGuard } from '../http/url-guard.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import { Capability } from '../types/auth.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
@@ -1149,7 +1150,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       },
       body: JSON.stringify({
         accountId: 'sim_account_0001',
-        capabilities: [],
+        capabilities: [Capability.ListBuckets],
         keyName: 'partner-authorize-negative',
       }),
     })

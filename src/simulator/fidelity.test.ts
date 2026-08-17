@@ -1136,6 +1136,253 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('rejects unknown capabilities during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.createKey({
+        capabilities: ['doEverything'] as unknown as Capability[],
+        keyName: 'unknown-capability-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('unknown capabilities: doEverything'),
+    })
+  })
+
+  it('rejects empty capabilities during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    await expect(
+      client.createKey({
+        capabilities: [],
+        keyName: 'empty-capability-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('capabilities must not be empty'),
+    })
+  })
+
+  it('rejects malformed create-key fields in default mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const transport = sim.transport()
+    const base = {
+      accountId: client.accountInfo.getAccountId(),
+      capabilities: [Capability.ListBuckets],
+      keyName: 'malformed-create-key',
+    }
+
+    for (const body of [
+      { ...base, capabilities: 'listBuckets' },
+      { ...base, capabilities: [123] },
+      { ...base, capabilities: ['doEverything'] },
+      { ...base, capabilities: [] },
+      { ...base, keyName: 42 },
+      { ...base, keyName: null },
+      { ...base, keyName: 'k'.repeat(101) },
+    ]) {
+      const resp = await transport.send({
+        method: 'POST',
+        url: 'http://localhost:0/b2api/v4/b2_create_key',
+        headers: {
+          Authorization: client.accountInfo.getAuthToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      expect(resp.status).toBe(400)
+      await expect(resp.json()).resolves.toMatchObject({ code: 'bad_request' })
+    }
+  })
+
+  it('does not expose stored create-key capabilities by reference', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'defensive-capabilities',
+    })
+
+    ;(key.capabilities as Capability[]).push(Capability.ListBuckets)
+    const listed = await client.listKeys()
+    const listedKey = listed.keys.find(
+      (candidate) => candidate.applicationKeyId === key.applicationKeyId,
+    )
+    expect(listedKey?.capabilities).toEqual([Capability.WriteKeys])
+    if (listedKey === undefined) throw new Error('expected created key to be listed')
+
+    ;(listedKey.capabilities as Capability[]).push(Capability.ListBuckets)
+    const relisted = await client.listKeys()
+    expect(
+      relisted.keys.find((candidate) => candidate.applicationKeyId === key.applicationKeyId)
+        ?.capabilities,
+    ).toEqual([Capability.WriteKeys])
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    expect(scopedClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
+      Capability.WriteKeys,
+    ])
+
+    const requestCapabilities: Capability[] = [Capability.WriteKeys]
+    const direct = await sim.handleRequest(
+      'POST',
+      'http://localhost:0',
+      '/b2api/v4/b2_create_key',
+      { authorization: client.accountInfo.getAuthToken() },
+      {
+        accountId: client.accountInfo.getAccountId(),
+        capabilities: requestCapabilities,
+        keyName: 'direct-defensive-capabilities',
+      },
+    )
+    expect(direct.status).toBe(200)
+    const directKey = direct.body as {
+      applicationKeyId: string
+      applicationKey: string
+      capabilities: readonly Capability[]
+    }
+    requestCapabilities.push(Capability.ListBuckets)
+    ;(directKey.capabilities as Capability[]).push(Capability.DeleteBuckets)
+
+    const directClient = await authorizeWithKey(sim, directKey)
+    expect(directClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.capabilities).toEqual([
+      Capability.WriteKeys,
+    ])
+  })
+
+  it('rejects keys that request capabilities outside the creator grant', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'delegated-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+        keyName: 'too-broad-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('listBuckets'),
+    })
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys],
+        keyName: 'same-grant-key',
+      }),
+    ).resolves.toMatchObject({ capabilities: [Capability.WriteKeys] })
+  })
+
+  it('rejects broader child grants from restricted creators in default mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys],
+      keyName: 'default-delegated-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+
+    await expect(
+      creatorClient.createKey({
+        capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+        keyName: 'default-too-broad-key',
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('listBuckets'),
+    })
+  })
+
+  it('rejects create-key accountId mismatches for authorized tokens', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const transport = sim.transport()
+    const masterAuthToken = client.accountInfo.getAuthToken()
+
+    const masterMismatch = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: { Authorization: masterAuthToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'victim_account',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'cross-account-master',
+      }),
+    })
+    expect(masterMismatch.status).toBe(400)
+    await expect(masterMismatch.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'accountId must match authorized account',
+    })
+
+    const creatorKey = await client.createKey({
+      capabilities: [Capability.WriteKeys, Capability.ListBuckets],
+      keyName: 'account-bound-key-creator',
+    })
+    const creatorClient = await authorizeWithKey(sim, creatorKey)
+    const restrictedMismatch = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_create_key',
+      headers: {
+        Authorization: creatorClient.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        accountId: 'victim_account',
+        capabilities: [Capability.ListBuckets],
+        keyName: 'cross-account-restricted',
+      }),
+    })
+    expect(restrictedMismatch.status).toBe(400)
+    await expect(restrictedMismatch.json()).resolves.toMatchObject({
+      code: 'bad_request',
+      message: 'accountId must match authorized account',
+    })
+
+    const afterMismatches = await client.listKeys()
+    expect(afterMismatches.keys).not.toContainEqual(
+      expect.objectContaining({ keyName: 'cross-account-master' }),
+    )
+    expect(afterMismatches.keys).not.toContainEqual(
+      expect.objectContaining({ keyName: 'cross-account-restricted' }),
+    )
+  })
+
+  it('enforces B2 keyName length limits during key creation', async () => {
+    const { client } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    for (const keyName of ['', 'k'.repeat(101)]) {
+      await expect(
+        client.createKey({
+          capabilities: [Capability.ListBuckets],
+          keyName,
+        }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'bad_request',
+        message: expect.stringContaining('keyName must be 1-100 characters'),
+      })
+    }
+    await expect(
+      client.createKey({
+        capabilities: [Capability.ListBuckets],
+        keyName: 'k'.repeat(100),
+      }),
+    ).resolves.toMatchObject({ keyName: 'k'.repeat(100) })
+  })
+
   it('rejects with 401 when the auth token is unknown', async () => {
     const { sim } = makeClient({ sim: { strictAuth: true } })
     const transport = sim.transport()

@@ -24,6 +24,7 @@ import {
   hasValidB2BucketNameShape,
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
+import { Capability } from '../types/auth.ts'
 import { BucketRetentionMode, BucketType, CorsOperation } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
@@ -32,6 +33,80 @@ import { utf8Encoder } from '../util/text-codec.ts'
 export interface ValidationError {
   readonly code: string
   readonly message: string
+}
+
+// ---------------------------------------------------------------------------
+// Application keys (`b2_create_key`)
+// ---------------------------------------------------------------------------
+
+/** Minimum length for application key names. */
+export const KEY_NAME_MIN = 1
+/** Maximum length for application key names. */
+export const KEY_NAME_MAX = 100
+
+const VALID_CAPABILITIES = new Set<string>(Object.values(Capability))
+
+/**
+ * Validates application-key capabilities against B2's supported capability set.
+ *
+ * @param capabilities - Caller-supplied capabilities array.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function validateCreateKeyCapabilities(capabilities: unknown): ValidationError | null {
+  if (!Array.isArray(capabilities)) {
+    return { code: 'bad_request', message: 'capabilities must be an array' }
+  }
+  if (capabilities.length === 0) {
+    return { code: 'bad_request', message: 'capabilities must not be empty' }
+  }
+  const unknownCapabilities = capabilities.filter(
+    (capability) => typeof capability !== 'string' || !VALID_CAPABILITIES.has(capability),
+  )
+  if (unknownCapabilities.length > 0) {
+    return {
+      code: 'bad_request',
+      message: `unknown capabilities: ${unknownCapabilities.map(String).join(', ')}`,
+    }
+  }
+  return null
+}
+
+/**
+ * Returns a frozen copy of a previously validated application-key capability list.
+ *
+ * @param capabilities - Validated caller-supplied capabilities.
+ *
+ * @returns An immutable capability list safe to store internally.
+ */
+export function normalizeCreateKeyCapabilities(
+  capabilities: readonly Capability[],
+): readonly Capability[] {
+  return Object.freeze([...capabilities])
+}
+
+/**
+ * Validates application-key names against B2's documented length limits.
+ *
+ * @param keyName - Caller-supplied keyName.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-key
+ */
+export function validateCreateKeyName(keyName: unknown): ValidationError | null {
+  if (typeof keyName !== 'string') {
+    return { code: 'bad_request', message: 'keyName must be a string' }
+  }
+  if (keyName.length < KEY_NAME_MIN || keyName.length > KEY_NAME_MAX) {
+    return {
+      code: 'bad_request',
+      message: `keyName must be ${KEY_NAME_MIN}-${KEY_NAME_MAX} characters`,
+    }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
