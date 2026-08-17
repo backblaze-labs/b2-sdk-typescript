@@ -1064,6 +1064,74 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 // Strict-auth mode
 // ---------------------------------------------------------------------------
 
+describe('B2Simulator authorize response grants', () => {
+  async function authorizeWithKey(
+    sim: B2Simulator,
+    key: { applicationKeyId: string; applicationKey: string },
+  ): Promise<B2Client> {
+    const client = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    return client
+  }
+
+  it('derives allowed capabilities and scope from a created key in default mode', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-grant-scope',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'auth-grant-restricted',
+      bucketIds: [bucket.id],
+      namePrefix: 'allowed/',
+    })
+
+    const scopedClient = await authorizeWithKey(sim, key)
+    const storageApi = scopedClient.accountInfo.getAuth()?.apiInfo.storageApi
+
+    expect(storageApi?.allowed.capabilities).toEqual([Capability.ListFiles])
+    expect(storageApi?.allowed.buckets).toEqual([{ id: bucket.id, name: bucket.name }])
+    expect(storageApi?.allowed.bucketId).toBe(bucket.id)
+    expect(storageApi?.allowed.namePrefix).toBe('allowed/')
+    expect(storageApi?.namePrefix).toBe('allowed/')
+    expect(scopedClient.hasCapabilities([Capability.ListFiles])).toEqual({
+      ok: true,
+      missing: [],
+    })
+    expect(scopedClient.hasCapabilities([Capability.WriteFiles])).toEqual({
+      ok: false,
+      missing: [Capability.WriteFiles],
+    })
+  })
+
+  it('does not promote invalid created-key credentials to the master grant', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'auth-grant-invalid-secret',
+    })
+
+    const response = await sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:wrong-secret`)}`,
+      },
+    })
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'unauthorized' })
+  })
+})
+
 describe('B2Simulator strictAuth: capability enforcement', () => {
   async function authorizeWithKey(
     sim: B2Simulator,

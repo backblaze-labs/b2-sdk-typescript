@@ -13,7 +13,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import { encodeFileName } from '../raw/encoding.ts'
 import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
-import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
+import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
@@ -40,6 +40,37 @@ import { isPartnerQueryEndpoint, PartnerSimulator } from './partner.ts'
 const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
 const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'master-key-id'
 const SIMULATOR_MASTER_APPLICATION_KEY = 'master-key'
+const SIMULATOR_TEST_APPLICATION_KEY_ID = 'test-key-id'
+const SIMULATOR_TEST_APPLICATION_KEY = 'test-key'
+// Master capabilities granted to the simulator's implicit storage credentials.
+// Object Lock capabilities are intentionally omitted: real B2 does not
+// auto-grant them; tests that need them create an explicit key.
+const SIMULATOR_MASTER_CAPABILITIES: readonly Capability[] = [
+  Capability.ListBuckets,
+  Capability.ListAllBucketNames,
+  Capability.ReadBuckets,
+  Capability.WriteBuckets,
+  Capability.DeleteBuckets,
+  Capability.ReadBucketEncryption,
+  Capability.WriteBucketEncryption,
+  Capability.ReadBucketReplications,
+  Capability.WriteBucketReplications,
+  Capability.ReadBucketNotifications,
+  Capability.WriteBucketNotifications,
+  Capability.ReadBucketLogging,
+  Capability.WriteBucketLogging,
+  Capability.ReadBucketLifecycleRules,
+  Capability.WriteBucketLifecycleRules,
+  Capability.ListFiles,
+  Capability.ReadFiles,
+  Capability.WriteFiles,
+  Capability.DeleteFiles,
+  Capability.ListKeys,
+  Capability.WriteKeys,
+  Capability.DeleteKeys,
+  Capability.ShareFiles,
+]
+
 function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
@@ -374,6 +405,14 @@ interface StoredKey {
   readonly expirationTimestamp: number | null
 }
 
+interface AuthorizationGrant {
+  readonly accountId: string
+  readonly capabilities: readonly Capability[]
+  readonly bucketIds: readonly string[] | null
+  readonly namePrefix: string | null
+  readonly applicationKeyId: string | null
+}
+
 interface IssuedToken {
   readonly accountId: string
   readonly capabilities: readonly Capability[]
@@ -450,6 +489,22 @@ function cloneBucketIds(bucketIds: readonly string[] | null): readonly string[] 
 
 function cloneCapabilities(capabilities: readonly Capability[]): readonly Capability[] {
   return [...capabilities]
+}
+
+function isImplicitStorageMasterCredential(credentials: BasicCredentials): boolean {
+  return (
+    (credentials.applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+      credentials.applicationKey === SIMULATOR_MASTER_APPLICATION_KEY) ||
+    (credentials.applicationKeyId === SIMULATOR_TEST_APPLICATION_KEY_ID &&
+      credentials.applicationKey === SIMULATOR_TEST_APPLICATION_KEY)
+  )
+}
+
+function isImplicitPartnerMasterCredential(credentials: BasicCredentials): boolean {
+  return (
+    credentials.applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
+    credentials.applicationKey === SIMULATOR_MASTER_APPLICATION_KEY
+  )
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -2147,52 +2202,54 @@ export class B2Simulator {
   }
 
   /**
-   * Look up the application key matching the `Authorization` header on
+   * Resolve the application key matching the `Authorization` header on
    * an `authorize_account` request. The header is in the form
    * `Basic base64(applicationKeyId:applicationKey)`.
    *
-   * Returns `null` for the implicit master credential (anything that
-   * does not match a key minted via `b2_create_key`); in that case
-   * `authorize` grants the full master capability set.
+   * The simulator has two implicit full-access storage credentials:
+   * the documented `test-key-id:test-key` pair used by SDK tests and
+   * `master-key-id:master-key`. All other credentials must match a key
+   * minted via `b2_create_key`.
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
-   * @returns The matching key's grant scope, or `null` for the master.
+   * @returns The authorizing key's grant scope, or `null` when invalid.
    */
-  private findKeyForAuthHeader(authzHeader: string | undefined): {
-    capabilities: readonly Capability[]
-    bucketIds: readonly string[] | null
-    namePrefix: string | null
-    applicationKeyId: string
-    accountId: string
-  } | null {
+  private findAuthorizationGrant(authzHeader: string | undefined): AuthorizationGrant | null {
     const credentials = parseBasicAuthorizationHeader(authzHeader)
     if (credentials === null) return null
     const stored = this.keys.get(credentials.applicationKeyId)
-    if (!stored || stored.applicationKey !== credentials.applicationKey) return null
-    return {
-      capabilities: stored.capabilities,
-      bucketIds: stored.bucketIds,
-      namePrefix: stored.namePrefix,
-      applicationKeyId: credentials.applicationKeyId,
-      accountId: stored.accountId,
+    if (stored !== undefined) {
+      if (!timingSafeStringEqual(stored.applicationKey, credentials.applicationKey)) return null
+      return {
+        capabilities: stored.capabilities,
+        bucketIds: stored.bucketIds,
+        namePrefix: stored.namePrefix,
+        applicationKeyId: credentials.applicationKeyId,
+        accountId: stored.accountId,
+      }
     }
+    if (isImplicitStorageMasterCredential(credentials)) {
+      return {
+        capabilities: SIMULATOR_MASTER_CAPABILITIES,
+        bucketIds: null,
+        namePrefix: null,
+        applicationKeyId: null,
+        accountId: this.accountId,
+      }
+    }
+    return null
   }
 
   private canAuthorizePartner(authzHeader: string | undefined): boolean {
     const credentials = parseBasicAuthorizationHeader(authzHeader)
     if (credentials === null) return false
-    if (
-      credentials.applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
-      credentials.applicationKey === SIMULATOR_MASTER_APPLICATION_KEY
-    ) {
-      return true
-    }
+    if (isImplicitPartnerMasterCredential(credentials)) return true
     const stored = this.keys.get(credentials.applicationKeyId)
     return (
       stored !== undefined &&
       stored.accountId === this.accountId &&
-      stored.applicationKey === credentials.applicationKey
+      timingSafeStringEqual(stored.applicationKey, credentials.applicationKey)
     )
   }
 
@@ -3064,73 +3121,29 @@ export class B2Simulator {
 
   // --- API handlers ---
 
-  private authorize(
-    authzHeader?: string,
-    origin = 'http://localhost:0',
-  ): { status: number; body: AuthorizeAccountResponse } {
-    // Master capabilities granted to the implicit "test" credential.
-    // Real B2 derives the capability list from the application key the
-    // caller authorized with; in permissive mode every auth call gets
-    // the full set so existing tests don't have to construct keys
-    // first. Strict-mode tests that need a restricted scope authorize
-    // with a specific app-key first via b2_create_key, then call
-    // authorize-with-that-key (today's simulator returns this full
-    // set regardless — strict-mode test seam is in `authorizeRequest`
-    // which consults the issued-token map, not the response body).
-    // Note: Object Lock capabilities (bucket/file retention, file legal hold,
-    // and bypassGovernance) are intentionally omitted from the master grant.
-    // Real B2 doesn't auto-grant these either; they're opt-in scopes set via
-    // b2_create_key. Tests that need them explicit-issue a key via the
-    // simulator's createKey handler and reauth with that key.
-    const capabilities: readonly Capability[] = [
-      Capability.ListBuckets,
-      Capability.ListAllBucketNames,
-      Capability.ReadBuckets,
-      Capability.WriteBuckets,
-      Capability.DeleteBuckets,
-      Capability.ReadBucketEncryption,
-      Capability.WriteBucketEncryption,
-      Capability.ReadBucketReplications,
-      Capability.WriteBucketReplications,
-      Capability.ReadBucketNotifications,
-      Capability.WriteBucketNotifications,
-      Capability.ReadBucketLogging,
-      Capability.WriteBucketLogging,
-      Capability.ReadBucketLifecycleRules,
-      Capability.WriteBucketLifecycleRules,
-      Capability.ListFiles,
-      Capability.ReadFiles,
-      Capability.WriteFiles,
-      Capability.DeleteFiles,
-      Capability.ListKeys,
-      Capability.WriteKeys,
-      Capability.DeleteKeys,
-      Capability.ShareFiles,
-    ]
+  private authorize(authzHeader?: string, origin = 'http://localhost:0'): SimulatorJsonResponse {
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
-    // If a key was previously authorized via `authorizeAsKey` (test
-    // seam, see `authorizeAsKey` below), the auth header identifies
-    // it and the issued token inherits that key's scope.
-    const keyForAuth = this.findKeyForAuthHeader(authzHeader)
-    const authorizedCapabilities = keyForAuth?.capabilities ?? capabilities
-    const authorizedAccountId = keyForAuth?.accountId ?? this.accountId
-    const allowedBuckets = this.allowedBuckets(keyForAuth?.bucketIds)
-    const legacyBucketId = singleBucketId(keyForAuth?.bucketIds)
+    // The issued token and response body both inherit the exact grant
+    // resolved from the Basic credentials used for this authorize call.
+    const grant = this.findAuthorizationGrant(authzHeader)
+    if (grant === null) return this.error(401, 'unauthorized', 'application key is not valid')
+    const allowedBuckets = this.allowedBuckets(grant.bucketIds)
+    const legacyBucketId = singleBucketId(grant.bucketIds)
     const legacyBucketName =
       legacyBucketId === null ? null : (this.buckets.get(legacyBucketId)?.info.bucketName ?? null)
     const tokenStr = `sim_auth_token_${this.nextId++}`
     this.issuedTokens.set(tokenStr, {
-      accountId: authorizedAccountId,
-      capabilities: authorizedCapabilities,
-      bucketIds: keyForAuth?.bucketIds ?? null,
-      namePrefix: keyForAuth?.namePrefix ?? null,
+      accountId: grant.accountId,
+      capabilities: grant.capabilities,
+      bucketIds: grant.bucketIds,
+      namePrefix: grant.namePrefix,
       expiresAt: this.now() + this.authTokenTtlMs,
-      applicationKeyId: keyForAuth?.applicationKeyId ?? null,
+      applicationKeyId: grant.applicationKeyId,
     })
     return {
       status: 200,
       body: {
-        accountId: accountIdOf(authorizedAccountId),
+        accountId: accountIdOf(grant.accountId),
         // `AuthToken` has no public factory by design — auth tokens are
         // minted by B2, not constructed by user code. The simulator is
         // the only legitimate place that needs to forge one.
@@ -3143,15 +3156,15 @@ export class B2Simulator {
             bucketName: legacyBucketName,
             downloadUrl: origin,
             infoType: 'storageApi',
-            namePrefix: keyForAuth?.namePrefix ?? null,
+            namePrefix: grant.namePrefix,
             recommendedPartSize: this.recommendedPartSize,
             s3ApiUrl: origin,
             allowed: {
-              capabilities: cloneCapabilities(authorizedCapabilities),
+              capabilities: cloneCapabilities(grant.capabilities),
               buckets: allowedBuckets,
               bucketId: legacyBucketId === null ? null : bucketIdOf(legacyBucketId),
               bucketName: legacyBucketName,
-              namePrefix: keyForAuth?.namePrefix ?? null,
+              namePrefix: grant.namePrefix,
             },
           },
         },
