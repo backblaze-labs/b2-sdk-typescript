@@ -35,7 +35,10 @@ export interface UploadFileOptions extends UploadRetryOptions {
   readonly legalHold?: LegalHoldValue
   /** Override the last-modified timestamp (epoch millis). */
   readonly lastModifiedMillis?: number
-  /** Override B2's upload timestamp (epoch millis). */
+  /**
+   * B2 upload timestamp override in milliseconds since epoch.
+   * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   */
   readonly customUploadTimestamp?: number
   /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener

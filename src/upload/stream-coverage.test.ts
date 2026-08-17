@@ -58,6 +58,34 @@ describe('createWriteStream branch coverage', () => {
     expect(result.contentLength).toBe(data.byteLength)
   })
 
+  it('passes customUploadTimestamp through createWriteStream', async () => {
+    const { client: timestampClient } = makeClient({
+      sim: {
+        minimumPartSize: 100_000,
+        recommendedPartSize: 200_000,
+        customUploadTimestampsEnabled: true,
+      },
+    })
+    await timestampClient.authorize()
+    const timestampBucket = await timestampClient.createBucket({
+      bucketName: 'stream-custom-timestamp',
+      bucketType: BucketType.AllPrivate,
+    })
+    const customUploadTimestamp = 1_700_000_000_000
+
+    const { writable, done } = timestampBucket.file('custom-timestamp.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      customUploadTimestamp,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await writer.close()
+    const result = await done
+
+    expect(result.uploadTimestamp).toBe(customUploadTimestamp)
+  })
+
   it('applies backpressure instead of queueing stalled part buffers', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()

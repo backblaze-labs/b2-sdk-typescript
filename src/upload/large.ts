@@ -87,7 +87,7 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   readonly lastModifiedMillis?: number
   /**
    * B2 upload timestamp override in milliseconds since epoch.
-   * This sets `uploadTimestamp`; use `lastModifiedMillis` for source last-modified metadata.
+   * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
    */
   readonly customUploadTimestamp?: number
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
@@ -111,8 +111,11 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * `AbortSignal` to enforce a hard discovery deadline. SSE-C uploads are
    * never auto-resumed because B2 does not expose the customer key identity
    * needed to verify a compatible unfinished file. Candidates with unreadable
-   * Object Lock fields are rejected unless the caller provides explicit
-   * settings that can be verified.
+   * Object Lock fields are rejected unless the caller provides explicit settings
+   * that can be verified. When `customUploadTimestamp` is set, discovery only
+   * reuses candidates with the same `uploadTimestamp`; when it is omitted, a
+   * reused unfinished file keeps its existing `uploadTimestamp` because B2 does
+   * not expose whether that timestamp was custom or server-assigned.
    */
   readonly resume?: boolean
   /** Optional aggregate SDK-enforced timeout for resume discovery. */

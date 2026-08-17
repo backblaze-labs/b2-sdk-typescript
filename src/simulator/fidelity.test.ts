@@ -3654,6 +3654,49 @@ describe('B2Simulator upload write-path validation', () => {
     )
   }
 
+  async function uploadFileWithCustomTimestamp(
+    customUploadTimestamp: string,
+  ): Promise<HttpResponse> {
+    const uploadUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    const data = new Uint8Array([1, 2, 3])
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'X-Bz-File-Name': 'custom-timestamp.txt',
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(data.byteLength),
+        'X-Bz-Content-Sha1': await sha1Hex(data),
+        'X-Bz-Custom-Upload-Timestamp': customUploadTimestamp,
+      },
+      body: data as BodyInit,
+    })
+  }
+
+  async function startLargeFileWithCustomTimestamp(
+    customUploadTimestamp: unknown,
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'POST',
+      url: `${client.accountInfo.getApiUrl()}/b2api/v3/b2_start_large_file`,
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        bucketId: bucket.id,
+        fileName: 'custom-timestamp-large.bin',
+        contentType: 'application/octet-stream',
+        customUploadTimestamp,
+      }),
+    })
+  }
+
   async function handleUploadPartDirect(
     uploadUrl: string,
     authorizationToken: string,
@@ -3976,6 +4019,15 @@ describe('B2Simulator upload write-path validation', () => {
   })
 
   it('stores custom upload timestamps for small and large uploads', async () => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-enabled',
+      bucketType: BucketType.AllPrivate,
+    })
     const apiUrl = client.accountInfo.getApiUrl()
     const authToken = client.accountInfo.getAuthToken()
     const smallTimestamp = 1_700_000_000_000
@@ -4028,6 +4080,77 @@ describe('B2Simulator upload write-path validation', () => {
       partSha1Array: [part.contentSha1],
     })
     expect(finished.uploadTimestamp).toBe(largeTimestamp)
+  })
+
+  it('rejects custom upload timestamps without account entitlement', async () => {
+    const small = await uploadFileWithCustomTimestamp('0')
+    expect(small.status).toBe(400)
+    await expect(small.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+
+    const large = await startLargeFileWithCustomTimestamp(0)
+    expect(large.status).toBe(400)
+    await expect(large.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+  })
+
+  it.each([
+    ['future', () => Date.now() + 86_400_000],
+    ['negative', () => -1],
+    ['non-integer', () => 12.5],
+    ['non-safe-integer', () => Number.MAX_SAFE_INTEGER + 1],
+    ['malformed-string', () => '1e9'],
+  ])('rejects %s custom upload timestamps on both write paths', async (_, valueFactory) => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-invalid',
+      bucketType: BucketType.AllPrivate,
+    })
+    const value = valueFactory()
+
+    const small = await uploadFileWithCustomTimestamp(String(value))
+    expect(small.status).toBe(400)
+    await expect(small.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_invalid',
+    })
+
+    const large = await startLargeFileWithCustomTimestamp(value)
+    expect(large.status).toBe(400)
+    await expect(large.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_invalid',
+    })
+  })
+
+  it('validates future custom upload timestamps against the virtual clock', async () => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-virtual-clock',
+      bucketType: BucketType.AllPrivate,
+    })
+    sim.advanceTime(86_400_000)
+    const timestamp = Date.now() + 60_000
+
+    const small = await uploadFileWithCustomTimestamp(String(timestamp))
+    expect(small.status).toBe(200)
+    await expect(small.json()).resolves.toMatchObject({
+      uploadTimestamp: timestamp,
+    })
+
+    const large = await startLargeFileWithCustomTimestamp(timestamp)
+    expect(large.status).toBe(200)
+    await expect(large.json()).resolves.toMatchObject({
+      uploadTimestamp: timestamp,
+    })
   })
 })
 

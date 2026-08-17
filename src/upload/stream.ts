@@ -36,7 +36,10 @@ export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFai
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
-  /** B2 upload timestamp override in milliseconds since epoch. */
+  /**
+   * B2 upload timestamp override in milliseconds since epoch.
+   * Sets the file version `uploadTimestamp`; distinct from `src_last_modified_millis` metadata.
+   */
   readonly customUploadTimestamp?: number
   /**
    * Target part size in bytes. The stream buffers writes until this many bytes

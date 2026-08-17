@@ -385,6 +385,45 @@ describe('RawClient upload URL request controls', () => {
     })
   })
 
+  it('rejects invalid custom upload timestamps before transport serialization', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const invalidValues = [
+      -1,
+      12.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.NaN,
+      '1\r\nX-Injected: yes' as unknown as number,
+    ]
+
+    for (const customUploadTimestamp of invalidValues) {
+      await expect(
+        raw.uploadFile(
+          'https://upload.example.test/b2_upload_file',
+          {
+            authorization: 'upload-auth',
+            fileName: 'file.txt',
+            contentType: 'text/plain',
+            contentLength: 1,
+            contentSha1: 'none',
+            customUploadTimestamp,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer')
+
+      await expect(
+        raw.startLargeFile('https://api.example.test', 'auth', {
+          bucketId: bucketId('bucket'),
+          fileName: 'large.bin',
+          contentType: 'application/octet-stream',
+          customUploadTimestamp,
+        }),
+      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer')
+    }
+
+    expect(seenRequests).toHaveLength(0)
+  })
+
   it('forwards legacy positional signal and retry controls to raw upload endpoints', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
     const controller = new AbortController()

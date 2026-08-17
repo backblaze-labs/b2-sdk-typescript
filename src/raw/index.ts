@@ -140,6 +140,12 @@ function isAbortSignal(value: unknown): value is AbortSignal {
   )
 }
 
+function assertCustomUploadTimestamp(value: unknown): asserts value is number {
+  if (value === undefined) return
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return
+  throw new TypeError('customUploadTimestamp must be a non-negative safe integer')
+}
+
 function normalizeCreateKeyRequest(request: CreateKeyRequest): CreateKeyRequest {
   const { bucketId, ...withoutDeprecatedBucketId } = request
   if (bucketId !== undefined && withoutDeprecatedBucketId.bucketIds !== undefined) {
@@ -492,6 +498,7 @@ export class RawClient {
       reqHeaders['X-Bz-Info-src_last_modified_millis'] = String(headers.lastModifiedMillis)
     }
     if (headers.customUploadTimestamp !== undefined) {
+      assertCustomUploadTimestamp(headers.customUploadTimestamp)
       reqHeaders['X-Bz-Custom-Upload-Timestamp'] = String(headers.customUploadTimestamp)
     }
     if (headers.contentDisposition) {
@@ -698,6 +705,7 @@ export class RawClient {
     request: StartLargeFileRequest,
     options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
+    assertCustomUploadTimestamp(request.customUploadTimestamp)
     return this.postJson<StartLargeFileResponse>(
       apiUrl,
       authToken,

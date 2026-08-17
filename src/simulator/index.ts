@@ -1217,6 +1217,12 @@ export interface B2SimulatorOptions {
    * Defaults to `true`; `false` produces `403 access_denied` on Partner calls.
    */
   partnerAccountInGoodStanding?: boolean
+  /**
+   * Whether the simulated account may set custom upload timestamps on
+   * `b2_upload_file` and `b2_start_large_file`. Defaults to `false`, matching
+   * production accounts without the restricted feature enabled.
+   */
+  customUploadTimestampsEnabled?: boolean
 }
 
 /**
@@ -1259,6 +1265,7 @@ export class B2Simulator {
   private readonly onHookError?: B2SimulatorOptions['onHookError']
   private readonly strictAuth: boolean
   private readonly authTokenTtlMs: number
+  private readonly customUploadTimestampsEnabled: boolean
   private readonly partner: PartnerSimulator
   /**
    * Issued auth tokens with their associated grant scope + expiry. In
@@ -1321,6 +1328,7 @@ export class B2Simulator {
     if (options.onReplicate !== undefined) this.onReplicate = options.onReplicate
     if (options.onHookError !== undefined) this.onHookError = options.onHookError
     this.strictAuth = options.strictAuth ?? false
+    this.customUploadTimestampsEnabled = options.customUploadTimestampsEnabled ?? false
     // Real B2 tokens last 24h. Default matches production; tests that
     // want to exercise the reauth path can lower this knob.
     this.authTokenTtlMs = options.authTokenTtlMs ?? 24 * 60 * 60 * 1000
@@ -2682,7 +2690,14 @@ export class B2Simulator {
   private parseCustomUploadTimestamp(
     value: unknown,
   ): { readonly timestamp: number | null } | SimulatorJsonResponse {
-    if (value === undefined || value === null) return { timestamp: null }
+    if (value === undefined) return { timestamp: null }
+    if (!this.customUploadTimestampsEnabled) {
+      return this.error(
+        400,
+        'custom_timestamp_not_allowed',
+        'Custom upload timestamps are not enabled for this account.',
+      )
+    }
     const timestamp =
       typeof value === 'number'
         ? value
@@ -2690,7 +2705,7 @@ export class B2Simulator {
           ? Number(value)
           : Number.NaN
 
-    if (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > Date.now()) {
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > this.now()) {
       return this.error(
         400,
         'custom_timestamp_invalid',

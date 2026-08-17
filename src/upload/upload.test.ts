@@ -20,7 +20,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'plan-parts',
@@ -161,7 +161,7 @@ describe('uploadSmallFile edge cases', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'small-upload',
