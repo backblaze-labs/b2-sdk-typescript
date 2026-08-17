@@ -1061,7 +1061,7 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Strict-auth mode
+// Authorization grant fidelity
 // ---------------------------------------------------------------------------
 
 async function authorizeWithKey(
@@ -1221,6 +1221,10 @@ describe('B2Simulator authorize response grants', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'unauthorized' })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Strict-auth mode
+// ---------------------------------------------------------------------------
 
 describe('B2Simulator strictAuth: capability enforcement', () => {
   function forgeAdjacentTokenValue(token: string): string {
