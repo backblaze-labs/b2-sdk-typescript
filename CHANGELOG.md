@@ -9,114 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Download response headers.** `DownloadHeaders` now exposes optional
-  `contentDisposition`, `contentLanguage`, `contentEncoding`, `cacheControl`,
-  `expires`, `contentRange`, `serverSideEncryption`, readable
-  `fileRetention`/`legalHold`, typed `clientUnauthorizedToRead`, and
-  `headerParseIssues`; new `DownloadHeaderName`,
-  `DownloadClientUnauthorizedToReadMarker`, `DownloadServerSideEncryption`,
-  and `SseCDownloadSetting` exports document the added surface.
-- **Large-file part metadata.** Raw large-file response types now expose
-  documented v4 metadata fields: `contentMd5` on `UploadPartResponse` and
-  `PartInfo`, `serverSideEncryption` and `uploadTimestamp` on
-  `CopyPartResponse`, `serverSideEncryption` on `PartInfo`, and
-  `replicationStatus` on unfinished large-file metadata via the exported
-  `ReplicationStatus` alias.
-- **Custom upload timestamps.** Upload options now accept numeric
-  `customUploadTimestamp` values to override B2's `uploadTimestamp`, distinct
-  from `lastModifiedMillis` source metadata. Raw `b2_upload_file` headers
-  serialize the value as `X-Bz-Custom-Upload-Timestamp`; raw
-  `StartLargeFileRequest` accepts B2's documented decimal string/null body
-  shape. Multipart uploads now also persist `lastModifiedMillis` as
-  `src_last_modified_millis`, matching the small-file path; this metadata is
-  included in multipart resume identity and older unfinished uploads that lack
-  it can report `file-info-mismatch`. Custom timestamps require B2 account
-  enablement, and resume diagnostics can report
-  `upload-timestamp-mismatch` for incompatible unfinished large files.
-- **Bucket lifecycle-rule capabilities.** `Capability` now exports
-  `ReadBucketLifecycleRules` and `WriteBucketLifecycleRules`.
-- **Partner authorize runtime surface.** New `@backblaze-labs/b2-sdk/partner`
-  subpath exports `PartnerRawClient.authorizePartner()`, `PartnerAccountInfo`,
-  and `InMemoryPartnerAccountInfo` for Master Application Key authorization
-  against the Partner and Computer Backup suites.
-- **Partner API runtime bindings.** `PartnerRawClient` now includes
-  `createGroupMember()`, `ejectGroupMember()`, `listGroups()`,
-  `listGroupMembers()`, and `reserveTrialCreateAccount()` bindings for Partner
-  API group management and B2 Reserve trial-account creation.
-- **High-level Partner facade.** The `@backblaze-labs/b2-sdk/partner` subpath
-  now exports the experimental `PartnerClient` facade plus
-  `PartnerClientOptions`, `PartnerAuthorizeOptions`, `ListGroupsOptions`,
-  `PaginateGroupsOptions`, `ListGroupMembersOptions`,
-  `PaginateGroupMembersOptions`, `CreateGroupMemberOptions`,
-  `EjectGroupMemberOptions`, and `ReserveTrialAccountsOptions` for ergonomic
-  Partner group/member pagination and B2 Reserve trial-account workflows.
-- **Computer Backup runtime facade.** The new
-  `@backblaze-labs/b2-sdk/backup` subpath exports experimental `BackupClient`
-  and `BackupRawClient` bindings for Partner-authorized Computer Backup
-  listing, pagination, and delete workflows.
-- **Partner API and Computer Backup typed error subclasses.** New exported
-  `TooManyMembersError`, `InvalidGroupIdError`, `InvalidEmailError`,
-  `InvalidRegionError`, `InvalidSmsPhoneError`, `MethodFailureError`,
-  `InvalidMemberAccountIdError`, `InvalidAccountIdError`, and
-  `InvalidComputerIdError` classify Partner API and Computer Backup error
-  codes; Partner 401 overload codes map to non-auth subclasses so they do not
-  trigger reauth. Compatibility aliases preserve the issue-specified
-  `TooManyGroupMembersError`, `MissingSmsPhoneError`, and
-  `GroupMemberCreationFailedError` names.
-- **Partner API and Computer Backup type layer.** Public exports now include
-  Partner API and Computer Backup request/response types, branded
-  `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`.
-  The response types document each Partner and Backup endpoint's wire shape
-  (array-shaped or single-object per the API docs) and preserve numeric-looking
-  group IDs and B2 statistics counts as strings. Endpoint types still awaiting
-  runtime methods are marked experimental until those methods are implemented
-  and exercised.
+- **Download response headers.** `DownloadHeaders` now exposes optional `contentDisposition`, `contentLanguage`, `contentEncoding`, `cacheControl`, `expires`, `contentRange`, `serverSideEncryption`, readable `fileRetention`/`legalHold`, typed `clientUnauthorizedToRead`, and `headerParseIssues`; new `DownloadHeaderName`, `DownloadClientUnauthorizedToReadMarker`, `DownloadServerSideEncryption`, and `SseCDownloadSetting` exports document the added surface.
+- **Large-file part metadata.** Raw large-file response types now expose documented v4 metadata fields: `contentMd5` on `UploadPartResponse` and `PartInfo`, `serverSideEncryption` and `uploadTimestamp` on `CopyPartResponse`, `serverSideEncryption` on `PartInfo`, and `replicationStatus` on unfinished large-file metadata via the exported `ReplicationStatus` alias.
+- **Custom upload timestamps.** Upload options now accept numeric `customUploadTimestamp` values to override B2's `uploadTimestamp`, distinct from `lastModifiedMillis` source metadata. Raw `b2_upload_file` headers serialize the value as `X-Bz-Custom-Upload-Timestamp`; raw `StartLargeFileRequest` accepts B2's documented decimal string/null body shape. Multipart uploads now also persist `lastModifiedMillis` as `src_last_modified_millis`, matching the small-file path; this metadata is included in multipart resume identity and older unfinished uploads that lack it can report `file-info-mismatch`. Custom timestamps require B2 account enablement, and resume diagnostics can report `upload-timestamp-mismatch` for incompatible unfinished large files.
+- **Bucket lifecycle-rule capabilities.** `Capability` now exports `ReadBucketLifecycleRules` and `WriteBucketLifecycleRules`.
+- **Partner authorize runtime surface.** New `@backblaze-labs/b2-sdk/partner` subpath exports `PartnerRawClient.authorizePartner()`, `PartnerAccountInfo`, and `InMemoryPartnerAccountInfo` for Master Application Key authorization against the Partner and Computer Backup suites.
+- **Partner API runtime bindings.** `PartnerRawClient` now includes `createGroupMember()`, `ejectGroupMember()`, `listGroups()`, `listGroupMembers()`, and `reserveTrialCreateAccount()` bindings for Partner API group management and B2 Reserve trial-account creation.
+- **High-level Partner facade.** The `@backblaze-labs/b2-sdk/partner` subpath now exports the experimental `PartnerClient` facade plus `PartnerClientOptions`, `PartnerAuthorizeOptions`, `ListGroupsOptions`, `PaginateGroupsOptions`, `ListGroupMembersOptions`, `PaginateGroupMembersOptions`, `CreateGroupMemberOptions`, `EjectGroupMemberOptions`, and `ReserveTrialAccountsOptions` for ergonomic Partner group/member pagination and B2 Reserve trial-account workflows.
+- **Computer Backup runtime facade.** The new `@backblaze-labs/b2-sdk/backup` subpath exports experimental `BackupClient` and `BackupRawClient` bindings for Partner-authorized Computer Backup listing, pagination, and delete workflows.
+- **Partner API and Computer Backup typed error subclasses.** New exported `TooManyMembersError`, `InvalidGroupIdError`, `InvalidEmailError`, `InvalidRegionError`, `InvalidSmsPhoneError`, `MethodFailureError`, `InvalidMemberAccountIdError`, `InvalidAccountIdError`, and `InvalidComputerIdError` classify Partner API and Computer Backup error codes; Partner 401 overload codes map to non-auth subclasses so they do not trigger reauth. Compatibility aliases preserve the issue-specified `TooManyGroupMembersError`, `MissingSmsPhoneError`, and `GroupMemberCreationFailedError` names.
+- **Partner API and Computer Backup type layer.** Public exports now include Partner API and Computer Backup request/response types, branded `groupId()` / `computerId()` factories, `PartnerCapability`, and `Region`. The response types document each Partner and Backup endpoint's wire shape (array-shaped or single-object per the API docs) and preserve numeric-looking group IDs and B2 statistics counts as strings. Endpoint types still awaiting runtime methods are marked experimental until those methods are implemented and exercised.
 
 ### Changed
 
-- **Computer Backup facade validates list pages.** `BackupRawClient.listComputers()`
-  returns the documented single-object `bz_list_computers` wire response, and
-  `BackupClient.listComputers()` validates that page object and returns its
-  `computers` and `nextComputerId`, rejecting malformed wire shapes before
-  pagination can silently truncate results.
-- **Partner auth cache validation is non-destructive during construction.**
-  `PartnerClient` and `BackupClient` ignore unsafe cached Partner authorization
-  locally until `authorize()` replaces it, instead of clearing a shared
-  `PartnerAccountInfo` store from a client constructor.
+- **Computer Backup facade validates list pages.** `BackupRawClient.listComputers()` returns the documented single-object `bz_list_computers` wire response, and `BackupClient.listComputers()` validates that page object and returns its `computers` and `nextComputerId`, rejecting malformed wire shapes before pagination can silently truncate results.
+- **Partner auth cache validation is non-destructive during construction.** `PartnerClient` and `BackupClient` ignore unsafe cached Partner authorization locally until `authorize()` replaces it, instead of clearing a shared `PartnerAccountInfo` store from a client constructor.
 
 ### Fixed
 
-- **B2 endpoint URL path hardening.** `b2Url()` now rejects literal and
-  percent-encoded backslashes in prefix, version, and endpoint path components
-  so WHATWG URL normalization cannot smuggle an endpoint into another path
-  segment.
-- **Real-B2 integration evidence is explicit and diagnosable.** Same-repo
-  integration workflow runs now fail when required B2 secrets are missing instead
-  of silently accepting an all-skipped suite, integration setup logs per-step
-  timings and timeout failures for authorization, bucket listing, stale cleanup,
-  and bucket creation, and contributor/release docs now spell out
-  simulator-vs-live-B2 expectations.
-- **B2Simulator upload write-path fidelity.** Simulator uploads now reject
-  Content-Length/body mismatches, reject upload_part and copy_part part numbers
-  outside B2's 1-10000 range, classify copy_part malformed ranges as 400 and
-  unsatisfiable ranges as 416, verify large-file finish part SHA-1 entries, and
-  report stored monotonic part timestamps from list_parts. Closes #21.
+- **B2 endpoint URL path hardening.** `b2Url()` now rejects literal and percent-encoded backslashes in prefix, version, and endpoint path components so WHATWG URL normalization cannot smuggle an endpoint into another path segment.
+- **Real-B2 integration evidence is explicit and diagnosable.** Same-repo integration workflow runs now fail when required B2 secrets are missing instead of silently accepting an all-skipped suite, integration setup logs per-step timings and timeout failures for authorization, bucket listing, stale cleanup, and bucket creation, and contributor/release docs now spell out simulator-vs-live-B2 expectations.
+- **B2Simulator upload write-path fidelity.** Simulator uploads now reject Content-Length/body mismatches, reject upload_part and copy_part part numbers outside B2's 1-10000 range, classify copy_part malformed ranges as 400 and unsatisfiable ranges as 416, verify large-file finish part SHA-1 entries, and report stored monotonic part timestamps from list_parts. Closes #21.
 - **B2Simulator SSE-C fidelity.** Simulator uploads, large-file parts, downloads, copyFile, and copyPart now validate SSE-C customer-key headers more closely to B2, preserve destination encryption semantics, and keep customer keys out of public response metadata.
-- **B2Simulator bucket-deletion fidelity.** `b2_delete_bucket` now rejects
-  buckets that still contain file versions or unfinished large files with
-  `400 cannot_delete_non_empty_bucket`, matching real B2.
-- **B2Simulator bucket-configuration fidelity.** `b2_create_bucket` and
-  `b2_update_bucket` now validate CORS, lifecycle, replication, and default
-  retention rule shapes; `b2_list_buckets` honors the `bucketName`, `bucketId`,
-  and `bucketTypes` filters; and `b2_update_bucket` enforces `ifRevisionIs` with
-  a `409 conflict`. Closes #22.
-- **B2Simulator create_key validation.** `b2_create_key` now rejects unknown or
-  empty capabilities and out-of-range key names, and rejects capabilities that
-  exceed the creating key's grant, matching real B2. Closes #18.
-- **B2Simulator authorize grant fidelity.** `b2_authorize_account` now derives
-  the response `allowed` capabilities and bucket/name-prefix scope from the
-  authorizing key instead of always returning the full master grant, so a
-  restricted key reports its real scope. Closes #19.
+- **B2Simulator bucket-deletion fidelity.** `b2_delete_bucket` now rejects buckets that still contain file versions or unfinished large files with `400 cannot_delete_non_empty_bucket`, matching real B2.
+- **B2Simulator bucket-configuration fidelity.** `b2_create_bucket` and `b2_update_bucket` now validate CORS, lifecycle, replication, and default retention rule shapes; `b2_list_buckets` honors the `bucketName`, `bucketId`, and `bucketTypes` filters; and `b2_update_bucket` enforces `ifRevisionIs` with a `409 conflict`. Closes #22.
+- **B2Simulator create_key validation.** `b2_create_key` now rejects unknown or empty capabilities and out-of-range key names, and rejects capabilities that exceed the creating key's grant, matching real B2. Closes #18.
+- **B2Simulator authorize grant fidelity.** `b2_authorize_account` now derives the response `allowed` capabilities and bucket/name-prefix scope from the authorizing key instead of always returning the full master grant, so a restricted key reports its real scope. Closes #19.
 
 ## [0.2.0] - 2026-07-08
 
