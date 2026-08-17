@@ -392,6 +392,7 @@ interface LargeFileInProgress {
 interface StoredLargeFilePart {
   readonly data: Uint8Array
   readonly sha1: string
+  readonly contentMd5: string | null
   readonly uploadTimestamp: number
 }
 
@@ -2989,7 +2990,7 @@ export class B2Simulator {
     const { sha1, data: partData } = resolved
 
     const uploadTimestamp = this.monotonicTimestamp()
-    large.parts.set(partNumber, { data: partData, sha1, uploadTimestamp })
+    large.parts.set(partNumber, { data: partData, sha1, contentMd5: null, uploadTimestamp })
 
     return {
       status: 200,
@@ -2998,6 +2999,7 @@ export class B2Simulator {
         partNumber,
         contentLength: partData.byteLength,
         contentSha1: sha1,
+        contentMd5: null,
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp,
       },
@@ -3874,6 +3876,7 @@ export class B2Simulator {
           isClientAuthorizedToRead: true,
           value: large.legalHold,
         },
+        replicationStatus: null,
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: large.uploadTimestamp,
       },
@@ -4079,6 +4082,7 @@ export class B2Simulator {
         isClientAuthorizedToRead: true,
         value: f.legalHold,
       },
+      replicationStatus: null,
       serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
       uploadTimestamp: f.uploadTimestamp,
     }))
@@ -4108,6 +4112,7 @@ export class B2Simulator {
         partNumber,
         contentLength: part.data.byteLength,
         contentSha1: part.sha1,
+        contentMd5: part.contentMd5,
         uploadTimestamp: part.uploadTimestamp,
       }))
 
@@ -4161,10 +4166,12 @@ export class B2Simulator {
     // Hash the part data so list_parts can return a real SHA-1.
     // sha1Hex is isomorphic (node:crypto in Node, WebCrypto in browsers).
     const sha1 = await sha1Hex(partData)
+    const uploadTimestamp = this.monotonicTimestamp()
     large.parts.set(req.partNumber, {
       data: new Uint8Array(partData),
       sha1,
-      uploadTimestamp: this.monotonicTimestamp(),
+      contentMd5: null,
+      uploadTimestamp,
     })
 
     return {
@@ -4174,6 +4181,9 @@ export class B2Simulator {
         partNumber: req.partNumber,
         contentLength: partData.byteLength,
         contentSha1: sha1,
+        contentMd5: null,
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
+        uploadTimestamp,
       },
     }
   }
