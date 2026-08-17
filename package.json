@@ -177,7 +177,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "cspell": "^10.0.1",
     "eslint": "^10.6.0",
-    "eslint-plugin-jsdoc": "^63.0.10",
+    "eslint-plugin-jsdoc": "^64.0.2",
     "eslint-plugin-tsdoc": "^0.5.2",
     "playwright": "^1.61.1",
     "typedoc": "^0.28.19",
