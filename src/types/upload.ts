@@ -1,5 +1,5 @@
 import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
-import type { FileAction } from './file.ts'
+import type { FileAction, ReplicationStatus } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
@@ -117,6 +117,8 @@ export interface UnfinishedLargeFileMetadata {
   readonly fileRetention?: ReadableFileRetention
   /** Legal hold status for this unfinished file, when readable. */
   readonly legalHold?: ReadableLegalHold
+  /** Replication status for this unfinished file, when available. */
+  readonly replicationStatus?: ReplicationStatus
   /** Server-side encryption applied to this unfinished file. */
   readonly serverSideEncryption?: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this unfinished upload was started. */
@@ -182,6 +184,8 @@ export interface UploadPartResponse {
   readonly contentLength: number
   /** SHA-1 checksum of the uploaded part content. */
   readonly contentSha1: string
+  /** MD5 checksum of the uploaded part content, or null if not available. */
+  readonly contentMd5: string | null
   /** Server-side encryption applied to this part. */
   readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
@@ -273,6 +277,10 @@ export interface PartInfo {
   readonly contentLength: number
   /** SHA-1 checksum of this part's content. */
   readonly contentSha1: string
+  /** MD5 checksum of this part's content, or null if not available. */
+  readonly contentMd5: string | null
+  /** Server-side encryption applied to this part. */
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
   readonly uploadTimestamp: number
 }

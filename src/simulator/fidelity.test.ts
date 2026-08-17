@@ -4018,6 +4018,95 @@ describe('B2Simulator upload write-path validation', () => {
     }
   })
 
+  it('returns documented v4 metadata on large-file part responses', async () => {
+    const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('part-metadata.bin')
+    expect(large.replicationStatus).toBeNull()
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'part-metadata.bin',
+    })
+    expect(unfinished.files[0]).toMatchObject({
+      fileId: large.fileId,
+      replicationStatus: null,
+    })
+
+    const partData = new TextEncoder().encode('uploaded part metadata')
+    const uploaded = await client.raw.uploadPart(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partData.byteLength,
+        contentSha1: await sha1Hex(partData),
+      },
+      partData as BodyInit,
+    )
+    expect(uploaded.contentMd5).toBeNull()
+
+    const listed = await client.raw.listParts(apiUrl, authToken, { fileId: large.fileId })
+    expect(listed.parts[0]).toMatchObject({
+      contentMd5: null,
+      contentSha1: uploaded.contentSha1,
+      fileId: large.fileId,
+      partNumber: 1,
+      serverSideEncryption: { mode: null, algorithm: null },
+      uploadTimestamp: uploaded.uploadTimestamp,
+    })
+
+    const encryptedLarge = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'encrypted-part-metadata.bin',
+      contentType: 'application/octet-stream',
+      serverSideEncryption: SSE_B2,
+    })
+    const encryptedUploadUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: encryptedLarge.fileId,
+    })
+    const encryptedPartData = new TextEncoder().encode('encrypted listed part metadata')
+    const encryptedUploaded = await client.raw.uploadPart(
+      encryptedUploadUrl.uploadUrl,
+      {
+        authorization: encryptedUploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: encryptedPartData.byteLength,
+        contentSha1: await sha1Hex(encryptedPartData),
+      },
+      encryptedPartData as BodyInit,
+    )
+    const encryptedListed = await client.raw.listParts(apiUrl, authToken, {
+      fileId: encryptedLarge.fileId,
+    })
+    expect(encryptedListed.parts[0]).toMatchObject({
+      contentMd5: null,
+      contentSha1: encryptedUploaded.contentSha1,
+      fileId: encryptedLarge.fileId,
+      partNumber: 1,
+      serverSideEncryption: SSE_B2,
+      uploadTimestamp: encryptedUploaded.uploadTimestamp,
+    })
+
+    const source = await bucket.upload({
+      fileName: 'copy-part-metadata-source.bin',
+      source: new BufferSource(new TextEncoder().encode('copied part metadata')),
+    })
+    const copyLarge = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'copy-part-metadata-destination.bin',
+      contentType: 'application/octet-stream',
+    })
+    const copied = await client.raw.copyPart(apiUrl, authToken, {
+      sourceFileId: source.fileId,
+      largeFileId: fileIdOf(copyLarge.fileId),
+      partNumber: 1,
+    })
+
+    expect(copied).toMatchObject({
+      contentMd5: null,
+      serverSideEncryption: { mode: null, algorithm: null },
+    })
+    expect(copied.uploadTimestamp).toEqual(expect.any(Number))
+  })
+
   it('stores custom upload timestamps for small and large uploads', async () => {
     ;({ client, sim } = makeClient({
       sim: { customUploadTimestampsEnabled: true },

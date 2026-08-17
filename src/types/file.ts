@@ -34,6 +34,9 @@ export const FileAction = {
  */
 export type FileAction = (typeof FileAction)[keyof typeof FileAction]
 
+/** Replication status for a file version or unfinished large file. */
+export type ReplicationStatus = 'pending' | 'completed' | 'failed' | 'replica' | null
+
 /**
  * Complete metadata for a single file version in B2.
  * Returned by `b2_get_file_info`, `b2_list_file_names`, `b2_list_file_versions`,
@@ -75,7 +78,7 @@ export interface FileVersion {
     readonly value: LegalHoldValue | null
   }
   /** Replication status, or null if replication is not configured. */
-  readonly replicationStatus: 'pending' | 'completed' | 'failed' | 'replica' | null
+  readonly replicationStatus: ReplicationStatus
   /** Server-side encryption settings applied to this file version. */
   readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this version was uploaded. */
@@ -232,4 +235,10 @@ export interface CopyPartResponse {
   readonly contentLength: number
   /** SHA-1 checksum of the copied part content. */
   readonly contentSha1: string
+  /** MD5 checksum of the copied part content, or null if not available. */
+  readonly contentMd5: string | null
+  /** Server-side encryption applied to this copied part. */
+  readonly serverSideEncryption: PublicEncryptionSetting
+  /** UTC timestamp (milliseconds) when this part was copied. */
+  readonly uploadTimestamp: number
 }

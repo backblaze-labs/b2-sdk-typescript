@@ -80,6 +80,7 @@ export type {
   ListFileNamesResponse,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
+  ReplicationStatus,
 } from './file.ts'
 // `FileAction` and `MetadataDirective` are forwarded as both type and value.
 export { FileAction, MetadataDirective } from './file.ts'
