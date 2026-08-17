@@ -317,6 +317,14 @@ const DOWNLOAD_RESPONSE_OVERRIDE_HEADERS: Record<DownloadResponseOverrideParam, 
   b2Expires: 'Expires',
 }
 
+const DOWNLOAD_SSE_B2_HEADER = 'X-Bz-Server-Side-Encryption'
+const DOWNLOAD_SSE_C_ALGORITHM_HEADER = 'X-Bz-Server-Side-Encryption-Customer-Algorithm'
+const DOWNLOAD_SSE_C_KEY_MD5_HEADER = 'X-Bz-Server-Side-Encryption-Customer-Key-Md5'
+const DOWNLOAD_FILE_RETENTION_MODE_HEADER = 'X-Bz-File-Retention-Mode'
+const DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER = 'X-Bz-File-Retention-Retain-Until-Timestamp'
+const DOWNLOAD_FILE_LEGAL_HOLD_HEADER = 'X-Bz-File-Legal-Hold'
+const DOWNLOAD_CLIENT_UNAUTHORIZED_TO_READ_HEADER = 'X-Bz-Client-Unauthorized-To-Read'
+
 type DownloadAuthorizationRequestBody = {
   bucketId: string
   fileNamePrefix: string
@@ -3207,6 +3215,17 @@ export class B2Simulator {
     if (!('src_last_modified_millis' in fv.fileInfo)) {
       headers['X-Bz-Info-src_last_modified_millis'] = String(fv.uploadTimestamp)
     }
+    const unauthorizedToRead: string[] = []
+    this.addDownloadEncryptionHeaders(
+      headers,
+      stored.serverSideEncryption,
+      requestHeaders,
+      unauthorizedToRead,
+    )
+    this.addDownloadObjectLockHeaders(headers, fv, requestHeaders, unauthorizedToRead)
+    if (unauthorizedToRead.length > 0) {
+      headers[DOWNLOAD_CLIENT_UNAUTHORIZED_TO_READ_HEADER] = unauthorizedToRead.join(',')
+    }
     if (contentRange !== null) {
       // B2 spec-compliance: 206 Partial Content responses MUST carry a
       // `Content-Range: bytes <start>-<end>/<total>` header per RFC
@@ -3216,6 +3235,66 @@ export class B2Simulator {
       headers['Content-Range'] = contentRange
     }
     return { status, headers, data }
+  }
+
+  private addDownloadEncryptionHeaders(
+    headers: Record<string, string>,
+    encryption: StoredServerSideEncryption,
+    requestHeaders: Record<string, string>,
+    unauthorizedToRead: string[],
+  ): void {
+    if (encryption.mode === EncryptionMode.None) return
+    if (
+      !this.requestHasCapability(
+        requestHeaderValue(requestHeaders, 'authorization'),
+        Capability.ReadBucketEncryption,
+      )
+    ) {
+      if (encryption.mode === EncryptionMode.SseB2) {
+        unauthorizedToRead.push(DOWNLOAD_SSE_B2_HEADER)
+      } else {
+        unauthorizedToRead.push(DOWNLOAD_SSE_C_ALGORITHM_HEADER, DOWNLOAD_SSE_C_KEY_MD5_HEADER)
+      }
+      return
+    }
+
+    if (encryption.mode === EncryptionMode.SseB2) {
+      headers[DOWNLOAD_SSE_B2_HEADER] = encryption.algorithm
+      return
+    }
+    headers[DOWNLOAD_SSE_C_ALGORITHM_HEADER] = encryption.algorithm
+    headers[DOWNLOAD_SSE_C_KEY_MD5_HEADER] = encryption.customerKeyMd5
+  }
+
+  private addDownloadObjectLockHeaders(
+    headers: Record<string, string>,
+    fileVersion: FileVersion,
+    requestHeaders: Record<string, string>,
+    unauthorizedToRead: string[],
+  ): void {
+    const authToken = requestHeaderValue(requestHeaders, 'authorization')
+    const retention = fileVersion.fileRetention.value
+    if (retention !== null && retention.mode !== null && retention.retainUntilTimestamp !== null) {
+      if (this.requestHasCapability(authToken, Capability.ReadFileRetentions)) {
+        headers[DOWNLOAD_FILE_RETENTION_MODE_HEADER] = retention.mode
+        headers[DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER] = String(
+          retention.retainUntilTimestamp,
+        )
+      } else {
+        unauthorizedToRead.push(
+          DOWNLOAD_FILE_RETENTION_MODE_HEADER,
+          DOWNLOAD_FILE_RETENTION_RETAIN_UNTIL_HEADER,
+        )
+      }
+    }
+
+    const legalHold = fileVersion.legalHold.value
+    if (legalHold === null) return
+    if (this.requestHasCapability(authToken, Capability.ReadFileLegalHolds)) {
+      headers[DOWNLOAD_FILE_LEGAL_HOLD_HEADER] = legalHold
+      return
+    }
+    unauthorizedToRead.push(DOWNLOAD_FILE_LEGAL_HOLD_HEADER)
   }
 
   // --- API handlers ---

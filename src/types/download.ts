@@ -1,4 +1,5 @@
 import type { BucketId, FileId } from './ids.ts'
+import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
 
 /** Request parameters for downloading a file by its ID via `b2_download_file_by_id`. */
 export interface DownloadByIdRequest {
@@ -95,12 +96,41 @@ export interface DownloadAuthorizationResponse {
   readonly authorizationToken: string
 }
 
+/** Server-side encryption metadata echoed in B2 download response headers. */
+export type DownloadServerSideEncryption =
+  | {
+      /** B2-managed server-side encryption. */
+      readonly mode: 'SSE-B2'
+      /** Encryption algorithm echoed by `X-Bz-Server-Side-Encryption`. */
+      readonly algorithm: 'AES256'
+    }
+  | {
+      /** Customer-managed server-side encryption. */
+      readonly mode: 'SSE-C'
+      /** Encryption algorithm echoed by `X-Bz-Server-Side-Encryption-Customer-Algorithm`. */
+      readonly algorithm: 'AES256'
+      /** MD5 digest echoed by `X-Bz-Server-Side-Encryption-Customer-Key-Md5`. */
+      readonly customerKeyMd5: string
+    }
+
 /** Parsed headers from a B2 file download response. */
 export interface DownloadHeaders {
   /** MIME type of the downloaded file content. */
   readonly contentType: string
   /** Size of the downloaded content in bytes. */
   readonly contentLength: number
+  /** Content-Disposition value computed from upload metadata or the download request. */
+  readonly contentDisposition?: string
+  /** Content-Language value computed from upload metadata or the download request. */
+  readonly contentLanguage?: string
+  /** Content-Encoding value computed from upload metadata or the download request. */
+  readonly contentEncoding?: string
+  /** Cache-Control value computed from upload metadata, bucket defaults, or the download request. */
+  readonly cacheControl?: string
+  /** Expires value computed from upload metadata or the download request. */
+  readonly expires?: string
+  /** Content-Range value returned for satisfiable range downloads. */
+  readonly contentRange?: string
   /** SHA-1 checksum of the full file content, or null for large files. */
   readonly contentSha1: string | null
   /** ID of the downloaded file version. */
@@ -111,4 +141,12 @@ export interface DownloadHeaders {
   readonly fileInfo: Record<string, string>
   /** UTC timestamp (milliseconds) when the file was uploaded. */
   readonly uploadTimestamp: number
+  /** Server-side encryption metadata echoed by B2, when the caller is authorized to read it. */
+  readonly serverSideEncryption?: DownloadServerSideEncryption
+  /** Object Lock retention metadata, when present and the caller is authorized to read it. */
+  readonly fileRetention?: FileRetentionValue
+  /** Object Lock legal hold metadata, when present and the caller is authorized to read it. */
+  readonly legalHold?: LegalHoldValue
+  /** Header names B2 omitted because the caller lacks capability to read them. */
+  readonly clientUnauthorizedToRead?: readonly string[]
 }

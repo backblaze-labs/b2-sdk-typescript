@@ -46,6 +46,7 @@ export type {
   DownloadByIdRequest,
   DownloadByNameRequest,
   DownloadHeaders,
+  DownloadServerSideEncryption,
 } from './download.ts'
 export type {
   EncryptionSetting,

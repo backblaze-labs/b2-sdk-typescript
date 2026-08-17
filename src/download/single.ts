@@ -2,7 +2,7 @@ import type { AccountInfo } from '../auth/account-info.ts'
 import { parseFileInfoHeaders } from '../raw/encoding.ts'
 import type { DownloadFileOptions, RawClient, SseCDownloadKey } from '../raw/index.ts'
 import { type ProgressListener, ProgressTracker } from '../streams/progress.ts'
-import type { DownloadHeaders } from '../types/download.ts'
+import type { DownloadHeaders, DownloadServerSideEncryption } from '../types/download.ts'
 import { type FileId, fileId as fileIdOf } from '../types/ids.ts'
 import { bestEffort } from '../util/best-effort.ts'
 import { normalizeSha1 } from '../util/normalize.ts'
@@ -360,10 +360,28 @@ function instrumentProgress(
  */
 function extractDownloadHeaders(headers: Headers): DownloadHeaders {
   const fileInfo = parseFileInfoHeaders(headers)
+  const contentDisposition = optionalHeader(headers, 'Content-Disposition')
+  const contentLanguage = optionalHeader(headers, 'Content-Language')
+  const contentEncoding = optionalHeader(headers, 'Content-Encoding')
+  const cacheControl = optionalHeader(headers, 'Cache-Control')
+  const expires = optionalHeader(headers, 'Expires')
+  const contentRange = optionalHeader(headers, 'Content-Range')
+  const serverSideEncryption = parseDownloadServerSideEncryption(headers)
+  const fileRetention = parseDownloadFileRetention(headers)
+  const legalHold = optionalHeader(headers, 'X-Bz-File-Legal-Hold') as
+    | DownloadHeaders['legalHold']
+    | undefined
+  const clientUnauthorizedToRead = parseClientUnauthorizedToRead(headers)
 
   return {
     contentType: headers.get('Content-Type') ?? 'application/octet-stream',
     contentLength: Number.parseInt(headers.get('Content-Length') ?? '0', 10),
+    ...(contentDisposition !== undefined ? { contentDisposition } : {}),
+    ...(contentLanguage !== undefined ? { contentLanguage } : {}),
+    ...(contentEncoding !== undefined ? { contentEncoding } : {}),
+    ...(cacheControl !== undefined ? { cacheControl } : {}),
+    ...(expires !== undefined ? { expires } : {}),
+    ...(contentRange !== undefined ? { contentRange } : {}),
     // B2 sends the literal `'none'` for multipart-finished files; collapse
     // to `null` so the typed `string | null` actually means "no SHA-1".
     contentSha1: normalizeSha1(headers.get('X-Bz-Content-Sha1')),
@@ -371,5 +389,54 @@ function extractDownloadHeaders(headers: Headers): DownloadHeaders {
     fileName: decodeURIComponent(headers.get('X-Bz-File-Name') ?? ''),
     fileInfo,
     uploadTimestamp: Number.parseInt(headers.get('X-Bz-Upload-Timestamp') ?? '0', 10),
+    ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+    ...(fileRetention !== undefined ? { fileRetention } : {}),
+    ...(legalHold !== undefined ? { legalHold } : {}),
+    ...(clientUnauthorizedToRead !== undefined ? { clientUnauthorizedToRead } : {}),
   }
+}
+
+function optionalHeader(headers: Headers, name: string): string | undefined {
+  return headers.get(name) ?? undefined
+}
+
+function parseDownloadServerSideEncryption(
+  headers: Headers,
+): DownloadServerSideEncryption | undefined {
+  const managedAlgorithm = optionalHeader(headers, 'X-Bz-Server-Side-Encryption')
+  if (managedAlgorithm !== undefined) {
+    return { mode: 'SSE-B2', algorithm: managedAlgorithm as 'AES256' }
+  }
+
+  const customerAlgorithm = optionalHeader(
+    headers,
+    'X-Bz-Server-Side-Encryption-Customer-Algorithm',
+  )
+  const customerKeyMd5 = optionalHeader(headers, 'X-Bz-Server-Side-Encryption-Customer-Key-Md5')
+  if (customerAlgorithm === undefined || customerKeyMd5 === undefined) return undefined
+  return { mode: 'SSE-C', algorithm: customerAlgorithm as 'AES256', customerKeyMd5 }
+}
+
+function parseDownloadFileRetention(headers: Headers): DownloadHeaders['fileRetention'] {
+  const mode = optionalHeader(headers, 'X-Bz-File-Retention-Mode') as
+    | NonNullable<DownloadHeaders['fileRetention']>['mode']
+    | undefined
+  const retainUntilTimestamp = optionalHeader(headers, 'X-Bz-File-Retention-Retain-Until-Timestamp')
+  if (mode === undefined && retainUntilTimestamp === undefined) return undefined
+  return {
+    mode: mode ?? null,
+    retainUntilTimestamp:
+      retainUntilTimestamp === undefined ? null : Number.parseInt(retainUntilTimestamp, 10),
+  }
+}
+
+function parseClientUnauthorizedToRead(
+  headers: Headers,
+): DownloadHeaders['clientUnauthorizedToRead'] {
+  const value = optionalHeader(headers, 'X-Bz-Client-Unauthorized-To-Read')
+  if (value === undefined) return undefined
+  return value
+    .split(',')
+    .map((header) => header.trim())
+    .filter((header) => header.length > 0)
 }
