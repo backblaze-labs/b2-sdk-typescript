@@ -491,6 +491,9 @@ export class RawClient {
     if (headers.lastModifiedMillis !== undefined) {
       reqHeaders['X-Bz-Info-src_last_modified_millis'] = String(headers.lastModifiedMillis)
     }
+    if (headers.customUploadTimestamp !== undefined) {
+      reqHeaders['X-Bz-Custom-Upload-Timestamp'] = String(headers.customUploadTimestamp)
+    }
     if (headers.contentDisposition) {
       reqHeaders['X-Bz-Info-b2-content-disposition'] = headers.contentDisposition
     }

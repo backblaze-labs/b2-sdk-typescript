@@ -36,6 +36,8 @@ export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFai
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
+  /** B2 upload timestamp override in milliseconds since epoch. */
+  readonly customUploadTimestamp?: number
   /**
    * Target part size in bytes. The stream buffers writes until this many bytes
    * are accumulated, then ships a part. Must be at least the account's
@@ -134,6 +136,9 @@ export function createWriteStream(
           fileName: options.fileName,
           contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
           fileInfo: options.fileInfo ?? {},
+          ...(options.customUploadTimestamp !== undefined
+            ? { customUploadTimestamp: options.customUploadTimestamp }
+            : {}),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),

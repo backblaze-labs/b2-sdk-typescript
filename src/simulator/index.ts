@@ -2532,6 +2532,7 @@ export class B2Simulator {
             bucketId: string
             fileName: string
             contentType: string
+            customUploadTimestamp?: number | null
             fileInfo?: Record<string, string>
             fileRetention?: FileRetentionValue
             legalHold?: LegalHoldValue
@@ -2676,6 +2677,27 @@ export class B2Simulator {
       )
     }
     return null
+  }
+
+  private parseCustomUploadTimestamp(
+    value: unknown,
+  ): { readonly timestamp: number | null } | SimulatorJsonResponse {
+    if (value === undefined || value === null) return { timestamp: null }
+    const timestamp =
+      typeof value === 'number'
+        ? value
+        : typeof value === 'string' && /^\d+$/.test(value)
+          ? Number(value)
+          : Number.NaN
+
+    if (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > Date.now()) {
+      return this.error(
+        400,
+        'custom_timestamp_invalid',
+        'The request has an invalid custom upload timestamp.',
+      )
+    }
+    return { timestamp }
   }
 
   /**
@@ -2831,6 +2853,12 @@ export class B2Simulator {
       bucket.info.defaultServerSideEncryption,
     )
     if ('status' in serverSideEncryption) return serverSideEncryption
+    const customUploadTimestamp = this.parseCustomUploadTimestamp(
+      requestHeaderValue(headers, 'x-bz-custom-upload-timestamp'),
+    )
+    if ('status' in customUploadTimestamp) {
+      return customUploadTimestamp
+    }
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -2840,6 +2868,9 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Upload,
       serverSideEncryption,
+      ...(customUploadTimestamp.timestamp !== null
+        ? { uploadTimestamp: customUploadTimestamp.timestamp }
+        : {}),
     })
     const stored: StoredFile = { fileVersion, data: storedData, serverSideEncryption }
     const existing = bucket.files.get(fileName)
@@ -3772,6 +3803,7 @@ export class B2Simulator {
     bucketId: string
     fileName: string
     contentType: string
+    customUploadTimestamp?: number | null
     fileInfo?: Record<string, string>
     fileRetention?: FileRetentionValue
     legalHold?: LegalHoldValue
@@ -3787,8 +3819,11 @@ export class B2Simulator {
       if (infoError) return this.error(400, infoError.code, infoError.message)
     }
 
+    const customUploadTimestamp = this.parseCustomUploadTimestamp(req.customUploadTimestamp)
+    if ('status' in customUploadTimestamp) return customUploadTimestamp
+
     const fid = this.genId('4_z')
-    const uploadTimestamp = this.monotonicTimestamp()
+    const uploadTimestamp = customUploadTimestamp.timestamp ?? this.monotonicTimestamp()
     const serverSideEncryption = await storedServerSideEncryption(
       req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
     )
@@ -3954,6 +3989,7 @@ export class B2Simulator {
       fileRetention: large.fileRetention,
       legalHold: large.legalHold,
       serverSideEncryption: large.serverSideEncryption,
+      uploadTimestamp: large.uploadTimestamp,
     })
     const stored: StoredFile = {
       fileVersion,
@@ -4517,6 +4553,7 @@ export class B2Simulator {
     readonly fileRetention?: FileRetentionValue | null
     readonly legalHold?: LegalHoldValue | null
     readonly serverSideEncryption?: EncryptionSetting | StoredServerSideEncryption
+    readonly uploadTimestamp?: number
   }): FileVersion {
     return {
       accountId: accountIdOf(this.accountId),
@@ -4535,7 +4572,7 @@ export class B2Simulator {
       serverSideEncryption: publicServerSideEncryption(
         params.serverSideEncryption ?? { mode: EncryptionMode.None },
       ),
-      uploadTimestamp: this.monotonicTimestamp(),
+      uploadTimestamp: params.uploadTimestamp ?? this.monotonicTimestamp(),
     }
   }
 

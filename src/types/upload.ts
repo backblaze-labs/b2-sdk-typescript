@@ -44,6 +44,8 @@ export interface UploadFileHeaders {
   readonly legalHold?: LegalHoldValue
   /** Optional last-modified timestamp in milliseconds (stored as `src_last_modified_millis` in file info). */
   readonly lastModifiedMillis?: number
+  /** Optional B2 upload timestamp override in milliseconds; distinct from last-modified file info. */
+  readonly customUploadTimestamp?: number
   /** Optional Content-Disposition header value for downloads. */
   readonly contentDisposition?: string
   /** Optional Content-Language header value for downloads. */
@@ -66,6 +68,8 @@ export interface StartLargeFileRequest {
   readonly contentType: string
   /** Optional user-defined key-value metadata for the file. */
   readonly fileInfo?: Record<string, string>
+  /** Optional B2 upload timestamp override in milliseconds; distinct from `src_last_modified_millis`. */
+  readonly customUploadTimestamp?: number
   /** Optional server-side encryption setting. */
   readonly serverSideEncryption?: EncryptionSetting
   /** Optional Object Lock retention for the file. */

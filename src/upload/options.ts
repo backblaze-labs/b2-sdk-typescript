@@ -27,6 +27,11 @@ export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailu
   readonly legalHold?: LegalHoldValue
   /** Last-modified timestamp in milliseconds since epoch. */
   readonly lastModifiedMillis?: number
+  /**
+   * B2 upload timestamp override in milliseconds since epoch.
+   * This sets `uploadTimestamp`; use `lastModifiedMillis` for `src_last_modified_millis` metadata.
+   */
+  readonly customUploadTimestamp?: number
   /** Part size override for multipart uploads, in bytes. */
   readonly partSize?: number
   /** Number of concurrent part uploads for large files. */
@@ -76,6 +81,8 @@ export interface B2ObjectWriteStreamOptions extends UploadRetryOptions, CleanupF
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
+  /** B2 upload timestamp override in milliseconds since epoch. */
+  readonly customUploadTimestamp?: number
   /** Target part size in bytes. Defaults to the account's recommended part size. */
   readonly partSize?: number
   /** Maximum number of parts uploaded in parallel. Defaults to 4. */

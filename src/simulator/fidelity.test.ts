@@ -3974,6 +3974,61 @@ describe('B2Simulator upload write-path validation', () => {
       dateNow.mockRestore()
     }
   })
+
+  it('stores custom upload timestamps for small and large uploads', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const smallTimestamp = 1_700_000_000_000
+    const largeTimestamp = 1_700_000_000_001
+    const smallData = new Uint8Array([1, 2, 3])
+
+    const uploadUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const small = await client.raw.uploadFile(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        fileName: 'custom-small.txt',
+        contentType: 'application/octet-stream',
+        contentLength: smallData.byteLength,
+        contentSha1: await sha1Hex(smallData),
+        customUploadTimestamp: smallTimestamp,
+      },
+      smallData as BodyInit,
+    )
+    expect(small.uploadTimestamp).toBe(smallTimestamp)
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'custom-large.bin',
+      contentType: 'application/octet-stream',
+      customUploadTimestamp: largeTimestamp,
+    })
+    expect(large.uploadTimestamp).toBe(largeTimestamp)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'custom-large.bin',
+    })
+    expect(unfinished.files[0]?.uploadTimestamp).toBe(largeTimestamp)
+
+    const partData = new Uint8Array([4, 5, 6])
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, { fileId: large.fileId })
+    const part = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partData.byteLength,
+        contentSha1: await sha1Hex(partData),
+      },
+      partData as BodyInit,
+    )
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: large.fileId,
+      partSha1Array: [part.contentSha1],
+    })
+    expect(finished.uploadTimestamp).toBe(largeTimestamp)
+  })
 })
 
 // ---------------------------------------------------------------------------
