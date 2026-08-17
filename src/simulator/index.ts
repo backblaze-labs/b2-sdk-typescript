@@ -42,6 +42,7 @@ const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'master-key-id'
 const SIMULATOR_MASTER_APPLICATION_KEY = 'master-key'
 const SIMULATOR_TEST_APPLICATION_KEY_ID = 'test-key-id'
 const SIMULATOR_TEST_APPLICATION_KEY = 'test-key'
+const SIMULATOR_APPLICATION_KEY_ID_PREFIX = 'sim_key_'
 // Master capabilities granted to the simulator's implicit storage credentials.
 // Object Lock capabilities are intentionally omitted: real B2 does not
 // auto-grant them; tests that need them create an explicit key.
@@ -511,6 +512,10 @@ function isImplicitPartnerMasterCredential(credentials: BasicCredentials): boole
     credentials.applicationKeyId === SIMULATOR_MASTER_APPLICATION_KEY_ID &&
     credentials.applicationKey === SIMULATOR_MASTER_APPLICATION_KEY
   )
+}
+
+function isSimulatorApplicationKeyId(applicationKeyId: string): boolean {
+  return applicationKeyId.startsWith(SIMULATOR_APPLICATION_KEY_ID_PREFIX)
 }
 
 function hasOwnField(body: unknown, field: string): boolean {
@@ -2274,6 +2279,7 @@ export class B2Simulator {
         },
       }
     }
+    if (isSimulatorApplicationKeyId(credentials.applicationKeyId)) return { kind: 'invalid' }
     if (isImplicitStorageMasterCredential(credentials) || !this.strictAuth) {
       return {
         kind: 'ok',

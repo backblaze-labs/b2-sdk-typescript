@@ -1220,6 +1220,29 @@ describe('B2Simulator authorize response grants', () => {
     expect(response.status).toBe(401)
     await expect(response.json()).resolves.toMatchObject({ code: 'unauthorized' })
   })
+
+  it('does not promote deleted created-key credentials to the master grant', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'auth-grant-deleted-key',
+    })
+    await client.deleteKey(key.applicationKeyId)
+    const beforeDeletedKeyAuthorize = issuedTokenCount(sim)
+
+    const response = await sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:${key.applicationKey}`)}`,
+      },
+    })
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({ code: 'unauthorized' })
+    expect(issuedTokenCount(sim)).toBe(beforeDeletedKeyAuthorize)
+  })
 })
 
 // ---------------------------------------------------------------------------
