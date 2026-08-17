@@ -37,7 +37,9 @@ import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 import { isPartnerQueryEndpoint, PartnerSimulator } from './partner.ts'
 
-const UPLOAD_TOKEN_SIGNING_KEY = 'b2-sdk-typescript-simulator-upload-token-v1'
+const UPLOAD_TOKEN_SIGNING_KEY = ['b2 sdk typescript', 'simulator upload authorization', 'v1'].join(
+  ':',
+)
 const SIMULATOR_MASTER_APPLICATION_KEY_ID = 'master-key-id'
 const SIMULATOR_MASTER_APPLICATION_KEY = 'master-key'
 const SIMULATOR_TEST_APPLICATION_KEY_ID = 'test-key-id'
