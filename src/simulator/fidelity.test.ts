@@ -1064,21 +1064,29 @@ describe('B2Simulator hooks: onWebhookDeliver', () => {
 // Strict-auth mode
 // ---------------------------------------------------------------------------
 
-describe('B2Simulator authorize response grants', () => {
-  async function authorizeWithKey(
-    sim: B2Simulator,
-    key: { applicationKeyId: string; applicationKey: string },
-  ): Promise<B2Client> {
-    const client = new B2Client({
-      applicationKeyId: key.applicationKeyId,
-      applicationKey: key.applicationKey,
-      transport: sim.transport(),
-      retry: { maxRetries: 0 },
-    })
-    await client.authorize()
-    return client
-  }
+async function authorizeWithKey(
+  sim: B2Simulator,
+  key: { applicationKeyId: string; applicationKey: string },
+): Promise<B2Client> {
+  const client = new B2Client({
+    applicationKeyId: key.applicationKeyId,
+    applicationKey: key.applicationKey,
+    transport: sim.transport(),
+    retry: { maxRetries: 0 },
+  })
+  await client.authorize()
+  return client
+}
 
+function issuedTokenCount(sim: B2Simulator): number {
+  return (
+    sim as unknown as {
+      readonly issuedTokens: Map<string, unknown>
+    }
+  ).issuedTokens.size
+}
+
+describe('B2Simulator authorize response grants', () => {
   it('derives allowed capabilities and scope from a created key in default mode', async () => {
     const { client, sim } = makeClient()
     await client.authorize()
@@ -1111,6 +1119,88 @@ describe('B2Simulator authorize response grants', () => {
     })
   })
 
+  it('keeps default-mode implicit master fallback for unknown Basic credentials', async () => {
+    const { sim } = makeClient()
+    const fallbackClient = new B2Client({
+      applicationKeyId: 'placeholder-key-id',
+      applicationKey: 'placeholder-key',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+
+    await fallbackClient.authorize()
+
+    expect(fallbackClient.accountInfo.getAuth()?.apiInfo.storageApi.allowed.buckets).toBeNull()
+    expect(fallbackClient.hasCapabilities([Capability.ListBuckets, Capability.WriteFiles])).toEqual(
+      {
+        ok: true,
+        missing: [],
+      },
+    )
+  })
+
+  it('reports applicationKeyExpirationTimestamp for an expiring created key', async () => {
+    const { client, sim } = makeClient()
+    await client.authorize()
+    const key = await client.createKey({
+      capabilities: [Capability.ListFiles],
+      keyName: 'auth-grant-expiring',
+      validDurationInSeconds: 60,
+    })
+
+    const scopedClient = await authorizeWithKey(sim, key)
+
+    expect(scopedClient.accountInfo.getAuth()?.applicationKeyExpirationTimestamp).toBe(
+      key.expirationTimestamp,
+    )
+  })
+
+  it('rejects expired created-key credentials and their strict-auth tokens', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-grant-expired',
+      bucketType: BucketType.AllPrivate,
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'auth-grant-expired-key',
+      bucketIds: [bucket.id],
+      validDurationInSeconds: 1,
+    })
+    const scopedClient = await authorizeWithKey(sim, key)
+    await expect(scopedClient.listBuckets({ bucketId: bucket.id })).resolves.toHaveLength(1)
+
+    sim.advanceTime(1000)
+    const beforeExpiredAuthorize = issuedTokenCount(sim)
+    const response = await sim.transport().send({
+      method: 'GET',
+      url: 'http://localhost:0/b2api/v4/b2_authorize_account',
+      headers: {
+        Authorization: `Basic ${btoa(`${key.applicationKeyId}:${key.applicationKey}`)}`,
+      },
+    })
+
+    expect(response.status).toBe(401)
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'unauthorized',
+      message: expect.stringContaining('expired'),
+    })
+    expect(issuedTokenCount(sim)).toBe(beforeExpiredAuthorize)
+
+    const protectedResponse = await sim.transport().send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v4/b2_list_buckets',
+      headers: { Authorization: scopedClient.accountInfo.getAuthToken() },
+      body: JSON.stringify({
+        accountId: client.accountInfo.getAccountId(),
+        bucketId: bucket.id,
+      }),
+    })
+    expect(protectedResponse.status).toBe(401)
+    await expect(protectedResponse.json()).resolves.toMatchObject({ code: 'expired_auth_token' })
+  })
+
   it('does not promote invalid created-key credentials to the master grant', async () => {
     const { client, sim } = makeClient()
     await client.authorize()
@@ -1133,20 +1223,6 @@ describe('B2Simulator authorize response grants', () => {
 })
 
 describe('B2Simulator strictAuth: capability enforcement', () => {
-  async function authorizeWithKey(
-    sim: B2Simulator,
-    key: { applicationKeyId: string; applicationKey: string },
-  ): Promise<B2Client> {
-    const client = new B2Client({
-      applicationKeyId: key.applicationKeyId,
-      applicationKey: key.applicationKey,
-      transport: sim.transport(),
-      retry: { maxRetries: 0 },
-    })
-    await client.authorize()
-    return client
-  }
-
   function forgeAdjacentTokenValue(token: string): string {
     return `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`
   }

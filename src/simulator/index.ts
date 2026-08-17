@@ -411,7 +411,13 @@ interface AuthorizationGrant {
   readonly bucketIds: readonly string[] | null
   readonly namePrefix: string | null
   readonly applicationKeyId: string | null
+  readonly expirationTimestamp: number | null
 }
+
+type AuthorizationGrantResolution =
+  | { readonly kind: 'ok'; readonly grant: AuthorizationGrant }
+  | { readonly kind: 'invalid' }
+  | { readonly kind: 'expired' }
 
 interface IssuedToken {
   readonly accountId: string
@@ -1140,8 +1146,12 @@ export interface B2SimulatorOptions {
    * checks, bucket scoping, prefix scoping, and auth-token expiry on
    * every request. The default `false` keeps the simulator permissive
    * for account/application-key authorization (matching its
-   * long-standing behaviour) so the existing test suite doesn't have
-   * to set up keys with the right capabilities.
+   * long-standing behaviour): any well-formed Basic credential whose
+   * applicationKeyId is not a simulator-created key receives the
+   * implicit master grant, so tests do not have to set up keys with
+   * the right capabilities. Created keys always authorize with their
+   * stored capabilities, bucket scope, name prefix, and expiration;
+   * a wrong or expired created-key secret is rejected.
    *
    * Upload authorization tokens returned by `b2_get_upload_url` and
    * `b2_get_upload_part_url` are always enforced, regardless of this
@@ -1150,6 +1160,9 @@ export interface B2SimulatorOptions {
    *
    * In strict mode:
    *
+   * - `b2_authorize_account` still accepts the documented implicit
+   *   master credentials `test-key-id:test-key` and
+   *   `master-key-id:master-key`.
    * - Unknown auth tokens return HTTP 401 with code `bad_auth_token`.
    * - Expired tokens (per {@link B2Simulator.advanceTime}) return HTTP 401 with code `expired_auth_token`.
    * - Calls without the required capability for the endpoint return HTTP 403 `unauthorized`.
@@ -1216,6 +1229,15 @@ export interface B2SimulatorOptions {
  * })
  * await client.authorize()
  * ```
+ *
+ * `test-key-id:test-key` is the documented implicit full-access
+ * storage credential. `master-key-id:master-key` is also accepted for
+ * tests that share storage and Partner simulator credentials. In the
+ * default permissive mode, other well-formed Basic credentials whose
+ * applicationKeyId was not minted by `b2_create_key` receive the same
+ * implicit master grant for backward compatibility. A simulator-created
+ * key always authorizes with its own capabilities, bucket restrictions,
+ * name prefix, and expiration.
  */
 export class B2Simulator {
   private readonly buckets = new Map<string, StoredBucket>()
@@ -1375,6 +1397,10 @@ export class B2Simulator {
    */
   private now(): number {
     return Date.now() + this.clockOffsetMs
+  }
+
+  private isStoredKeyExpired(key: StoredKey): boolean {
+    return key.expirationTimestamp !== null && key.expirationTimestamp <= this.now()
   }
 
   private pruneExpiredUploadTokens(now = this.now()): void {
@@ -1556,6 +1582,15 @@ export class B2Simulator {
     }
     if (this.now() > token.expiresAt) {
       return this.error(401, 'expired_auth_token', 'auth token has expired; reauthorize')
+    }
+    if (token.applicationKeyId !== null) {
+      const key = this.keys.get(token.applicationKeyId)
+      if (key === undefined) {
+        return this.error(401, 'bad_auth_token', 'application key has been deleted; reauthorize')
+      }
+      if (this.isStoredKeyExpired(key)) {
+        return this.error(401, 'expired_auth_token', 'application key has expired; reauthorize')
+      }
     }
     const missing = missingCapabilitiesFor(endpoint, token.capabilities)
     if (missing.length > 0) {
@@ -2208,37 +2243,51 @@ export class B2Simulator {
    *
    * The simulator has two implicit full-access storage credentials:
    * the documented `test-key-id:test-key` pair used by SDK tests and
-   * `master-key-id:master-key`. All other credentials must match a key
-   * minted via `b2_create_key`.
+   * `master-key-id:master-key`. In default permissive mode, any other
+   * well-formed Basic credential whose applicationKeyId is not a stored
+   * key also receives that implicit master grant for backward
+   * compatibility. A credential whose applicationKeyId matches a stored
+   * key must use the stored secret and must not be expired.
    *
    * @param authzHeader - Raw HTTP `Authorization` header value.
    *
-   * @returns The authorizing key's grant scope, or `null` when invalid.
+   * @returns The authorizing key's grant scope or the rejection reason.
    */
-  private findAuthorizationGrant(authzHeader: string | undefined): AuthorizationGrant | null {
+  private findAuthorizationGrant(authzHeader: string | undefined): AuthorizationGrantResolution {
     const credentials = parseBasicAuthorizationHeader(authzHeader)
-    if (credentials === null) return null
+    if (credentials === null) return { kind: 'invalid' }
     const stored = this.keys.get(credentials.applicationKeyId)
     if (stored !== undefined) {
-      if (!timingSafeStringEqual(stored.applicationKey, credentials.applicationKey)) return null
+      if (!timingSafeStringEqual(stored.applicationKey, credentials.applicationKey)) {
+        return { kind: 'invalid' }
+      }
+      if (this.isStoredKeyExpired(stored)) return { kind: 'expired' }
       return {
-        capabilities: stored.capabilities,
-        bucketIds: stored.bucketIds,
-        namePrefix: stored.namePrefix,
-        applicationKeyId: credentials.applicationKeyId,
-        accountId: stored.accountId,
+        kind: 'ok',
+        grant: {
+          capabilities: stored.capabilities,
+          bucketIds: stored.bucketIds,
+          namePrefix: stored.namePrefix,
+          applicationKeyId: credentials.applicationKeyId,
+          accountId: stored.accountId,
+          expirationTimestamp: stored.expirationTimestamp,
+        },
       }
     }
-    if (isImplicitStorageMasterCredential(credentials)) {
+    if (isImplicitStorageMasterCredential(credentials) || !this.strictAuth) {
       return {
-        capabilities: SIMULATOR_MASTER_CAPABILITIES,
-        bucketIds: null,
-        namePrefix: null,
-        applicationKeyId: null,
-        accountId: this.accountId,
+        kind: 'ok',
+        grant: {
+          capabilities: SIMULATOR_MASTER_CAPABILITIES,
+          bucketIds: null,
+          namePrefix: null,
+          applicationKeyId: null,
+          accountId: this.accountId,
+          expirationTimestamp: null,
+        },
       }
     }
-    return null
+    return { kind: 'invalid' }
   }
 
   private canAuthorizePartner(authzHeader: string | undefined): boolean {
@@ -2249,6 +2298,7 @@ export class B2Simulator {
     return (
       stored !== undefined &&
       stored.accountId === this.accountId &&
+      !this.isStoredKeyExpired(stored) &&
       timingSafeStringEqual(stored.applicationKey, credentials.applicationKey)
     )
   }
@@ -3125,8 +3175,14 @@ export class B2Simulator {
     // Token validity: real B2 = 24h; configurable via `authTokenTtlMs`.
     // The issued token and response body both inherit the exact grant
     // resolved from the Basic credentials used for this authorize call.
-    const grant = this.findAuthorizationGrant(authzHeader)
-    if (grant === null) return this.error(401, 'unauthorized', 'application key is not valid')
+    const resolution = this.findAuthorizationGrant(authzHeader)
+    if (resolution.kind === 'invalid') {
+      return this.error(401, 'unauthorized', 'application key is not valid')
+    }
+    if (resolution.kind === 'expired') {
+      return this.error(401, 'unauthorized', 'application key is expired')
+    }
+    const { grant } = resolution
     const allowedBuckets = this.allowedBuckets(grant.bucketIds)
     const legacyBucketId = singleBucketId(grant.bucketIds)
     const legacyBucketName =
@@ -3168,7 +3224,7 @@ export class B2Simulator {
             },
           },
         },
-        applicationKeyExpirationTimestamp: null,
+        applicationKeyExpirationTimestamp: grant.expirationTimestamp,
       },
     }
   }
@@ -4180,7 +4236,7 @@ export class B2Simulator {
     const appKey = this.genId('sim_secret')
     const expiration =
       req.validDurationInSeconds !== undefined
-        ? Date.now() + req.validDurationInSeconds * 1000
+        ? this.now() + req.validDurationInSeconds * 1000
         : null
     const stored: StoredKey = {
       applicationKeyId: kid,
