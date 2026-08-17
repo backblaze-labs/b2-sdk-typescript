@@ -233,9 +233,9 @@ export interface CopyPartResponse {
   /** SHA-1 checksum of the copied part content. */
   readonly contentSha1: string
   /** MD5 checksum of the copied part content, or null if not available. */
-  readonly contentMd5?: string | null
+  readonly contentMd5: string | null
   /** Server-side encryption applied to this copied part. */
-  readonly serverSideEncryption?: PublicEncryptionSetting
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was copied. */
-  readonly uploadTimestamp?: number
+  readonly uploadTimestamp: number
 }

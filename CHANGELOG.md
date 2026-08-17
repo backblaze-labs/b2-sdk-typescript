@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Large-file part metadata.** Raw large-file response types now expose
+  documented v4 metadata fields: `contentMd5` on `UploadPartResponse` and
+  `PartInfo`, `serverSideEncryption` and `uploadTimestamp` on
+  `CopyPartResponse`, `serverSideEncryption` on `PartInfo`, and
+  `replicationStatus` on unfinished large-file metadata.
 - **Custom upload timestamps.** Upload options now accept numeric
   `customUploadTimestamp` values to override B2's `uploadTimestamp`, distinct
   from `lastModifiedMillis` source metadata. Raw `b2_upload_file` headers

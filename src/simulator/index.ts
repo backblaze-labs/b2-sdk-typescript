@@ -4113,6 +4113,7 @@ export class B2Simulator {
         contentLength: part.data.byteLength,
         contentSha1: part.sha1,
         contentMd5: part.contentMd5,
+        serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: part.uploadTimestamp,
       }))
 

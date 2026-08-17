@@ -4021,6 +4021,14 @@ describe('B2Simulator upload write-path validation', () => {
   it('returns documented v4 metadata on large-file part responses', async () => {
     const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('part-metadata.bin')
     expect(large.replicationStatus).toBeNull()
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'part-metadata.bin',
+    })
+    expect(unfinished.files[0]).toMatchObject({
+      fileId: large.fileId,
+      replicationStatus: null,
+    })
 
     const partData = new TextEncoder().encode('uploaded part metadata')
     const uploaded = await client.raw.uploadPart(
@@ -4041,6 +4049,7 @@ describe('B2Simulator upload write-path validation', () => {
       contentSha1: uploaded.contentSha1,
       fileId: large.fileId,
       partNumber: 1,
+      serverSideEncryption: { mode: null, algorithm: null },
       uploadTimestamp: uploaded.uploadTimestamp,
     })
 

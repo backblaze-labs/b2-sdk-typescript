@@ -185,7 +185,7 @@ export interface UploadPartResponse {
   /** SHA-1 checksum of the uploaded part content. */
   readonly contentSha1: string
   /** MD5 checksum of the uploaded part content, or null if not available. */
-  readonly contentMd5?: string | null
+  readonly contentMd5: string | null
   /** Server-side encryption applied to this part. */
   readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
@@ -278,7 +278,9 @@ export interface PartInfo {
   /** SHA-1 checksum of this part's content. */
   readonly contentSha1: string
   /** MD5 checksum of this part's content, or null if not available. */
-  readonly contentMd5?: string | null
+  readonly contentMd5: string | null
+  /** Server-side encryption applied to this part. */
+  readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this part was uploaded. */
   readonly uploadTimestamp: number
 }
