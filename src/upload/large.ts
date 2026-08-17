@@ -88,6 +88,7 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   /**
    * B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
@@ -116,6 +117,9 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * reuses candidates with the same `uploadTimestamp`; when it is omitted, a
    * reused unfinished file keeps its existing `uploadTimestamp` because B2 does
    * not expose whether that timestamp was custom or server-assigned.
+   * `lastModifiedMillis` is part of the file-info identity; unfinished files
+   * started by older SDK versions that omitted it can be rejected with
+   * `file-info-mismatch`.
    */
   readonly resume?: boolean
   /** Optional aggregate SDK-enforced timeout for resume discovery. */
@@ -158,7 +162,6 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
 interface StartLargeFileResumeRequest {
   readonly contentType: string
   readonly fileInfo: Record<string, string>
-  readonly customUploadTimestamp?: number
   readonly serverSideEncryption?: EncryptionSetting
   readonly fileRetention?: FileRetentionValue
   readonly legalHold?: LegalHoldValue
@@ -177,8 +180,8 @@ function createResumeCandidateCriteria(
     sourceSize: totalSize,
     partSize,
     parts,
-    ...(request.customUploadTimestamp !== undefined
-      ? { customUploadTimestamp: request.customUploadTimestamp }
+    ...(options.customUploadTimestamp !== undefined
+      ? { customUploadTimestamp: options.customUploadTimestamp }
       : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(request.serverSideEncryption !== undefined
@@ -261,7 +264,7 @@ export async function uploadLargeFile(
     contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
     fileInfo,
     ...(options.customUploadTimestamp !== undefined
-      ? { customUploadTimestamp: options.customUploadTimestamp }
+      ? { customUploadTimestamp: String(options.customUploadTimestamp) }
       : {}),
     ...(options.serverSideEncryption !== undefined
       ? { serverSideEncryption: options.serverSideEncryption }

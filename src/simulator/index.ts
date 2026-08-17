@@ -2540,7 +2540,7 @@ export class B2Simulator {
             bucketId: string
             fileName: string
             contentType: string
-            customUploadTimestamp?: number | null
+            customUploadTimestamp?: string | null
             fileInfo?: Record<string, string>
             fileRetention?: FileRetentionValue
             legalHold?: LegalHoldValue
@@ -2690,7 +2690,7 @@ export class B2Simulator {
   private parseCustomUploadTimestamp(
     value: unknown,
   ): { readonly timestamp: number | null } | SimulatorJsonResponse {
-    if (value === undefined) return { timestamp: null }
+    if (value === undefined || value === null) return { timestamp: null }
     if (!this.customUploadTimestampsEnabled) {
       return this.error(
         400,
@@ -2698,12 +2698,7 @@ export class B2Simulator {
         'Custom upload timestamps are not enabled for this account.',
       )
     }
-    const timestamp =
-      typeof value === 'number'
-        ? value
-        : typeof value === 'string' && /^\d+$/.test(value)
-          ? Number(value)
-          : Number.NaN
+    const timestamp = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : Number.NaN
 
     if (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > this.now()) {
       return this.error(
@@ -3818,7 +3813,7 @@ export class B2Simulator {
     bucketId: string
     fileName: string
     contentType: string
-    customUploadTimestamp?: number | null
+    customUploadTimestamp?: string | null
     fileInfo?: Record<string, string>
     fileRetention?: FileRetentionValue
     legalHold?: LegalHoldValue

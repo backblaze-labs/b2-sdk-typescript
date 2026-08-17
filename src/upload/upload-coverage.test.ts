@@ -3608,6 +3608,55 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(unfinishedIds).not.toContain(matching.fileId)
   })
 
+  it('reports custom upload timestamp resume mismatches', async () => {
+    const { client } = makeClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+      customUploadTimestampsEnabled: true,
+    })
+    await client.authorize()
+    const timestampBucket = await client.createBucket({
+      bucketName: 'resume-custom-timestamp-mismatch',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const requestedTimestamp = 1_700_000_000_000
+    const staleTimestamp = requestedTimestamp + 1
+    const stale = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: timestampBucket.id,
+        fileName: 'custom-resume.bin',
+        contentType: 'application/octet-stream',
+        customUploadTimestamp: String(staleTimestamp),
+      },
+    )
+
+    const rejected: string[] = []
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: timestampBucket.id,
+      fileName: 'custom-resume.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resume: true,
+      customUploadTimestamp: requestedTimestamp,
+      onResumeCandidateRejected: (event) => rejected.push(event.reason),
+    })
+
+    expect(result.uploadTimestamp).toBe(requestedTimestamp)
+    expect(rejected).toEqual(['upload-timestamp-mismatch'])
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: timestampBucket.id },
+    )
+    expect(unfinished.files.map((file) => file.fileId)).toContain(stale.fileId)
+  })
+
   it('reuploads a same-length tampered resume part when SHA-1 differs', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)

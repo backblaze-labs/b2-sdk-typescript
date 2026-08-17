@@ -72,6 +72,7 @@ describe('createWriteStream branch coverage', () => {
       bucketType: BucketType.AllPrivate,
     })
     const customUploadTimestamp = 1_700_000_000_000
+    const startLargeFile = vi.spyOn(timestampClient.raw, 'startLargeFile')
 
     const { writable, done } = timestampBucket.file('custom-timestamp.bin').createWriteStream({
       partSize: 100_000,
@@ -84,6 +85,9 @@ describe('createWriteStream branch coverage', () => {
     const result = await done
 
     expect(result.uploadTimestamp).toBe(customUploadTimestamp)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
   })
 
   it('applies backpressure instead of queueing stalled part buffers', async () => {

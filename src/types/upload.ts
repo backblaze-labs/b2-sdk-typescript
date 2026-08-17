@@ -47,6 +47,7 @@ export interface UploadFileHeaders {
   /**
    * Optional B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /** Optional Content-Disposition header value for downloads. */
@@ -72,10 +73,12 @@ export interface StartLargeFileRequest {
   /** Optional user-defined key-value metadata for the file. */
   readonly fileInfo?: Record<string, string>
   /**
-   * Optional B2 upload timestamp override in milliseconds since epoch.
+   * Optional B2 upload timestamp override in milliseconds since epoch, as a decimal string.
+   * `null` is accepted and ignored by B2.
    * Sets the file version `uploadTimestamp`; distinct from `src_last_modified_millis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
-  readonly customUploadTimestamp?: number
+  readonly customUploadTimestamp?: string | null
   /** Optional server-side encryption setting. */
   readonly serverSideEncryption?: EncryptionSetting
   /** Optional Object Lock retention for the file. */

@@ -38,6 +38,7 @@ export interface UploadFileOptions extends UploadRetryOptions {
   /**
    * B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /** Callback invoked with upload progress updates. */

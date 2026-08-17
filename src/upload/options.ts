@@ -30,6 +30,7 @@ export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailu
   /**
    * B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /** Part size override for multipart uploads, in bytes. */
@@ -84,6 +85,7 @@ export interface B2ObjectWriteStreamOptions extends UploadRetryOptions, CleanupF
   /**
    * B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `src_last_modified_millis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /** Target part size in bytes. Defaults to the account's recommended part size. */

@@ -4053,7 +4053,7 @@ describe('B2Simulator upload write-path validation', () => {
       bucketId: bucket.id,
       fileName: 'custom-large.bin',
       contentType: 'application/octet-stream',
-      customUploadTimestamp: largeTimestamp,
+      customUploadTimestamp: String(largeTimestamp),
     })
     expect(large.uploadTimestamp).toBe(largeTimestamp)
 
@@ -4089,11 +4089,56 @@ describe('B2Simulator upload write-path validation', () => {
       code: 'custom_timestamp_not_allowed',
     })
 
-    const large = await startLargeFileWithCustomTimestamp(0)
+    const large = await startLargeFileWithCustomTimestamp('0')
     expect(large.status).toBe(400)
     await expect(large.json()).resolves.toMatchObject({
       code: 'custom_timestamp_not_allowed',
     })
+  })
+
+  it('rejects unauthorized large-file timestamp backdating before default retention', async () => {
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-retention-denied',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+
+    const rejected = await startLargeFileWithCustomTimestamp('0')
+    expect(rejected.status).toBe(400)
+    await expect(rejected.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files).toEqual([])
+
+    const { apiUrl, authToken, large, uploadUrl } = await startPartUpload('retained-default.bin')
+    const data = new Uint8Array([1])
+    const part = await client.raw.uploadPart(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: data.byteLength,
+        contentSha1: await sha1Hex(data),
+      },
+      data,
+    )
+    const retained = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: large.fileId,
+      partSha1Array: [part.contentSha1],
+    })
+    await expect(
+      bucket.deleteFileVersion('retained-default.bin', retained.fileId),
+    ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
   })
 
   it.each([
@@ -4120,7 +4165,7 @@ describe('B2Simulator upload write-path validation', () => {
       code: 'custom_timestamp_invalid',
     })
 
-    const large = await startLargeFileWithCustomTimestamp(value)
+    const large = await startLargeFileWithCustomTimestamp(String(value))
     expect(large.status).toBe(400)
     await expect(large.json()).resolves.toMatchObject({
       code: 'custom_timestamp_invalid',
@@ -4146,7 +4191,7 @@ describe('B2Simulator upload write-path validation', () => {
       uploadTimestamp: timestamp,
     })
 
-    const large = await startLargeFileWithCustomTimestamp(timestamp)
+    const large = await startLargeFileWithCustomTimestamp(String(timestamp))
     expect(large.status).toBe(200)
     await expect(large.json()).resolves.toMatchObject({
       uploadTimestamp: timestamp,

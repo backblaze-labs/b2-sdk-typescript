@@ -39,6 +39,7 @@ export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFai
   /**
    * B2 upload timestamp override in milliseconds since epoch.
    * Sets the file version `uploadTimestamp`; distinct from `src_last_modified_millis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
    */
   readonly customUploadTimestamp?: number
   /**
@@ -140,7 +141,7 @@ export function createWriteStream(
           contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
           fileInfo: options.fileInfo ?? {},
           ...(options.customUploadTimestamp !== undefined
-            ? { customUploadTimestamp: options.customUploadTimestamp }
+            ? { customUploadTimestamp: String(options.customUploadTimestamp) }
             : {}),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }

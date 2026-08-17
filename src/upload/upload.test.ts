@@ -82,6 +82,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     const customUploadTimestamp = 1_700_000_000_000
     const lastModifiedMillis = 1_699_999_999_999
     const data = deterministicBytes(500)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
       fileName: 'custom-upload-time-large.bin',
@@ -91,6 +92,9 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     })
 
     expect(result.uploadTimestamp).toBe(customUploadTimestamp)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
     expect(result.fileInfo).toEqual({
       src_last_modified_millis: String(lastModifiedMillis),
     })

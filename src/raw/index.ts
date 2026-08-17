@@ -146,6 +146,17 @@ function assertCustomUploadTimestamp(value: unknown): asserts value is number {
   throw new TypeError('customUploadTimestamp must be a non-negative safe integer')
 }
 
+function assertRawCustomUploadTimestamp(
+  value: unknown,
+): asserts value is string | null | undefined {
+  if (value === undefined || value === null) return
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    const timestamp = Number(value)
+    if (Number.isSafeInteger(timestamp)) return
+  }
+  throw new TypeError('customUploadTimestamp must be a non-negative safe integer string or null')
+}
+
 function normalizeCreateKeyRequest(request: CreateKeyRequest): CreateKeyRequest {
   const { bucketId, ...withoutDeprecatedBucketId } = request
   if (bucketId !== undefined && withoutDeprecatedBucketId.bucketIds !== undefined) {
@@ -705,7 +716,7 @@ export class RawClient {
     request: StartLargeFileRequest,
     options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
-    assertCustomUploadTimestamp(request.customUploadTimestamp)
+    assertRawCustomUploadTimestamp(request.customUploadTimestamp)
     return this.postJson<StartLargeFileResponse>(
       apiUrl,
       authToken,

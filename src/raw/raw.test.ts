@@ -374,28 +374,51 @@ describe('RawClient upload URL request controls', () => {
       bucketId: bucketId('bucket'),
       fileName: 'large.bin',
       contentType: 'application/octet-stream',
-      customUploadTimestamp,
+      customUploadTimestamp: String(customUploadTimestamp),
     })
 
     expect(seenRequests[0]?.headers?.['X-Bz-Custom-Upload-Timestamp']).toBe(
       String(customUploadTimestamp),
     )
     expect(JSON.parse(String(seenRequests[1]?.body))).toMatchObject({
-      customUploadTimestamp,
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
+  })
+
+  it('accepts null custom upload timestamps for raw large-file starts', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+
+    await raw.startLargeFile('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      fileName: 'large.bin',
+      contentType: 'application/octet-stream',
+      customUploadTimestamp: null,
+    })
+
+    expect(JSON.parse(String(seenRequests[0]?.body))).toMatchObject({
+      customUploadTimestamp: null,
     })
   })
 
   it('rejects invalid custom upload timestamps before transport serialization', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
-    const invalidValues = [
+    const invalidHeaderValues = [
       -1,
       12.5,
       Number.MAX_SAFE_INTEGER + 1,
       Number.NaN,
       '1\r\nX-Injected: yes' as unknown as number,
     ]
+    const invalidLargeFileValues = [
+      '-1',
+      '12.5',
+      String(Number.MAX_SAFE_INTEGER + 1),
+      'NaN',
+      '1\r\nX-Injected: yes',
+      1_700_000_000_000 as unknown as string,
+    ]
 
-    for (const customUploadTimestamp of invalidValues) {
+    for (const customUploadTimestamp of invalidHeaderValues) {
       await expect(
         raw.uploadFile(
           'https://upload.example.test/b2_upload_file',
@@ -410,7 +433,9 @@ describe('RawClient upload URL request controls', () => {
           new Uint8Array([1]),
         ),
       ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer')
+    }
 
+    for (const customUploadTimestamp of invalidLargeFileValues) {
       await expect(
         raw.startLargeFile('https://api.example.test', 'auth', {
           bucketId: bucketId('bucket'),
@@ -418,7 +443,7 @@ describe('RawClient upload URL request controls', () => {
           contentType: 'application/octet-stream',
           customUploadTimestamp,
         }),
-      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer')
+      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer string or null')
     }
 
     expect(seenRequests).toHaveLength(0)
