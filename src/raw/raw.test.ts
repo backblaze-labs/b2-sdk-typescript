@@ -354,6 +354,101 @@ describe('RawClient upload URL request controls', () => {
     expect(seenRequests[1]?.retry).toBe(retry)
   })
 
+  it('serializes custom upload timestamps for file and large-file starts', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const customUploadTimestamp = 1_700_000_000_000
+
+    await raw.uploadFile(
+      'https://upload.example.test/b2_upload_file',
+      {
+        authorization: 'upload-auth',
+        fileName: 'file.txt',
+        contentType: 'text/plain',
+        contentLength: 1,
+        contentSha1: 'none',
+        customUploadTimestamp,
+      },
+      new Uint8Array([1]),
+    )
+    await raw.startLargeFile('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      fileName: 'large.bin',
+      contentType: 'application/octet-stream',
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
+
+    expect(seenRequests[0]?.headers?.['X-Bz-Custom-Upload-Timestamp']).toBe(
+      String(customUploadTimestamp),
+    )
+    expect(JSON.parse(String(seenRequests[1]?.body))).toMatchObject({
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
+  })
+
+  it('accepts null custom upload timestamps for raw large-file starts', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+
+    await raw.startLargeFile('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      fileName: 'large.bin',
+      contentType: 'application/octet-stream',
+      customUploadTimestamp: null,
+    })
+
+    expect(JSON.parse(String(seenRequests[0]?.body))).toMatchObject({
+      customUploadTimestamp: null,
+    })
+  })
+
+  it('rejects invalid custom upload timestamps before transport serialization', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const invalidHeaderValues = [
+      -1,
+      12.5,
+      Number.MAX_SAFE_INTEGER + 1,
+      Number.NaN,
+      '1\r\nX-Injected: yes' as unknown as number,
+    ]
+    const invalidLargeFileValues = [
+      '-1',
+      '12.5',
+      String(Number.MAX_SAFE_INTEGER + 1),
+      'NaN',
+      '1\r\nX-Injected: yes',
+      1_700_000_000_000 as unknown as string,
+    ]
+
+    for (const customUploadTimestamp of invalidHeaderValues) {
+      await expect(
+        raw.uploadFile(
+          'https://upload.example.test/b2_upload_file',
+          {
+            authorization: 'upload-auth',
+            fileName: 'file.txt',
+            contentType: 'text/plain',
+            contentLength: 1,
+            contentSha1: 'none',
+            customUploadTimestamp,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer')
+    }
+
+    for (const customUploadTimestamp of invalidLargeFileValues) {
+      await expect(
+        raw.startLargeFile('https://api.example.test', 'auth', {
+          bucketId: bucketId('bucket'),
+          fileName: 'large.bin',
+          contentType: 'application/octet-stream',
+          customUploadTimestamp,
+        }),
+      ).rejects.toThrow('customUploadTimestamp must be a non-negative safe integer string or null')
+    }
+
+    expect(seenRequests).toHaveLength(0)
+  })
+
   it('forwards legacy positional signal and retry controls to raw upload endpoints', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
     const controller = new AbortController()
@@ -468,6 +563,17 @@ function makeUploadUrlRawClient(): { raw: RawClient; seenRequests: HttpRequest[]
           fileId: largeFileId('large-file'),
           uploadUrl: 'https://upload.example.test/part',
           authorizationToken: 'part-auth',
+        })
+      }
+      if (request.url.includes('b2_start_large_file')) {
+        return jsonResponse({
+          fileId: largeFileId('large-file'),
+          fileName: 'large.bin',
+          accountId: 'account',
+          bucketId: bucketId('bucket'),
+          contentType: 'application/octet-stream',
+          fileInfo: {},
+          uploadTimestamp: 1_700_000_000_000,
         })
       }
       return jsonResponse({

@@ -20,7 +20,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'plan-parts',
@@ -76,6 +76,28 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     })
 
     expect(result.contentType).toBe('b2/x-auto')
+  })
+
+  it('passes customUploadTimestamp through to startLargeFile', async () => {
+    const customUploadTimestamp = 1_700_000_000_000
+    const lastModifiedMillis = 1_699_999_999_999
+    const data = deterministicBytes(500)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'custom-upload-time-large.bin',
+      source: new BufferSource(data),
+      customUploadTimestamp,
+      lastModifiedMillis,
+    })
+
+    expect(result.uploadTimestamp).toBe(customUploadTimestamp)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
+      customUploadTimestamp: String(customUploadTimestamp),
+    })
+    expect(result.fileInfo).toEqual({
+      src_last_modified_millis: String(lastModifiedMillis),
+    })
   })
 
   it('multiple uploads coexist in the same bucket', async () => {
@@ -143,7 +165,7 @@ describe('uploadSmallFile edge cases', () => {
   let bucket: Bucket
 
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client } = makeClient({ sim: { customUploadTimestampsEnabled: true } }))
     await client.authorize()
     bucket = await client.createBucket({
       bucketName: 'small-upload',
@@ -293,6 +315,24 @@ describe('uploadSmallFile edge cases', () => {
 
     expect(result.fileName).toBe('dated.txt')
     expect(result.contentLength).toBe(data.byteLength)
+  })
+
+  it('keeps customUploadTimestamp separate from lastModifiedMillis metadata', async () => {
+    const data = new TextEncoder().encode('timestamped')
+    const customUploadTimestamp = 1_700_000_000_000
+    const lastModifiedMillis = 1_699_999_999_999
+    const result = await uploadSmallFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'custom-upload-time-small.txt',
+      source: new BufferSource(data),
+      customUploadTimestamp,
+      lastModifiedMillis,
+    })
+
+    expect(result.uploadTimestamp).toBe(customUploadTimestamp)
+    expect(result.fileInfo).toEqual({
+      src_last_modified_millis: String(lastModifiedMillis),
+    })
   })
 
   it('passes serverSideEncryption through to upload', async () => {

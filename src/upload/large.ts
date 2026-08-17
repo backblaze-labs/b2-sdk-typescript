@@ -83,6 +83,14 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   readonly bucketDefaultRetentionUnreadable?: boolean
   /** Legal hold status applied at upload time. */
   readonly legalHold?: LegalHoldValue
+  /** Override the last-modified timestamp (epoch millis) stored in file info. */
+  readonly lastModifiedMillis?: number
+  /**
+   * B2 upload timestamp override in milliseconds since epoch.
+   * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
+   */
+  readonly customUploadTimestamp?: number
   /** Size of each part in bytes. Defaults to the account's recommended part size. */
   readonly partSize?: number
   /** Maximum number of parts uploaded in parallel. Defaults to 4. */
@@ -104,8 +112,14 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * `AbortSignal` to enforce a hard discovery deadline. SSE-C uploads are
    * never auto-resumed because B2 does not expose the customer key identity
    * needed to verify a compatible unfinished file. Candidates with unreadable
-   * Object Lock fields are rejected unless the caller provides explicit
-   * settings that can be verified.
+   * Object Lock fields are rejected unless the caller provides explicit settings
+   * that can be verified. When `customUploadTimestamp` is set, discovery only
+   * reuses candidates with the same `uploadTimestamp`; when it is omitted, a
+   * reused unfinished file keeps its existing `uploadTimestamp` because B2 does
+   * not expose whether that timestamp was custom or server-assigned.
+   * `lastModifiedMillis` is part of the file-info identity; unfinished files
+   * started by older SDK versions that omitted it can be rejected with
+   * `file-info-mismatch`.
    */
   readonly resume?: boolean
   /** Optional aggregate SDK-enforced timeout for resume discovery. */
@@ -166,6 +180,9 @@ function createResumeCandidateCriteria(
     sourceSize: totalSize,
     partSize,
     parts,
+    ...(options.customUploadTimestamp !== undefined
+      ? { customUploadTimestamp: options.customUploadTimestamp }
+      : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(request.serverSideEncryption !== undefined
       ? { serverSideEncryption: request.serverSideEncryption }
@@ -234,6 +251,9 @@ export async function uploadLargeFile(
       fileInfo[key] = value
     }
   }
+  if (options.lastModifiedMillis !== undefined) {
+    fileInfo['src_last_modified_millis'] = String(options.lastModifiedMillis)
+  }
 
   // Construct the `b2_start_large_file` request body once so the two
   // non-resume branches below (no `resume`, resume-but-no-candidate)
@@ -243,6 +263,9 @@ export async function uploadLargeFile(
     fileName: options.fileName,
     contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
     fileInfo,
+    ...(options.customUploadTimestamp !== undefined
+      ? { customUploadTimestamp: String(options.customUploadTimestamp) }
+      : {}),
     ...(options.serverSideEncryption !== undefined
       ? { serverSideEncryption: options.serverSideEncryption }
       : {}),

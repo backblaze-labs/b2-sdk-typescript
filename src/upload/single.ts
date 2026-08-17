@@ -35,6 +35,12 @@ export interface UploadFileOptions extends UploadRetryOptions {
   readonly legalHold?: LegalHoldValue
   /** Override the last-modified timestamp (epoch millis). */
   readonly lastModifiedMillis?: number
+  /**
+   * B2 upload timestamp override in milliseconds since epoch.
+   * Sets the file version `uploadTimestamp`; distinct from `lastModifiedMillis` metadata.
+   * Requires B2 account enablement for Custom Upload Timestamp.
+   */
+  readonly customUploadTimestamp?: number
   /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener
   /** Signal to abort the upload. */
@@ -109,6 +115,9 @@ export async function uploadSmallFile(
           ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
           ...(options.lastModifiedMillis !== undefined
             ? { lastModifiedMillis: options.lastModifiedMillis }
+            : {}),
+          ...(options.customUploadTimestamp !== undefined
+            ? { customUploadTimestamp: options.customUploadTimestamp }
             : {}),
         },
         data,

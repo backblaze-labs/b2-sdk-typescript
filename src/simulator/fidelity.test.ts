@@ -3654,6 +3654,49 @@ describe('B2Simulator upload write-path validation', () => {
     )
   }
 
+  async function uploadFileWithCustomTimestamp(
+    customUploadTimestamp: string,
+  ): Promise<HttpResponse> {
+    const uploadUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    const data = new Uint8Array([1, 2, 3])
+    return sim.transport().send({
+      method: 'POST',
+      url: uploadUrl.uploadUrl,
+      headers: {
+        Authorization: uploadUrl.authorizationToken,
+        'X-Bz-File-Name': 'custom-timestamp.txt',
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': String(data.byteLength),
+        'X-Bz-Content-Sha1': await sha1Hex(data),
+        'X-Bz-Custom-Upload-Timestamp': customUploadTimestamp,
+      },
+      body: data as BodyInit,
+    })
+  }
+
+  async function startLargeFileWithCustomTimestamp(
+    customUploadTimestamp: unknown,
+  ): Promise<HttpResponse> {
+    return sim.transport().send({
+      method: 'POST',
+      url: `${client.accountInfo.getApiUrl()}/b2api/v3/b2_start_large_file`,
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        bucketId: bucket.id,
+        fileName: 'custom-timestamp-large.bin',
+        contentType: 'application/octet-stream',
+        customUploadTimestamp,
+      }),
+    })
+  }
+
   async function handleUploadPartDirect(
     uploadUrl: string,
     authorizationToken: string,
@@ -3973,6 +4016,186 @@ describe('B2Simulator upload write-path validation', () => {
     } finally {
       dateNow.mockRestore()
     }
+  })
+
+  it('stores custom upload timestamps for small and large uploads', async () => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-enabled',
+      bucketType: BucketType.AllPrivate,
+    })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const smallTimestamp = 1_700_000_000_000
+    const largeTimestamp = 1_700_000_000_001
+    const smallData = new Uint8Array([1, 2, 3])
+
+    const uploadUrl = await client.raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+    const small = await client.raw.uploadFile(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        fileName: 'custom-small.txt',
+        contentType: 'application/octet-stream',
+        contentLength: smallData.byteLength,
+        contentSha1: await sha1Hex(smallData),
+        customUploadTimestamp: smallTimestamp,
+      },
+      smallData as BodyInit,
+    )
+    expect(small.uploadTimestamp).toBe(smallTimestamp)
+
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'custom-large.bin',
+      contentType: 'application/octet-stream',
+      customUploadTimestamp: String(largeTimestamp),
+    })
+    expect(large.uploadTimestamp).toBe(largeTimestamp)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'custom-large.bin',
+    })
+    expect(unfinished.files[0]?.uploadTimestamp).toBe(largeTimestamp)
+
+    const partData = new Uint8Array([4, 5, 6])
+    const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, { fileId: large.fileId })
+    const part = await client.raw.uploadPart(
+      partUrl.uploadUrl,
+      {
+        authorization: partUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partData.byteLength,
+        contentSha1: await sha1Hex(partData),
+      },
+      partData as BodyInit,
+    )
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: large.fileId,
+      partSha1Array: [part.contentSha1],
+    })
+    expect(finished.uploadTimestamp).toBe(largeTimestamp)
+  })
+
+  it('rejects custom upload timestamps without account entitlement', async () => {
+    const small = await uploadFileWithCustomTimestamp('0')
+    expect(small.status).toBe(400)
+    await expect(small.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+
+    const large = await startLargeFileWithCustomTimestamp('0')
+    expect(large.status).toBe(400)
+    await expect(large.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+  })
+
+  it('rejects unauthorized large-file timestamp backdating before default retention', async () => {
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-retention-denied',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+
+    const rejected = await startLargeFileWithCustomTimestamp('0')
+    expect(rejected.status).toBe(400)
+    await expect(rejected.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_not_allowed',
+    })
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files).toEqual([])
+
+    const { apiUrl, authToken, large, uploadUrl } = await startPartUpload('retained-default.bin')
+    const data = new Uint8Array([1])
+    const part = await client.raw.uploadPart(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: data.byteLength,
+        contentSha1: await sha1Hex(data),
+      },
+      data,
+    )
+    const retained = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: large.fileId,
+      partSha1Array: [part.contentSha1],
+    })
+    await expect(
+      bucket.deleteFileVersion('retained-default.bin', retained.fileId),
+    ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
+  })
+
+  it.each([
+    ['future', () => Date.now() + 86_400_000],
+    ['negative', () => -1],
+    ['non-integer', () => 12.5],
+    ['non-safe-integer', () => Number.MAX_SAFE_INTEGER + 1],
+    ['malformed-string', () => '1e9'],
+  ])('rejects %s custom upload timestamps on both write paths', async (_, valueFactory) => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-invalid',
+      bucketType: BucketType.AllPrivate,
+    })
+    const value = valueFactory()
+
+    const small = await uploadFileWithCustomTimestamp(String(value))
+    expect(small.status).toBe(400)
+    await expect(small.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_invalid',
+    })
+
+    const large = await startLargeFileWithCustomTimestamp(String(value))
+    expect(large.status).toBe(400)
+    await expect(large.json()).resolves.toMatchObject({
+      code: 'custom_timestamp_invalid',
+    })
+  })
+
+  it('validates future custom upload timestamps against the virtual clock', async () => {
+    ;({ client, sim } = makeClient({
+      sim: { customUploadTimestampsEnabled: true },
+      client: { retry: { maxRetries: 0 } },
+    }))
+    await client.authorize()
+    bucket = await client.createBucket({
+      bucketName: 'custom-timestamp-virtual-clock',
+      bucketType: BucketType.AllPrivate,
+    })
+    sim.advanceTime(86_400_000)
+    const timestamp = Date.now() + 60_000
+
+    const small = await uploadFileWithCustomTimestamp(String(timestamp))
+    expect(small.status).toBe(200)
+    await expect(small.json()).resolves.toMatchObject({
+      uploadTimestamp: timestamp,
+    })
+
+    const large = await startLargeFileWithCustomTimestamp(String(timestamp))
+    expect(large.status).toBe(200)
+    await expect(large.json()).resolves.toMatchObject({
+      uploadTimestamp: timestamp,
+    })
   })
 })
 

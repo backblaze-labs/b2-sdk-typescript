@@ -45,6 +45,7 @@ export type ResumeCandidateRejectedReason =
   | 'file-info-mismatch'
   | 'source-size-mismatch'
   | 'part-size-mismatch'
+  | 'upload-timestamp-mismatch'
   | 'encryption-mismatch'
   | 'sse-c-unsupported'
   | 'retention-mismatch'
@@ -78,6 +79,8 @@ export interface ResumeCandidateCriteria {
   readonly partSize: number
   /** Planned local parts used to verify already-uploaded server part lengths. */
   readonly parts: readonly ResumePartPlan[]
+  /** Requested B2 upload timestamp override, if configured by the caller. */
+  readonly customUploadTimestamp?: number
   /** Explicit server-side encryption option, if configured by the caller. */
   readonly serverSideEncryption?: EncryptionSetting
   /** Explicit Object Lock retention option, if configured by the caller. */
@@ -349,6 +352,12 @@ function candidateMetadataRejectReason(
     candidateInfo.partSize !== String(criteria.partSize)
   ) {
     return 'part-size-mismatch'
+  }
+  if (
+    criteria.customUploadTimestamp !== undefined &&
+    candidate.uploadTimestamp !== criteria.customUploadTimestamp
+  ) {
+    return 'upload-timestamp-mismatch'
   }
 
   const encryptionRejectReason = serverSideEncryptionRejectReason(
