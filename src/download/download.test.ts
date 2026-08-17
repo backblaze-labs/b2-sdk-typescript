@@ -7,9 +7,17 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { RawClient } from '../raw/index.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
-import { makeClient, readStream } from '../test-utils/index.ts'
-import { EncryptionAlgorithm, EncryptionKey } from '../types/encryption.ts'
-import type { FileId } from '../types/ids.ts'
+import { daysFromNow, makeClient, readStream } from '../test-utils/index.ts'
+import { Capability } from '../types/auth.ts'
+import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
+import {
+  EncryptionAlgorithm,
+  EncryptionKey,
+  type EncryptionSetting,
+  SSE_B2,
+} from '../types/encryption.ts'
+import type { BucketId, FileId } from '../types/ids.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { createParallelDownloadStream } from './parallel.ts'
 import { downloadById, downloadByName, headById, headByName } from './single.ts'
 
@@ -33,6 +41,52 @@ function mockAccountInfo(): AccountInfo {
     getDownloadUrl: () => 'https://download.example.com',
     getAuthToken: () => 'auth-token',
   } as AccountInfo
+}
+
+async function finishOnePartLargeFile(
+  client: B2Client,
+  options: {
+    readonly bucketId: BucketId
+    readonly fileName: string
+    readonly data: Uint8Array
+    readonly contentType?: string
+    readonly serverSideEncryption?: EncryptionSetting
+    readonly fileRetention?: FileRetentionValue
+    readonly legalHold?: LegalHoldValue
+  },
+) {
+  const apiUrl = client.accountInfo.getApiUrl()
+  const authToken = client.accountInfo.getAuthToken()
+  const started = await client.raw.startLargeFile(apiUrl, authToken, {
+    bucketId: options.bucketId,
+    fileName: options.fileName,
+    contentType: options.contentType ?? 'application/octet-stream',
+    ...(options.serverSideEncryption !== undefined
+      ? { serverSideEncryption: options.serverSideEncryption }
+      : {}),
+    ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
+    ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+  })
+  const partUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+    fileId: started.fileId,
+  })
+  const uploadedPart = await client.raw.uploadPart(
+    partUrl.uploadUrl,
+    {
+      authorization: partUrl.authorizationToken,
+      partNumber: 1,
+      contentLength: options.data.byteLength,
+      contentSha1: await sha1Hex(options.data),
+      ...(options.serverSideEncryption !== undefined
+        ? { serverSideEncryption: options.serverSideEncryption }
+        : {}),
+    },
+    options.data as BodyInit,
+  )
+  return client.raw.finishLargeFile(apiUrl, authToken, {
+    fileId: started.fileId,
+    partSha1Array: [uploadedPart.contentSha1],
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +523,259 @@ describe('extractDownloadHeaders (via downloadById)', () => {
     // microtask queue drains so quickly that the counter outruns Date.now().
     // We only need to assert the timestamp is *recent*, not exact.
     expect(result.headers.uploadTimestamp).toBeLessThanOrEqual(after + 1000)
+  })
+
+  it('parses documented optional download response headers into a stable shape', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          ...byteResponse(200, new Uint8Array(0), {
+            [DownloadHeaderName.ContentLength]: '123',
+            [DownloadHeaderName.ContentType]: 'text/plain',
+            [DownloadHeaderName.ContentDisposition]: 'attachment; filename="report.txt"',
+            [DownloadHeaderName.ContentLanguage]: 'en-US',
+            [DownloadHeaderName.ContentEncoding]: 'gzip',
+            [DownloadHeaderName.CacheControl]: 'max-age=60',
+            [DownloadHeaderName.Expires]: 'Wed, 21 Oct 2026 07:28:00 GMT',
+            [DownloadHeaderName.ContentRange]: 'bytes 0-122/123',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'optional_header_file_id',
+            [DownloadHeaderName.FileName]: encodeFileName('optional headers.txt'),
+            'X-Bz-Info-author': 'qa',
+            [DownloadHeaderName.UploadTimestamp]: '1700000000000',
+            [DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm]: 'AES256',
+            [DownloadHeaderName.ServerSideEncryptionCustomerKeyMd5]: 'customer-key-md5',
+            [DownloadHeaderName.FileRetentionMode]: 'governance',
+            [DownloadHeaderName.FileRetentionRetainUntilTimestamp]: '1893456000000',
+            [DownloadHeaderName.FileLegalHold]: 'on',
+            [DownloadHeaderName.ClientUnauthorizedToRead]:
+              DownloadClientUnauthorizedToReadMarker.ServerSideEncryption,
+          }),
+          body: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'optional_header_file_id' as FileId,
+    })
+
+    expect(result.headers).toMatchInlineSnapshot(`
+      {
+        "cacheControl": "max-age=60",
+        "clientUnauthorizedToRead": [
+          "X-Bz-Server-Side-Encryption",
+        ],
+        "contentDisposition": "attachment; filename="report.txt"",
+        "contentEncoding": "gzip",
+        "contentLanguage": "en-US",
+        "contentLength": 123,
+        "contentRange": "bytes 0-122/123",
+        "contentSha1": null,
+        "contentType": "text/plain",
+        "expires": "Wed, 21 Oct 2026 07:28:00 GMT",
+        "fileId": "optional_header_file_id",
+        "fileInfo": {
+          "author": "qa",
+        },
+        "fileName": "optional headers.txt",
+        "fileRetention": {
+          "isClientAuthorizedToRead": true,
+          "value": {
+            "mode": "governance",
+            "retainUntilTimestamp": 1893456000000,
+          },
+        },
+        "legalHold": {
+          "isClientAuthorizedToRead": true,
+          "value": "on",
+        },
+        "serverSideEncryption": {
+          "algorithm": "AES256",
+          "customerKeyMd5": "customer-key-md5",
+          "mode": "SSE-C",
+        },
+        "uploadTimestamp": 1700000000000,
+      }
+    `)
+  })
+
+  it('normalizes malformed typed download metadata headers', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          ...byteResponse(200, new Uint8Array(0), {
+            [DownloadHeaderName.ContentLength]: '0',
+            [DownloadHeaderName.ContentType]: 'application/octet-stream',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'malformed_header_file_id',
+            [DownloadHeaderName.FileName]: encodeFileName('malformed headers.txt'),
+            [DownloadHeaderName.UploadTimestamp]: '1700000000000',
+            [DownloadHeaderName.ServerSideEncryption]: 'AES512',
+            [DownloadHeaderName.FileRetentionMode]: 'frozen',
+            [DownloadHeaderName.FileRetentionRetainUntilTimestamp]: 'not-a-number',
+            [DownloadHeaderName.FileLegalHold]: 'maybe',
+            [DownloadHeaderName.ClientUnauthorizedToRead]: ' , , ',
+          }),
+          body: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'malformed_header_file_id' as FileId,
+    })
+
+    expect(result.headers.serverSideEncryption).toBeUndefined()
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: {
+        mode: null,
+        retainUntilTimestamp: null,
+      },
+    })
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: true,
+      value: null,
+    })
+    expect(result.headers.clientUnauthorizedToRead).toBeUndefined()
+    expect(result.headers.headerParseIssues).toEqual([
+      { headerName: DownloadHeaderName.ServerSideEncryption, value: 'AES512' },
+      { headerName: DownloadHeaderName.FileRetentionMode, value: 'frozen' },
+      {
+        headerName: DownloadHeaderName.FileRetentionRetainUntilTimestamp,
+        value: 'not-a-number',
+      },
+      { headerName: DownloadHeaderName.FileLegalHold, value: 'maybe' },
+    ])
+  })
+
+  it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
+    const { client: simClient } = makeClient()
+    await simClient.authorize()
+    const bucket = await simClient.createBucket({
+      bucketName: 'hdr-sensitive-roundtrip',
+      bucketType: 'allPrivate',
+      fileLockEnabled: true,
+    })
+    const retainUntilTimestamp = daysFromNow(30)
+    const data = new TextEncoder().encode('sensitive metadata')
+    await finishOnePartLargeFile(simClient, {
+      bucketId: bucket.id,
+      fileName: 'locked-sse-b2.bin',
+      data,
+      serverSideEncryption: SSE_B2,
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp,
+      },
+      legalHold: LegalHoldValue.On,
+    })
+
+    const result = await downloadByName(simClient.raw, simClient.accountInfo, {
+      bucketName: bucket.name,
+      fileName: 'locked-sse-b2.bin',
+    })
+    expect(await readStream(result.body)).toEqual(data)
+    expect(result.headers.serverSideEncryption).toEqual(SSE_B2)
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp,
+      },
+    })
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: true,
+      value: LegalHoldValue.On,
+    })
+    expect(result.headers.clientUnauthorizedToRead).toBeUndefined()
+  })
+
+  it('round-trips simulator SSE-C download echo headers', async () => {
+    const { client: simClient } = makeClient()
+    await simClient.authorize()
+    const bucket = await simClient.createBucket({
+      bucketName: 'hdr-sse-c-roundtrip',
+      bucketType: 'allPrivate',
+    })
+    const encryption = await EncryptionKey.fromBytes(new Uint8Array(32).fill(19))
+    const data = new TextEncoder().encode('customer encrypted metadata')
+    await bucket.upload({
+      fileName: 'sse-c.bin',
+      source: new BufferSource(data),
+      serverSideEncryption: encryption,
+    })
+
+    const result = await bucket.download('sse-c.bin', {
+      serverSideEncryption: encryption,
+    })
+    expect(await readStream(result.body)).toEqual(data)
+    expect(result.headers.serverSideEncryption).toEqual({
+      mode: 'SSE-C',
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKeyMd5: encryption.customerKeyMd5,
+    })
+    expect(JSON.stringify(result.headers)).not.toContain(encryption.customerKey)
+  })
+
+  it('reports simulator download headers hidden by missing read capabilities', async () => {
+    const { client: setupClient, sim } = makeClient({
+      sim: { strictAuth: true },
+      client: { retry: { maxRetries: 0 } },
+    })
+    await setupClient.authorize()
+    const bucket = await setupClient.createBucket({
+      bucketName: 'hdr-hidden-markers',
+      bucketType: 'allPrivate',
+      fileLockEnabled: true,
+    })
+    const retainUntilTimestamp = daysFromNow(30)
+    const data = new TextEncoder().encode('hidden metadata')
+    await finishOnePartLargeFile(setupClient, {
+      bucketId: bucket.id,
+      fileName: 'hidden-sensitive.bin',
+      data,
+      serverSideEncryption: SSE_B2,
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp,
+      },
+      legalHold: LegalHoldValue.On,
+    })
+    const key = await setupClient.createKey({
+      capabilities: [Capability.ReadFiles],
+      keyName: 'download-no-sensitive-read',
+      bucketIds: [bucket.id],
+    })
+    const scopedClient = new B2Client({
+      applicationKeyId: key.applicationKeyId,
+      applicationKey: key.applicationKey,
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await scopedClient.authorize()
+
+    const result = await downloadByName(scopedClient.raw, scopedClient.accountInfo, {
+      bucketName: bucket.name,
+      fileName: 'hidden-sensitive.bin',
+    })
+    expect(await readStream(result.body)).toEqual(data)
+    expect(result.headers.serverSideEncryption).toBeUndefined()
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+    expect(result.headers.legalHold).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+    expect(result.headers.clientUnauthorizedToRead).toEqual([
+      DownloadClientUnauthorizedToReadMarker.ServerSideEncryption,
+      DownloadClientUnauthorizedToReadMarker.FileRetentionMode,
+      DownloadClientUnauthorizedToReadMarker.FileRetentionRetainUntilTimestamp,
+      DownloadClientUnauthorizedToReadMarker.FileLegalHold,
+    ])
   })
 })
 

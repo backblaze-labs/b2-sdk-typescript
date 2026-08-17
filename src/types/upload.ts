@@ -1,7 +1,14 @@
 import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
 import type { FileAction, ReplicationStatus } from './file.ts'
 import type { BucketId, LargeFileId } from './ids.ts'
-import type { FileRetentionValue, LegalHoldValue } from './lock.ts'
+import type {
+  FileRetentionValue,
+  LegalHoldValue,
+  ReadableFileRetention,
+  ReadableLegalHold,
+} from './lock.ts'
+
+export type { ReadableFileRetention, ReadableLegalHold } from './lock.ts'
 
 /** Request parameters for the `b2_get_upload_url` API call. */
 export interface GetUploadUrlRequest {
@@ -85,22 +92,6 @@ export interface StartLargeFileRequest {
   readonly fileRetention?: FileRetentionValue
   /** Optional legal hold for the file. */
   readonly legalHold?: LegalHoldValue
-}
-
-/** Object Lock retention settings as returned by B2 response objects. */
-export interface ReadableFileRetention {
-  /** Whether the caller is authorized to read retention settings. */
-  readonly isClientAuthorizedToRead: boolean
-  /** Retention settings, or null when none are set or unreadable. */
-  readonly value: FileRetentionValue | null
-}
-
-/** Legal hold status as returned by B2 response objects. */
-export interface ReadableLegalHold {
-  /** Whether the caller is authorized to read legal hold status. */
-  readonly isClientAuthorizedToRead: boolean
-  /** Legal hold value, or null when none is set or unreadable. */
-  readonly value: LegalHoldValue | null
 }
 
 /** Optional metadata fields B2 may return for unfinished large-file records. */

@@ -15,6 +15,7 @@ import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { Capability } from '../types/auth.ts'
 import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
+import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
   EncryptionAlgorithm,
   EncryptionMode,
@@ -311,12 +312,12 @@ type DownloadResponseOverrideParam = (typeof DOWNLOAD_RESPONSE_OVERRIDE_PARAMS)[
 type DownloadResponseOverrides = Partial<Record<DownloadResponseOverrideParam, string>>
 
 const DOWNLOAD_RESPONSE_OVERRIDE_HEADERS: Record<DownloadResponseOverrideParam, string> = {
-  b2ContentDisposition: 'Content-Disposition',
-  b2ContentLanguage: 'Content-Language',
-  b2ContentEncoding: 'Content-Encoding',
-  b2ContentType: 'Content-Type',
-  b2CacheControl: 'Cache-Control',
-  b2Expires: 'Expires',
+  b2ContentDisposition: DownloadHeaderName.ContentDisposition,
+  b2ContentLanguage: DownloadHeaderName.ContentLanguage,
+  b2ContentEncoding: DownloadHeaderName.ContentEncoding,
+  b2ContentType: DownloadHeaderName.ContentType,
+  b2CacheControl: DownloadHeaderName.CacheControl,
+  b2Expires: DownloadHeaderName.Expires,
 }
 
 type DownloadAuthorizationRequestBody = {
@@ -3209,6 +3210,17 @@ export class B2Simulator {
     if (!('src_last_modified_millis' in fv.fileInfo)) {
       headers['X-Bz-Info-src_last_modified_millis'] = String(fv.uploadTimestamp)
     }
+    const unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[] = []
+    this.addDownloadEncryptionHeaders(
+      headers,
+      stored.serverSideEncryption,
+      requestHeaders,
+      unauthorizedToRead,
+    )
+    this.addDownloadObjectLockHeaders(headers, fv, requestHeaders, unauthorizedToRead)
+    if (unauthorizedToRead.length > 0) {
+      headers[DownloadHeaderName.ClientUnauthorizedToRead] = unauthorizedToRead.join(',')
+    }
     if (contentRange !== null) {
       // B2 spec-compliance: 206 Partial Content responses MUST carry a
       // `Content-Range: bytes <start>-<end>/<total>` header per RFC
@@ -3218,6 +3230,69 @@ export class B2Simulator {
       headers['Content-Range'] = contentRange
     }
     return { status, headers, data }
+  }
+
+  private addDownloadEncryptionHeaders(
+    headers: Record<string, string>,
+    encryption: StoredServerSideEncryption,
+    requestHeaders: Record<string, string>,
+    unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[],
+  ): void {
+    if (encryption.mode === EncryptionMode.None) return
+    if (
+      !this.requestHasCapability(
+        requestHeaderValue(requestHeaders, 'authorization'),
+        Capability.ReadBucketEncryption,
+      )
+    ) {
+      if (encryption.mode === EncryptionMode.SseB2) {
+        unauthorizedToRead.push(DownloadClientUnauthorizedToReadMarker.ServerSideEncryption)
+      } else {
+        unauthorizedToRead.push(
+          DownloadClientUnauthorizedToReadMarker.ServerSideEncryptionCustomerAlgorithm,
+          DownloadClientUnauthorizedToReadMarker.ServerSideEncryptionCustomerKeyMd5,
+        )
+      }
+      return
+    }
+
+    if (encryption.mode === EncryptionMode.SseB2) {
+      headers[DownloadHeaderName.ServerSideEncryption] = encryption.algorithm
+      return
+    }
+    headers[DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm] = encryption.algorithm
+    headers[DownloadHeaderName.ServerSideEncryptionCustomerKeyMd5] = encryption.customerKeyMd5
+  }
+
+  private addDownloadObjectLockHeaders(
+    headers: Record<string, string>,
+    fileVersion: FileVersion,
+    requestHeaders: Record<string, string>,
+    unauthorizedToRead: DownloadClientUnauthorizedToReadMarker[],
+  ): void {
+    const authToken = requestHeaderValue(requestHeaders, 'authorization')
+    const retention = fileVersion.fileRetention.value
+    if (retention !== null && retention.mode !== null && retention.retainUntilTimestamp !== null) {
+      if (this.requestHasCapability(authToken, Capability.ReadFileRetentions)) {
+        headers[DownloadHeaderName.FileRetentionMode] = retention.mode
+        headers[DownloadHeaderName.FileRetentionRetainUntilTimestamp] = String(
+          retention.retainUntilTimestamp,
+        )
+      } else {
+        unauthorizedToRead.push(
+          DownloadClientUnauthorizedToReadMarker.FileRetentionMode,
+          DownloadClientUnauthorizedToReadMarker.FileRetentionRetainUntilTimestamp,
+        )
+      }
+    }
+
+    const legalHold = fileVersion.legalHold.value
+    if (legalHold === null) return
+    if (this.requestHasCapability(authToken, Capability.ReadFileLegalHolds)) {
+      headers[DownloadHeaderName.FileLegalHold] = legalHold
+      return
+    }
+    unauthorizedToRead.push(DownloadClientUnauthorizedToReadMarker.FileLegalHold)
   }
 
   // --- API handlers ---
