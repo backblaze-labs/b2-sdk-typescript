@@ -9,7 +9,7 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 ## Commands
 
 ```bash
-pnpm build           # Vite library mode: ESM + CJS + DTS for all 11 subpath exports
+pnpm build           # Vite library mode: ESM + CJS + DTS for all 12 export entries
 pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator (Node)
 pnpm test:watch      # Vitest in watch mode
 pnpm test:coverage   # Vitest with v8 coverage (gates: 97% statements, 98% lines, 97% functions, 91% branches)
@@ -67,6 +67,7 @@ src/
   download/      downloadById/ByName, parallel ranged downloads with per-range retry
   copy/          copyLargeFile orchestrator (server-side multipart copy via b2_copy_part)
   sync/          synchronize() async generator + LocalFolder + B2Folder scanners
+  notifications/ Webhook signature verification (verifyWebhookSignature, requireValidWebhook)
   s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl)
   partner/       PartnerClient + PartnerRawClient, authorizePartner + PartnerAccountInfo, reserve-trial + redaction
   backup/        BackupClient + BackupRawClient (Computer Backup bz_ endpoints)

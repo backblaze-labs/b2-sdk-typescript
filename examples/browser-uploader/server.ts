@@ -9,8 +9,8 @@
  */
 
 import { createServer } from 'node:http'
+import type { BucketId } from '../../src/index.ts'
 import { B2Client } from '../../src/index.ts'
-import type { BucketId } from '../../src/types/ids.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID
 const appKey = process.env.B2_APPLICATION_KEY

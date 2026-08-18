@@ -25,6 +25,7 @@
       "@backblaze-labs/b2-sdk/streams": ["../src/streams/index.ts"],
       "@backblaze-labs/b2-sdk/sync": ["../src/sync/index.ts"],
       "@backblaze-labs/b2-sdk/simulator": ["../src/simulator/index.ts"],
+      "@backblaze-labs/b2-sdk/notifications": ["../src/notifications/index.ts"],
       "@backblaze-labs/b2-sdk/s3": ["../src/s3/index.ts"]
     }
   },

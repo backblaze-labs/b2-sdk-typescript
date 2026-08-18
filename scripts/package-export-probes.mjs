@@ -22,6 +22,14 @@ export const publicExportProbes = [
       ["typeof entry.B2Client === 'function'", 'B2Client runtime export missing'],
       ["typeof entry.VERSION === 'string' && entry.VERSION.length > 0", 'VERSION export missing'],
       ["entry.BucketType?.AllPublic === 'allPublic'", 'BucketType enum export drifted'],
+      [
+        "entry.DownloadHeaderName !== undefined && typeof entry.DownloadHeaderName === 'object'",
+        'DownloadHeaderName enum value export missing',
+      ],
+      [
+        "entry.DownloadClientUnauthorizedToReadMarker !== undefined && typeof entry.DownloadClientUnauthorizedToReadMarker === 'object'",
+        'DownloadClientUnauthorizedToReadMarker enum value export missing',
+      ],
     ],
   },
   {
