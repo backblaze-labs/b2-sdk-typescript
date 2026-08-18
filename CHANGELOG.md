@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Unfinished large-file SHA-1 sentinel normalized.** `startLargeFile` and `listUnfinishedLargeFiles` now collapse B2's `contentSha1: 'none'` wire sentinel to `null`, matching finished and file-list endpoints; the optional `UnfinishedLargeFileMetadata.contentSha1` type is widened to `string | null`.
 - **B2 endpoint URL path hardening.** `b2Url()` now rejects literal and percent-encoded backslashes in prefix, version, and endpoint path components so WHATWG URL normalization cannot smuggle an endpoint into another path segment.
 - **Real-B2 integration evidence is explicit and diagnosable.** Same-repo integration workflow runs now fail when required B2 secrets are missing instead of silently accepting an all-skipped suite, integration setup logs per-step timings and timeout failures for authorization, bucket listing, stale cleanup, and bucket creation, and contributor/release docs now spell out simulator-vs-live-B2 expectations.
 - **B2Simulator upload write-path fidelity.** Simulator uploads now reject Content-Length/body mismatches, reject upload_part and copy_part part numbers outside B2's 1-10000 range, classify copy_part malformed ranges as 400 and unsatisfiable ranges as 416, verify large-file finish part SHA-1 entries, and report stored monotonic part timestamps from list_parts. Closes #21.

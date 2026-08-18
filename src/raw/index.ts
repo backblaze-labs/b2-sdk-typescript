@@ -729,12 +729,14 @@ export class RawClient {
     options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
     assertRawCustomUploadTimestamp(request.customUploadTimestamp)
-    return this.postJson<StartLargeFileResponse>(
-      apiUrl,
-      authToken,
-      'b2_start_large_file',
-      withJsonBodyWireSseC(request),
-      options,
+    return normalizeFileVersionSha1(
+      await this.postJson<StartLargeFileResponse>(
+        apiUrl,
+        authToken,
+        'b2_start_large_file',
+        withJsonBodyWireSseC(request),
+        options,
+      ),
     )
   }
 
@@ -958,12 +960,14 @@ export class RawClient {
     request: ListUnfinishedLargeFilesRequest,
     options?: RawRequestOptions,
   ): Promise<ListUnfinishedLargeFilesResponse> {
-    return this.postJson<ListUnfinishedLargeFilesResponse>(
-      apiUrl,
-      authToken,
-      'b2_list_unfinished_large_files',
-      request,
-      options,
+    return normalizeFileVersionListSha1(
+      await this.postJson<ListUnfinishedLargeFilesResponse>(
+        apiUrl,
+        authToken,
+        'b2_list_unfinished_large_files',
+        request,
+        options,
+      ),
     )
   }
 

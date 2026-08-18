@@ -140,4 +140,37 @@ describe('RawClient list request controls', () => {
     expect(requests[1]?.signal).toBe(controller.signal)
     expect(requests[1]?.retry).toBe(retry)
   })
+
+  it("normalizes the 'none' contentSha1 sentinel for unfinished large files", async () => {
+    const transport: HttpTransport = {
+      async send(request) {
+        const body = {
+          fileId: 'large-file' as never,
+          fileName: 'large.bin',
+          accountId: 'account',
+          bucketId: 'bucket' as never,
+          contentType: 'application/octet-stream',
+          contentSha1: 'none',
+          fileInfo: {},
+        }
+        if (request.url.endsWith('/b2_list_unfinished_large_files')) {
+          return jsonResponse({ files: [body], nextFileId: null })
+        }
+        return jsonResponse(body)
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const started = await raw.startLargeFile('https://api.example.test', 'auth', {
+      bucketId: 'bucket' as never,
+      fileName: 'large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const unfinished = await raw.listUnfinishedLargeFiles('https://api.example.test', 'auth', {
+      bucketId: 'bucket' as never,
+    })
+
+    expect(started.contentSha1).toBeNull()
+    expect(unfinished.files[0]?.contentSha1).toBeNull()
+  })
 })
