@@ -117,6 +117,10 @@ export { Capability } from './types/auth.ts'
 // of the same name forwarded by the `export type *` line below.
 export { BucketRetentionMode, BucketType, CorsOperation } from './types/bucket.ts'
 export {
+  DownloadClientUnauthorizedToReadMarker,
+  DownloadHeaderName,
+} from './types/download.ts'
+export {
   EncryptionAlgorithm,
   EncryptionKey,
   EncryptionMode,

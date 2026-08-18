@@ -10,8 +10,8 @@ This template shows what a thin, framework-agnostic adapter over `@backblaze-lab
 import { createStorage } from '@your-org/host-framework-b2-storage'
 
 const storage = createStorage({
-  applicationKeyId: process.env.B2_KEY_ID!,
-  applicationKey: process.env.B2_KEY!,
+  applicationKeyId: process.env.B2_APPLICATION_KEY_ID!,
+  applicationKey: process.env.B2_APPLICATION_KEY!,
   bucket: 'uploads',
   prefix: 'user-content/',
 })

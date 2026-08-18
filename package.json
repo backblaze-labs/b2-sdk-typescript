@@ -211,7 +211,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/backblaze-labs/b2-sdk-typescript"
+    "url": "git+https://github.com/backblaze-labs/b2-sdk-typescript.git"
   },
   "author": "Backblaze, Inc.",
   "homepage": "https://github.com/backblaze-labs/b2-sdk-typescript#readme",

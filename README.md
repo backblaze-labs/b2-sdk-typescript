@@ -4,7 +4,7 @@
 [![API Docs](https://github.com/backblaze-labs/b2-sdk-typescript/actions/workflows/docs.yml/badge.svg)](https://backblaze-labs.github.io/b2-sdk-typescript/)
 [![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.3-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 

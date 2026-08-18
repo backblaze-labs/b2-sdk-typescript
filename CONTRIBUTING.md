@@ -156,6 +156,7 @@ src/
   download/      Single + parallel ranged download (with per-range retry)
   copy/          copyLargeFile orchestrator (server-side multipart copy)
   sync/          synchronize() async generator, LocalFolder + B2Folder scanners, policies, actions
+  notifications/ Webhook signature verification (verifyWebhookSignature, requireValidWebhook)
   s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl)
   partner/       Partner API: PartnerClient + PartnerRawClient, authorizePartner + PartnerAccountInfo, redaction
   backup/        Computer Backup (bz_): BackupClient + BackupRawClient
