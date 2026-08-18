@@ -165,6 +165,8 @@
     "verify:release": "node scripts/verify-release-workflow.mjs",
     "verify:exports": "node scripts/verify-package-exports.mjs",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
+    "smoke:published": "node scripts/smoke-published-package.mjs",
+    "test:smoke-published": "node --test scripts/smoke-published-package.test.mjs",
     "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test && pnpm run build && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:exports"
   },
   "devDependencies": {
