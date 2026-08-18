@@ -72,4 +72,7 @@ export {
   type PartnerRawClientOptions,
   type PartnerRawRequestOptions,
 } from './raw.ts'
-export type { RedactedPartnerAuthorizeResponseJson } from './redaction.ts'
+export {
+  partnerAuthorizeResponseToPersistableJson,
+  type RedactedPartnerAuthorizeResponseJson,
+} from './redaction.ts'

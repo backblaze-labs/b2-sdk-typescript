@@ -34,6 +34,7 @@ import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
   PARTNER_TOKEN_REDACTED,
+  partnerAuthorizeResponseToPersistableJson,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
@@ -1301,8 +1302,9 @@ describe('PartnerRawClient authorizePartner', () => {
       applicationKeyExpirationTimestamp: 1_786_662_000_000,
     })
     expect(auth.authorizationToken).toBe(partnerToken('partner-token'))
-    expect(JSON.stringify(auth)).toContain(PARTNER_TOKEN_REDACTED)
-    expect(JSON.stringify(auth)).not.toContain('partner-token')
+    const authJson = JSON.stringify(auth)
+    expect(authJson).toContain(PARTNER_TOKEN_REDACTED)
+    expect(authJson).not.toContain('partner-token')
 
     const accountInfo = new InMemoryPartnerAccountInfo()
     accountInfo.setAuth(auth)
@@ -1314,14 +1316,22 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(accountInfo.getAccountId()).toBe(accountId('partner-account'))
     expect(accountInfo.getGroupsCapabilities()).toEqual([PartnerCapability.All])
     expect(accountInfo.getBackupCapabilities()).toEqual([PartnerCapability.All])
-    expect(Object.keys(accountInfo.getAuth() ?? {})).toContain('authorizationToken')
-    expect(JSON.stringify(accountInfo.getAuth())).toContain(PARTNER_TOKEN_REDACTED)
-    expect(JSON.stringify(accountInfo.getAuth())).not.toContain('partner-token')
+    const cachedAuth = accountInfo.getAuth()
+    if (cachedAuth === null) throw new Error('expected cached auth')
+    expect(Object.keys(cachedAuth)).toContain('authorizationToken')
+    const cachedAuthJson = JSON.stringify(cachedAuth)
+    expect(cachedAuthJson).toContain(PARTNER_TOKEN_REDACTED)
+    expect(cachedAuthJson).not.toContain('partner-token')
     expect(JSON.stringify(accountInfo)).not.toContain('partner-token')
     expect(accountInfo.toString()).not.toContain('partner-token')
 
-    const rehydrated = accountInfo.getAuth()
-    if (rehydrated === null) throw new Error('expected cached auth')
+    const persistableAuthJson = JSON.stringify(
+      partnerAuthorizeResponseToPersistableJson(cachedAuth),
+    )
+    expect(persistableAuthJson).toContain('partner-token')
+    expect(persistableAuthJson).not.toContain(PARTNER_TOKEN_REDACTED)
+
+    const rehydrated = JSON.parse(persistableAuthJson) as PartnerAuthorizeResponse
     const restoredAccountInfo = new InMemoryPartnerAccountInfo()
     restoredAccountInfo.setAuth(rehydrated)
     expect(restoredAccountInfo.getPartnerToken()).toBe('partner-token')
@@ -1870,7 +1880,7 @@ describe('InMemoryPartnerAccountInfo', () => {
     ).toThrow(B2PartnerAuthorizationError)
   })
 
-  it('keeps non-extensible auth data enumerable while adding inspection redaction to a copy', () => {
+  it('keeps non-extensible auth data enumerable while scoping JSON redaction', () => {
     const auth = Object.preventExtensions(partnerAuth())
 
     const redacted = redactPartnerAuthorizeResponse(auth)
@@ -1879,6 +1889,7 @@ describe('InMemoryPartnerAccountInfo', () => {
     expect(Object.keys(redacted)).toContain('authorizationToken')
     expect(JSON.stringify(redacted)).toContain(PARTNER_TOKEN_REDACTED)
     expect(JSON.stringify(redacted)).not.toContain('partner-token')
+    expect(JSON.stringify({ ...redacted })).toContain('partner-token')
     expect(redacted.toString()).not.toContain('partner-token')
   })
 })

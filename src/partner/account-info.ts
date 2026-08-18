@@ -8,11 +8,23 @@ import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partn
  * contract: re-run `PartnerRawClient.authorizePartner` with the same Master
  * Application Key credentials, store the fresh response with `setAuth`, then
  * return `authorizationToken` to the retry transport.
+ *
+ * Partner authorize responses redact `authorizationToken` when passed to
+ * `JSON.stringify`, so do not persist `getAuth()` with direct JSON serialization.
+ * For trusted durable caches, serialize the output of
+ * `partnerAuthorizeResponseToPersistableJson(getAuth())` or store
+ * `authorizationToken` directly in secure storage with the rest of the
+ * authorize response metadata.
  */
 export interface PartnerAccountInfo {
   /** Store a fresh Partner authorization response, replacing any previous state. */
   setAuth(auth: PartnerAuthorizeResponse): void
-  /** Return the current Partner authorization response, or null if not authorized. */
+  /**
+   * Return the current Partner authorization response, or null if not authorized.
+   *
+   * The returned object remains directly reusable with `setAuth()`, but
+   * `JSON.stringify` redacts its token and is not a persistence format.
+   */
   getAuth(): PartnerAuthorizeResponse | null
   /** Discard all cached Partner authorization state. */
   clear(): void

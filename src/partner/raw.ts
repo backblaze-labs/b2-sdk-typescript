@@ -58,14 +58,19 @@ export interface PartnerRawClientOptions {
    * Partner endpoint calls validate URLs against suffixes recorded by
    * `authorizePartner()`. A rehydrated client that skips authorization must use
    * `authorizedPartnerEndpointSuffixes` or a {@link UrlGuardedTransport} with a
-   * locked `urlGuard`.
+   * locked `urlGuard`. Because Partner authorize responses redact
+   * `authorizationToken` under `JSON.stringify`, durable caches should persist
+   * the output of `partnerAuthorizeResponseToPersistableJson(auth)` or another
+   * secure token-preserving representation.
    */
   readonly transport: HttpTransport
   /**
    * Validated Partner endpoint host suffixes restored from cached
    * authorization. Facades normally manage this after authorization; direct raw
    * clients can pass suffixes derived from trusted Partner authorization when
-   * rehydrating an auth cache.
+   * rehydrating an auth cache. Do not derive this cache with
+   * `JSON.stringify(authorizePartner())`, which intentionally stores a redacted
+   * token placeholder instead of a usable Partner token.
    */
   readonly authorizedPartnerEndpointSuffixes?: readonly string[]
   /**

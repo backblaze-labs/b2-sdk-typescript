@@ -78,6 +78,65 @@ export function partnerAuthorizeResponseToRedactedJson(
 }
 
 /**
+ * Returns a plain Partner authorize response copy for trusted auth-cache persistence.
+ *
+ * Unlike `JSON.stringify(auth)`, this preserves `authorizationToken` so the
+ * result can be stringified, stored securely, parsed, and passed back to
+ * `PartnerAccountInfo.setAuth()`. Do not log this output.
+ *
+ * @param auth - Partner authorization response to persist.
+ *
+ * @returns A plain object with the live Partner token preserved.
+ */
+export function partnerAuthorizeResponseToPersistableJson(
+  auth: PartnerAuthorizeResponse,
+): PartnerAuthorizeResponse {
+  const storageApi = auth.apiInfo.storageApi
+  const groupsApi = auth.apiInfo.groupsApi
+  const backupApi = auth.apiInfo.backupApi
+
+  return {
+    accountId: auth.accountId,
+    authorizationToken: auth.authorizationToken,
+    apiInfo: {
+      ...(storageApi !== undefined
+        ? {
+            storageApi: {
+              ...storageApi,
+              capabilities: [...storageApi.capabilities],
+            },
+          }
+        : {}),
+      ...(groupsApi !== undefined
+        ? {
+            groupsApi: {
+              ...groupsApi,
+              capabilities: [...groupsApi.capabilities],
+            },
+          }
+        : {}),
+      ...(backupApi !== undefined
+        ? {
+            backupApi: {
+              ...backupApi,
+              capabilities: [...backupApi.capabilities],
+            },
+          }
+        : {}),
+    },
+    ...(auth.groupsApiUrl !== undefined ? { groupsApiUrl: auth.groupsApiUrl } : {}),
+    ...(auth.backupApiUrl !== undefined ? { backupApiUrl: auth.backupApiUrl } : {}),
+    ...(auth.groupsCapabilities !== undefined
+      ? { groupsCapabilities: [...auth.groupsCapabilities] }
+      : {}),
+    ...(auth.backupCapabilities !== undefined
+      ? { backupCapabilities: [...auth.backupCapabilities] }
+      : {}),
+    applicationKeyExpirationTimestamp: auth.applicationKeyExpirationTimestamp,
+  }
+}
+
+/**
  * Returns a redacted copy for log serializers that intentionally hide group-member keys.
  *
  * @param result - Create group member result to render safely.
@@ -137,7 +196,17 @@ export function reserveTrialCreateAccountResponseToRedactedJson(
 
 /**
  * Adds non-enumerable serialization and inspection hooks that redact the
- * Partner token while preserving direct property access.
+ * Partner token through `JSON.stringify`, `toString`, and Node `util.inspect`
+ * while preserving direct property access.
+ *
+ * `JSON.stringify` no longer round-trips `authorizationToken` from protected
+ * authorize responses. Persist trusted auth caches with
+ * {@link partnerAuthorizeResponseToPersistableJson} before JSON serialization, or
+ * read `authorizationToken` directly into secure storage before serializing.
+ *
+ * This does not make the object universally log-safe: object spread,
+ * `Object.assign`, `Object.entries`, `structuredClone`, and serializers that
+ * walk enumerable properties can still expose the raw token.
  *
  * @param auth - Partner authorization response to protect from accidental inspection.
  *
@@ -253,11 +322,11 @@ export function redactCreateGroupMemberResponse(
 /**
  * Adds non-enumerable serialization and inspection hooks that redact the
  * application key secret while preserving direct property access.
- * Unlike Partner authorize token redaction, reserve-trial results redact
- * `JSON.stringify` because the response contains newly minted application key
- * secrets that are commonly logged as batch results. Callers that need to
- * persist the key should read `applicationKey` directly into secure storage
- * before serializing the object.
+ *
+ * `JSON.stringify` redacts because the response contains newly minted
+ * application key secrets that are commonly logged as batch results. Callers
+ * that need to persist the key should read `applicationKey` directly into
+ * secure storage before serializing the object.
  *
  * @param result - Reserve trial account result to protect from accidental logging.
  *
