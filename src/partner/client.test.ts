@@ -829,15 +829,18 @@ describe('PartnerClient facade', () => {
     ['invalid_sms_phone', InvalidSmsPhoneError],
     ['out_of_range', OutOfRangeError],
     ['method_failure', MethodFailureError],
-  ] as const)('does not reauthorize for Partner 401 validation code %s', async (code, errorClass) => {
-    const { client, listAuthorizations, authorizeCount } = make401ListGroupsClient(code)
+  ] as const)(
+    'does not reauthorize for Partner 401 validation code %s',
+    async (code, errorClass) => {
+      const { client, listAuthorizations, authorizeCount } = make401ListGroupsClient(code)
 
-    await client.authorize()
-    await expect(client.listGroups()).rejects.toThrow(errorClass)
+      await client.authorize()
+      await expect(client.listGroups()).rejects.toThrow(errorClass)
 
-    expect(authorizeCount()).toBe(1)
-    expect(listAuthorizations).toEqual(['partner-token-1'])
-  })
+      expect(authorizeCount()).toBe(1)
+      expect(listAuthorizations).toEqual(['partner-token-1'])
+    },
+  )
 
   it('does not reauthorize for simulator partner validation 401 responses', async () => {
     const { client, seenRequests } = makeRecordingPartnerClient()
@@ -859,27 +862,30 @@ describe('PartnerClient facade', () => {
     ['query string', { groupsApiUrl: 'https://groups.backblazeb2.com/partner?token=secret' }],
     ['fragment', { groupsApiUrl: 'https://groups.backblazeb2.com/partner#token' }],
     ['internal host', { groupsApiUrl: 'https://metadata.google.internal/partner' }],
-  ])('rejects unsafe cached auth before Partner tokens can leave: %s', async (_label, overrides) => {
-    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    partnerAccountInfo.setAuth(partnerAuthorizeResponse('victim-partner-token', overrides))
-    const seenRequests: HttpRequest[] = []
-    const client = new PartnerClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      partnerAccountInfo,
-      transport: {
-        async send(request) {
-          seenRequests.push(request)
-          return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+  ])(
+    'rejects unsafe cached auth before Partner tokens can leave: %s',
+    async (_label, overrides) => {
+      const partnerAccountInfo = new InMemoryPartnerAccountInfo()
+      partnerAccountInfo.setAuth(partnerAuthorizeResponse('victim-partner-token', overrides))
+      const seenRequests: HttpRequest[] = []
+      const client = new PartnerClient({
+        masterKeyId: 'master-key-id',
+        masterKey: 'master-key',
+        partnerAccountInfo,
+        transport: {
+          async send(request) {
+            seenRequests.push(request)
+            return jsonResponse({ accountId: accountId('partner-account'), groups: [] })
+          },
         },
-      },
-    })
+      })
 
-    expect(partnerAccountInfo.getPartnerToken()).toBe('victim-partner-token')
-    await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
+      expect(partnerAccountInfo.getPartnerToken()).toBe('victim-partner-token')
+      await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
 
-    expect(seenRequests).toEqual([])
-  })
+      expect(seenRequests).toEqual([])
+    },
+  )
 
   it('rejects cached auth whose endpoint mirror points away from apiInfo', async () => {
     const cachedAuth = {

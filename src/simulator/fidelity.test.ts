@@ -5496,23 +5496,22 @@ describe('B2Simulator copy_file fidelity', () => {
     ).rejects.toThrow(/Unsatisfiable copy range/i)
   })
 
-  it.each([
-    'bytes=abc',
-    'bytes=5-1',
-    'bytes=-0',
-  ])('rejects a malformed copy range (%s) with 400, not 416', async (range) => {
-    const src = await bucket.upload({
-      fileName: `src-malformed-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
-      source: new BufferSource(new TextEncoder().encode('abcdefghij')),
-    })
-    await expect(
-      rawCopy({
-        sourceFileId: src.fileId,
-        fileName: `dst-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
-        range,
-      }),
-    ).rejects.toThrow(/Malformed copy range/i)
-  })
+  it.each(['bytes=abc', 'bytes=5-1', 'bytes=-0'])(
+    'rejects a malformed copy range (%s) with 400, not 416',
+    async (range) => {
+      const src = await bucket.upload({
+        fileName: `src-malformed-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
+        source: new BufferSource(new TextEncoder().encode('abcdefghij')),
+      })
+      await expect(
+        rawCopy({
+          sourceFileId: src.fileId,
+          fileName: `dst-${range.replace(/[^a-z0-9]/gi, '')}.txt`,
+          range,
+        }),
+      ).rejects.toThrow(/Malformed copy range/i)
+    },
+  )
 
   it('rejects replacement contentType/fileInfo in COPY (default) mode', async () => {
     const src = await uploadSource('src-copy-with-meta.txt')

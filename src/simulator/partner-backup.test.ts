@@ -147,27 +147,24 @@ describe('B2Simulator partner endpoints', () => {
       undefined,
       'account is not in good standing',
     ],
-  ] satisfies readonly (readonly [
-    string,
-    B2SimulatorOptions,
-    string,
-    unknown,
-    string,
-  ])[])('rejects default permissive Partner calls for %s', async (_label, options, url, body, message) => {
-    const sim = new B2Simulator(options)
-    const result = await simulatorRequest<ErrorBody>(sim, {
-      url,
-      method: body === undefined ? 'GET' : 'POST',
-      authorization: 'any-partner-token',
-      ...(body === undefined ? {} : { body }),
-    })
+  ] satisfies readonly (readonly [string, B2SimulatorOptions, string, unknown, string])[])(
+    'rejects default permissive Partner calls for %s',
+    async (_label, options, url, body, message) => {
+      const sim = new B2Simulator(options)
+      const result = await simulatorRequest<ErrorBody>(sim, {
+        url,
+        method: body === undefined ? 'GET' : 'POST',
+        authorization: 'any-partner-token',
+        ...(body === undefined ? {} : { body }),
+      })
 
-    expect(result.status).toBe(403)
-    expect(result.body).toMatchObject({
-      code: 'access_denied',
-      message,
-    })
-  })
+      expect(result.status).toBe(403)
+      expect(result.body).toMatchObject({
+        code: 'access_denied',
+        message,
+      })
+    },
+  )
 
   it('creates, lists, paginates, and ejects group members with issued Partner tokens', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true })

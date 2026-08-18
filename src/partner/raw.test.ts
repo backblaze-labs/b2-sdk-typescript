@@ -648,38 +648,44 @@ describe('PartnerRawClient group management endpoints', () => {
     ['localhost', 'https://localhost/partner'],
     ['metadata hostname', 'https://metadata.google.internal/partner'],
     ['off-realm attacker host', 'https://attacker.example/partner'],
-  ])('rejects unsafe groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
-    const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-    })
+  ])(
+    'rejects unsafe groupsApiUrl before sending tokens: %s',
+    async (_label, unsafeGroupsApiUrl) => {
+      const { raw, seenRequests } = makePartnerEndpointRawClient({
+        b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+      })
 
-    await expect(raw.listGroups(unsafeGroupsApiUrl, authToken, { adminAccountId })).rejects.toThrow(
-      B2PartnerAuthorizationError,
-    )
+      await expect(
+        raw.listGroups(unsafeGroupsApiUrl, authToken, { adminAccountId }),
+      ).rejects.toThrow(B2PartnerAuthorizationError)
 
-    expect(seenRequests).toEqual([])
-  })
+      expect(seenRequests).toEqual([])
+    },
+  )
 
   it.each([
     ['plaintext HTTP', 'http://groups.backblazeb2.com/partner'],
     ['literal metadata IP', 'https://169.254.169.254/latest/meta-data'],
     ['localhost', 'https://localhost/partner'],
     ['off-realm attacker host', 'https://attacker.example/partner'],
-  ])('rejects unsafe POST groupsApiUrl before sending tokens: %s', async (_label, unsafeGroupsApiUrl) => {
-    const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [],
-    })
+  ])(
+    'rejects unsafe POST groupsApiUrl before sending tokens: %s',
+    async (_label, unsafeGroupsApiUrl) => {
+      const { raw, seenRequests } = makePartnerEndpointRawClient({
+        b2_create_group_member: [],
+      })
 
-    await expect(
-      raw.createGroupMember(unsafeGroupsApiUrl, authToken, {
-        adminAccountId,
-        groupId: group,
-        memberEmail: 'member@example.com',
-      }),
-    ).rejects.toThrow(B2PartnerAuthorizationError)
+      await expect(
+        raw.createGroupMember(unsafeGroupsApiUrl, authToken, {
+          adminAccountId,
+          groupId: group,
+          memberEmail: 'member@example.com',
+        }),
+      ).rejects.toThrow(B2PartnerAuthorizationError)
 
-    expect(seenRequests).toEqual([])
-  })
+      expect(seenRequests).toEqual([])
+    },
+  )
 
   it('fails closed before a transport URL guard is locked', async () => {
     const noGuard = recordingTransport()
@@ -1060,27 +1066,30 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ['trailing whitespace Authorization header', '000 ', AccessDeniedError, 403, 'access_denied'],
     ['interior whitespace Authorization header', '0 0 0', AccessDeniedError, 403, 'access_denied'],
     ['invalid token', '000', BadAuthTokenError, 401, 'unauthorized'],
-  ])('surfaces the documented reserve trial auth error path: %s', async (_label, token, errorClass, status, code) => {
-    const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
+  ])(
+    'surfaces the documented reserve trial auth error path: %s',
+    async (_label, token, errorClass, status, code) => {
+      const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient()
 
-    await expect(
-      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
-        email: 'trial-auth@example.com',
-        term: 7,
-        storage: 1,
-      }),
-    ).rejects.toMatchObject({
-      code,
-      status,
-    })
-    await expect(
-      raw.reserveTrialCreateAccount(groupsApiUrl, token, {
-        email: 'trial-auth-2@example.com',
-        term: 7,
-        storage: 1,
-      }),
-    ).rejects.toThrow(errorClass)
-  })
+      await expect(
+        raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+          email: 'trial-auth@example.com',
+          term: 7,
+          storage: 1,
+        }),
+      ).rejects.toMatchObject({
+        code,
+        status,
+      })
+      await expect(
+        raw.reserveTrialCreateAccount(groupsApiUrl, token, {
+          email: 'trial-auth-2@example.com',
+          term: 7,
+          storage: 1,
+        }),
+      ).rejects.toThrow(errorClass)
+    },
+  )
 
   it('rejects non-issued Partner tokens in strict simulator mode', async () => {
     const { raw, groupsApiUrl } = await makeSimulatorPartnerRawClient({ strictAuth: true })
@@ -1110,35 +1119,35 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ['non-Basic', { Authorization: 'Bearer partner-token' }],
     ['malformed Basic', { Authorization: `Basic ${btoa('not-a-key-pair')}` }],
     ['empty Basic credentials', { Authorization: `Basic ${btoa(':')}` }],
-  ] satisfies readonly (readonly [
-    string,
-    Record<string, string> | undefined,
-  ])[])('does not mint simulator Partner tokens with %s authorize credentials', async (_label, headers) => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
-    const transport = sim.transport()
+  ] satisfies readonly (readonly [string, Record<string, string> | undefined])[])(
+    'does not mint simulator Partner tokens with %s authorize credentials',
+    async (_label, headers) => {
+      const sim = new B2Simulator({ partnerAuthorize: true })
+      const transport = sim.transport()
 
-    const authResponse = await transport.send({
-      url: 'http://localhost:0/b2api/v3/b2_authorize_account',
-      method: 'GET',
-      ...(headers !== undefined ? { headers } : {}),
-    })
-    expect(authResponse.status).toBe(401)
-    const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
-    expect(authBody.authorizationToken).toBeUndefined()
+      const authResponse = await transport.send({
+        url: 'http://localhost:0/b2api/v3/b2_authorize_account',
+        method: 'GET',
+        ...(headers !== undefined ? { headers } : {}),
+      })
+      expect(authResponse.status).toBe(401)
+      const authBody = (await authResponse.json()) as { readonly authorizationToken?: string }
+      expect(authBody.authorizationToken).toBeUndefined()
 
-    const reserveResponse = await transport.send({
-      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
-      method: 'POST',
-      headers: {
-        Authorization: authBody.authorizationToken ?? '',
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
-    })
+      const reserveResponse = await transport.send({
+        url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+        method: 'POST',
+        headers: {
+          Authorization: authBody.authorizationToken ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+      })
 
-    expect(reserveResponse.status).toBe(403)
-    await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'access_denied' })
-  })
+      expect(reserveResponse.status).toBe(403)
+      await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'access_denied' })
+    },
+  )
 
   it('does not mint simulator Partner tokens for a known application key secret mismatch', async () => {
     const sim = new B2Simulator({ partnerAuthorize: true })
@@ -1207,30 +1216,30 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ['Partner API disabled', { partnerApiEnabled: false }],
     ['missing valid phone number', { partnerAccountHasValidPhone: false }],
     ['account not in good standing', { partnerAccountInGoodStanding: false }],
-  ] satisfies readonly (readonly [
-    string,
-    B2SimulatorOptions,
-  ])[])('surfaces reserve trial access_denied when %s', async (_label, options) => {
-    const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient(options)
+  ] satisfies readonly (readonly [string, B2SimulatorOptions])[])(
+    'surfaces reserve trial access_denied when %s',
+    async (_label, options) => {
+      const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient(options)
 
-    await expect(
-      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
-        email: 'trial-prereq@example.com',
-        term: 7,
-        storage: 1,
-      }),
-    ).rejects.toMatchObject({
-      code: 'access_denied',
-      status: 403,
-    })
-    await expect(
-      raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
-        email: 'trial-prereq-typed@example.com',
-        term: 7,
-        storage: 1,
-      }),
-    ).rejects.toThrow(AccessDeniedError)
-  })
+      await expect(
+        raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+          email: 'trial-prereq@example.com',
+          term: 7,
+          storage: 1,
+        }),
+      ).rejects.toMatchObject({
+        code: 'access_denied',
+        status: 403,
+      })
+      await expect(
+        raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+          email: 'trial-prereq-typed@example.com',
+          term: 7,
+          storage: 1,
+        }),
+      ).rejects.toThrow(AccessDeniedError)
+    },
+  )
 
   it('maps reserve trial request validation to BadRequestError', async () => {
     const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
