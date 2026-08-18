@@ -24,7 +24,6 @@ import {
   checkProbeCoverage,
   packageSpecifier,
   publicExportProbes,
-  walkFiles,
 } from './package-export-probes.mjs'
 
 const packageName = '@backblaze-labs/b2-sdk'
@@ -220,11 +219,8 @@ function checkInstalledPackageFiles(project) {
 
   checkProbeCoverage(installedPkg, fail)
 
-  const leakedSource = walkFiles(realPackageDir).filter((file) =>
-    file.startsWith(join(realPackageDir, 'src') + sep),
-  )
-  if (leakedSource.length > 0) {
-    fail(`installed package contains src/ files: ${leakedSource.length}`)
+  if (existsSync(join(realPackageDir, 'src'))) {
+    fail('installed package contains top-level src/')
   }
 
   return { dctsTypeEntries, installedPkg, referencedFiles }
