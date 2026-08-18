@@ -101,8 +101,10 @@ export interface UnfinishedLargeFileMetadata {
   /** When present, always 0 for unfinished large files. */
   readonly contentLength?: number
   /**
-   * Always `null` for unfinished large files: B2's `'none'` wire sentinel is
-   * normalized to `null`.
+   * When present for documented B2 unfinished large files, this is `null`:
+   * B2's `'none'` wire sentinel is normalized to `null`. If B2 omits the
+   * field, it remains `undefined`; the `string` arm is retained for
+   * forward-compatible or non-standard response values.
    */
   readonly contentSha1?: string | null
   /** When present, always null for unfinished large files. */
