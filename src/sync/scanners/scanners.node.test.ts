@@ -604,6 +604,30 @@ describe('B2Folder', () => {
     expect(errors).toEqual([])
   })
 
+  it('surfaces spoofed B2 list AbortError payloads when the signal is not aborted', async () => {
+    const spoofedAbortError = Object.create({ name: 'AbortError' })
+    const listFileVersions = vi.fn().mockRejectedValue(spoofedAbortError)
+    const errors: unknown[] = []
+    const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
+    const controller = new AbortController()
+
+    await expect(
+      collect<B2SyncPath>(
+        folder.scan({
+          signal: controller.signal,
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('failed to scan B2 file versions')
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        path: '',
+        message: 'failed to scan B2 file versions: [object Object]',
+      }),
+    )
+  })
+
   it('rejects B2 objects in the reserved SDK temp namespace', async () => {
     const bucket = await client.createBucket({
       bucketName: 'reserved-temp-bucket',

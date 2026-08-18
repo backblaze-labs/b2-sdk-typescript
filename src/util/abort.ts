@@ -1,5 +1,5 @@
 /**
- * Abort-signal helpers shared by the HTTP transport and Partner client.
+ * Abort-signal and cancellation-error helpers shared across SDK operations.
  *
  * @packageDocumentation
  */
@@ -23,12 +23,18 @@ export function abortReason(signal: AbortSignal): unknown {
  * @returns True for values named `AbortError`.
  */
 export function isAbortError(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'name' in err &&
-    (err as { readonly name?: unknown }).name === 'AbortError'
-  )
+  return isNamedError(err, 'AbortError')
+}
+
+/**
+ * Returns whether an error represents a timeout.
+ *
+ * @param err - Unknown thrown value.
+ *
+ * @returns True for `Error` or `DOMException` instances named `TimeoutError`.
+ */
+export function isTimeoutError(err: unknown): boolean {
+  return isNamedError(err, 'TimeoutError')
 }
 
 /**
@@ -86,4 +92,11 @@ export async function raceWithAbort<T>(
   } finally {
     removeAbortListener?.()
   }
+}
+
+function isNamedError(err: unknown, name: string): boolean {
+  return (
+    (err instanceof DOMException || err instanceof Error) &&
+    (err as { readonly name: string }).name === name
+  )
 }

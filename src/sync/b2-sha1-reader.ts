@@ -63,9 +63,12 @@ async function readRawStreamChunkWithTimeout(
     signal === undefined
       ? undefined
       : new Promise<never>((_, reject) => {
-          const onAbort = () => reject(abortReason(signal))
+          const onAbort = () => {
+            reject(abortReason(signal))
+          }
           signal.addEventListener('abort', onAbort, { once: true })
           removeAbortListener = () => signal.removeEventListener('abort', onAbort)
+          if (signal.aborted) onAbort()
         })
 
   try {

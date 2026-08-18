@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { deferred } from '../test-utils/index.ts'
-import { isAbortError, raceWithAbort } from './abort.ts'
+import { isAbortError, isTimeoutError, raceWithAbort } from './abort.ts'
 
 describe('isAbortError', () => {
-  it('identifies values named AbortError', () => {
+  it('identifies Error and DOMException values named AbortError', () => {
     const error = new Error('aborted')
     error.name = 'AbortError'
 
@@ -11,6 +11,25 @@ describe('isAbortError', () => {
     expect(isAbortError(error)).toBe(true)
     expect(isAbortError(new Error('not aborted'))).toBe(false)
     expect(isAbortError('AbortError')).toBe(false)
+  })
+
+  it('rejects spoofed non-Error AbortError payloads', () => {
+    const inherited = Object.create({ name: 'AbortError' })
+
+    expect(isAbortError({ name: 'AbortError', message: 'hide real failure' })).toBe(false)
+    expect(isAbortError(inherited)).toBe(false)
+  })
+})
+
+describe('isTimeoutError', () => {
+  it('identifies Error and DOMException values named TimeoutError', () => {
+    const error = new Error('timed out')
+    error.name = 'TimeoutError'
+
+    expect(isTimeoutError(new DOMException('timed out', 'TimeoutError'))).toBe(true)
+    expect(isTimeoutError(error)).toBe(true)
+    expect(isTimeoutError(new Error('not timed out'))).toBe(false)
+    expect(isTimeoutError({ name: 'TimeoutError' })).toBe(false)
   })
 })
 

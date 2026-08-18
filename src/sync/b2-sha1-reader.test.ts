@@ -105,6 +105,31 @@ describe('readStreamChunkWithTimeout', () => {
       reader.releaseLock()
     },
   )
+
+  it('rejects when the signal aborts during listener registration', async () => {
+    const reason = new DOMException('deploy shutdown', 'AbortError')
+    let aborted = false
+    const signal = {
+      get aborted() {
+        return aborted
+      },
+      get reason() {
+        return reason
+      },
+      addEventListener() {
+        aborted = true
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal
+    const reader = new ReadableStream<Uint8Array>().getReader()
+
+    try {
+      await expect(readStreamChunkWithTimeout(reader, 1000, 'stalled', signal)).rejects.toBe(reason)
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
+  })
 })
 
 describe('hashReadableStreamSha1', () => {
