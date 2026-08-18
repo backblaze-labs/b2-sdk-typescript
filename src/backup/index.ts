@@ -11,6 +11,7 @@
  */
 
 export type { PartnerAccountInfo } from '../partner/account-info.ts'
+export { partnerAuthorizeResponseForPersistence } from '../partner/auth-clone.ts'
 export { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
 export type {
   ComputerBackup,

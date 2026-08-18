@@ -4,6 +4,7 @@ import {
   BackupClient,
   PartnerCapability as BackupPartnerCapability,
   BackupRawClient,
+  partnerAuthorizeResponseForPersistence as backupAuthForPersistence,
   computerId,
 } from './backup/index.ts'
 import {
@@ -11,6 +12,7 @@ import {
   PartnerCapability,
   PartnerClient,
   PartnerRawClient,
+  partnerAuthorizeResponseForPersistence,
   Region,
 } from './partner/index.ts'
 
@@ -21,6 +23,7 @@ describe('Partner and Backup subpath imports', () => {
     expect(BackupClient).toBeTypeOf('function')
     expect(BackupRawClient).toBeTypeOf('function')
     expect(InMemoryPartnerAccountInfo).toBe(BackupAccountInfo)
+    expect(partnerAuthorizeResponseForPersistence).toBe(backupAuthForPersistence)
     expect(PartnerCapability.All).toBe('all')
     expect(BackupPartnerCapability.All).toBe('all')
     expect(Region.UsWest).toBe('us-west')

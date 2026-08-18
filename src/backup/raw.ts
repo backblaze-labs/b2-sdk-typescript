@@ -25,14 +25,21 @@ export interface BackupRawClientOptions {
    * Computer Backup endpoint calls validate URLs against suffixes recorded by
    * Partner authorization. A rehydrated client that skips authorization must
    * use `authorizedBackupEndpointSuffixes` or a transport with a locked
-   * `urlGuard`.
+   * `urlGuard`. Because Partner authorize responses redact
+   * `authorizationToken` under `JSON.stringify`, durable caches should persist
+   * `partnerAuthorizeResponseForPersistence(auth)` only to encrypted or
+   * otherwise credential-grade storage, or use another secure token-preserving
+   * representation.
    */
   readonly transport: HttpTransport
   /**
    * Validated Computer Backup endpoint host suffixes restored from cached
    * Partner authorization. Facades normally manage this after authorization;
    * direct raw clients can pass trusted suffixes derived from
-   * `derivePartnerAllowedSuffixes()`.
+   * `derivePartnerAllowedSuffixes()`. Do not derive this cache with
+   * `JSON.stringify(authorizePartner())`, which intentionally stores a redacted
+   * token placeholder instead of a usable Partner token. Rehydrating that
+   * placeholder fails fast.
    */
   readonly authorizedBackupEndpointSuffixes?: readonly string[]
 }

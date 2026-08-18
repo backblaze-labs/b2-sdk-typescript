@@ -1,5 +1,6 @@
 import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
+import { PARTNER_TOKEN_REDACTED } from './redaction-placeholders.ts'
 
 function sameCapabilities(
   left: readonly PartnerCapability[] | undefined,
@@ -20,6 +21,12 @@ function sameCapabilities(
  * @internal
  */
 export function validatePartnerAuthorizeResponseShape(auth: PartnerAuthorizeResponse): void {
+  if (auth.authorizationToken === PARTNER_TOKEN_REDACTED) {
+    throw new B2PartnerAuthorizationError(
+      'Partner authorization token was redacted; persist with partnerAuthorizeResponseForPersistence(auth) or reauthorize before reusing cached auth',
+    )
+  }
+
   const { groupsApi, backupApi } = auth.apiInfo
   if (groupsApi === undefined && backupApi === undefined) {
     throw new B2PartnerAuthorizationError(

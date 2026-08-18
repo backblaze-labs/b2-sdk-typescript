@@ -6,11 +6,12 @@ import type {
   ReserveTrialCreateAccountResponse,
   ReserveTrialCreateAccountResult,
 } from '../types/partner.ts'
+import { APPLICATION_KEY_REDACTED, PARTNER_TOKEN_REDACTED } from './redaction-placeholders.ts'
 
-/** Placeholder used when a Partner token is serialized for logs or inspection. */
-export const PARTNER_TOKEN_REDACTED = '[redacted Partner token]'
-/** Placeholder used when an application key secret is serialized for logs or inspection. */
-export const APPLICATION_KEY_REDACTED = '[redacted application key]'
+export {
+  APPLICATION_KEY_REDACTED,
+  PARTNER_TOKEN_REDACTED,
+} from './redaction-placeholders.ts'
 
 /**
  * JSON-safe Partner authorize response with the Partner token replaced by a
@@ -136,8 +137,19 @@ export function reserveTrialCreateAccountResponseToRedactedJson(
 }
 
 /**
- * Adds non-enumerable inspection hooks that redact the Partner token while
- * preserving the plain enumerable data shape for serialization and handoff.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * Partner token through `JSON.stringify`, `toString`, and Node `util.inspect`
+ * while preserving direct property access.
+ *
+ * `JSON.stringify` no longer round-trips `authorizationToken` from protected
+ * authorize responses. Persist trusted auth caches with
+ * `partnerAuthorizeResponseForPersistence(auth)` only into encrypted or
+ * otherwise credential-grade storage, or read `authorizationToken` directly
+ * into secure storage before serializing.
+ *
+ * This does not make the object universally log-safe: object spread,
+ * `Object.assign`, `Object.entries`, `structuredClone`, and serializers that
+ * walk enumerable properties can still expose the raw token.
  *
  * @param auth - Partner authorization response to protect from accidental inspection.
  *
@@ -151,6 +163,7 @@ export function redactPartnerAuthorizeResponse(
     partnerAuthorizeResponseToRedactedJson(target)
   const toRedactedString = (): string => `[PartnerAuthorizeResponse ${PARTNER_TOKEN_REDACTED}]`
 
+  installPortableJsonHook(target, toRedactedJson)
   Object.defineProperties(target, {
     toString: {
       value: toRedactedString,
@@ -252,11 +265,11 @@ export function redactCreateGroupMemberResponse(
 /**
  * Adds non-enumerable serialization and inspection hooks that redact the
  * application key secret while preserving direct property access.
- * Unlike Partner authorize token redaction, reserve-trial results redact
- * `JSON.stringify` because the response contains newly minted application key
- * secrets that are commonly logged as batch results. Callers that need to
- * persist the key should read `applicationKey` directly into secure storage
- * before serializing the object.
+ *
+ * `JSON.stringify` redacts because the response contains newly minted
+ * application key secrets that are commonly logged as batch results. Callers
+ * that need to persist the key should read `applicationKey` directly into
+ * secure storage before serializing the object.
  *
  * @param result - Reserve trial account result to protect from accidental logging.
  *

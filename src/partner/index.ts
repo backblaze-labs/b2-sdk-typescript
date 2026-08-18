@@ -50,6 +50,7 @@ export type {
 } from '../types/partner.ts'
 export { computerId, groupId, PartnerCapability, Region } from '../types/partner.ts'
 export type { PartnerAccountInfo } from './account-info.ts'
+export { partnerAuthorizeResponseForPersistence } from './auth-clone.ts'
 export {
   type CreateGroupMemberOptions,
   type EjectGroupMemberOptions,

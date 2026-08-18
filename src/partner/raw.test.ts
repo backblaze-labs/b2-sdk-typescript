@@ -28,11 +28,13 @@ import { Capability } from '../types/auth.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
+import { partnerAuthorizeResponseForPersistence } from './auth-clone.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
+  PARTNER_TOKEN_REDACTED,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
@@ -1300,6 +1302,16 @@ describe('PartnerRawClient authorizePartner', () => {
       applicationKeyExpirationTimestamp: 1_786_662_000_000,
     })
     expect(auth.authorizationToken).toBe(partnerToken('partner-token'))
+    const authJson = JSON.stringify(auth)
+    expect(authJson).toContain(PARTNER_TOKEN_REDACTED)
+    expect(authJson).not.toContain('partner-token')
+    const poisonedCache = JSON.parse(authJson) as PartnerAuthorizeResponse
+    expect(() => new InMemoryPartnerAccountInfo().setAuth(poisonedCache)).toThrow(
+      B2PartnerAuthorizationError,
+    )
+    expect(() => new InMemoryPartnerAccountInfo().setAuth(poisonedCache)).toThrow(
+      'Partner authorization token was redacted',
+    )
 
     const accountInfo = new InMemoryPartnerAccountInfo()
     accountInfo.setAuth(auth)
@@ -1311,12 +1323,20 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(accountInfo.getAccountId()).toBe(accountId('partner-account'))
     expect(accountInfo.getGroupsCapabilities()).toEqual([PartnerCapability.All])
     expect(accountInfo.getBackupCapabilities()).toEqual([PartnerCapability.All])
-    expect(Object.keys(accountInfo.getAuth() ?? {})).toContain('authorizationToken')
-    expect(JSON.stringify(accountInfo.getAuth())).toContain('partner-token')
+    const cachedAuth = accountInfo.getAuth()
+    if (cachedAuth === null) throw new Error('expected cached auth')
+    expect(Object.keys(cachedAuth)).toContain('authorizationToken')
+    const cachedAuthJson = JSON.stringify(cachedAuth)
+    expect(cachedAuthJson).toContain(PARTNER_TOKEN_REDACTED)
+    expect(cachedAuthJson).not.toContain('partner-token')
     expect(JSON.stringify(accountInfo)).not.toContain('partner-token')
     expect(accountInfo.toString()).not.toContain('partner-token')
 
-    const rehydrated = JSON.parse(JSON.stringify(accountInfo.getAuth())) as PartnerAuthorizeResponse
+    const persistableAuthJson = JSON.stringify(partnerAuthorizeResponseForPersistence(cachedAuth))
+    expect(persistableAuthJson).toContain('partner-token')
+    expect(persistableAuthJson).not.toContain(PARTNER_TOKEN_REDACTED)
+
+    const rehydrated = JSON.parse(persistableAuthJson) as PartnerAuthorizeResponse
     const restoredAccountInfo = new InMemoryPartnerAccountInfo()
     restoredAccountInfo.setAuth(rehydrated)
     expect(restoredAccountInfo.getPartnerToken()).toBe('partner-token')
@@ -1865,14 +1885,18 @@ describe('InMemoryPartnerAccountInfo', () => {
     ).toThrow(B2PartnerAuthorizationError)
   })
 
-  it('keeps non-extensible auth data enumerable while adding inspection redaction to a copy', () => {
+  it('keeps non-extensible auth data enumerable while documenting clone leakage', () => {
     const auth = Object.preventExtensions(partnerAuth())
 
     const redacted = redactPartnerAuthorizeResponse(auth)
 
     expect(redacted).not.toBe(auth)
     expect(Object.keys(redacted)).toContain('authorizationToken')
-    expect(JSON.stringify(redacted)).toContain('partner-token')
+    expect(JSON.stringify(redacted)).toContain(PARTNER_TOKEN_REDACTED)
+    expect(JSON.stringify(redacted)).not.toContain('partner-token')
+    expect(JSON.stringify({ ...redacted })).toContain('partner-token')
+    expect(JSON.stringify(structuredClone(redacted))).toContain('partner-token')
+    expect(JSON.stringify(Object.fromEntries(Object.entries(redacted)))).toContain('partner-token')
     expect(redacted.toString()).not.toContain('partner-token')
   })
 })
