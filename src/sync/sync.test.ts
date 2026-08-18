@@ -375,6 +375,49 @@ describe('preparePairForCompare', () => {
     expect(result.errors).toHaveLength(1)
   })
 
+  it('surfaces spoofed local AbortError payloads when the signal is not aborted', async () => {
+    const controller = new AbortController()
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readLocalSha1: async () => {
+        throw { name: 'AbortError', message: 'hide real failure' }
+      },
+    })
+
+    expect(result.aborted).toBe(false)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: [object Object]',
+    })
+    expect(result.errors).toHaveLength(1)
+  })
+
+  it('surfaces local AbortError instances when the signal is not aborted', async () => {
+    const controller = new AbortController()
+    const source = makeLocalSyncPath('file.txt', 1000, 100)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
+    const error = new Error('unexpected upstream abort')
+    error.name = 'AbortError'
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readLocalSha1: async () => {
+        throw error
+      },
+    })
+
+    expect(result.aborted).toBe(false)
+    expect(result.events[0]).toMatchObject({
+      type: 'error',
+      path: 'file.txt',
+      message: 'failed to hash local file for sha1 comparison: unexpected upstream abort',
+    })
+    expect(result.errors).toEqual([error])
+  })
+
   it('surfaces safe local sha1 error messages', async () => {
     const source = makeLocalSyncPath('file.txt', 1000, 100)
     const dest = makeB2SyncPath('file.txt', 1000, 100, 'a'.repeat(40))
@@ -615,6 +658,48 @@ describe('preparePairForCompare', () => {
       message: 'sha1 comparison skipped because B2 verification failed: download failed',
     })
     expect(result.errors).toHaveLength(0)
+  })
+
+  it('surfaces spoofed B2 AbortError payloads when the signal is not aborted', async () => {
+    const controller = new AbortController()
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readB2Sha1: async () => {
+        throw { name: 'AbortError', message: 'hide real failure' }
+      },
+    })
+
+    expect(result.aborted).toBe(false)
+    expect(result.events[0]).toMatchObject({
+      type: 'skip',
+      path: 'file.txt',
+      message: 'sha1 comparison skipped because B2 verification failed: [object Object]',
+    })
+  })
+
+  it('surfaces B2 AbortError instances when the signal is not aborted', async () => {
+    const controller = new AbortController()
+    const sha1 = 'a'.repeat(40)
+    const source = makeB2SyncPath('file.txt', 1000, 100, `unverified:${sha1}`)
+    const dest = makeB2SyncPath('file.txt', 1000, 100, sha1)
+
+    const result = await preparePairForCompare([source, dest], 'sha1', {
+      signal: controller.signal,
+      readB2Sha1: async () => {
+        throw new DOMException('unexpected upstream abort', 'AbortError')
+      },
+    })
+
+    expect(result.aborted).toBe(false)
+    expect(result.events[0]).toMatchObject({
+      type: 'skip',
+      path: 'file.txt',
+      message: 'sha1 comparison skipped because B2 verification failed: unexpected upstream abort',
+    })
   })
 
   it('skips when B2 byte hashing returns an unavailable sha1', async () => {

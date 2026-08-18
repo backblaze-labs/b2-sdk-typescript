@@ -88,6 +88,48 @@ describe('readStreamChunkWithTimeout', () => {
     await reader.cancel()
     reader.releaseLock()
   })
+
+  it.skipIf(isBun)(
+    'uses a default AbortError when a pending read aborts without a reason',
+    async () => {
+      const controller = new AbortController()
+      Object.defineProperty(controller.signal, 'reason', { value: undefined })
+      const reader = new ReadableStream<Uint8Array>().getReader()
+      const promise = readStreamChunkWithTimeout(reader, 1000, 'stalled', controller.signal)
+      const rejection = expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+
+      controller.abort()
+
+      await rejection
+      await reader.cancel()
+      reader.releaseLock()
+    },
+  )
+
+  it('rejects when the signal aborts during listener registration', async () => {
+    const reason = new DOMException('deploy shutdown', 'AbortError')
+    let aborted = false
+    const signal = {
+      get aborted() {
+        return aborted
+      },
+      get reason() {
+        return reason
+      },
+      addEventListener() {
+        aborted = true
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal
+    const reader = new ReadableStream<Uint8Array>().getReader()
+
+    try {
+      await expect(readStreamChunkWithTimeout(reader, 1000, 'stalled', signal)).rejects.toBe(reason)
+    } finally {
+      await reader.cancel()
+      reader.releaseLock()
+    }
+  })
 })
 
 describe('hashReadableStreamSha1', () => {

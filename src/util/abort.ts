@@ -1,5 +1,5 @@
 /**
- * Abort-signal helpers shared by the HTTP transport and Partner client.
+ * Abort-signal and cancellation-error helpers shared across SDK operations.
  *
  * @packageDocumentation
  */
@@ -13,6 +13,43 @@
  */
 export function abortReason(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('Aborted', 'AbortError')
+}
+
+/**
+ * Returns whether an error represents an abort.
+ *
+ * @param err - Unknown thrown value.
+ *
+ * @returns True for `Error` or `DOMException` instances named `AbortError`.
+ */
+export function isAbortError(err: unknown): boolean {
+  return isNamedError(err, 'AbortError')
+}
+
+/**
+ * Returns whether an error should be treated as the given signal's abort.
+ *
+ * @param signal - Controlling signal for the operation.
+ * @param err - Unknown thrown value.
+ *
+ * @returns True when the signal is aborted and `err` is either the signal's
+ * reason or a trusted `AbortError` instance.
+ */
+export function isSignalAbortError(signal: AbortSignal | undefined, err: unknown): boolean {
+  if (signal?.aborted !== true) return false
+  if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
+  return isAbortError(err)
+}
+
+/**
+ * Returns whether an error represents a timeout.
+ *
+ * @param err - Unknown thrown value.
+ *
+ * @returns True for `Error` or `DOMException` instances named `TimeoutError`.
+ */
+export function isTimeoutError(err: unknown): boolean {
+  return isNamedError(err, 'TimeoutError')
 }
 
 /**
@@ -69,5 +106,16 @@ export async function raceWithAbort<T>(
     return await Promise.race([promise, aborted])
   } finally {
     removeAbortListener?.()
+  }
+}
+
+function isNamedError(err: unknown, name: string): boolean {
+  try {
+    return (
+      (err instanceof DOMException || err instanceof Error) &&
+      (err as { readonly name: string }).name === name
+    )
+  } catch {
+    return false
   }
 }

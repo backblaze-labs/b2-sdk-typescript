@@ -1,6 +1,5 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
-import { toError } from '../util/to-error.ts'
 import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
@@ -30,18 +29,6 @@ export type LocalSha1Reader = (
  */
 export function formatHashError(error: Error): string {
   return sanitizeErrorReason(error)
-}
-
-/**
- * Returns whether an error represents an abort.
- *
- * @param err - Unknown thrown value.
- *
- * @returns True for AbortError values.
- */
-export function isAbortError(err: unknown): boolean {
-  const error = toError(err)
-  return error.name === 'AbortError'
 }
 
 /**

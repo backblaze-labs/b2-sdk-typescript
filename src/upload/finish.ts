@@ -4,6 +4,7 @@ import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
+import { isAbortError, isTimeoutError } from '../util/abort.ts'
 
 /** Context for safely finalizing a large file. */
 export interface FinishLargeFileContext {
@@ -90,18 +91,4 @@ function isAmbiguousFinishDispatchFailure(err: unknown, signal: AbortSignal | un
   if (signal?.aborted !== true) return false
   if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
   return isAbortError(err)
-}
-
-function isAbortError(err: unknown): boolean {
-  return (
-    (err instanceof DOMException && err.name === 'AbortError') ||
-    (err instanceof Error && err.name === 'AbortError')
-  )
-}
-
-function isTimeoutError(err: unknown): boolean {
-  return (
-    (err instanceof DOMException && err.name === 'TimeoutError') ||
-    (err instanceof Error && err.name === 'TimeoutError')
-  )
 }
