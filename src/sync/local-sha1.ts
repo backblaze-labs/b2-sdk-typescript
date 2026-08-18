@@ -1,6 +1,6 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { isAbortError as isAbortErrorValue } from '../util/abort.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
-import { toError } from '../util/to-error.ts'
 import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
@@ -40,8 +40,7 @@ export function formatHashError(error: Error): string {
  * @returns True for AbortError values.
  */
 export function isAbortError(err: unknown): boolean {
-  const error = toError(err)
-  return error.name === 'AbortError'
+  return isAbortErrorValue(err)
 }
 
 /**

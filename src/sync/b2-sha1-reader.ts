@@ -1,4 +1,5 @@
 import { IncrementalSha1 } from '../streams/hash.ts'
+import { abortReason, throwIfSignalAborted } from '../util/abort.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 
 const MAX_CONSECUTIVE_EMPTY_READ_CHUNKS = 1024
@@ -45,7 +46,7 @@ async function readRawStreamChunkWithTimeout(
   stalledMessage: string,
   signal?: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
-  signal?.throwIfAborted()
+  throwIfSignalAborted(signal)
 
   let timeout: ReturnType<typeof setTimeout> | undefined
   let removeAbortListener: (() => void) | undefined
@@ -62,7 +63,7 @@ async function readRawStreamChunkWithTimeout(
     signal === undefined
       ? undefined
       : new Promise<never>((_, reject) => {
-          const onAbort = () => reject(signal.reason ?? new Error('aborted'))
+          const onAbort = () => reject(abortReason(signal))
           signal.addEventListener('abort', onAbort, { once: true })
           removeAbortListener = () => signal.removeEventListener('abort', onAbort)
         })

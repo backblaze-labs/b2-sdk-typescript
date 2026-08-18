@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { deferred } from '../test-utils/index.ts'
-import { raceWithAbort } from './abort.ts'
+import { isAbortError, raceWithAbort } from './abort.ts'
+
+describe('isAbortError', () => {
+  it('identifies values named AbortError', () => {
+    const error = new Error('aborted')
+    error.name = 'AbortError'
+
+    expect(isAbortError(new DOMException('aborted', 'AbortError'))).toBe(true)
+    expect(isAbortError(error)).toBe(true)
+    expect(isAbortError(new Error('not aborted'))).toBe(false)
+    expect(isAbortError('AbortError')).toBe(false)
+  })
+})
 
 describe('raceWithAbort', () => {
   it('throws immediately and observes a pre-aborted request promise', async () => {

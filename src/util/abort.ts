@@ -16,6 +16,22 @@ export function abortReason(signal: AbortSignal): unknown {
 }
 
 /**
+ * Returns whether an error represents an abort.
+ *
+ * @param err - Unknown thrown value.
+ *
+ * @returns True for values named `AbortError`.
+ */
+export function isAbortError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'name' in err &&
+    (err as { readonly name?: unknown }).name === 'AbortError'
+  )
+}
+
+/**
  * Throws the abort reason if the signal is already aborted; otherwise returns.
  *
  * @param signal - The signal to check, or undefined to skip the check.
