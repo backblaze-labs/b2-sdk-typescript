@@ -19,6 +19,26 @@ describe('isAbortError', () => {
     expect(isAbortError({ name: 'AbortError', message: 'hide real failure' })).toBe(false)
     expect(isAbortError(inherited)).toBe(false)
   })
+
+  it('rejects values that throw while being classified', () => {
+    const throwingPrototype = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('prototype trap')
+        },
+      },
+    )
+    const throwingName = new Proxy(new Error('aborted'), {
+      get(target, prop, receiver) {
+        if (prop === 'name') throw new Error('name trap')
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+
+    expect(isAbortError(throwingPrototype)).toBe(false)
+    expect(isAbortError(throwingName)).toBe(false)
+  })
 })
 
 describe('isTimeoutError', () => {

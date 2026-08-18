@@ -95,8 +95,12 @@ export async function raceWithAbort<T>(
 }
 
 function isNamedError(err: unknown, name: string): boolean {
-  return (
-    (err instanceof DOMException || err instanceof Error) &&
-    (err as { readonly name: string }).name === name
-  )
+  try {
+    return (
+      (err instanceof DOMException || err instanceof Error) &&
+      (err as { readonly name: string }).name === name
+    )
+  } catch {
+    return false
+  }
 }
