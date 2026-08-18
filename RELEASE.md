@@ -203,6 +203,31 @@ node --input-type=module -e "
 "
 ```
 
+Before publishing, smoke the packed tarball that was produced from the bumped
+checkout. This verifies the runtime `VERSION` matches the installed package
+manifest, resolves every public subpath including `/partner` and `/backup`
+through both ESM and CJS, and contains no source or secret-bearing paths such
+as `src/`, `coverage/`, `node_modules/`, `.env`, or `.npmrc`:
+
+```bash
+pnpm pack --pack-destination /tmp/b2-smoke
+pnpm run smoke:published -- /tmp/b2-smoke/backblaze-labs-b2-sdk-<version>.tgz
+```
+
+After `npm view @backblaze-labs/b2-sdk dist-tags` shows `latest: <version>`,
+repeat the same acceptance smoke against the registry:
+
+```bash
+pnpm run smoke:published -- @backblaze-labs/b2-sdk@latest
+```
+
+The helper imports the installed artifact in subprocesses with a scrubbed
+environment, throwaway HOME/cache directories, Node filesystem permissions
+limited to the temp project, child processes/workers disabled, and common Node
+network APIs blocked. Keep it out of credentialed release jobs; it is intended
+for maintainer acceptance checks after the release artifact or registry package
+is available.
+
 ---
 
 ## Pre-releases (alpha, beta, rc)
