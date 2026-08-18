@@ -103,9 +103,10 @@ jobs:
     # this job, skipping here also skips the comment. The preflight step below is
     # the inner fail-closed trust+token gate (also excludes Dependabot).
     if: >-
-      ${{ github.event_name == 'workflow_dispatch'
+      ${{ (github.event_name == 'workflow_dispatch'
           || (github.event.pull_request.head.repo.full_name == github.repository
-              && github.event.pull_request.draft == false) }}
+              && github.event.pull_request.draft == false))
+          && github.event.pull_request.user.login != 'dependabot[bot]' }}
     # READ ONLY. This job installs dependencies and runs the target repository's
     # own checks, so it must never hold PR-write (or any outward) authority.
     permissions:

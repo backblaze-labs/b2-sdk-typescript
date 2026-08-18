@@ -25,6 +25,14 @@ pnpm clean           # rm -rf dist docs
 
 CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and the coverage gate configured in `vitest.coverage.config.ts` (97% statements, 98% lines, 97% functions, 91% branches).
 
+## CI does not run on Dependabot PRs
+
+Every job in the pull-request-triggered workflows (`ci`, `examples`, `security`, `integration`, `quality-run-demo`) is guarded with `if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}` (ANDed into the existing fork/draft guards in `integration` and `quality-run-demo`), so a Dependabot PR skips all CI. The guard keys on the PR author, not the triggering actor, so a human re-run cannot start CI on a Dependabot PR either. `docs` (push to `main`) and `release` (tag push) never run on PRs, so they need no guard.
+
+Dependency updates are handled manually via a single consolidated PR rather than merging Dependabot's per-package PRs (this keeps one coherent lockfile and one formatting pass; see the deps-consolidation commits in the history). Dependabot may still open PRs for visibility, but they do not consume CI.
+
+When you add a new job to any pull-request-triggered workflow, add the same `if` guard (and AND it into any existing `if`).
+
 ## Test file naming convention
 
 | Pattern | Where it runs |

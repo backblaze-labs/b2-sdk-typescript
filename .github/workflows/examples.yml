@@ -23,6 +23,7 @@ permissions:
 jobs:
   typecheck-node:
     name: Typecheck (Node ${{ matrix.node-version }})
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -43,6 +44,7 @@ jobs:
 
   typecheck-bun:
     name: Typecheck (Bun)
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,6 +66,7 @@ jobs:
 
   smoke-examples:
     name: Smoke-run examples (B2Simulator)
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,6 +132,7 @@ jobs:
 
   typecheck-deno:
     name: Typecheck (Deno)
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

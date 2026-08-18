@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     # Fork PRs can't access secrets; skip rather than fail loudly. Same-repo
     # PRs and pushes to main do run.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       # Run matrix entries one at a time. The integration tests share a single
@@ -77,7 +77,7 @@ jobs:
     # as an integration failure (sharp signal) rather than a confusing
     # example-script failure.
     needs: integration
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       # Same reason as the integration job: real-examples uses a separate
