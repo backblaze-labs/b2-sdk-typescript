@@ -100,8 +100,8 @@ export interface UnfinishedLargeFileMetadata {
   readonly action?: FileAction
   /** When present, always 0 for unfinished large files. */
   readonly contentLength?: number
-  /** When present, always `'none'` for unfinished large files. */
-  readonly contentSha1?: string
+  /** SHA-1 checksum of the content, or null if not available for unfinished large files. */
+  readonly contentSha1?: string | null
   /** When present, always null for unfinished large files. */
   readonly contentMd5?: string | null
   /** Object Lock retention settings for this unfinished file, when readable. */

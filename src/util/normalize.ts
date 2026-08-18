@@ -37,13 +37,13 @@ export function normalizeSha1(raw: string | null | undefined): string | null {
  * substitution was needed, so callers paying for change detection
  * (e.g. React memo) see referential stability.
  *
- * @typeParam T - Any object with a `contentSha1: string | null` field.
+ * @typeParam T - Any object with a `contentSha1?: string | null` field.
  *
  * @param fv - The wire-shape file-version object.
  *
  * @returns Either `fv` unchanged or a shallow copy with `contentSha1: null`.
  */
-export function normalizeFileVersionSha1<T extends { readonly contentSha1: string | null }>(
+export function normalizeFileVersionSha1<T extends { readonly contentSha1?: string | null }>(
   fv: T,
 ): T {
   return fv.contentSha1 === 'none' ? { ...fv, contentSha1: null } : fv
@@ -51,11 +51,11 @@ export function normalizeFileVersionSha1<T extends { readonly contentSha1: strin
 
 /**
  * Returns a new list-response object with `normalizeFileVersionSha1`
- * applied to every entry in `files`. Used at the `b2_list_file_names` /
- * `b2_list_file_versions` boundary so list output shares the same
- * SHA-1 semantics as the singular endpoints.
+ * applied to every entry in `files`. Used at file-version and unfinished
+ * large-file list boundaries so list output shares the same SHA-1 semantics
+ * as the singular endpoints.
  *
- * @typeParam F - Any object with a `contentSha1: string | null` field.
+ * @typeParam F - Any object with a `contentSha1?: string | null` field.
  * @typeParam R - The list-response shape (must have a `files` array of `F`).
  *
  * @param resp - The wire-shape list response.
@@ -63,7 +63,7 @@ export function normalizeFileVersionSha1<T extends { readonly contentSha1: strin
  * @returns A response with normalized `files`. `resp.files` is a new array.
  */
 export function normalizeFileVersionListSha1<
-  F extends { readonly contentSha1: string | null },
+  F extends { readonly contentSha1?: string | null },
   R extends { readonly files: readonly F[] },
 >(resp: R): R {
   return { ...resp, files: resp.files.map(normalizeFileVersionSha1) }
