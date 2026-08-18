@@ -6,11 +6,12 @@ import type {
   ReserveTrialCreateAccountResponse,
   ReserveTrialCreateAccountResult,
 } from '../types/partner.ts'
+import { APPLICATION_KEY_REDACTED, PARTNER_TOKEN_REDACTED } from './redaction-placeholders.ts'
 
-/** Placeholder used when a Partner token is serialized for logs or inspection. */
-export const PARTNER_TOKEN_REDACTED = '[redacted Partner token]'
-/** Placeholder used when an application key secret is serialized for logs or inspection. */
-export const APPLICATION_KEY_REDACTED = '[redacted application key]'
+export {
+  APPLICATION_KEY_REDACTED,
+  PARTNER_TOKEN_REDACTED,
+} from './redaction-placeholders.ts'
 
 /**
  * JSON-safe Partner authorize response with the Partner token replaced by a
@@ -74,65 +75,6 @@ export function partnerAuthorizeResponseToRedactedJson(
   return {
     ...auth,
     authorizationToken: PARTNER_TOKEN_REDACTED,
-  }
-}
-
-/**
- * Returns a plain Partner authorize response copy for trusted auth-cache persistence.
- *
- * Unlike `JSON.stringify(auth)`, this preserves `authorizationToken` so the
- * result can be stringified, stored securely, parsed, and passed back to
- * `PartnerAccountInfo.setAuth()`. Do not log this output.
- *
- * @param auth - Partner authorization response to persist.
- *
- * @returns A plain object with the live Partner token preserved.
- */
-export function partnerAuthorizeResponseToPersistableJson(
-  auth: PartnerAuthorizeResponse,
-): PartnerAuthorizeResponse {
-  const storageApi = auth.apiInfo.storageApi
-  const groupsApi = auth.apiInfo.groupsApi
-  const backupApi = auth.apiInfo.backupApi
-
-  return {
-    accountId: auth.accountId,
-    authorizationToken: auth.authorizationToken,
-    apiInfo: {
-      ...(storageApi !== undefined
-        ? {
-            storageApi: {
-              ...storageApi,
-              capabilities: [...storageApi.capabilities],
-            },
-          }
-        : {}),
-      ...(groupsApi !== undefined
-        ? {
-            groupsApi: {
-              ...groupsApi,
-              capabilities: [...groupsApi.capabilities],
-            },
-          }
-        : {}),
-      ...(backupApi !== undefined
-        ? {
-            backupApi: {
-              ...backupApi,
-              capabilities: [...backupApi.capabilities],
-            },
-          }
-        : {}),
-    },
-    ...(auth.groupsApiUrl !== undefined ? { groupsApiUrl: auth.groupsApiUrl } : {}),
-    ...(auth.backupApiUrl !== undefined ? { backupApiUrl: auth.backupApiUrl } : {}),
-    ...(auth.groupsCapabilities !== undefined
-      ? { groupsCapabilities: [...auth.groupsCapabilities] }
-      : {}),
-    ...(auth.backupCapabilities !== undefined
-      ? { backupCapabilities: [...auth.backupCapabilities] }
-      : {}),
-    applicationKeyExpirationTimestamp: auth.applicationKeyExpirationTimestamp,
   }
 }
 
@@ -201,8 +143,9 @@ export function reserveTrialCreateAccountResponseToRedactedJson(
  *
  * `JSON.stringify` no longer round-trips `authorizationToken` from protected
  * authorize responses. Persist trusted auth caches with
- * {@link partnerAuthorizeResponseToPersistableJson} before JSON serialization, or
- * read `authorizationToken` directly into secure storage before serializing.
+ * `partnerAuthorizeResponseForPersistence(auth)` only into encrypted or
+ * otherwise credential-grade storage, or read `authorizationToken` directly
+ * into secure storage before serializing.
  *
  * This does not make the object universally log-safe: object spread,
  * `Object.assign`, `Object.entries`, `structuredClone`, and serializers that

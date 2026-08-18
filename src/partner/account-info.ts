@@ -12,9 +12,9 @@ import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partn
  * Partner authorize responses redact `authorizationToken` when passed to
  * `JSON.stringify`, so do not persist `getAuth()` with direct JSON serialization.
  * For trusted durable caches, serialize the output of
- * `partnerAuthorizeResponseToPersistableJson(getAuth())` or store
- * `authorizationToken` directly in secure storage with the rest of the
- * authorize response metadata.
+ * `partnerAuthorizeResponseForPersistence(getAuth())` into encrypted or
+ * otherwise credential-grade storage, or store `authorizationToken` directly in
+ * secure storage with the rest of the authorize response metadata.
  */
 export interface PartnerAccountInfo {
   /** Store a fresh Partner authorization response, replacing any previous state. */

@@ -11,8 +11,8 @@
  */
 
 export type { PartnerAccountInfo } from '../partner/account-info.ts'
+export { partnerAuthorizeResponseForPersistence } from '../partner/auth-clone.ts'
 export { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
-export { partnerAuthorizeResponseToPersistableJson } from '../partner/redaction.ts'
 export type {
   ComputerBackup,
   DeleteComputerRequest,

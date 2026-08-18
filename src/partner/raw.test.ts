@@ -28,13 +28,13 @@ import { Capability } from '../types/auth.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
+import { partnerAuthorizeResponseForPersistence } from './auth-clone.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
   PARTNER_TOKEN_REDACTED,
-  partnerAuthorizeResponseToPersistableJson,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
@@ -1305,6 +1305,13 @@ describe('PartnerRawClient authorizePartner', () => {
     const authJson = JSON.stringify(auth)
     expect(authJson).toContain(PARTNER_TOKEN_REDACTED)
     expect(authJson).not.toContain('partner-token')
+    const poisonedCache = JSON.parse(authJson) as PartnerAuthorizeResponse
+    expect(() => new InMemoryPartnerAccountInfo().setAuth(poisonedCache)).toThrow(
+      B2PartnerAuthorizationError,
+    )
+    expect(() => new InMemoryPartnerAccountInfo().setAuth(poisonedCache)).toThrow(
+      'Partner authorization token was redacted',
+    )
 
     const accountInfo = new InMemoryPartnerAccountInfo()
     accountInfo.setAuth(auth)
@@ -1325,9 +1332,7 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(JSON.stringify(accountInfo)).not.toContain('partner-token')
     expect(accountInfo.toString()).not.toContain('partner-token')
 
-    const persistableAuthJson = JSON.stringify(
-      partnerAuthorizeResponseToPersistableJson(cachedAuth),
-    )
+    const persistableAuthJson = JSON.stringify(partnerAuthorizeResponseForPersistence(cachedAuth))
     expect(persistableAuthJson).toContain('partner-token')
     expect(persistableAuthJson).not.toContain(PARTNER_TOKEN_REDACTED)
 
@@ -1880,7 +1885,7 @@ describe('InMemoryPartnerAccountInfo', () => {
     ).toThrow(B2PartnerAuthorizationError)
   })
 
-  it('keeps non-extensible auth data enumerable while scoping JSON redaction', () => {
+  it('keeps non-extensible auth data enumerable while documenting clone leakage', () => {
     const auth = Object.preventExtensions(partnerAuth())
 
     const redacted = redactPartnerAuthorizeResponse(auth)
@@ -1890,6 +1895,8 @@ describe('InMemoryPartnerAccountInfo', () => {
     expect(JSON.stringify(redacted)).toContain(PARTNER_TOKEN_REDACTED)
     expect(JSON.stringify(redacted)).not.toContain('partner-token')
     expect(JSON.stringify({ ...redacted })).toContain('partner-token')
+    expect(JSON.stringify(structuredClone(redacted))).toContain('partner-token')
+    expect(JSON.stringify(Object.fromEntries(Object.entries(redacted)))).toContain('partner-token')
     expect(redacted.toString()).not.toContain('partner-token')
   })
 })

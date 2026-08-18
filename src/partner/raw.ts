@@ -60,8 +60,9 @@ export interface PartnerRawClientOptions {
    * `authorizedPartnerEndpointSuffixes` or a {@link UrlGuardedTransport} with a
    * locked `urlGuard`. Because Partner authorize responses redact
    * `authorizationToken` under `JSON.stringify`, durable caches should persist
-   * the output of `partnerAuthorizeResponseToPersistableJson(auth)` or another
-   * secure token-preserving representation.
+   * `partnerAuthorizeResponseForPersistence(auth)` only to encrypted or
+   * otherwise credential-grade storage, or use another secure token-preserving
+   * representation.
    */
   readonly transport: HttpTransport
   /**
@@ -70,7 +71,8 @@ export interface PartnerRawClientOptions {
    * clients can pass suffixes derived from trusted Partner authorization when
    * rehydrating an auth cache. Do not derive this cache with
    * `JSON.stringify(authorizePartner())`, which intentionally stores a redacted
-   * token placeholder instead of a usable Partner token.
+   * token placeholder instead of a usable Partner token. Rehydrating that
+   * placeholder fails fast.
    */
   readonly authorizedPartnerEndpointSuffixes?: readonly string[]
   /**
@@ -213,6 +215,7 @@ function normalizePartnerAuthorizeResponse(
     applicationKeyExpirationTimestamp: response.applicationKeyExpirationTimestamp,
   }
 
+  validatePartnerAuthorizeResponseShape(normalized)
   return redactPartnerAuthorizeResponse(normalized)
 }
 

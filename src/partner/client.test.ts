@@ -28,6 +28,7 @@ import {
 import type { PartnerAccountInfo } from './account-info.ts'
 import { PartnerClient, type PartnerClientOptions } from './client.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
+import { PARTNER_TOKEN_REDACTED } from './redaction.ts'
 
 function requestJsonBody(request: HttpRequest): unknown {
   if (typeof request.body !== 'string') throw new Error('expected JSON request body')
@@ -229,6 +230,51 @@ describe('PartnerClient facade', () => {
     expect(rendered).not.toContain('partner-token-secret')
     expect(rendered).not.toContain('application-key-secret')
     expect(rendered).toContain('[redacted')
+  })
+
+  it('rejects cached auth rehydrated from redacted JSON before requests', async () => {
+    const poisonedAuth = partnerAuthorizeResponse(PARTNER_TOKEN_REDACTED)
+    const partnerAccountInfo: PartnerAccountInfo = {
+      setAuth() {},
+      getAuth() {
+        return poisonedAuth
+      },
+      clear() {},
+      getPartnerToken() {
+        return poisonedAuth.authorizationToken
+      },
+      getGroupsApiUrl() {
+        return poisonedAuth.groupsApiUrl ?? null
+      },
+      getBackupApiUrl() {
+        return poisonedAuth.backupApiUrl ?? null
+      },
+      getAccountId() {
+        return poisonedAuth.accountId
+      },
+      getGroupsCapabilities() {
+        return poisonedAuth.groupsCapabilities ?? null
+      },
+      getBackupCapabilities() {
+        return poisonedAuth.backupCapabilities ?? null
+      },
+    }
+    const seenRequests: HttpRequest[] = []
+    const client = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      partnerAccountInfo,
+      transport: {
+        async send(request) {
+          seenRequests.push(request)
+          throw new Error('unexpected request')
+        },
+      },
+    })
+
+    await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
+    await expect(client.listGroups()).rejects.toThrow('Partner authorization token was redacted')
+    expect(seenRequests).toHaveLength(0)
   })
 
   it('paginates groups and group members through the simulator', async () => {

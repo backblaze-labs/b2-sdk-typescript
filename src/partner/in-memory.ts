@@ -2,7 +2,7 @@ import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type { AccountId, PartnerToken } from '../types/ids.ts'
 import type { PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
-import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
+import { clonePartnerAuthorizeResponse } from './auth-clone.ts'
 import {
   PARTNER_TOKEN_REDACTED,
   partnerAuthorizeResponseToRedactedJson,
@@ -17,40 +17,7 @@ export interface InMemoryPartnerAccountInfoJson {
 }
 
 function clonePartnerAuth(auth: PartnerAuthorizeResponse): PartnerAuthorizeResponse {
-  validatePartnerAuthorizeResponseShape(auth)
-
-  const groupsApi =
-    auth.apiInfo.groupsApi === undefined
-      ? undefined
-      : {
-          ...auth.apiInfo.groupsApi,
-          capabilities: [...auth.apiInfo.groupsApi.capabilities],
-          infoType: 'groupsApi' as const,
-        }
-  const backupApi =
-    auth.apiInfo.backupApi === undefined
-      ? undefined
-      : {
-          ...auth.apiInfo.backupApi,
-          capabilities: [...auth.apiInfo.backupApi.capabilities],
-          infoType: 'backupApi' as const,
-        }
-  const cloned: PartnerAuthorizeResponse = {
-    accountId: auth.accountId,
-    authorizationToken: auth.authorizationToken,
-    apiInfo: {
-      ...(auth.apiInfo.storageApi !== undefined ? { storageApi: auth.apiInfo.storageApi } : {}),
-      ...(groupsApi !== undefined ? { groupsApi } : {}),
-      ...(backupApi !== undefined ? { backupApi } : {}),
-    },
-    ...(groupsApi !== undefined ? { groupsApiUrl: groupsApi.groupsApiUrl } : {}),
-    ...(backupApi !== undefined ? { backupApiUrl: backupApi.backupApiUrl } : {}),
-    ...(groupsApi !== undefined ? { groupsCapabilities: groupsApi.capabilities } : {}),
-    ...(backupApi !== undefined ? { backupCapabilities: backupApi.capabilities } : {}),
-    applicationKeyExpirationTimestamp: auth.applicationKeyExpirationTimestamp,
-  }
-
-  return redactPartnerAuthorizeResponse(cloned)
+  return redactPartnerAuthorizeResponse(clonePartnerAuthorizeResponse(auth))
 }
 
 /**

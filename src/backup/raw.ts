@@ -27,8 +27,9 @@ export interface BackupRawClientOptions {
    * use `authorizedBackupEndpointSuffixes` or a transport with a locked
    * `urlGuard`. Because Partner authorize responses redact
    * `authorizationToken` under `JSON.stringify`, durable caches should persist
-   * the output of `partnerAuthorizeResponseToPersistableJson(auth)` or another
-   * secure token-preserving representation.
+   * `partnerAuthorizeResponseForPersistence(auth)` only to encrypted or
+   * otherwise credential-grade storage, or use another secure token-preserving
+   * representation.
    */
   readonly transport: HttpTransport
   /**
@@ -37,7 +38,8 @@ export interface BackupRawClientOptions {
    * direct raw clients can pass trusted suffixes derived from
    * `derivePartnerAllowedSuffixes()`. Do not derive this cache with
    * `JSON.stringify(authorizePartner())`, which intentionally stores a redacted
-   * token placeholder instead of a usable Partner token.
+   * token placeholder instead of a usable Partner token. Rehydrating that
+   * placeholder fails fast.
    */
   readonly authorizedBackupEndpointSuffixes?: readonly string[]
 }
