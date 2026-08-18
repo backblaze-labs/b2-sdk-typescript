@@ -4152,12 +4152,42 @@ describe('B2Simulator upload write-path validation', () => {
     const versions = await bucket.listFileVersions({ prefix: 'replicated/small.bin' })
     expect(versions.files[0]?.replicationStatus).toBe('PENDING')
 
+    const hidden = await bucket.hideFile('replicated/small.bin')
+    expect(hidden).not.toHaveProperty('replicationStatus')
+
+    const hiddenInfo = await client.raw.getFileInfo(apiUrl, authToken, { fileId: hidden.fileId })
+    expect(hiddenInfo).not.toHaveProperty('replicationStatus')
+
+    const versionsWithHide = await bucket.listFileVersions({ prefix: 'replicated/small.bin' })
+    const hiddenVersion = versionsWithHide.files.find((file) => file.fileId === hidden.fileId)
+    expect(hiddenVersion).toBeDefined()
+    expect(hiddenVersion).not.toHaveProperty('replicationStatus')
+
     const coveredLarge = await client.raw.startLargeFile(apiUrl, authToken, {
       bucketId: bucket.id,
       fileName: 'replicated/large.bin',
       contentType: 'application/octet-stream',
     })
     expect(coveredLarge.replicationStatus).toBe('PENDING')
+
+    await bucket.update({
+      replicationConfiguration: {
+        asReplicationDestination: null,
+        asReplicationSource: {
+          replicationRules: [
+            {
+              destinationBucketId: destination.id,
+              fileNamePrefix: 'replicated/',
+              includeExistingFiles: false,
+              isEnabled: false,
+              priority: 1,
+              replicationRuleName: 'replicated-prefix',
+            },
+          ],
+          sourceApplicationKeyId: applicationKeyId('source-application-key-id'),
+        },
+      },
+    })
 
     const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
       bucketId: bucket.id,
