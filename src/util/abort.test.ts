@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { deferred } from '../test-utils/index.ts'
-import { isAbortError, isTimeoutError, raceWithAbort } from './abort.ts'
+import { isAbortError, isSignalAbortError, isTimeoutError, raceWithAbort } from './abort.ts'
 
 describe('isAbortError', () => {
   it('identifies Error and DOMException values named AbortError', () => {
@@ -38,6 +38,27 @@ describe('isAbortError', () => {
 
     expect(isAbortError(throwingPrototype)).toBe(false)
     expect(isAbortError(throwingName)).toBe(false)
+  })
+})
+
+describe('isSignalAbortError', () => {
+  it('accepts the signal reason and trusted AbortError instances after signal aborts', () => {
+    const controller = new AbortController()
+    const reason = new Error('caller stopped')
+    controller.abort(reason)
+
+    expect(isSignalAbortError(controller.signal, reason)).toBe(true)
+    expect(isSignalAbortError(controller.signal, new DOMException('aborted', 'AbortError'))).toBe(
+      true,
+    )
+  })
+
+  it('rejects AbortError instances when the signal is not aborted', () => {
+    const controller = new AbortController()
+
+    expect(isSignalAbortError(controller.signal, new DOMException('aborted', 'AbortError'))).toBe(
+      false,
+    )
   })
 })
 

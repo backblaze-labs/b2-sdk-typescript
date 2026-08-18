@@ -628,6 +628,31 @@ describe('B2Folder', () => {
     )
   })
 
+  it('surfaces B2 list AbortError instances when the signal is not aborted', async () => {
+    const listFileVersions = vi
+      .fn()
+      .mockRejectedValue(new DOMException('unexpected upstream abort', 'AbortError'))
+    const errors: unknown[] = []
+    const folder = new B2Folder({ listFileVersions } as unknown as Bucket)
+    const controller = new AbortController()
+
+    await expect(
+      collect<B2SyncPath>(
+        folder.scan({
+          signal: controller.signal,
+          onError: (event) => errors.push(event),
+        }),
+      ),
+    ).rejects.toThrow('failed to scan B2 file versions')
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        path: '',
+        message: 'failed to scan B2 file versions: unexpected upstream abort',
+      }),
+    )
+  })
+
   it('rejects B2 objects in the reserved SDK temp namespace', async () => {
     const bucket = await client.createBucket({
       bucketName: 'reserved-temp-bucket',

@@ -1,7 +1,8 @@
 import { mapConcurrent } from '../../upload/concurrency.ts'
+import { isSignalAbortError } from '../../util/abort.ts'
 import { normalizeVerifiableSha1 } from '../../util/sha1.ts'
 import { toError } from '../../util/to-error.ts'
-import { formatHashError, isAbortError, type LocalSha1Reader } from '../local-sha1.ts'
+import { formatHashError, type LocalSha1Reader } from '../local-sha1.ts'
 import type { SyncPair } from '../pairing.ts'
 import { selectB2ComparableSha1, syncSha1StateOf } from '../sha1-metadata.ts'
 import type {
@@ -309,7 +310,7 @@ async function prepareLocalPathSha1(
       aborted: false,
     }
   } catch (err) {
-    if (options.signal?.aborted || isAbortError(err)) {
+    if (isSignalAbortError(options.signal, err)) {
       return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
     }
     const error = toError(err)
@@ -411,7 +412,7 @@ async function prepareB2PathSha1(
       aborted: false,
     }
   } catch (err) {
-    if (options.signal?.aborted || isAbortError(err)) {
+    if (isSignalAbortError(options.signal, err)) {
       return { path, bytesHashed: 0, bytesVerified: 0, aborted: true }
     }
     const error = toError(err)

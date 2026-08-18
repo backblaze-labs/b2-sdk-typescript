@@ -4,8 +4,6 @@ import { assertSameScannedRegularFile } from './local-file-identity.ts'
 import { normalizeSha1TimeoutMillis } from './sha1-options.ts'
 import type { LocalSyncPath } from './types.ts'
 
-export { isAbortError } from '../util/abort.ts'
-
 /** Options for reading a local file SHA-1 digest. */
 export interface LocalSha1ReadOptions {
   /**

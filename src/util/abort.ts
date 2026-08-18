@@ -20,10 +20,25 @@ export function abortReason(signal: AbortSignal): unknown {
  *
  * @param err - Unknown thrown value.
  *
- * @returns True for values named `AbortError`.
+ * @returns True for `Error` or `DOMException` instances named `AbortError`.
  */
 export function isAbortError(err: unknown): boolean {
   return isNamedError(err, 'AbortError')
+}
+
+/**
+ * Returns whether an error should be treated as the given signal's abort.
+ *
+ * @param signal - Controlling signal for the operation.
+ * @param err - Unknown thrown value.
+ *
+ * @returns True when the signal is aborted and `err` is either the signal's
+ * reason or a trusted `AbortError` instance.
+ */
+export function isSignalAbortError(signal: AbortSignal | undefined, err: unknown): boolean {
+  if (signal?.aborted !== true) return false
+  if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
+  return isAbortError(err)
 }
 
 /**

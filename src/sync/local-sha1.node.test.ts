@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { sha1Hex } from '../streams/hash.ts'
-import { formatHashError, isAbortError, readLocalSha1File } from './local-sha1.ts'
+import { formatHashError, readLocalSha1File } from './local-sha1.ts'
 import type { LocalFileIdentity, LocalSyncPath } from './types.ts'
 
 const processLike = (globalThis as { process?: { platform?: string } }).process
@@ -161,12 +161,5 @@ describe('formatHashError', () => {
     const error = new Error('/tmp/file.txt')
     error.name = ''
     expect(formatHashError(error)).toBe('Error')
-  })
-})
-
-describe('isAbortError', () => {
-  it('identifies DOM abort errors', () => {
-    expect(isAbortError(new DOMException('aborted', 'AbortError'))).toBe(true)
-    expect(isAbortError(new Error('not aborted'))).toBe(false)
   })
 })
