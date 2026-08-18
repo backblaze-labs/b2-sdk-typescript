@@ -18,27 +18,37 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   checkProbeCoverage,
   packageSpecifier,
   publicExportProbes,
+  walkFiles,
 } from './package-export-probes.mjs'
 
 const packageName = '@backblaze-labs/b2-sdk'
-const repoPackage = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
-const expectedVersion = repoPackage.version
 const pnpm = process.env.PNPM ?? 'pnpm'
 const callerCwd = process.cwd()
-const installTimeoutMs = Number(process.env.B2_SMOKE_INSTALL_TIMEOUT_MS ?? 5 * 60_000)
-const importTimeoutMs = Number(process.env.B2_SMOKE_IMPORT_TIMEOUT_MS ?? 60_000)
+const installTimeoutMs = positiveNumberEnv('B2_SMOKE_INSTALL_TIMEOUT_MS', 5 * 60_000)
+const importTimeoutMs = positiveNumberEnv('B2_SMOKE_IMPORT_TIMEOUT_MS', 60_000)
+const installRetries = nonNegativeIntegerEnv('B2_SMOKE_INSTALL_RETRIES', 2)
 const maxBuffer = 10 * 1024 * 1024
 
 class SmokeFailure extends Error {}
 
 function fail(message) {
   throw new SmokeFailure(message)
+}
+
+function positiveNumberEnv(name, fallback) {
+  const value = Number(process.env[name] ?? fallback)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function nonNegativeIntegerEnv(name, fallback) {
+  const value = Number(process.env[name] ?? fallback)
+  return Number.isInteger(value) && value >= 0 ? value : fallback
 }
 
 function parseArgs(argv) {
@@ -143,7 +153,9 @@ function run({ args, command, cwd, displayArgs = args, env, redactions = [], tim
   const stderr = redactText(result.stderr ?? '', redactions)
 
   if (result.status !== 0 || result.error) {
-    const reason = result.error?.message ?? `exit ${result.status ?? 'unknown'}`
+    const reason =
+      result.error?.message ??
+      (result.signal ? `signal ${result.signal}` : `exit ${result.status ?? 'unknown'}`)
     const output = [stdout, stderr].filter(Boolean).join('\n')
     fail(
       `${commandText(command, displayArgs)} failed in ${cwd} after ${elapsed}ms: ${reason}${
@@ -157,6 +169,74 @@ function run({ args, command, cwd, displayArgs = args, env, redactions = [], tim
   return { elapsed, stderr, stdout }
 }
 
+function shouldRetryInstallFailure(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /\b(?:EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|ENOTFOUND)\b|ERR_PNPM_(?:FETCH|META_FETCH|TARBALL_FETCH)|fetch failed|network|registry|socket|timeout|transient/i.test(
+    message,
+  )
+}
+
+function runInstall(project, normalizedPackageSpec, normalizedRedactedPackageSpec, redactions) {
+  const args = ['add', '--ignore-scripts', '--', normalizedPackageSpec]
+  const displayArgs = ['add', '--ignore-scripts', '--', normalizedRedactedPackageSpec]
+  const attempts = installRetries + 1
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return run({
+        args,
+        command: pnpm,
+        cwd: project,
+        displayArgs,
+        redactions,
+        timeoutMs: installTimeoutMs,
+      })
+    } catch (error) {
+      if (attempt === attempts || !shouldRetryInstallFailure(error)) throw error
+
+      const message = error instanceof Error ? error.message : String(error)
+      const firstLine = message.split('\n')[0]
+      console.error(
+        `smoke-published-package: install attempt ${attempt}/${attempts} failed; retrying: ${firstLine}`,
+      )
+    }
+  }
+
+  fail(`${commandText(pnpm, displayArgs)} failed after ${attempts} attempts`)
+}
+
+const forbiddenPathSegments = new Set(['coverage', 'node_modules', 'src'])
+const forbiddenTopLevelDirs = ['src', 'coverage', 'node_modules']
+const forbiddenFilePatterns = [
+  /^\.env(?:$|\.)/i,
+  /^\.npmrc$/i,
+  /^(?:b2-live|integration)\.env$/i,
+  /^(?:id_rsa|id_dsa|id_ecdsa|id_ed25519)$/i,
+  /\.(?:key|p12|pfx|pem)$/i,
+  /(?:^|[._-])(?:credential|credentials|password|passwd|private[-_]?key|secret|token)(?:[._-]|$)/i,
+]
+
+function checkForbiddenPackageContents(realPackageDir) {
+  for (const dir of forbiddenTopLevelDirs) {
+    if (existsSync(join(realPackageDir, dir))) {
+      fail(`installed package contains forbidden path ${dir}/`)
+    }
+  }
+
+  for (const file of walkFiles(realPackageDir)) {
+    const rel = relative(realPackageDir, file).split(sep).join('/')
+    const segments = rel.split('/')
+    const name = segments.at(-1) ?? rel
+    const forbiddenSegment = segments.find((segment) => forbiddenPathSegments.has(segment))
+    if (forbiddenSegment) {
+      fail(`installed package contains forbidden path ${rel}`)
+    }
+    if (forbiddenFilePatterns.some((pattern) => pattern.test(name))) {
+      fail(`installed package contains forbidden file ${rel}`)
+    }
+  }
+}
+
 function checkInstalledPackageFiles(project) {
   const packageDir = join(project, 'node_modules', '@backblaze-labs', 'b2-sdk')
   if (!existsSync(packageDir)) {
@@ -168,8 +248,8 @@ function checkInstalledPackageFiles(project) {
   if (installedPkg.name !== packageName) {
     fail(`installed package name should be ${packageName} (found ${installedPkg.name})`)
   }
-  if (installedPkg.version !== expectedVersion) {
-    fail(`installed package VERSION should be ${expectedVersion} (found ${installedPkg.version})`)
+  if (typeof installedPkg.version !== 'string' || installedPkg.version.length === 0) {
+    fail('installed package version should be a non-empty string')
   }
   if (!installedPkg.exports || typeof installedPkg.exports !== 'object') {
     fail('installed package has no package.json#exports map')
@@ -218,10 +298,7 @@ function checkInstalledPackageFiles(project) {
   }
 
   checkProbeCoverage(installedPkg, fail)
-
-  if (existsSync(join(realPackageDir, 'src'))) {
-    fail('installed package contains top-level src/')
-  }
+  checkForbiddenPackageContents(realPackageDir)
 
   return { dctsTypeEntries, installedPkg, referencedFiles }
 }
@@ -272,7 +349,7 @@ function buildRuntimeProbeSource(format, pkg) {
 
   lines.push('function assert(ok, msg) { if (!ok) throw new Error(msg) }')
   lines.push(`const expectedProbeCount = ${publicExportProbes.length}`)
-  lines.push(`const expectedVersion = ${JSON.stringify(expectedVersion)}`)
+  lines.push(`const expectedVersion = ${JSON.stringify(pkg.version)}`)
 
   publicExportProbes.forEach((probe) => {
     const specifier = packageSpecifier(pkg.name, probe.subpath)
@@ -290,7 +367,7 @@ function buildRuntimeProbeSource(format, pkg) {
     if (probe.subpath === '.') {
       lines.push(
         `  assert(entry.VERSION === expectedVersion, ${JSON.stringify(
-          `VERSION should be ${expectedVersion}`,
+          `VERSION should match installed package.json version ${pkg.version}`,
         )})`,
       )
     }
@@ -376,14 +453,7 @@ try {
   )
 
   console.log(`Installing ${redactedPackageSpec} in ${project}`)
-  run({
-    args: ['add', '--ignore-scripts', '--', normalizedPackageSpec],
-    command: pnpm,
-    cwd: project,
-    displayArgs: ['add', '--ignore-scripts', '--', normalizedRedactedPackageSpec],
-    redactions,
-    timeoutMs: installTimeoutMs,
-  })
+  runInstall(project, normalizedPackageSpec, normalizedRedactedPackageSpec, redactions)
 
   const { dctsTypeEntries, installedPkg, referencedFiles } = checkInstalledPackageFiles(project)
   runImportProbe(project, installedPkg, 'esm')

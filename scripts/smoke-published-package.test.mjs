@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,15 +21,18 @@ const script = join(repo, 'scripts', 'smoke-published-package.mjs')
 const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
 
 function runNode(args, options) {
+  const { env, ...spawnOptions } = options ?? {}
   return spawnSync(process.execPath, args, {
     encoding: 'utf8',
     env: {
       ...process.env,
       B2_SMOKE_IMPORT_TIMEOUT_MS: '10000',
       B2_SMOKE_INSTALL_TIMEOUT_MS: '10000',
+      B2_SMOKE_INSTALL_RETRIES: '0',
+      ...env,
     },
     maxBuffer: 10 * 1024 * 1024,
-    ...options,
+    ...spawnOptions,
   })
 }
 
@@ -40,6 +44,36 @@ function runNpm(args, cwd) {
   })
   assert.equal(result.status, 0, result.stderr || result.stdout)
   return result
+}
+
+function commandPath(command) {
+  const result = spawnSync('which', [command], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  return result.stdout.trim()
+}
+
+function writeFlakyPnpm(root) {
+  const file = join(root, 'flaky-pnpm.mjs')
+  writeFileSync(
+    file,
+    `#!/usr/bin/env node
+import { existsSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+
+const marker = process.env.FAKE_PNPM_MARKER
+if (!marker) throw new Error('FAKE_PNPM_MARKER is required')
+if (!existsSync(marker)) {
+  writeFileSync(marker, 'failed once')
+  console.error('transient registry failure')
+  process.exit(1)
+}
+
+const result = spawnSync(process.env.REAL_PNPM, process.argv.slice(2), { stdio: 'inherit' })
+process.exit(result.status ?? 1)
+`,
+  )
+  chmodSync(file, 0o755)
+  return file
 }
 
 function ensureParent(file) {
@@ -96,12 +130,12 @@ try {
 `
 }
 
-function esmExports(subpath) {
+function esmExports(subpath, version = pkg.version) {
   switch (subpath) {
     case '.':
       return `
 export function B2Client() {}
-export const VERSION = ${JSON.stringify(pkg.version)}
+export const VERSION = ${JSON.stringify(version)}
 export const BucketType = { AllPublic: 'allPublic' }
 `
     case './raw':
@@ -160,12 +194,12 @@ export const trustedUnsafeS3PresignOptIn = {}
   }
 }
 
-function cjsExports(subpath) {
+function cjsExports(subpath, version = pkg.version) {
   switch (subpath) {
     case '.':
       return `
 exports.B2Client = function B2Client() {}
-exports.VERSION = ${JSON.stringify(pkg.version)}
+exports.VERSION = ${JSON.stringify(version)}
 exports.BucketType = { AllPublic: 'allPublic' }
 `
     case './raw':
@@ -230,9 +264,11 @@ exports.trustedUnsafeS3PresignOptIn = {}
   }
 }
 
-function createMaliciousFixture(root) {
+function createMaliciousFixture(root, options = {}) {
+  const { extraFiles = [], version = pkg.version } = options
   const packageRoot = join(root, 'fixture')
   const secretPath = join(root, 'caller-secret.txt')
+  const extraFileRoots = [...new Set(extraFiles.map(({ path }) => path.split('/')[0]))]
   mkdirSync(packageRoot, { recursive: true })
   writeFileSync(secretPath, 'SHOULD_NOT_LEAK')
   writeFileSync(join(packageRoot, 'README.md'), '# fixture\n')
@@ -243,10 +279,10 @@ function createMaliciousFixture(root) {
     `${JSON.stringify(
       {
         name: pkg.name,
-        version: pkg.version,
+        version,
         type: 'module',
         exports: pkg.exports,
-        files: ['dist', 'README.md', 'LICENSE', 'CHANGELOG.md'],
+        files: ['dist', 'README.md', 'LICENSE', 'CHANGELOG.md', ...extraFileRoots],
       },
       null,
       2,
@@ -257,19 +293,23 @@ function createMaliciousFixture(root) {
     writeExportFile(
       packageRoot,
       conditions.import.default,
-      `${maliciousPrelude('esm', secretPath)}\n${esmExports(subpath)}`,
+      `${maliciousPrelude('esm', secretPath)}\n${esmExports(subpath, version)}`,
     )
     writeExportFile(
       packageRoot,
       conditions.require.default,
-      `${maliciousPrelude('cjs', secretPath)}\n${cjsExports(subpath)}`,
+      `${maliciousPrelude('cjs', secretPath)}\n${cjsExports(subpath, version)}`,
     )
     writeExportFile(packageRoot, conditions.import.types, 'export {}\n')
     writeExportFile(packageRoot, conditions.require.types, 'export {}\n')
   }
 
+  for (const { contents, path } of extraFiles) {
+    writeExportFile(packageRoot, path, contents)
+  }
+
   runNpm(['pack', '--silent', '--pack-destination', root], packageRoot)
-  return join(root, `${pkg.name.replace(/^@/, '').replaceAll('/', '-')}-${pkg.version}.tgz`)
+  return join(root, `${pkg.name.replace(/^@/, '').replaceAll('/', '-')}-${version}.tgz`)
 }
 
 test('smokes a relative tarball while blocking env, fs, and network access', () => {
@@ -284,6 +324,55 @@ test('smokes a relative tarball while blocking env, fs, and network access', () 
     assert.match(result.stdout, /esm smoke OK/)
     assert.match(result.stdout, /cjs smoke OK/)
     assert.doesNotMatch(result.stdout + result.stderr, /SHOULD_NOT_LEAK/)
+  } finally {
+    rmSync(root, { force: true, recursive: true })
+  }
+})
+
+test('accepts a package version that differs from the checkout', () => {
+  const root = mkdtempSync(join(tmpdir(), 'b2-sdk-smoke-test-'))
+  try {
+    const tarball = createMaliciousFixture(root, { version: '9.9.9' })
+    const result = runNode([script, `./${basename(tarball)}`], { cwd: root })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.match(result.stdout, /VERSION = 9\.9\.9/)
+  } finally {
+    rmSync(root, { force: true, recursive: true })
+  }
+})
+
+test('rejects forbidden secret-bearing package contents', () => {
+  const root = mkdtempSync(join(tmpdir(), 'b2-sdk-smoke-test-'))
+  try {
+    const tarball = createMaliciousFixture(root, {
+      extraFiles: [{ contents: 'B2_APPLICATION_KEY=secret\n', path: 'coverage/b2-live.env' }],
+    })
+    const result = runNode([script, tarball], { cwd: root })
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /forbidden path coverage\//)
+  } finally {
+    rmSync(root, { force: true, recursive: true })
+  }
+})
+
+test('retries a transient package install failure', () => {
+  const root = mkdtempSync(join(tmpdir(), 'b2-sdk-smoke-test-'))
+  try {
+    const tarball = createMaliciousFixture(root)
+    const marker = join(root, 'pnpm-failed-once')
+    const fakePnpm = writeFlakyPnpm(root)
+    const result = runNode([script, tarball], {
+      cwd: root,
+      env: {
+        B2_SMOKE_INSTALL_RETRIES: '1',
+        FAKE_PNPM_MARKER: marker,
+        PNPM: fakePnpm,
+        REAL_PNPM: commandPath('pnpm'),
+      },
+    })
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    assert.equal(existsSync(marker), true)
+    assert.match(result.stderr, /install attempt 1\/2 failed; retrying/)
   } finally {
     rmSync(root, { force: true, recursive: true })
   }

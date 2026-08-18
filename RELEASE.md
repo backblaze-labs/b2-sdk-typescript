@@ -204,9 +204,10 @@ node --input-type=module -e "
 ```
 
 Before publishing, smoke the packed tarball that was produced from the bumped
-checkout. This verifies the installed package has the same version as this
-checkout, resolves every public subpath including `/partner` and `/backup`
-through both ESM and CJS, and contains no `src/` leak:
+checkout. This verifies the runtime `VERSION` matches the installed package
+manifest, resolves every public subpath including `/partner` and `/backup`
+through both ESM and CJS, and contains no source or secret-bearing paths such
+as `src/`, `coverage/`, `node_modules/`, `.env`, or `.npmrc`:
 
 ```bash
 pnpm pack --pack-destination /tmp/b2-smoke
