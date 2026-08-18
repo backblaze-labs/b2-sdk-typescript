@@ -1,15 +1,14 @@
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 export function walkFiles(dir) {
   /** @type {string[]} */
   const files = []
-  for (const entry of readdirSync(dir)) {
-    const file = join(dir, entry)
-    const stats = statSync(file)
-    if (stats.isDirectory()) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = join(dir, entry.name)
+    if (entry.isDirectory()) {
       files.push(...walkFiles(file))
-    } else {
+    } else if (entry.isFile()) {
       files.push(file)
     }
   }

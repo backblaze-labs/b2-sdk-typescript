@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { walkFiles } from './package-export-probes.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const script = join(repo, 'scripts', 'smoke-published-package.mjs')
@@ -58,7 +67,7 @@ try {
   if (String(error?.message ?? '').startsWith('filesystem secret was readable')) throw error
 }
 try {
-  net.connect(9, '127.0.0.1')
+  new net.Socket().connect(9, '127.0.0.1')
   throw new Error('network API was not blocked')
 } catch (error) {
   if (String(error?.message ?? '') === 'network API was not blocked') throw error
@@ -79,7 +88,7 @@ try {
   if (String(error && error.message || '').startsWith('filesystem secret was readable')) throw error
 }
 try {
-  net.connect(9, '127.0.0.1')
+  new net.Socket().connect(9, '127.0.0.1')
   throw new Error('network API was not blocked')
 } catch (error) {
   if (String(error && error.message || '') === 'network API was not blocked') throw error
@@ -308,4 +317,19 @@ test('rejects dash-prefixed package specs', () => {
   const result = runNode([script, '--', '--registry=http://127.0.0.1:9'], { cwd: repo })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /package spec must not begin with "-"/)
+})
+
+test('walkFiles skips symlinks instead of following them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'b2-sdk-walk-test-'))
+  try {
+    mkdirSync(join(root, 'dir'))
+    writeFileSync(join(root, 'dir', 'file.txt'), 'ok')
+    symlinkSync(root, join(root, 'dir', 'loop'))
+    symlinkSync('/etc/passwd', join(root, 'dir', 'outside-file'))
+
+    const files = walkFiles(root)
+    assert.deepEqual(files, [join(root, 'dir', 'file.txt')])
+  } finally {
+    rmSync(root, { force: true, recursive: true })
+  }
 })
