@@ -203,6 +203,14 @@ node --input-type=module -e "
 "
 ```
 
+For the release acceptance smoke that verifies the installed package has the
+same version as this checkout, resolves `/partner` and `/backup` through both
+ESM and CJS, and contains no `src/` leak, run:
+
+```bash
+node scripts/smoke-published-package.mjs @backblaze-labs/b2-sdk@latest
+```
+
 ---
 
 ## Pre-releases (alpha, beta, rc)
