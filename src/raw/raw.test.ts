@@ -450,6 +450,75 @@ describe('RawClient upload URL request controls', () => {
     )
   })
 
+  it('keeps EncryptionKey SSE-C material out of diagnostics on JSON body failures', async () => {
+    const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(4))
+    const wireBodies: string[] = []
+    const diagnostics: unknown[] = []
+    const errors: string[] = []
+    const transport: HttpTransport = {
+      async send(request: HttpRequest): Promise<HttpResponse> {
+        wireBodies.push(String(request.body))
+        diagnostics.push({
+          method: request.method,
+          url: request.url,
+          headers: request.headers,
+        })
+        return {
+          status: 500,
+          headers: new Headers(),
+          body: null,
+          json: async () => {
+            throw new Error(`forced JSON failure for ${request.url}`)
+          },
+          text: () => Promise.resolve('forced failure'),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        }
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    for (const call of [
+      () =>
+        raw.copyFile('https://api.example.test', 'auth', {
+          sourceFileId: fileId('4_z_source'),
+          fileName: 'copy.bin',
+          sourceServerSideEncryption: key,
+          destinationServerSideEncryption: key,
+        }),
+      () =>
+        raw.copyPart('https://api.example.test', 'auth', {
+          sourceFileId: fileId('4_z_source'),
+          largeFileId: fileId('4_z_large'),
+          partNumber: 1,
+          sourceServerSideEncryption: key,
+          destinationServerSideEncryption: key,
+        }),
+      () =>
+        raw.startLargeFile('https://api.example.test', 'auth', {
+          bucketId: bucketId('bucket'),
+          fileName: 'large.bin',
+          contentType: 'application/octet-stream',
+          serverSideEncryption: key,
+        }),
+    ]) {
+      try {
+        await call()
+      } catch (err) {
+        errors.push(String(err instanceof Error ? `${err.name}: ${err.message}` : err))
+      }
+    }
+
+    expect(errors).toHaveLength(3)
+    const diagnosticSurfaces = JSON.stringify({ diagnostics, errors })
+    expect(diagnosticSurfaces).not.toContain(key.customerKey)
+    expect(diagnosticSurfaces).not.toContain(key.customerKeyMd5)
+
+    const intendedWireBodies = wireBodies.join('\n')
+    expect(intendedWireBodies).toContain(key.customerKey)
+    expect(intendedWireBodies).toContain(key.customerKeyMd5)
+    expect(intendedWireBodies).not.toContain(SSE_C_KEY_REDACTION)
+  })
+
   it('rejects invalid custom upload timestamps before transport serialization', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
     const invalidHeaderValues = [
