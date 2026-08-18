@@ -64,18 +64,14 @@ describe('sync path safety', () => {
     )
   })
 
-  it.each([
-    '../outside.txt',
-    'a/../victim',
-    './victim',
-    'a//b',
-    'safe\\..\\victim.txt',
-    'C:foo',
-  ])('rejects unsafe sync-relative path %j on POSIX', (relativePath) => {
-    expect(() => resolveSafeLocalPath('/sync-root', relativePath, posixPath)).toThrow(
-      /unsafe local destination path|Sync path must be relative/,
-    )
-  })
+  it.each(['../outside.txt', 'a/../victim', './victim', 'a//b', 'safe\\..\\victim.txt', 'C:foo'])(
+    'rejects unsafe sync-relative path %j on POSIX',
+    (relativePath) => {
+      expect(() => resolveSafeLocalPath('/sync-root', relativePath, posixPath)).toThrow(
+        /unsafe local destination path|Sync path must be relative/,
+      )
+    },
+  )
 
   it.each([
     '../outside.txt',

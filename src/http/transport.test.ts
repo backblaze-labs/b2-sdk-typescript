@@ -380,29 +380,28 @@ describe('FetchTransport', () => {
     expect(cancel.mock.calls[0]?.[0]).toBe('caller cancelled')
   })
 
-  it.each([
-    'json',
-    'text',
-    'arrayBuffer',
-  ] as const)('aborts a stalled response body read through %s()', async (method) => {
-    vi.useFakeTimers()
-    try {
-      fetchSpy.mockResolvedValue(stalledResponse())
+  it.each(['json', 'text', 'arrayBuffer'] as const)(
+    'aborts a stalled response body read through %s()',
+    async (method) => {
+      vi.useFakeTimers()
+      try {
+        fetchSpy.mockResolvedValue(stalledResponse())
 
-      const transport = new FetchTransport()
-      const response = await transport.send({
-        url: 'https://example.com/file',
-        method: 'GET',
-        retry: { requestTimeoutMs: 1 },
-      })
-      const read = observeRejection(response[method]())
-      await advanceTimersByTime(1)
+        const transport = new FetchTransport()
+        const response = await transport.send({
+          url: 'https://example.com/file',
+          method: 'GET',
+          retry: { requestTimeoutMs: 1 },
+        })
+        const read = observeRejection(response[method]())
+        await advanceTimersByTime(1)
 
-      await expect(read).rejects.toMatchObject({ name: 'TimeoutError' })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
+        await expect(read).rejects.toMatchObject({ name: 'TimeoutError' })
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
 
   it('aborts a stalled response body stream read', async () => {
     vi.useFakeTimers()
@@ -515,47 +514,47 @@ describe('FetchTransport', () => {
     }
   })
 
-  it.each([
-    'uploadFile',
-    'uploadPart',
-  ] as const)('preserves caller aborts during %s response body reads', async (method) => {
-    const controller = new AbortController()
-    const reason = new Error('caller stopped waiting')
-    fetchSpy.mockResolvedValue(stalledResponse())
-    const raw = new RawClient({ transport: new FetchTransport() })
+  it.each(['uploadFile', 'uploadPart'] as const)(
+    'preserves caller aborts during %s response body reads',
+    async (method) => {
+      const controller = new AbortController()
+      const reason = new Error('caller stopped waiting')
+      fetchSpy.mockResolvedValue(stalledResponse())
+      const raw = new RawClient({ transport: new FetchTransport() })
 
-    const call =
-      method === 'uploadFile'
-        ? raw.uploadFile(
-            'https://pod.backblaze.com/b2_upload_file',
-            {
-              authorization: 'upload-auth',
-              fileName: 'payload.bin',
-              contentType: 'application/octet-stream',
-              contentLength: 1,
-              contentSha1: 'none',
-              fileInfo: {},
-            },
-            new Uint8Array([1]) as BodyInit,
-            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
-          )
-        : raw.uploadPart(
-            'https://pod.backblaze.com/b2_upload_part',
-            {
-              authorization: 'part-auth',
-              partNumber: 1,
-              contentLength: 1,
-              contentSha1: 'none',
-            },
-            new Uint8Array([1]) as BodyInit,
-            { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
-          )
+      const call =
+        method === 'uploadFile'
+          ? raw.uploadFile(
+              'https://pod.backblaze.com/b2_upload_file',
+              {
+                authorization: 'upload-auth',
+                fileName: 'payload.bin',
+                contentType: 'application/octet-stream',
+                contentLength: 1,
+                contentSha1: 'none',
+                fileInfo: {},
+              },
+              new Uint8Array([1]) as BodyInit,
+              { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+            )
+          : raw.uploadPart(
+              'https://pod.backblaze.com/b2_upload_part',
+              {
+                authorization: 'part-auth',
+                partNumber: 1,
+                contentLength: 1,
+                contentSha1: 'none',
+              },
+              new Uint8Array([1]) as BodyInit,
+              { signal: controller.signal, retry: { requestTimeoutMs: 10_000 } },
+            )
 
-    const observed = observeRejection(call as Promise<unknown>)
-    controller.abort(reason)
+      const observed = observeRejection(call as Promise<unknown>)
+      controller.abort(reason)
 
-    await expect(observed).rejects.toBe(reason)
-  })
+      await expect(observed).rejects.toBe(reason)
+    },
+  )
 
   it('applies finishLargeFile retry timeout overrides to response body reads', async () => {
     vi.useFakeTimers()
@@ -1029,37 +1028,37 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    it.each([
-      'b2_upload_file',
-      'b2_upload_part',
-    ] as const)('retries %s on HTTP 429 in place and respects Retry-After', async (endpoint) => {
-      const errorBody = { status: 429, code: 'too_many_requests', message: 'slow down' }
-      innerTransport.send
-        .mockResolvedValueOnce(mockResponse(429, errorBody, { 'Retry-After': '2' }))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
-      const sleepImpl = vi.fn<(_ms: number, _signal?: AbortSignal) => Promise<void>>(() =>
-        Promise.resolve(),
-      )
+    it.each(['b2_upload_file', 'b2_upload_part'] as const)(
+      'retries %s on HTTP 429 in place and respects Retry-After',
+      async (endpoint) => {
+        const errorBody = { status: 429, code: 'too_many_requests', message: 'slow down' }
+        innerTransport.send
+          .mockResolvedValueOnce(mockResponse(429, errorBody, { 'Retry-After': '2' }))
+          .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+        const sleepImpl = vi.fn<(_ms: number, _signal?: AbortSignal) => Promise<void>>(() =>
+          Promise.resolve(),
+        )
 
-      const transport = new RetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100_000 },
-        sleepImpl,
-      })
-      const uploadRequest: HttpRequest = {
-        url: `https://pod-000.backblaze.com/b2api/v3/${endpoint}`,
-        method: 'POST',
-        headers: { Authorization: 'upload-token' },
-      }
+        const transport = new RetryTransport({
+          transport: innerTransport,
+          retry: { maxRetries: 1, initialRetryDelayMs: 10, maxRetryDelayMs: 100_000 },
+          sleepImpl,
+        })
+        const uploadRequest: HttpRequest = {
+          url: `https://pod-000.backblaze.com/b2api/v3/${endpoint}`,
+          method: 'POST',
+          headers: { Authorization: 'upload-token' },
+        }
 
-      const result = await transport.send(uploadRequest)
+        const result = await transport.send(uploadRequest)
 
-      expect(result.status).toBe(200)
-      expect(innerTransport.send).toHaveBeenCalledTimes(2)
-      expect(innerTransport.send.mock.calls[0]?.[0].url).toBe(uploadRequest.url)
-      expect(innerTransport.send.mock.calls[1]?.[0].url).toBe(uploadRequest.url)
-      expect(sleepImpl).toHaveBeenCalledWith(2000, undefined)
-    })
+        expect(result.status).toBe(200)
+        expect(innerTransport.send).toHaveBeenCalledTimes(2)
+        expect(innerTransport.send.mock.calls[0]?.[0].url).toBe(uploadRequest.url)
+        expect(innerTransport.send.mock.calls[1]?.[0].url).toBe(uploadRequest.url)
+        expect(sleepImpl).toHaveBeenCalledWith(2000, undefined)
+      },
+    )
 
     it('does not treat b2_get_upload_url / b2_get_upload_part_url as upload endpoints (still retries 500)', async () => {
       // These are ordinary API calls (fetching an upload URL), not the
@@ -1082,30 +1081,29 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it.each([
-      'b2_upload_file',
-      'b2_start_large_file',
-      'b2_finish_large_file',
-    ] as const)('does not treat a download named %s as replay-unsafe', async (fileName) => {
-      // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name is
-      // user-controlled, so B2 API endpoint names in file names must still retry.
-      const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
-      innerTransport.send
-        .mockResolvedValueOnce(mockResponse(500, errorBody))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+    it.each(['b2_upload_file', 'b2_start_large_file', 'b2_finish_large_file'] as const)(
+      'does not treat a download named %s as replay-unsafe',
+      async (fileName) => {
+        // Download-by-name URLs are `/file/<bucket>/<fileName>` and the file name is
+        // user-controlled, so B2 API endpoint names in file names must still retry.
+        const errorBody = { status: 500, code: 'internal_error', message: 'Internal error' }
+        innerTransport.send
+          .mockResolvedValueOnce(mockResponse(500, errorBody))
+          .mockResolvedValueOnce(mockResponse(200, { ok: true }))
 
-      const transport = makeRetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
-      })
-      const result = await transport.send({
-        url: `https://f000.backblazeb2.com/file/my-bucket/${fileName}`,
-        method: 'GET',
-        headers: { Authorization: 'token' },
-      })
-      expect(result.status).toBe(200)
-      expect(innerTransport.send).toHaveBeenCalledTimes(2)
-    })
+        const transport = makeRetryTransport({
+          transport: innerTransport,
+          retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+        })
+        const result = await transport.send({
+          url: `https://f000.backblazeb2.com/file/my-bucket/${fileName}`,
+          method: 'GET',
+          headers: { Authorization: 'token' },
+        })
+        expect(result.status).toBe(200)
+        expect(innerTransport.send).toHaveBeenCalledTimes(2)
+      },
+    )
   })
 
   // --------------------------------------------------------------------------
@@ -1563,28 +1561,28 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it.each([
-      'b2_create_group_member',
-      'b2_eject_group_member',
-    ] as const)('does not retry network errors for %s', async (endpoint) => {
-      innerTransport.send
-        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+    it.each(['b2_create_group_member', 'b2_eject_group_member'] as const)(
+      'does not retry network errors for %s',
+      async (endpoint) => {
+        innerTransport.send
+          .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+          .mockResolvedValueOnce(mockResponse(200, { ok: true }))
 
-      const transport = makeRetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
-      })
+        const transport = makeRetryTransport({
+          transport: innerTransport,
+          retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+        })
 
-      await expect(
-        transport.send({
-          ...baseRequest,
-          method: 'POST',
-          url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
-        }),
-      ).rejects.toThrow(NetworkError)
-      expect(innerTransport.send).toHaveBeenCalledTimes(1)
-    })
+        await expect(
+          transport.send({
+            ...baseRequest,
+            method: 'POST',
+            url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+          }),
+        ).rejects.toThrow(NetworkError)
+        expect(innerTransport.send).toHaveBeenCalledTimes(1)
+      },
+    )
 
     it('retries request timeout aborts as network failures', async () => {
       const okResponse = mockResponse(200, { ok: true })

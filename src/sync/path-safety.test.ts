@@ -52,15 +52,14 @@ describe('safeRelativePathSegments', () => {
     )
   })
 
-  it.each([
-    '',
-    'nested/file.txt',
-    'nested\\file.txt',
-  ])('rejects invalid temporary-file basename %s', (finalName) => {
-    expect(() =>
-      makeReservedSyncTempFileName(finalName, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
-    ).toThrow('invalid sync temporary-file basename')
-  })
+  it.each(['', 'nested/file.txt', 'nested\\file.txt'])(
+    'rejects invalid temporary-file basename %s',
+    (finalName) => {
+      expect(() =>
+        makeReservedSyncTempFileName(finalName, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
+      ).toThrow('invalid sync temporary-file basename')
+    },
+  )
 
   it('rejects invalid temporary-file nonces', () => {
     expect(() => makeReservedSyncTempFileName('payload.bin', 'not-a-uuid')).toThrow(

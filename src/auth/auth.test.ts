@@ -533,22 +533,21 @@ describe('getRealmUrl', () => {
     )
   })
 
-  it.each([
-    'http://127.0.0.1:8180',
-    'http://127.0.0.2:8180',
-    'http://[::1]:8180',
-  ])('allows loopback IP plaintext HTTP realm %s', (realm) => {
-    expect(() => assertSecureRealmUrl(realm)).not.toThrow()
-  })
+  it.each(['http://127.0.0.1:8180', 'http://127.0.0.2:8180', 'http://[::1]:8180'])(
+    'allows loopback IP plaintext HTTP realm %s',
+    (realm) => {
+      expect(() => assertSecureRealmUrl(realm)).not.toThrow()
+    },
+  )
 
-  it.each([
-    'http://localhost:8180',
-    'http://foo.localhost:8180',
-  ])('rejects loopback hostname plaintext HTTP realm %s', (realm) => {
-    expect(() => assertSecureRealmUrl(realm)).toThrow(
-      'refusing to send credentials over plaintext HTTP realm',
-    )
-  })
+  it.each(['http://localhost:8180', 'http://foo.localhost:8180'])(
+    'rejects loopback hostname plaintext HTTP realm %s',
+    (realm) => {
+      expect(() => assertSecureRealmUrl(realm)).toThrow(
+        'refusing to send credentials over plaintext HTTP realm',
+      )
+    },
+  )
 
   it('does not include non-loopback plaintext HTTP built-in realms', () => {
     for (const url of Object.values(REALM_URLS)) {
