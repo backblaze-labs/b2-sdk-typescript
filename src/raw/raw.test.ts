@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { B2RealmConfigurationError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { jsonResponse, recordingTransport } from '../test-utils/index.ts'
+import {
+  EncryptionAlgorithm,
+  EncryptionKey,
+  EncryptionMode,
+  SSE_C_KEY_REDACTION,
+} from '../types/encryption.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { RawClient } from './index.ts'
 import { b2Url, isB2ApiVersion } from './url.ts'
@@ -400,6 +406,50 @@ describe('RawClient upload URL request controls', () => {
     })
   })
 
+  it('serializes EncryptionKey SSE-C material in JSON body endpoints', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const sourceKey = await EncryptionKey.fromBytes(new Uint8Array(32).fill(1))
+    const destinationKey = await EncryptionKey.fromBytes(new Uint8Array(32).fill(2))
+    const largeFileKey = await EncryptionKey.fromBytes(new Uint8Array(32).fill(3))
+
+    expect(JSON.stringify(sourceKey)).toContain(SSE_C_KEY_REDACTION)
+
+    await raw.copyFile('https://api.example.test', 'auth', {
+      sourceFileId: fileId('4_z_source'),
+      fileName: 'copy.bin',
+      sourceServerSideEncryption: sourceKey,
+      destinationServerSideEncryption: destinationKey,
+    })
+    await raw.copyPart('https://api.example.test', 'auth', {
+      sourceFileId: fileId('4_z_source'),
+      largeFileId: fileId('4_z_large'),
+      partNumber: 1,
+      sourceServerSideEncryption: sourceKey,
+      destinationServerSideEncryption: destinationKey,
+    })
+    await raw.startLargeFile('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      fileName: 'large.bin',
+      contentType: 'application/octet-stream',
+      serverSideEncryption: largeFileKey,
+    })
+
+    const copyFileBody = requestJsonBody(seenRequests.find((r) => r.url.includes('b2_copy_file')))
+    const copyPartBody = requestJsonBody(seenRequests.find((r) => r.url.includes('b2_copy_part')))
+    const startBody = requestJsonBody(
+      seenRequests.find((r) => r.url.includes('b2_start_large_file')),
+    )
+
+    expect(copyFileBody['sourceServerSideEncryption']).toEqual(wireSseC(sourceKey))
+    expect(copyFileBody['destinationServerSideEncryption']).toEqual(wireSseC(destinationKey))
+    expect(copyPartBody['sourceServerSideEncryption']).toEqual(wireSseC(sourceKey))
+    expect(copyPartBody['destinationServerSideEncryption']).toEqual(wireSseC(destinationKey))
+    expect(startBody['serverSideEncryption']).toEqual(wireSseC(largeFileKey))
+    expect(JSON.stringify([copyFileBody, copyPartBody, startBody])).not.toContain(
+      SSE_C_KEY_REDACTION,
+    )
+  })
+
   it('rejects invalid custom upload timestamps before transport serialization', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
     const invalidHeaderValues = [
@@ -541,6 +591,24 @@ function makeUploadUrlRawClient(): { raw: RawClient; seenRequests: HttpRequest[]
   const transport: HttpTransport = {
     async send(request: HttpRequest): Promise<HttpResponse> {
       seenRequests.push(request)
+      if (request.url.includes('b2_copy_part')) {
+        return jsonResponse({
+          fileId: fileId('4_z_large'),
+          partNumber: 1,
+          contentLength: 1,
+          contentSha1: 'none',
+          contentMd5: null,
+        })
+      }
+      if (request.url.includes('b2_copy_file')) {
+        return jsonResponse({
+          fileId: fileId('4_z_copy'),
+          fileName: 'copy.bin',
+          action: 'copy',
+          contentLength: 1,
+          contentSha1: 'none',
+        })
+      }
       if (request.url.includes('b2_upload_part')) {
         return jsonResponse({
           fileId: largeFileId('large-file'),
@@ -584,4 +652,19 @@ function makeUploadUrlRawClient(): { raw: RawClient; seenRequests: HttpRequest[]
     },
   }
   return { raw: new RawClient({ transport }), seenRequests }
+}
+
+function requestJsonBody(request: HttpRequest | undefined): Record<string, unknown> {
+  expect(request).toBeDefined()
+  expect(typeof request?.body).toBe('string')
+  return JSON.parse(String(request?.body)) as Record<string, unknown>
+}
+
+function wireSseC(key: EncryptionKey): Record<string, string> {
+  return {
+    mode: EncryptionMode.SseC,
+    algorithm: EncryptionAlgorithm.Aes256,
+    customerKey: key.customerKey,
+    customerKeyMd5: key.customerKeyMd5,
+  }
 }

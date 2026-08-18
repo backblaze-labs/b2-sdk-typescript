@@ -677,7 +677,13 @@ export class RawClient {
     options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),
+      await this.postJson<FileVersion>(
+        apiUrl,
+        authToken,
+        'b2_copy_file',
+        copyFileWireRequest(request),
+        options,
+      ),
     )
   }
 
@@ -696,7 +702,13 @@ export class RawClient {
     request: CopyPartRequest,
     options?: CopyPartOptions,
   ): Promise<CopyPartResponse> {
-    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request, options)
+    return this.postJson<CopyPartResponse>(
+      apiUrl,
+      authToken,
+      'b2_copy_part',
+      copyPartWireRequest(request),
+      options,
+    )
   }
 
   // --- Large Files ---
@@ -717,11 +729,15 @@ export class RawClient {
     options?: StartLargeFileOptions,
   ): Promise<StartLargeFileResponse> {
     assertRawCustomUploadTimestamp(request.customUploadTimestamp)
+    const wireRequest =
+      request.serverSideEncryption === undefined
+        ? request
+        : { ...request, serverSideEncryption: toWireSseC(request.serverSideEncryption) }
     return this.postJson<StartLargeFileResponse>(
       apiUrl,
       authToken,
       'b2_start_large_file',
-      request,
+      wireRequest,
       options,
     )
   }
@@ -1279,6 +1295,40 @@ export class RawClient {
 
 import { EncryptionAlgorithm, EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
+
+function toWireSseC(setting: EncryptionSetting): EncryptionSetting {
+  if (setting.mode !== EncryptionMode.SseC) return setting
+  return {
+    mode: EncryptionMode.SseC,
+    algorithm: setting.algorithm,
+    customerKey: setting.customerKey,
+    customerKeyMd5: setting.customerKeyMd5,
+  }
+}
+
+function copyFileWireRequest(request: CopyFileRequest): CopyFileRequest {
+  return {
+    ...request,
+    ...(request.sourceServerSideEncryption !== undefined
+      ? { sourceServerSideEncryption: toWireSseC(request.sourceServerSideEncryption) }
+      : {}),
+    ...(request.destinationServerSideEncryption !== undefined
+      ? { destinationServerSideEncryption: toWireSseC(request.destinationServerSideEncryption) }
+      : {}),
+  }
+}
+
+function copyPartWireRequest(request: CopyPartRequest): CopyPartRequest {
+  return {
+    ...request,
+    ...(request.sourceServerSideEncryption !== undefined
+      ? { sourceServerSideEncryption: toWireSseC(request.sourceServerSideEncryption) }
+      : {}),
+    ...(request.destinationServerSideEncryption !== undefined
+      ? { destinationServerSideEncryption: toWireSseC(request.destinationServerSideEncryption) }
+      : {}),
+  }
+}
 
 /**
  * Applies server-side encryption headers to the request.
