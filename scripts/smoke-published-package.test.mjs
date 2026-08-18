@@ -47,9 +47,10 @@ function runNpm(args, cwd) {
 }
 
 function commandPath(command) {
-  const result = spawnSync('which', [command], { encoding: 'utf8' })
+  const locator = process.platform === 'win32' ? 'where' : 'which'
+  const result = spawnSync(locator, [command], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr || result.stdout)
-  return result.stdout.trim()
+  return result.stdout.trim().split(/\r?\n/)[0]
 }
 
 function writeFlakyPnpm(root) {
@@ -68,7 +69,10 @@ if (!existsSync(marker)) {
   process.exit(1)
 }
 
-const result = spawnSync(process.env.REAL_PNPM, process.argv.slice(2), { stdio: 'inherit' })
+const result = spawnSync(process.env.REAL_PNPM, process.argv.slice(2), {
+  shell: process.platform === 'win32',
+  stdio: 'inherit',
+})
 process.exit(result.status ?? 1)
 `,
   )
