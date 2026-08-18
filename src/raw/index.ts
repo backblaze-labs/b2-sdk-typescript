@@ -677,7 +677,13 @@ export class RawClient {
     options?: RawRequestOptions,
   ): Promise<FileVersion> {
     return normalizeFileVersionSha1(
-      await this.postJson<FileVersion>(apiUrl, authToken, 'b2_copy_file', request, options),
+      await this.postJson<FileVersion>(
+        apiUrl,
+        authToken,
+        'b2_copy_file',
+        withJsonBodyWireSseC(request),
+        options,
+      ),
     )
   }
 
@@ -696,7 +702,13 @@ export class RawClient {
     request: CopyPartRequest,
     options?: CopyPartOptions,
   ): Promise<CopyPartResponse> {
-    return this.postJson<CopyPartResponse>(apiUrl, authToken, 'b2_copy_part', request, options)
+    return this.postJson<CopyPartResponse>(
+      apiUrl,
+      authToken,
+      'b2_copy_part',
+      withJsonBodyWireSseC(request),
+      options,
+    )
   }
 
   // --- Large Files ---
@@ -721,7 +733,7 @@ export class RawClient {
       apiUrl,
       authToken,
       'b2_start_large_file',
-      request,
+      withJsonBodyWireSseC(request),
       options,
     )
   }
@@ -1279,6 +1291,42 @@ export class RawClient {
 
 import { EncryptionAlgorithm, EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
+
+interface JsonBodySseCRequest {
+  readonly serverSideEncryption?: EncryptionSetting
+  readonly sourceServerSideEncryption?: EncryptionSetting
+  readonly destinationServerSideEncryption?: EncryptionSetting
+}
+
+function withJsonBodyWireSseC<T extends JsonBodySseCRequest>(request: T): T {
+  return {
+    ...request,
+    ...(request.serverSideEncryption !== undefined
+      ? { serverSideEncryption: toWireSseC(request.serverSideEncryption) }
+      : {}),
+    ...(request.sourceServerSideEncryption !== undefined
+      ? { sourceServerSideEncryption: toWireSseC(request.sourceServerSideEncryption) }
+      : {}),
+    ...(request.destinationServerSideEncryption !== undefined
+      ? { destinationServerSideEncryption: toWireSseC(request.destinationServerSideEncryption) }
+      : {}),
+  }
+}
+
+function toWireSseC(setting: EncryptionSetting): EncryptionSetting {
+  if (setting.mode !== EncryptionMode.SseC) return setting
+  // SSE-C settings may be redacted wrappers with non-enumerable key fields.
+  // Passing the wrapper through would let toJSON() emit the redaction placeholder;
+  // spreading it would drop the key fields. Read directly into a plain wire
+  // literal for the B2 JSON body only, and never pass that cleartext literal to
+  // diagnostics or logging sinks.
+  return {
+    mode: EncryptionMode.SseC,
+    algorithm: setting.algorithm,
+    customerKey: setting.customerKey,
+    customerKeyMd5: setting.customerKeyMd5,
+  }
+}
 
 /**
  * Applies server-side encryption headers to the request.
