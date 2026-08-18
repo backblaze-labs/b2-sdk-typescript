@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Computer Backup facade validates list pages.** `BackupRawClient.listComputers()` returns the documented single-object `bz_list_computers` wire response, and `BackupClient.listComputers()` validates that page object and returns its `computers` and `nextComputerId`, rejecting malformed wire shapes before pagination can silently truncate results.
 - **Partner auth cache validation is non-destructive during construction.** `PartnerClient` and `BackupClient` ignore unsafe cached Partner authorization locally until `authorize()` replaces it, instead of clearing a shared `PartnerAccountInfo` store from a client constructor.
+- **Replication status metadata matches B2's wire shape.** BREAKING: `ReplicationStatus` values changed from lowercase (`'pending' | 'completed' | 'failed' | 'replica' | null`) to B2's documented uppercase values (`'PENDING' | 'COMPLETED' | 'FAILED' | 'REPLICA'`), and `FileVersion.replicationStatus`, `StartLargeFileResponse.replicationStatus`, and `UnfinishedLargeFile.replicationStatus` are now omitted instead of `null` when the file is not covered by a replication rule. Callers switching on lowercase literals or `null` must update those comparisons.
 
 ### Fixed
 

@@ -73,7 +73,6 @@ function makeB2SyncPath(
     fileName: b2FileName ?? relativePath,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
-    replicationStatus: null,
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: modTimeMillis,
   }
@@ -698,7 +697,6 @@ describe('synchronize', () => {
         fileName: 'docs/./readme.md',
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: 1000,
       }
@@ -1041,7 +1039,6 @@ describe('synchronize', () => {
         fileName: 'backup/docs/readme.md',
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: 1000,
       }
@@ -1096,7 +1093,6 @@ describe('synchronize', () => {
           fileName: `docs/./unsafe-${index}.txt`,
           fileRetention: { isClientAuthorizedToRead: true, value: null },
           legalHold: { isClientAuthorizedToRead: true, value: null },
-          replicationStatus: null,
           serverSideEncryption: { mode: EncryptionMode.None },
           uploadTimestamp: index,
         }
@@ -2343,7 +2339,6 @@ describe('synchronize', () => {
           fileName,
           fileRetention: { isClientAuthorizedToRead: true, value: null },
           legalHold: { isClientAuthorizedToRead: true, value: null },
-          replicationStatus: null,
           serverSideEncryption: { mode: EncryptionMode.None },
           uploadTimestamp,
         }

@@ -34,8 +34,13 @@ export const FileAction = {
  */
 export type FileAction = (typeof FileAction)[keyof typeof FileAction]
 
-/** Replication status for a file version or unfinished large file. */
-export type ReplicationStatus = 'pending' | 'completed' | 'failed' | 'replica' | null
+/**
+ * Replication status for a file version or unfinished large file.
+ *
+ * B2 returns these uppercase wire values as-is and omits the containing
+ * `replicationStatus` field when the file is not covered by a replication rule.
+ */
+export type ReplicationStatus = 'PENDING' | 'COMPLETED' | 'FAILED' | 'REPLICA'
 
 /**
  * Complete metadata for a single file version in B2.
@@ -77,8 +82,8 @@ export interface FileVersion {
     /** Legal hold value, or null if the caller lacks read authorization. */
     readonly value: LegalHoldValue | null
   }
-  /** Replication status, or null if replication is not configured. */
-  readonly replicationStatus: ReplicationStatus
+  /** Replication status when this file is covered by a replication rule. */
+  readonly replicationStatus?: ReplicationStatus
   /** Server-side encryption settings applied to this file version. */
   readonly serverSideEncryption: PublicEncryptionSetting
   /** UTC timestamp (milliseconds) when this version was uploaded. */

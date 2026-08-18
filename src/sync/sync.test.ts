@@ -65,7 +65,6 @@ function makeB2SyncPath(
     fileName: relativePath,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
-    replicationStatus: null,
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: modTimeMillis,
   }

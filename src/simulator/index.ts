@@ -22,7 +22,7 @@ import {
   type EncryptionSetting,
   type PublicEncryptionSetting,
 } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ReplicationStatus } from '../types/file.ts'
 import {
   type AuthToken,
   accountId as accountIdOf,
@@ -32,6 +32,7 @@ import {
 } from '../types/ids.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import type { ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
@@ -387,6 +388,7 @@ interface LargeFileInProgress {
   readonly fileInfo: Record<string, string>
   readonly fileRetention: FileRetentionValue | null
   readonly legalHold: LegalHoldValue | null
+  readonly replicationStatus?: ReplicationStatus
   readonly serverSideEncryption: StoredServerSideEncryption
   readonly uploadTimestamp: number
   readonly parts: Map<number, StoredLargeFilePart>
@@ -2882,6 +2884,7 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Upload,
       serverSideEncryption,
+      ...this.newReplicationStatusField(bucketId, fileName),
       ...(customUploadTimestamp.timestamp !== null
         ? { uploadTimestamp: customUploadTimestamp.timestamp }
         : {}),
@@ -3871,6 +3874,7 @@ export class B2Simulator {
       fileInfo,
       action: FileAction.Copy,
       serverSideEncryption: destinationEncryption,
+      ...this.newReplicationStatusField(destBucketId, req.fileName),
     })
     const copied: StoredFile = {
       fileVersion,
@@ -3917,6 +3921,7 @@ export class B2Simulator {
       req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
     )
     if ('status' in serverSideEncryption) return serverSideEncryption
+    const replicationStatus = this.replicationStatusForNewFile(req.bucketId, req.fileName)
     const large: LargeFileInProgress = {
       fileId: fid,
       bucketId: req.bucketId,
@@ -3926,6 +3931,7 @@ export class B2Simulator {
       fileRetention:
         req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
       legalHold: req.legalHold ?? null,
+      ...this.replicationStatusMetadataFor(replicationStatus),
       serverSideEncryption,
       uploadTimestamp,
       parts: new Map(),
@@ -3953,7 +3959,7 @@ export class B2Simulator {
           isClientAuthorizedToRead: true,
           value: large.legalHold,
         },
-        replicationStatus: null,
+        ...this.replicationStatusMetadataFor(large.replicationStatus),
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: large.uploadTimestamp,
       },
@@ -4080,6 +4086,7 @@ export class B2Simulator {
       legalHold: large.legalHold,
       serverSideEncryption: large.serverSideEncryption,
       uploadTimestamp: large.uploadTimestamp,
+      ...this.replicationStatusMetadataFor(large.replicationStatus),
     })
     const stored: StoredFile = {
       fileVersion,
@@ -4159,7 +4166,7 @@ export class B2Simulator {
         isClientAuthorizedToRead: true,
         value: f.legalHold,
       },
-      replicationStatus: null,
+      ...this.replicationStatusMetadataFor(f.replicationStatus),
       serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
       uploadTimestamp: f.uploadTimestamp,
     }))
@@ -4650,6 +4657,7 @@ export class B2Simulator {
     readonly fileInfo?: Record<string, string>
     readonly fileRetention?: FileRetentionValue | null
     readonly legalHold?: LegalHoldValue | null
+    readonly replicationStatus?: ReplicationStatus
     readonly serverSideEncryption?: EncryptionSetting | StoredServerSideEncryption
     readonly uploadTimestamp?: number
   }): FileVersion {
@@ -4666,12 +4674,46 @@ export class B2Simulator {
       fileName: params.fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: params.fileRetention ?? null },
       legalHold: { isClientAuthorizedToRead: true, value: params.legalHold ?? null },
-      replicationStatus: null,
+      ...this.replicationStatusMetadataFor(params.replicationStatus),
       serverSideEncryption: publicServerSideEncryption(
         params.serverSideEncryption ?? { mode: EncryptionMode.None },
       ),
       uploadTimestamp: params.uploadTimestamp ?? this.monotonicTimestamp(),
     }
+  }
+
+  private newReplicationStatusField(
+    bucketId: string,
+    fileName: string,
+  ): { readonly replicationStatus?: ReplicationStatus } {
+    return this.replicationStatusMetadataFor(this.replicationStatusForNewFile(bucketId, fileName))
+  }
+
+  private replicationStatusMetadataFor(replicationStatus: ReplicationStatus | undefined): {
+    readonly replicationStatus?: ReplicationStatus
+  } {
+    return replicationStatus === undefined ? {} : { replicationStatus }
+  }
+
+  private replicationStatusForNewFile(
+    bucketId: string,
+    fileName: string,
+  ): ReplicationStatus | undefined {
+    return this.matchingEnabledReplicationRules(bucketId, fileName).length > 0
+      ? 'PENDING'
+      : undefined
+  }
+
+  private matchingEnabledReplicationRules(
+    bucketId: string,
+    fileName: string,
+  ): readonly ReplicationRule[] {
+    const bucket = this.buckets.get(bucketId)
+    const sourceRules = bucket?.info.replicationConfiguration.asReplicationSource?.replicationRules
+    return (
+      sourceRules?.filter((rule) => rule.isEnabled && fileName.startsWith(rule.fileNamePrefix)) ??
+      []
+    )
   }
 
   private error(status: number, code: string, message: string): SimulatorJsonResponse {
@@ -4708,11 +4750,7 @@ export class B2Simulator {
       }
     }
     if (this.onReplicate !== undefined) {
-      const replConfig = bucket.info.replicationConfiguration
-      const sourceRules = replConfig.asReplicationSource?.replicationRules ?? []
-      for (const rule of sourceRules) {
-        if (!rule.isEnabled) continue
-        if (rule.fileNamePrefix && !fileVersion.fileName.startsWith(rule.fileNamePrefix)) continue
+      for (const rule of this.matchingEnabledReplicationRules(bucketId, fileVersion.fileName)) {
         const hook = this.onReplicate
         this.dispatchHook('replication', () =>
           hook({

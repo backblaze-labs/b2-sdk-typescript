@@ -24,7 +24,6 @@ const finishedFile: FileVersion = {
   fileName: 'finished.bin',
   fileRetention: { isClientAuthorizedToRead: true, value: null },
   legalHold: { isClientAuthorizedToRead: true, value: null },
-  replicationStatus: null,
   serverSideEncryption: { mode: 'none' },
   uploadTimestamp: 1,
 }
