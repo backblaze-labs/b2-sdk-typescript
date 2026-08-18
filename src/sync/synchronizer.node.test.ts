@@ -86,7 +86,6 @@ function makeB2Path(relativePath: string, size: number, fileName = relativePath)
     fileName,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
-    replicationStatus: null,
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: 1_000,
   }

@@ -4020,15 +4020,13 @@ describe('B2Simulator upload write-path validation', () => {
 
   it('returns documented v4 metadata on large-file part responses', async () => {
     const { large, uploadUrl, apiUrl, authToken } = await startPartUpload('part-metadata.bin')
-    expect(large.replicationStatus).toBeNull()
+    expect(large).not.toHaveProperty('replicationStatus')
     const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
       bucketId: bucket.id,
       namePrefix: 'part-metadata.bin',
     })
-    expect(unfinished.files[0]).toMatchObject({
-      fileId: large.fileId,
-      replicationStatus: null,
-    })
+    expect(unfinished.files[0]?.fileId).toBe(large.fileId)
+    expect(unfinished.files[0]).not.toHaveProperty('replicationStatus')
 
     const partData = new TextEncoder().encode('uploaded part metadata')
     const uploaded = await client.raw.uploadPart(
@@ -4105,6 +4103,89 @@ describe('B2Simulator upload write-path validation', () => {
       serverSideEncryption: { mode: null, algorithm: null },
     })
     expect(copied.uploadTimestamp).toEqual(expect.any(Number))
+  })
+
+  it('uses uppercase optional replicationStatus on file-returning responses', async () => {
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const destination = await client.createBucket({
+      bucketName: 'replication-status-destination',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.update({
+      replicationConfiguration: {
+        asReplicationDestination: null,
+        asReplicationSource: {
+          replicationRules: [
+            {
+              destinationBucketId: destination.id,
+              fileNamePrefix: 'replicated/',
+              includeExistingFiles: false,
+              isEnabled: true,
+              priority: 1,
+              replicationRuleName: 'replicated-prefix',
+            },
+          ],
+          sourceApplicationKeyId: applicationKeyId('source-application-key-id'),
+        },
+      },
+    })
+
+    const uncovered = await bucket.upload({
+      fileName: 'outside-rule.bin',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    expect(uncovered).not.toHaveProperty('replicationStatus')
+
+    const uploaded = await bucket.upload({
+      fileName: 'replicated/small.bin',
+      source: new BufferSource(new Uint8Array([2])),
+    })
+    expect(uploaded.replicationStatus).toBe('PENDING')
+
+    const fileInfo = await client.raw.getFileInfo(apiUrl, authToken, { fileId: uploaded.fileId })
+    expect(fileInfo.replicationStatus).toBe('PENDING')
+
+    const names = await bucket.listFileNames({ prefix: 'replicated/small.bin' })
+    expect(names.files[0]?.replicationStatus).toBe('PENDING')
+
+    const versions = await bucket.listFileVersions({ prefix: 'replicated/small.bin' })
+    expect(versions.files[0]?.replicationStatus).toBe('PENDING')
+
+    const coveredLarge = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'replicated/large.bin',
+      contentType: 'application/octet-stream',
+    })
+    expect(coveredLarge.replicationStatus).toBe('PENDING')
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'replicated/large.bin',
+    })
+    expect(unfinished.files[0]?.replicationStatus).toBe('PENDING')
+
+    const uploadUrl = await client.raw.getUploadPartUrl(apiUrl, authToken, {
+      fileId: coveredLarge.fileId,
+    })
+    const partData = new TextEncoder().encode('replicated large file')
+    const partSha1 = await sha1Hex(partData)
+    await client.raw.uploadPart(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        partNumber: 1,
+        contentLength: partData.byteLength,
+        contentSha1: partSha1,
+      },
+      partData as BodyInit,
+    )
+
+    const finished = await client.raw.finishLargeFile(apiUrl, authToken, {
+      fileId: coveredLarge.fileId,
+      partSha1Array: [partSha1],
+    })
+    expect(finished.replicationStatus).toBe('PENDING')
   })
 
   it('stores custom upload timestamps for small and large uploads', async () => {

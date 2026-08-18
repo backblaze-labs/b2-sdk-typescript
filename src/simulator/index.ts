@@ -22,7 +22,7 @@ import {
   type EncryptionSetting,
   type PublicEncryptionSetting,
 } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ReplicationStatus } from '../types/file.ts'
 import {
   type AuthToken,
   accountId as accountIdOf,
@@ -3953,7 +3953,7 @@ export class B2Simulator {
           isClientAuthorizedToRead: true,
           value: large.legalHold,
         },
-        replicationStatus: null,
+        ...this.replicationStatusMetadataFor(req.bucketId, req.fileName),
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: large.uploadTimestamp,
       },
@@ -4159,7 +4159,7 @@ export class B2Simulator {
         isClientAuthorizedToRead: true,
         value: f.legalHold,
       },
-      replicationStatus: null,
+      ...this.replicationStatusMetadataFor(f.bucketId, f.fileName),
       serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
       uploadTimestamp: f.uploadTimestamp,
     }))
@@ -4666,12 +4666,29 @@ export class B2Simulator {
       fileName: params.fileName,
       fileRetention: { isClientAuthorizedToRead: true, value: params.fileRetention ?? null },
       legalHold: { isClientAuthorizedToRead: true, value: params.legalHold ?? null },
-      replicationStatus: null,
+      ...this.replicationStatusMetadataFor(params.bucketId, params.fileName),
       serverSideEncryption: publicServerSideEncryption(
         params.serverSideEncryption ?? { mode: EncryptionMode.None },
       ),
       uploadTimestamp: params.uploadTimestamp ?? this.monotonicTimestamp(),
     }
+  }
+
+  private replicationStatusMetadataFor(
+    bucketId: string,
+    fileName: string,
+  ): { readonly replicationStatus?: ReplicationStatus } {
+    const status = this.replicationStatusFor(bucketId, fileName)
+    return status === undefined ? {} : { replicationStatus: status }
+  }
+
+  private replicationStatusFor(bucketId: string, fileName: string): ReplicationStatus | undefined {
+    const bucket = this.buckets.get(bucketId)
+    const sourceRules = bucket?.info.replicationConfiguration.asReplicationSource?.replicationRules
+    const isCovered = sourceRules?.some(
+      (rule) => rule.isEnabled && fileName.startsWith(rule.fileNamePrefix),
+    )
+    return isCovered ? 'PENDING' : undefined
   }
 
   private error(status: number, code: string, message: string): SimulatorJsonResponse {

@@ -67,7 +67,6 @@ function makeB2FileVersion(
     fileName: name,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
-    replicationStatus: null,
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: ts,
   }
@@ -793,7 +792,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: 1,
       }
@@ -1017,7 +1015,6 @@ describe('B2Folder', () => {
         fileName,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp,
       }
@@ -1064,7 +1061,6 @@ describe('B2Folder', () => {
       fileName: '/docs\\readme.md',
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
-      replicationStatus: null,
       serverSideEncryption: { mode: EncryptionMode.None },
       uploadTimestamp: 1,
     }
@@ -1111,7 +1107,6 @@ describe('B2Folder', () => {
         fileName,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp,
       }
@@ -1185,7 +1180,6 @@ describe('B2Folder', () => {
         fileName,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp,
       }
@@ -1270,7 +1264,6 @@ describe('B2Folder', () => {
       fileName: longRelativePath,
       fileRetention: { isClientAuthorizedToRead: true, value: null },
       legalHold: { isClientAuthorizedToRead: true, value: null },
-      replicationStatus: null,
       serverSideEncryption: { mode: EncryptionMode.None },
       uploadTimestamp: 1,
     }
@@ -1314,7 +1307,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1356,7 +1348,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1412,7 +1403,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1452,7 +1442,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1498,7 +1487,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1551,7 +1539,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1605,7 +1592,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1660,7 +1646,6 @@ describe('B2Folder', () => {
         fileName,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp,
       }
@@ -1704,7 +1689,6 @@ describe('B2Folder', () => {
         fileName,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp,
       }
@@ -1767,7 +1751,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1845,7 +1828,6 @@ describe('B2Folder', () => {
         fileName: name,
         fileRetention: { isClientAuthorizedToRead: true, value: null },
         legalHold: { isClientAuthorizedToRead: true, value: null },
-        replicationStatus: null,
         serverSideEncryption: { mode: EncryptionMode.None },
         uploadTimestamp: ts,
       }
@@ -1899,7 +1881,6 @@ describe('B2Folder', () => {
               fileName: 'bad.txt',
               fileRetention: { isClientAuthorizedToRead: true, value: null },
               legalHold: { isClientAuthorizedToRead: true, value: null },
-              replicationStatus: null,
               serverSideEncryption: { mode: EncryptionMode.None },
               uploadTimestamp: 1,
             },

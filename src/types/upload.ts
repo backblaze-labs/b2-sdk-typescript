@@ -108,7 +108,7 @@ export interface UnfinishedLargeFileMetadata {
   readonly fileRetention?: ReadableFileRetention
   /** Legal hold status for this unfinished file, when readable. */
   readonly legalHold?: ReadableLegalHold
-  /** Replication status for this unfinished file, when available. */
+  /** Uppercase B2 replication status when this unfinished file is covered by a replication rule. */
   readonly replicationStatus?: ReplicationStatus
   /** Server-side encryption applied to this unfinished file. */
   readonly serverSideEncryption?: PublicEncryptionSetting

@@ -32,7 +32,6 @@ function makeB2SyncPath(relativePath: string, size: number, contentSha1: string)
     fileName: relativePath,
     fileRetention: { isClientAuthorizedToRead: true, value: null },
     legalHold: { isClientAuthorizedToRead: true, value: null },
-    replicationStatus: null,
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: 1000,
   }
