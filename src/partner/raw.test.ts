@@ -33,6 +33,7 @@ import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './r
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
+  PARTNER_TOKEN_REDACTED,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
 } from './redaction.ts'
@@ -1300,6 +1301,8 @@ describe('PartnerRawClient authorizePartner', () => {
       applicationKeyExpirationTimestamp: 1_786_662_000_000,
     })
     expect(auth.authorizationToken).toBe(partnerToken('partner-token'))
+    expect(JSON.stringify(auth)).toContain(PARTNER_TOKEN_REDACTED)
+    expect(JSON.stringify(auth)).not.toContain('partner-token')
 
     const accountInfo = new InMemoryPartnerAccountInfo()
     accountInfo.setAuth(auth)
@@ -1312,11 +1315,13 @@ describe('PartnerRawClient authorizePartner', () => {
     expect(accountInfo.getGroupsCapabilities()).toEqual([PartnerCapability.All])
     expect(accountInfo.getBackupCapabilities()).toEqual([PartnerCapability.All])
     expect(Object.keys(accountInfo.getAuth() ?? {})).toContain('authorizationToken')
-    expect(JSON.stringify(accountInfo.getAuth())).toContain('partner-token')
+    expect(JSON.stringify(accountInfo.getAuth())).toContain(PARTNER_TOKEN_REDACTED)
+    expect(JSON.stringify(accountInfo.getAuth())).not.toContain('partner-token')
     expect(JSON.stringify(accountInfo)).not.toContain('partner-token')
     expect(accountInfo.toString()).not.toContain('partner-token')
 
-    const rehydrated = JSON.parse(JSON.stringify(accountInfo.getAuth())) as PartnerAuthorizeResponse
+    const rehydrated = accountInfo.getAuth()
+    if (rehydrated === null) throw new Error('expected cached auth')
     const restoredAccountInfo = new InMemoryPartnerAccountInfo()
     restoredAccountInfo.setAuth(rehydrated)
     expect(restoredAccountInfo.getPartnerToken()).toBe('partner-token')
@@ -1872,7 +1877,8 @@ describe('InMemoryPartnerAccountInfo', () => {
 
     expect(redacted).not.toBe(auth)
     expect(Object.keys(redacted)).toContain('authorizationToken')
-    expect(JSON.stringify(redacted)).toContain('partner-token')
+    expect(JSON.stringify(redacted)).toContain(PARTNER_TOKEN_REDACTED)
+    expect(JSON.stringify(redacted)).not.toContain('partner-token')
     expect(redacted.toString()).not.toContain('partner-token')
   })
 })

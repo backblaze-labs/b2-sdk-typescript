@@ -136,8 +136,8 @@ export function reserveTrialCreateAccountResponseToRedactedJson(
 }
 
 /**
- * Adds non-enumerable inspection hooks that redact the Partner token while
- * preserving the plain enumerable data shape for serialization and handoff.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * Partner token while preserving direct property access.
  *
  * @param auth - Partner authorization response to protect from accidental inspection.
  *
@@ -151,6 +151,7 @@ export function redactPartnerAuthorizeResponse(
     partnerAuthorizeResponseToRedactedJson(target)
   const toRedactedString = (): string => `[PartnerAuthorizeResponse ${PARTNER_TOKEN_REDACTED}]`
 
+  installPortableJsonHook(target, toRedactedJson)
   Object.defineProperties(target, {
     toString: {
       value: toRedactedString,
