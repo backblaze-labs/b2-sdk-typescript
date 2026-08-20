@@ -149,8 +149,9 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * verification also rejects SSE-C uploads because B2 does not expose
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
-   * {@link ResumeFileIdMismatchError}. Unreadable Object Lock fields reject
-   * the candidate.
+   * {@link ResumeFileIdMismatchError}. Caller-supplied Object Lock settings are
+   * verified when present; omitted unreadable Object Lock fields do not reject
+   * an explicitly targeted file.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */
@@ -174,6 +175,7 @@ function createResumeCandidateCriteria(
   partSize: number,
   parts: readonly RangePlan[],
 ): ResumeCandidateCriteria {
+  const explicitResume = options.resumeFileId !== undefined
   return {
     contentType: request.contentType,
     fileInfo: request.fileInfo,
@@ -186,14 +188,14 @@ function createResumeCandidateCriteria(
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(request.serverSideEncryption !== undefined
       ? { serverSideEncryption: request.serverSideEncryption }
-      : options.bucketDefaultServerSideEncryption !== undefined
+      : !explicitResume && options.bucketDefaultServerSideEncryption !== undefined
         ? { serverSideEncryption: options.bucketDefaultServerSideEncryption }
         : {}),
     ...(request.fileRetention !== undefined
       ? { fileRetention: request.fileRetention }
-      : options.bucketDefaultRetention !== undefined
+      : !explicitResume && options.bucketDefaultRetention !== undefined
         ? { defaultFileRetention: options.bucketDefaultRetention }
-        : options.bucketDefaultRetentionUnreadable === true
+        : !explicitResume && options.bucketDefaultRetentionUnreadable === true
           ? { defaultFileRetentionUnreadable: true }
           : {}),
     ...(request.legalHold !== undefined ? { legalHold: request.legalHold } : {}),

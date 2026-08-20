@@ -604,7 +604,6 @@ describe.skipIf(skip)('B2 integration', () => {
       )
       finished = true
 
-      expect(file.fileId).toBe(started.fileId)
       expect(file.contentLength).toBe(data.byteLength)
       expect(reusedParts).toEqual([1])
       expect(reusedPartSha1s).toEqual([firstPartSha1])

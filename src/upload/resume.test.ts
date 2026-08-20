@@ -1958,7 +1958,7 @@ describe('findResumeCandidate', () => {
     })
   })
 
-  it('rejects an explicit resumeFileId with unreadable omitted retention state', async () => {
+  it('accepts an explicit resumeFileId with unreadable omitted retention state', async () => {
     const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -1984,7 +1984,11 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        throw new Error(`listParts should not be called for unreadable candidate ${req.fileId}`)
+        expect(req.fileId).toBe('target-id')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
       },
     } as unknown as RawClient
 
@@ -2007,11 +2011,12 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result).toBeNull()
-    expect(rejected).toEqual(['retention-mismatch'])
+    expect(result?.fileId).toBe('target-id' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('target-p1')
+    expect(rejected).toEqual([])
   })
 
-  it('rejects an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
+  it('accepts an explicit resumeFileId with unreadable omitted legal-hold state', async () => {
     const rejected: string[] = []
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -2037,7 +2042,11 @@ describe('findResumeCandidate', () => {
         }
       },
       async listParts(_apiUrl: string, _authToken: string, req: { fileId: string }) {
-        throw new Error(`listParts should not be called for unreadable candidate ${req.fileId}`)
+        expect(req.fileId).toBe('target-id')
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: null,
+        }
       },
     } as unknown as RawClient
 
@@ -2060,8 +2069,9 @@ describe('findResumeCandidate', () => {
       },
     )
 
-    expect(result).toBeNull()
-    expect(rejected).toEqual(['legal-hold-mismatch'])
+    expect(result?.fileId).toBe('target-id' as LargeFileId)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('target-p1')
+    expect(rejected).toEqual([])
   })
 
   it('reports requested and candidate names when an explicit resumeFileId is rejected', async () => {
