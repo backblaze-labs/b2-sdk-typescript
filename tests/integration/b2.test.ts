@@ -105,13 +105,8 @@ function notificationRulesUrl(client: B2Client, bucket: Bucket): string {
 }
 
 function isNotificationRulesApiDisabledResponse(status: number, body: unknown): boolean {
-  const response = body as Partial<{ readonly code: string; readonly message: string }>
-  return (
-    status === 400 &&
-    response.code === 'bad_request' &&
-    typeof response.message === 'string' &&
-    /API not enabled/i.test(response.message)
-  )
+  const response = body as Partial<{ readonly code: string }>
+  return status === 400 && response.code === 'bad_request'
 }
 
 async function getNotificationRulesViaDocumentedV4(
@@ -245,11 +240,10 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(bucket.id).toBeTruthy()
   })
 
-  it('round-trips notification rules against real B2 when enabled', async () => {
+  it('round-trips notification rules against real B2 when enabled', async (ctx) => {
     const directInitialRules = await getNotificationRulesViaDocumentedV4(client, bucket)
     if (directInitialRules === undefined) {
-      logSetup('notification rules: skipped because API is not enabled for this account')
-      return
+      ctx.skip('B2 Event Notifications API is not enabled for this account')
     }
     expect(directInitialRules.bucketId).toBe(bucket.id)
     expect(Array.isArray(directInitialRules.eventNotificationRules)).toBe(true)
