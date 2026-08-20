@@ -105,8 +105,13 @@ function notificationRulesUrl(client: B2Client, bucket: Bucket): string {
 }
 
 function isNotificationRulesApiDisabledResponse(status: number, body: unknown): boolean {
-  const response = body as Partial<{ readonly code: string }>
-  return status === 400 && response.code === 'bad_request'
+  const response = body as Partial<{ readonly code: string; readonly message: string }>
+  return (
+    status === 400 &&
+    response.code === 'bad_request' &&
+    typeof response.message === 'string' &&
+    /API not enabled/i.test(response.message)
+  )
 }
 
 async function getNotificationRulesViaDocumentedV4(
