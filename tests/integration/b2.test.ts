@@ -253,6 +253,7 @@ describe.skipIf(skip)('B2 integration', () => {
     }
     expect(directInitialRules.bucketId).toBe(bucket.id)
     expect(Array.isArray(directInitialRules.eventNotificationRules)).toBe(true)
+    const initialEventNotificationRules = [...directInitialRules.eventNotificationRules]
 
     const rule: EventNotificationRule = {
       eventTypes: [EventType.ObjectCreatedAll],
@@ -267,12 +268,13 @@ describe.skipIf(skip)('B2 integration', () => {
       },
     }
 
-    await bucket.setNotificationRules([])
-    const initialRules = await bucket.getNotificationRules()
-    expect(initialRules.bucketId).toBe(bucket.id)
-    expect(initialRules.eventNotificationRules).toEqual([])
-
+    let testFailure: unknown
+    let restoreFailure: unknown
     try {
+      const initialRules = await bucket.getNotificationRules()
+      expect(initialRules.bucketId).toBe(bucket.id)
+      expect(initialRules.eventNotificationRules).toEqual(initialEventNotificationRules)
+
       const setRules = await bucket.setNotificationRules([rule])
       expect(setRules.bucketId).toBe(bucket.id)
       expect(setRules.eventNotificationRules).toHaveLength(1)
@@ -285,12 +287,31 @@ describe.skipIf(skip)('B2 integration', () => {
         rule.targetConfiguration.url,
       )
       expect(currentRules.eventNotificationRules[0]?.eventTypes).toEqual(rule.eventTypes)
-    } finally {
-      await bucket.setNotificationRules([])
+    } catch (err) {
+      testFailure = err
     }
 
-    const clearedRules = await bucket.getNotificationRules()
-    expect(clearedRules.eventNotificationRules).toEqual([])
+    try {
+      const restoredRules = await bucket.setNotificationRules(initialEventNotificationRules)
+      expect(restoredRules.bucketId).toBe(bucket.id)
+      expect(restoredRules.eventNotificationRules).toEqual(initialEventNotificationRules)
+
+      const currentRules = await bucket.getNotificationRules()
+      expect(currentRules.bucketId).toBe(bucket.id)
+      expect(currentRules.eventNotificationRules).toEqual(initialEventNotificationRules)
+    } catch (err) {
+      restoreFailure = err
+    }
+
+    if (testFailure !== undefined) {
+      if (restoreFailure !== undefined) {
+        console.warn(
+          `[b2 integration cleanup] restore notification rules failed after test failure: ${setupErrorMessage(restoreFailure)}`,
+        )
+      }
+      throw testFailure
+    }
+    if (restoreFailure !== undefined) throw restoreFailure
   })
 
   it('lists unfinished large files with inclusive startFileId and resolved auto content type', async () => {
