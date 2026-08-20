@@ -3,6 +3,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.
 import { RawClient } from './raw/index.ts'
 import { bucketId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
+import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
 function jsonResponse(value: unknown): HttpResponse {
   return {
@@ -174,27 +175,64 @@ describe('RawClient list request controls', () => {
     expect(unfinished.files[0]?.contentSha1).toBeNull()
   })
 
-  it('uses v4 endpoints for bucket notification rules', async () => {
+  it('uses documented v4 requests and response shapes for bucket notification rules', async () => {
     const requests: HttpRequest[] = []
+    const rule: EventNotificationRule = {
+      eventTypes: [EventType.ObjectCreatedAll],
+      isEnabled: false,
+      isSuspended: false,
+      name: 'sdk-v4-shape',
+      objectNamePrefix: 'photos/',
+      suspensionReason: '',
+      targetConfiguration: {
+        targetType: 'webhook',
+        url: 'https://sink.example.test/webhook',
+      },
+    }
     const transport: HttpTransport = {
       async send(request) {
         requests.push(request)
-        return jsonResponse({ bucketId: bucketId('bucket'), eventNotificationRules: [] })
+        return jsonResponse({
+          bucketId: bucketId('bucket'),
+          eventNotificationRules: request.method === 'GET' ? [rule] : [],
+        })
       },
     }
     const raw = new RawClient({ transport })
 
-    await raw.getBucketNotificationRules('https://api.example.test', 'auth', {
+    const getResult = await raw.getBucketNotificationRules('https://api.example.test', 'auth', {
       bucketId: bucketId('bucket'),
     })
-    await raw.setBucketNotificationRules('https://api.example.test', 'auth', {
+    const setResult = await raw.setBucketNotificationRules('https://api.example.test', 'auth', {
       bucketId: bucketId('bucket'),
       eventNotificationRules: [],
     })
 
-    expect(requests.map((request) => request.url)).toEqual([
-      'https://api.example.test/b2api/v4/b2_get_bucket_notification_rules',
+    expect(requests).toHaveLength(2)
+    const getRequest = requests[0]
+    expect(getRequest?.method).toBe('GET')
+    expect(getRequest?.url).toBe(
+      'https://api.example.test/b2api/v4/b2_get_bucket_notification_rules?bucketId=bucket',
+    )
+    expect(getRequest?.headers).toEqual({ Authorization: 'auth' })
+    expect(getRequest).not.toHaveProperty('body')
+    expect(getResult).toEqual({
+      bucketId: bucketId('bucket'),
+      eventNotificationRules: [rule],
+    })
+
+    const setRequest = requests[1]
+    expect(setRequest?.method).toBe('POST')
+    expect(setRequest?.url).toBe(
       'https://api.example.test/b2api/v4/b2_set_bucket_notification_rules',
-    ])
+    )
+    expect(JSON.parse(String(setRequest?.body))).toEqual({
+      bucketId: bucketId('bucket'),
+      eventNotificationRules: [],
+    })
+    expect(setResult).toEqual({
+      bucketId: bucketId('bucket'),
+      eventNotificationRules: [],
+    })
   })
 })

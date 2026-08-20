@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Notification-rule endpoints routed to v4.** `RawClient.getBucketNotificationRules()` now calls the documented `GET /b2api/v4/b2_get_bucket_notification_rules` query endpoint, and `setBucketNotificationRules()` now calls `/b2api/v4/b2_set_bucket_notification_rules` instead of the v3 default. Closes #226.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

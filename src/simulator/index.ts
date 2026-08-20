@@ -669,6 +669,7 @@ function queryParamsBody(params: URLSearchParams): Record<string, string> | null
 
 const JSON_GET_ENDPOINTS = new Set<string>([
   'b2_authorize_account',
+  'b2_get_bucket_notification_rules',
   'b2_list_groups',
   'b2_list_group_members',
   'bz_list_computers',
@@ -703,7 +704,6 @@ const JSON_POST_ENDPOINTS = new Set<string>([
   'b2_delete_key',
   'b2_update_file_retention',
   'b2_update_file_legal_hold',
-  'b2_get_bucket_notification_rules',
   'b2_set_bucket_notification_rules',
 ])
 
@@ -712,6 +712,10 @@ function jsonEndpointAllowsMethod(method: string, endpoint: string): boolean {
   if (JSON_GET_ENDPOINTS.has(endpoint)) return normalizedMethod === 'GET'
   if (JSON_POST_ENDPOINTS.has(endpoint)) return normalizedMethod === 'POST'
   return true
+}
+
+function isJsonQueryEndpoint(endpoint: string): boolean {
+  return endpoint === 'b2_get_bucket_notification_rules' || isPartnerQueryEndpoint(endpoint)
 }
 
 function notificationRulePrefixes(body: unknown): readonly string[] | undefined {
@@ -5079,7 +5083,7 @@ class SimulatorTransport implements HttpTransport {
         }
       } else if (
         request.method.toUpperCase() === 'GET' &&
-        isPartnerQueryEndpoint(apiPathParts(parsedUrl.pathname).endpoint)
+        isJsonQueryEndpoint(apiPathParts(parsedUrl.pathname).endpoint)
       ) {
         body = queryParamsBody(parsedUrl.searchParams)
       }

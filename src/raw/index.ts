@@ -1226,14 +1226,19 @@ export class RawClient {
     authToken: string,
     request: GetBucketNotificationRulesRequest,
   ): Promise<GetBucketNotificationRulesResponse> {
-    return this.postJson<GetBucketNotificationRulesResponse>(
-      apiUrl,
-      authToken,
-      'b2_get_bucket_notification_rules',
-      request,
-      undefined,
-      B2_NATIVE_API_V4,
+    const url = new URL(
+      b2Url(apiUrl, { ...B2_NATIVE_API_V4, endpoint: 'b2_get_bucket_notification_rules' }),
     )
+    url.searchParams.set('bucketId', request.bucketId)
+
+    const response = await this.transport.send({
+      url: url.toString(),
+      method: 'GET',
+      headers: {
+        Authorization: authToken,
+      },
+    })
+    return response.json<GetBucketNotificationRulesResponse>()
   }
 
   /**

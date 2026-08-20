@@ -12,9 +12,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
-import { B2Error, BadBucketIdError } from '../../src/errors/index.ts'
+import { BadBucketIdError } from '../../src/errors/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { type EventNotificationRule, EventType } from '../../src/types/notifications.ts'
+import {
+  type EventNotificationRule,
+  EventType,
+  type GetBucketNotificationRulesResponse,
+} from '../../src/types/notifications.ts'
 import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
@@ -92,12 +96,47 @@ function logSetup(message: string): void {
   console.info(`[b2 integration setup] ${message}`)
 }
 
-function isNotificationRulesApiDisabled(err: unknown): boolean {
+function notificationRulesUrl(client: B2Client, bucket: Bucket): string {
+  const url = new URL(
+    `${client.accountInfo.getApiUrl().replace(/\/+$/, '')}/b2api/v4/b2_get_bucket_notification_rules`,
+  )
+  url.searchParams.set('bucketId', bucket.id)
+  return url.toString()
+}
+
+function isNotificationRulesApiDisabledResponse(status: number, body: unknown): boolean {
+  const response = body as Partial<{ readonly code: string; readonly message: string }>
   return (
-    err instanceof B2Error &&
-    err.status === 400 &&
-    err.code === 'bad_request' &&
-    /API not enabled/i.test(err.message)
+    status === 400 &&
+    response.code === 'bad_request' &&
+    typeof response.message === 'string' &&
+    /API not enabled/i.test(response.message)
+  )
+}
+
+async function getNotificationRulesViaDocumentedV4(
+  client: B2Client,
+  bucket: Bucket,
+): Promise<GetBucketNotificationRulesResponse | undefined> {
+  const response = await fetch(notificationRulesUrl(client, bucket), {
+    method: 'GET',
+    headers: {
+      Authorization: client.accountInfo.getAuthToken(),
+    },
+  })
+  const body = (await response.json().catch(() => null)) as unknown
+
+  if (response.ok) {
+    if (body === null || typeof body !== 'object') {
+      throw new Error(`notification rules v4 preflight returned malformed body: ${String(body)}`)
+    }
+    return body as GetBucketNotificationRulesResponse
+  }
+  if (isNotificationRulesApiDisabledResponse(response.status, body)) {
+    return undefined
+  }
+  throw new Error(
+    `notification rules v4 preflight failed with HTTP ${response.status}: ${JSON.stringify(body)}`,
   )
 }
 
@@ -207,22 +246,19 @@ describe.skipIf(skip)('B2 integration', () => {
   })
 
   it('round-trips notification rules against real B2 when enabled', async () => {
-    let initialRules: Awaited<ReturnType<Bucket['getNotificationRules']>>
-    try {
-      initialRules = await bucket.getNotificationRules()
-    } catch (err) {
-      if (isNotificationRulesApiDisabled(err)) {
-        logSetup('notification rules: skipped because API is not enabled for this account')
-        return
-      }
-      throw err
+    const directInitialRules = await getNotificationRulesViaDocumentedV4(client, bucket)
+    if (directInitialRules === undefined) {
+      logSetup('notification rules: skipped because API is not enabled for this account')
+      return
     }
+    expect(directInitialRules.bucketId).toBe(bucket.id)
+    expect(Array.isArray(directInitialRules.eventNotificationRules)).toBe(true)
 
     const rule: EventNotificationRule = {
       eventTypes: [EventType.ObjectCreatedAll],
-      isEnabled: true,
+      isEnabled: false,
       isSuspended: false,
-      name: 'sdk-integration-webhook',
+      name: 'sdk-integration-disabled-webhook',
       objectNamePrefix: 'notification-test/',
       suspensionReason: '',
       targetConfiguration: {
@@ -231,6 +267,8 @@ describe.skipIf(skip)('B2 integration', () => {
       },
     }
 
+    await bucket.setNotificationRules([])
+    const initialRules = await bucket.getNotificationRules()
     expect(initialRules.bucketId).toBe(bucket.id)
     expect(initialRules.eventNotificationRules).toEqual([])
 
@@ -239,11 +277,14 @@ describe.skipIf(skip)('B2 integration', () => {
       expect(setRules.bucketId).toBe(bucket.id)
       expect(setRules.eventNotificationRules).toHaveLength(1)
       expect(setRules.eventNotificationRules[0]?.name).toBe(rule.name)
+      expect(setRules.eventNotificationRules[0]?.isEnabled).toBe(false)
 
       const currentRules = await bucket.getNotificationRules()
+      expect(currentRules.bucketId).toBe(bucket.id)
       expect(currentRules.eventNotificationRules[0]?.targetConfiguration.url).toBe(
         rule.targetConfiguration.url,
       )
+      expect(currentRules.eventNotificationRules[0]?.eventTypes).toEqual(rule.eventTypes)
     } finally {
       await bucket.setNotificationRules([])
     }
