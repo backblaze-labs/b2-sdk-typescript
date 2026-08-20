@@ -12,8 +12,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
-import { BadBucketIdError } from '../../src/errors/index.ts'
+import { B2Error, BadBucketIdError } from '../../src/errors/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
+import { type EventNotificationRule, EventType } from '../../src/types/notifications.ts'
 import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
@@ -89,6 +90,15 @@ function setupErrorMessage(err: unknown): string {
 
 function logSetup(message: string): void {
   console.info(`[b2 integration setup] ${message}`)
+}
+
+function isNotificationRulesApiDisabled(err: unknown): boolean {
+  return (
+    err instanceof B2Error &&
+    err.status === 400 &&
+    err.code === 'bad_request' &&
+    /API not enabled/i.test(err.message)
+  )
 }
 
 async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
@@ -194,6 +204,52 @@ describe.skipIf(skip)('B2 integration', () => {
   it('created the test bucket', () => {
     expect(bucket.name).toBe(bucketName)
     expect(bucket.id).toBeTruthy()
+  })
+
+  it('round-trips notification rules against real B2 when enabled', async () => {
+    let initialRules: Awaited<ReturnType<Bucket['getNotificationRules']>>
+    try {
+      initialRules = await bucket.getNotificationRules()
+    } catch (err) {
+      if (isNotificationRulesApiDisabled(err)) {
+        logSetup('notification rules: skipped because API is not enabled for this account')
+        return
+      }
+      throw err
+    }
+
+    const rule: EventNotificationRule = {
+      eventTypes: [EventType.ObjectCreatedAll],
+      isEnabled: true,
+      isSuspended: false,
+      name: 'sdk-integration-webhook',
+      objectNamePrefix: 'notification-test/',
+      suspensionReason: '',
+      targetConfiguration: {
+        targetType: 'webhook',
+        url: 'https://example.com/b2-sdk-integration-webhook',
+      },
+    }
+
+    expect(initialRules.bucketId).toBe(bucket.id)
+    expect(initialRules.eventNotificationRules).toEqual([])
+
+    try {
+      const setRules = await bucket.setNotificationRules([rule])
+      expect(setRules.bucketId).toBe(bucket.id)
+      expect(setRules.eventNotificationRules).toHaveLength(1)
+      expect(setRules.eventNotificationRules[0]?.name).toBe(rule.name)
+
+      const currentRules = await bucket.getNotificationRules()
+      expect(currentRules.eventNotificationRules[0]?.targetConfiguration.url).toBe(
+        rule.targetConfiguration.url,
+      )
+    } finally {
+      await bucket.setNotificationRules([])
+    }
+
+    const clearedRules = await bucket.getNotificationRules()
+    expect(clearedRules.eventNotificationRules).toEqual([])
   })
 
   it('lists unfinished large files with inclusive startFileId and resolved auto content type', async () => {

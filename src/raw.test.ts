@@ -173,4 +173,28 @@ describe('RawClient list request controls', () => {
     expect(started.contentSha1).toBeNull()
     expect(unfinished.files[0]?.contentSha1).toBeNull()
   })
+
+  it('uses v4 endpoints for bucket notification rules', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        return jsonResponse({ bucketId: bucketId('bucket'), eventNotificationRules: [] })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.getBucketNotificationRules('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+    })
+    await raw.setBucketNotificationRules('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      eventNotificationRules: [],
+    })
+
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://api.example.test/b2api/v4/b2_get_bucket_notification_rules',
+      'https://api.example.test/b2api/v4/b2_set_bucket_notification_rules',
+    ])
+  })
 })

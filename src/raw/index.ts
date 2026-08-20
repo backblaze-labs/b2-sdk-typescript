@@ -1231,6 +1231,8 @@ export class RawClient {
       authToken,
       'b2_get_bucket_notification_rules',
       request,
+      undefined,
+      B2_NATIVE_API_V4,
     )
   }
 
@@ -1252,6 +1254,8 @@ export class RawClient {
       authToken,
       'b2_set_bucket_notification_rules',
       request,
+      undefined,
+      B2_NATIVE_API_V4,
     )
   }
 
