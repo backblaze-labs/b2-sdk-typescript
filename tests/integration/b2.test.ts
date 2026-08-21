@@ -19,6 +19,7 @@ import { Capability, type Capability as CapabilityValue } from '../../src/types/
 import { SSE_B2 } from '../../src/types/encryption.ts'
 import type { LargeFileId } from '../../src/types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
+import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { deleteFileVersionOnce, hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
@@ -275,25 +276,19 @@ function expectBytesEqual(actual: Uint8Array, expected: Uint8Array): void {
 async function uploadRawPart(
   client: B2Client,
   fileId: LargeFileId,
+  fileName: string,
   partNumber: number,
   data: Uint8Array,
 ): Promise<string> {
-  const uploadUrl = await client.raw.getUploadPartUrl(
-    client.accountInfo.getApiUrl(),
-    client.accountInfo.getAuthToken(),
-    { fileId },
-  )
   const contentSha1 = await sha1Hex(data)
-  const part = await client.raw.uploadPart(
-    uploadUrl.uploadUrl,
-    {
-      authorization: uploadUrl.authorizationToken,
-      partNumber,
-      contentLength: data.byteLength,
-      contentSha1,
-    },
+  const part = await uploadPartWithFreshUrl(client.raw, client.accountInfo, fileId, {
+    fileName,
+    partNumber,
     data,
-  )
+    contentLength: data.byteLength,
+    contentSha1,
+    retryResponseBodyFailures: true,
+  })
   expect(part.contentSha1).toBe(contentSha1)
   return part.contentSha1
 }
@@ -676,6 +671,7 @@ describe.skipIf(skip)('B2 integration', () => {
       const firstPartSha1 = await uploadRawPart(
         client,
         started.fileId,
+        fileName,
         1,
         data.subarray(0, partSize),
       )
