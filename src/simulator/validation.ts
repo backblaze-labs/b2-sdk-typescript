@@ -529,6 +529,9 @@ export function validateBucketTypes(bucketTypes: unknown): ValidationError | nul
   if (!Array.isArray(bucketTypes)) {
     return { code: 'bad_request', message: 'bucketTypes must be an array' }
   }
+  if (bucketTypes.length === 0) {
+    return { code: 'bad_request', message: 'bucketTypes must not be empty' }
+  }
   if (bucketTypes.length === 1 && bucketTypes[0] === 'all') return null
   if (bucketTypes.includes('all')) {
     return { code: 'bad_request', message: "bucketTypes may contain 'all' only by itself" }

@@ -226,10 +226,11 @@ describe('validateBucketTypes', () => {
     expect(validateBucketTypes(['all'])).toBeNull()
   })
 
-  it('rejects non-array, non-string, and mixed all filter values', () => {
+  it('rejects empty, non-array, non-string, and mixed all filter values', () => {
     expect(validateBucketTypes(null)?.code).toBe('bad_request')
     expect(validateBucketTypes({})?.code).toBe('bad_request')
     expect(validateBucketTypes('allPrivate')?.code).toBe('bad_request')
+    expect(validateBucketTypes([])?.code).toBe('bad_request')
     expect(validateBucketTypes([42])?.code).toBe('bad_request')
     expect(validateBucketTypes(['all', 'allPrivate'])?.code).toBe('bad_request')
   })

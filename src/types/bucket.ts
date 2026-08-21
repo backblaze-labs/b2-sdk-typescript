@@ -38,7 +38,13 @@ export type KnownBucketResponseType =
 /** Bucket type returned by B2 bucket responses, including future B2-added values. */
 export type BucketResponseType = KnownBucketResponseType | (string & {})
 
-/** Bucket type value accepted by `b2_list_buckets.bucketTypes`, excluding the special `'all'` filter. */
+/**
+ * Bucket type value accepted by `b2_list_buckets.bucketTypes`.
+ *
+ * This includes future B2-added strings, so TypeScript cannot statically exclude
+ * the special `'all'` value from this open string type. Runtime validation still
+ * enforces that `'all'` is only valid as `['all']`.
+ */
 export type BucketListType = BucketResponseType
 
 /**
@@ -46,8 +52,10 @@ export type BucketListType = BucketResponseType
  *
  * Use `['all']` by itself to request all bucket types. Other filters may include
  * documented response types such as `'shared'` and future B2-added type strings.
+ * Because future bucket types are modeled as an open string, TypeScript cannot
+ * reject mixed arrays containing `'all'`; B2 and the simulator reject them at runtime.
  */
-export type BucketTypesFilter = readonly ['all'] | readonly BucketListType[]
+export type BucketTypesFilter = readonly ['all'] | readonly [BucketListType, ...BucketListType[]]
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {

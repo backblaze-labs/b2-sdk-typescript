@@ -200,6 +200,8 @@ describe('enum value typing (compile-time)', () => {
     expect(acceptsListBucketTypes(['all'])).toBe(true)
     // @ts-expect-error shared is a response-only bucket type.
     acceptsCreateBucketType(KnownBucketResponseType.Shared)
+    // @ts-expect-error bucketTypes must contain at least one filter value.
+    acceptsListBucketTypes([])
   })
 
   it('LegalHoldValue.On is assignable to LegalHoldValue', () => {

@@ -598,7 +598,7 @@ describe('B2Simulator listBuckets filters', () => {
 
   it('returns structured 400 responses for malformed bucketTypes filters', async () => {
     const transport = sim.transport()
-    for (const bucketTypes of [null, {}, 'allPrivate', [42], ['all', 'allPrivate']]) {
+    for (const bucketTypes of [null, {}, 'allPrivate', [], [42], ['all', 'allPrivate']]) {
       const resp = await transport.send({
         method: 'POST',
         url: 'http://localhost:0/b2api/v3/b2_list_buckets',
