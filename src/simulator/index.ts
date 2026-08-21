@@ -946,17 +946,28 @@ function hasCustomerEncryptionHeaders(headers: Record<string, string>): boolean 
   )
 }
 
+function isExactNoEncryptionWireSetting(encryption: Record<string, unknown>): boolean {
+  return (
+    encryption['mode'] === null &&
+    encryption['algorithm'] === null &&
+    Object.keys(encryption).length === 2
+  )
+}
+
 async function storedServerSideEncryption(
   encryption: EncryptionSetting | BucketDefaultServerSideEncryption,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const runtimeEncryption = encryption as unknown as Record<string, unknown>
   if (encryption.mode === null) {
+    if (isExactNoEncryptionWireSetting(runtimeEncryption)) return { mode: EncryptionMode.None }
     if (hasCustomerEncryptionFields(runtimeEncryption)) {
       return encryptionValidationError(
         'No-encryption settings must not include SSE-C customer keys',
       )
     }
-    return { mode: EncryptionMode.None }
+    return encryptionValidationError(
+      'No-encryption wire settings must be exactly { mode: null, algorithm: null }',
+    )
   }
   if (encryption.mode === EncryptionMode.SseC) {
     if (runtimeEncryption['algorithm'] === undefined) {

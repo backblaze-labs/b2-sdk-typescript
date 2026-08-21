@@ -5131,11 +5131,47 @@ describe('B2Simulator server-side encryption fidelity', () => {
       customerKey: valid.customerKey,
       customerKeyMd5: valid.customerKeyMd5,
     } as unknown as EncryptionSetting
+    const nullWithoutAlgorithm = { mode: null } as unknown as EncryptionSetting
+    const nullWithExtraField = {
+      mode: null,
+      algorithm: null,
+      extra: 'ignored',
+    } as unknown as EncryptionSetting
+    const nullWithCustomerKey = {
+      mode: null,
+      algorithm: null,
+      customerKey: valid.customerKey,
+      customerKeyMd5: valid.customerKeyMd5,
+    } as unknown as EncryptionSetting
     await expect(
       rawStartLargeFile('sse-b2-extra-key.bin', sseB2WithCustomerKey),
     ).rejects.toMatchObject({ status: 400 })
     await expect(
       rawStartLargeFile('none-extra-key.bin', noneWithCustomerKey),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      rawStartLargeFile('null-missing-algorithm.bin', nullWithoutAlgorithm),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      rawStartLargeFile('null-extra-field.bin', nullWithExtraField),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'No-encryption wire settings must be exactly { mode: null, algorithm: null }',
+    })
+    await expect(
+      bucket.copyFile({
+        sourceFileId: source.fileId,
+        fileName: 'null-extra-field-copy.txt',
+        destinationServerSideEncryption: nullWithExtraField,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      client.raw.copyPart(apiUrl, authToken, {
+        sourceFileId: source.fileId,
+        largeFileId: fileIdOf(started.fileId),
+        partNumber: 2,
+        destinationServerSideEncryption: nullWithCustomerKey,
+      }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
