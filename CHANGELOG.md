@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.
+
 ## [0.3.0] - 2026-08-18
 
 ### Added
