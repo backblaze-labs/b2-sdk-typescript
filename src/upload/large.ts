@@ -5,7 +5,7 @@ import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
 import { type ContentSource, readNextNonEmptyStreamChunk } from '../streams/source.ts'
 import type { BucketDefaultRetention } from '../types/bucket.ts'
-import type { EncryptionSetting } from '../types/encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
@@ -73,8 +73,8 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption settings applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
-  /** Effective bucket default encryption used when serverSideEncryption is omitted. */
-  readonly bucketDefaultServerSideEncryption?: EncryptionSetting
+  /** Effective readable bucket default encryption used when serverSideEncryption is omitted. */
+  readonly bucketDefaultServerSideEncryption?: PublicEncryptionSetting
   /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention used when fileRetention is omitted. */

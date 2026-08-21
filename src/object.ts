@@ -14,6 +14,7 @@ import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
 import type { BucketDefaultRetention } from './types/bucket.ts'
+import type { PublicEncryptionSetting } from './types/encryption.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
@@ -37,6 +38,14 @@ function bucketDefaultRetentionSnapshot(info: Bucket['info']): BucketDefaultRete
   if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
   if (fileLock.value === null) return { unreadable: false }
   return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function bucketDefaultServerSideEncryption(
+  info: Bucket['info'],
+): PublicEncryptionSetting | undefined {
+  const encryption = info.defaultServerSideEncryption
+  if (!encryption.isClientAuthorizedToRead) return undefined
+  return encryption.value ?? undefined
 }
 
 function resumeNeedsFreshBucketDefaults(options: B2ObjectUploadOptions): boolean {
@@ -150,12 +159,15 @@ export class B2Object {
         ? await this.fetchFreshBucketInfo()
         : this.bucket.info
       const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
+      const bucketDefaultSse = bucketDefaultServerSideEncryption(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.bucket.id,
         fileName: this.fileName,
         retry: uploadRetryOptions,
-        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultSse !== undefined
+          ? { bucketDefaultServerSideEncryption: bucketDefaultSse }
+          : {}),
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
           : {}),

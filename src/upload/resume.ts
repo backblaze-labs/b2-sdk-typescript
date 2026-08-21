@@ -85,8 +85,8 @@ export interface ResumeCandidateCriteria {
   readonly parts: readonly ResumePartPlan[]
   /** Requested B2 upload timestamp override, if configured by the caller. */
   readonly customUploadTimestamp?: number
-  /** Explicit server-side encryption option, if configured by the caller. */
-  readonly serverSideEncryption?: EncryptionSetting
+  /** Explicit or effective readable bucket default server-side encryption. */
+  readonly serverSideEncryption?: EncryptionSetting | PublicEncryptionSetting
   /** Explicit Object Lock retention option, if configured by the caller. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention when the caller omits fileRetention. */
@@ -625,7 +625,7 @@ type ListedEncryption = PublicEncryptionSetting | undefined
 
 function serverSideEncryptionRejectReason(
   candidate: ListedEncryption,
-  expected: EncryptionSetting | undefined,
+  expected: EncryptionSetting | PublicEncryptionSetting | undefined,
 ): 'encryption-mismatch' | 'sse-c-unsupported' | null {
   if (expected?.mode === EncryptionMode.SseC) return 'sse-c-unsupported'
 

@@ -1,4 +1,4 @@
-import type { EncryptionSetting } from './encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
 import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
@@ -170,7 +170,12 @@ export interface BucketInfo {
   /** CORS rules configured on this bucket. */
   readonly corsRules: readonly CorsRule[]
   /** Default server-side encryption setting for new files in this bucket. */
-  readonly defaultServerSideEncryption: EncryptionSetting
+  readonly defaultServerSideEncryption: {
+    /** Whether the caller is authorized to read default server-side encryption settings. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Default server-side encryption settings, or null if the caller lacks read authorization. */
+    readonly value: PublicEncryptionSetting | null
+  }
   /** File Lock configuration including authorization status and current settings. */
   readonly fileLockConfiguration: {
     /** Whether the caller is authorized to read file lock settings. */

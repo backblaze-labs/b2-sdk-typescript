@@ -797,6 +797,21 @@ function publicServerSideEncryption(
   return encryption
 }
 
+function publicBucketDefaultServerSideEncryption(
+  encryption: EncryptionSetting | undefined,
+): BucketInfo['defaultServerSideEncryption'] {
+  return {
+    isClientAuthorizedToRead: true,
+    value: publicServerSideEncryption(encryption ?? { mode: EncryptionMode.None }),
+  }
+}
+
+function bucketDefaultServerSideEncryptionForStorage(info: BucketInfo): PublicEncryptionSetting {
+  const encryption = info.defaultServerSideEncryption
+  if (!encryption.isClientAuthorizedToRead) return { mode: null, algorithm: null }
+  return encryption.value ?? { mode: null, algorithm: null }
+}
+
 function customerKeyDigest(customerKey: Uint8Array): string {
   let first = 0x811c9dc5
   let second = 0x27d4eb2d
@@ -883,9 +898,17 @@ function hasCustomerEncryptionHeaders(headers: Record<string, string>): boolean 
 }
 
 async function storedServerSideEncryption(
-  encryption: EncryptionSetting,
+  encryption: EncryptionSetting | PublicEncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const runtimeEncryption = encryption as unknown as Record<string, unknown>
+  if (encryption.mode === null) {
+    if (hasCustomerEncryptionFields(runtimeEncryption)) {
+      return encryptionValidationError(
+        'No-encryption settings must not include SSE-C customer keys',
+      )
+    }
+    return { mode: EncryptionMode.None }
+  }
   if (encryption.mode === EncryptionMode.SseC) {
     if (runtimeEncryption['algorithm'] === undefined) {
       return encryptionValidationError('SSE-C customer algorithm is required')
@@ -893,8 +916,8 @@ async function storedServerSideEncryption(
     if (encryption.algorithm !== EncryptionAlgorithm.Aes256) {
       return encryptionValidationError('SSE-C customer algorithm must be AES256')
     }
-    const customerKey = encryption.customerKey
-    const customerKeyMd5 = encryption.customerKeyMd5
+    const customerKey = 'customerKey' in encryption ? encryption.customerKey : undefined
+    const customerKeyMd5 = 'customerKeyMd5' in encryption ? encryption.customerKeyMd5 : undefined
     if (typeof customerKey !== 'string' || customerKey === '') {
       return encryptionValidationError('SSE-C customer key is required')
     }
@@ -947,7 +970,7 @@ async function storedServerSideEncryption(
 
 async function uploadServerSideEncryption(
   headers: Record<string, string>,
-  fallback: EncryptionSetting,
+  fallback: EncryptionSetting | PublicEncryptionSetting,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
   const customerKey = headers['x-bz-server-side-encryption-customer-key']
@@ -2928,7 +2951,7 @@ export class B2Simulator {
 
     const serverSideEncryption = await uploadServerSideEncryption(
       headers,
-      bucket.info.defaultServerSideEncryption,
+      bucketDefaultServerSideEncryptionForStorage(bucket.info),
     )
     if ('status' in serverSideEncryption) return serverSideEncryption
     const customUploadTimestamp = this.parseCustomUploadTimestamp(
@@ -3199,7 +3222,9 @@ export class B2Simulator {
     requested: EncryptionSetting | undefined,
   ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
     if (requested !== undefined) return await storedServerSideEncryption(requested)
-    return await storedServerSideEncryption(destinationBucket.info.defaultServerSideEncryption)
+    return await storedServerSideEncryption(
+      bucketDefaultServerSideEncryptionForStorage(destinationBucket.info),
+    )
   }
 
   private async validateCopyPartDestinationEncryption(
@@ -3427,7 +3452,7 @@ export class B2Simulator {
       accountId: string
       bucketInfo?: Record<string, string>
       corsRules?: BucketInfo['corsRules']
-      defaultServerSideEncryption?: BucketInfo['defaultServerSideEncryption']
+      defaultServerSideEncryption?: EncryptionSetting
       defaultRetention?: BucketRetentionPolicy
       fileLockEnabled?: boolean
       lifecycleRules?: BucketInfo['lifecycleRules']
@@ -3474,7 +3499,9 @@ export class B2Simulator {
       bucketType: req.bucketType,
       bucketInfo: req.bucketInfo ?? {},
       corsRules: req.corsRules ?? [],
-      defaultServerSideEncryption: req.defaultServerSideEncryption ?? { mode: EncryptionMode.None },
+      defaultServerSideEncryption: publicBucketDefaultServerSideEncryption(
+        req.defaultServerSideEncryption,
+      ),
       fileLockConfiguration: {
         isClientAuthorizedToRead: true,
         value: {
@@ -3618,9 +3645,9 @@ export class B2Simulator {
         : {}),
       ...(req['defaultServerSideEncryption'] !== undefined
         ? {
-            defaultServerSideEncryption: req[
-              'defaultServerSideEncryption'
-            ] as BucketInfo['defaultServerSideEncryption'],
+            defaultServerSideEncryption: publicBucketDefaultServerSideEncryption(
+              req['defaultServerSideEncryption'] as EncryptionSetting,
+            ),
           }
         : {}),
       revision: bucket.info.revision + 1,
@@ -3981,7 +4008,7 @@ export class B2Simulator {
     const fid = this.genId('4_z')
     const uploadTimestamp = customUploadTimestamp.timestamp ?? this.monotonicTimestamp()
     const serverSideEncryption = await storedServerSideEncryption(
-      req.serverSideEncryption ?? bucket.info.defaultServerSideEncryption,
+      req.serverSideEncryption ?? bucketDefaultServerSideEncryptionForStorage(bucket.info),
     )
     if ('status' in serverSideEncryption) return serverSideEncryption
     const replicationStatus = this.replicationStatusForNewFile(req.bucketId, req.fileName)

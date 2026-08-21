@@ -19,7 +19,7 @@ import type {
   ReadableReplicationConfiguration,
 } from './types/bucket.ts'
 import type { DownloadAuthorizationResponse } from './types/download.ts'
-import type { EncryptionSetting } from './types/encryption.ts'
+import type { EncryptionSetting, PublicEncryptionSetting } from './types/encryption.ts'
 import type {
   FileVersion,
   ListFileNamesResponse,
@@ -136,6 +136,12 @@ function bucketDefaultRetentionSnapshot(info: BucketInfo): BucketDefaultRetentio
   return { retention: fileLock.value.defaultRetention, unreadable: false }
 }
 
+function bucketDefaultServerSideEncryption(info: BucketInfo): PublicEncryptionSetting | undefined {
+  const encryption = info.defaultServerSideEncryption
+  if (!encryption.isClientAuthorizedToRead) return undefined
+  return encryption.value ?? undefined
+}
+
 function resumeNeedsFreshBucketDefaults(options: BucketUploadOptions): boolean {
   const resumeRequested = options.resume === true || options.resumeFileId !== undefined
   return (
@@ -205,11 +211,14 @@ export class Bucket {
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
       const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
+      const bucketDefaultSse = bucketDefaultServerSideEncryption(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
         retry: uploadRetryOptions,
-        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultSse !== undefined
+          ? { bucketDefaultServerSideEncryption: bucketDefaultSse }
+          : {}),
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
           : {}),

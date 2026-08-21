@@ -14,7 +14,13 @@ import {
   type LifecycleRule,
 } from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
-import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
+import {
+  EncryptionKey,
+  type EncryptionSetting,
+  SSE_B2,
+  SSE_NONE,
+  sseCustomer,
+} from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
@@ -4687,6 +4693,31 @@ describe('B2Simulator server-side encryption fidelity', () => {
       ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
     })
   }
+
+  it('returns bucket default encryption in a read-authorized envelope', async () => {
+    const defaultNone = {
+      isClientAuthorizedToRead: true,
+      value: { mode: null, algorithm: null },
+    }
+    expect(bucket.info.defaultServerSideEncryption).toEqual(defaultNone)
+
+    const sseB2Bucket = await client.createBucket({
+      bucketName: 'encryption-fidelity-default-sse-b2',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    const defaultSseB2 = {
+      isClientAuthorizedToRead: true,
+      value: SSE_B2,
+    }
+    expect(sseB2Bucket.info.defaultServerSideEncryption).toEqual(defaultSseB2)
+
+    const listed = await client.listBuckets({ bucketId: sseB2Bucket.id })
+    expect(listed[0]?.info.defaultServerSideEncryption).toEqual(defaultSseB2)
+
+    const updated = await sseB2Bucket.update({ defaultServerSideEncryption: SSE_NONE })
+    expect(updated.defaultServerSideEncryption).toEqual(defaultNone)
+  })
 
   it('returns B2 null no-encryption shapes from public upload responses', async () => {
     const apiUrl = client.accountInfo.getApiUrl()
