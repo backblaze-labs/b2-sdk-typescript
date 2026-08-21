@@ -10,8 +10,11 @@ import { deleteFileVersionOnce, hasB2ErrorCode } from './b2-cleanup.ts'
 export const integrationBucketPrefix = 'sdk-it-'
 export const objectLockBucketPrefix = 'sdk-it-lock-'
 export const legacyBucketPrefix = 'sdk-test-'
+export const maxBucketNameLength = 50
 export const staleBucketAgeMs = 60 * 60 * 1000
 
+const maxRunIdSegmentLength = 8
+const maxRunAttemptSegmentLength = 2
 const setupStepTimeoutMs = 60 * 1000
 const cleanupAttempts = 3
 const cleanupRetryDelayMs = 250
@@ -26,16 +29,44 @@ interface CleanupFailureContext {
   readonly err: unknown
 }
 
+function compactBucketNameSegment(
+  value: string | undefined,
+  fallback: string,
+  maxLength: number,
+): string {
+  const trimmed = value?.trim()
+  if (trimmed === undefined || trimmed === '') return fallback
+  const compact = /^\d+$/.test(trimmed) ? BigInt(trimmed).toString(36) : trimmed
+  const safe = compact.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  return (safe === '' ? fallback : safe).slice(-maxLength)
+}
+
+function bucketNameLabelSegment(label: string | undefined, maxLength: number): string | undefined {
+  if (label === undefined || maxLength < 1) return undefined
+  const safe = label
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLength)
+    .replace(/[-.]+$/g, '')
+  return safe === '' ? undefined : safe
+}
+
 export function makeBucketName(label?: string, options: { objectLock?: boolean } = {}): string {
   const runId = process.env['GITHUB_RUN_ID']
   const runAttempt = process.env['GITHUB_RUN_ATTEMPT'] ?? '1'
-  const now = Date.now()
+  const timestamp = `${Date.now()}`
   const prefix = options.objectLock === true ? objectLockBucketPrefix : integrationBucketPrefix
-  const suffix = label === undefined ? `${now}` : `${label}-${now}`
-  if (runId !== undefined && runId !== '') {
-    return `${prefix}${runId}-${runAttempt}-${suffix}`
-  }
-  return `${prefix}${suffix}`
+  const runSegment = compactBucketNameSegment(runId, 'local', maxRunIdSegmentLength)
+  const attemptSegment = compactBucketNameSegment(runAttempt, '1', maxRunAttemptSegmentLength)
+  const fixedLength =
+    prefix.length + runSegment.length + 1 + attemptSegment.length + 1 + timestamp.length
+  const labelSegment = bucketNameLabelSegment(label, maxBucketNameLength - fixedLength - 1)
+  const segments =
+    labelSegment === undefined
+      ? [runSegment, attemptSegment, timestamp]
+      : [runSegment, attemptSegment, labelSegment, timestamp]
+  return `${prefix}${segments.join('-')}`
 }
 
 export function isObjectLockIntegrationBucketName(name: string): boolean {

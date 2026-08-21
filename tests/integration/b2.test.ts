@@ -29,6 +29,7 @@ import {
   isObjectLockUnavailableError,
   logFeatureSkip,
   makeBucketName,
+  maxBucketNameLength,
   objectLockBucketPrefix,
   requireFeatureCapabilities,
   safeErrorSummary,
@@ -127,6 +128,37 @@ async function withRecommendedPartSize<T>(
 }
 
 describe('B2 integration cleanup safety', () => {
+  it('keeps generated bucket names within the B2 length limit', () => {
+    const previousRunId = process.env['GITHUB_RUN_ID']
+    const previousRunAttempt = process.env['GITHUB_RUN_ATTEMPT']
+    process.env['GITHUB_RUN_ID'] = '123456789012345'
+    process.env['GITHUB_RUN_ATTEMPT'] = '123'
+
+    try {
+      const objectLockName = makeBucketName('object-lock', { objectLock: true })
+      const longLabelName = makeBucketName('object-lock-cleanup-overflow', {
+        objectLock: true,
+      })
+
+      expect(objectLockName.startsWith(objectLockBucketPrefix)).toBe(true)
+      expect(objectLockName).toMatch(/\d{13}$/)
+      expect(objectLockName.length).toBeLessThanOrEqual(maxBucketNameLength)
+      expect(longLabelName).toMatch(/\d{13}$/)
+      expect(longLabelName.length).toBeLessThanOrEqual(maxBucketNameLength)
+    } finally {
+      if (previousRunId === undefined) {
+        delete process.env['GITHUB_RUN_ID']
+      } else {
+        process.env['GITHUB_RUN_ID'] = previousRunId
+      }
+      if (previousRunAttempt === undefined) {
+        delete process.env['GITHUB_RUN_ATTEMPT']
+      } else {
+        process.env['GITHUB_RUN_ATTEMPT'] = previousRunAttempt
+      }
+    }
+  })
+
   it('does not use Object Lock bypass cleanup for prefix-discovered stale buckets', async () => {
     const calls = {
       updateFileLegalHold: 0,
