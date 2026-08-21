@@ -1,5 +1,5 @@
 import type { Bucket } from '../../bucket.ts'
-import { FileAction, type FileVersion } from '../../types/file.ts'
+import { FileAction, type FileVersion, type ListedConcreteFileVersion } from '../../types/file.ts'
 import type { FileId } from '../../types/ids.ts'
 import { isSignalAbortError } from '../../util/abort.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
@@ -32,7 +32,7 @@ const MAX_EMPTY_B2_SCAN_PAGES = 100
 
 interface B2ScanEntry {
   relativePath: string
-  versions: FileVersion[]
+  versions: ListedConcreteFileVersion[]
 }
 
 interface VisibleB2ScanEntry extends B2ScanEntry {
@@ -119,6 +119,17 @@ export class B2Folder implements SyncFolder {
         if (scanIsAborted(options)) return
         assertScanEntryLimit(listedVersions + 1, maxScanEntries)
         listedVersions++
+
+        const runtimeFile = fv as { readonly action?: unknown; readonly fileId?: unknown }
+        if (runtimeFile.action === FileAction.Folder || typeof runtimeFile.fileId !== 'string') {
+          throw emitScanError(
+            options,
+            'failed to scan B2 file versions',
+            new Error(
+              'B2 listFileVersions returned a delimiter folder row or row without a string fileId even though the scanner did not request delimiter grouping',
+            ),
+          )
+        }
 
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before

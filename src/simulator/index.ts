@@ -31,7 +31,15 @@ import {
   type EncryptionSetting,
   type PublicEncryptionSetting,
 } from '../types/encryption.ts'
-import { FileAction, type FileVersion, type ReplicationStatus } from '../types/file.ts'
+import {
+  type ConcreteFileAction,
+  FileAction,
+  type FileVersion,
+  type FileVersionListEntry,
+  type FolderFileVersion,
+  type ListedFileVersion,
+  type ReplicationStatus,
+} from '../types/file.ts'
 import {
   type AuthToken,
   accountId as accountIdOf,
@@ -264,6 +272,12 @@ function compareB2FileNames(a: string, b: string): number {
   if (a < b) return -1
   if (a > b) return 1
   return 0
+}
+
+function compareFileVersionListEntries(a: FileVersionListEntry, b: FileVersionListEntry): number {
+  const nameCmp = compareB2FileNames(a.fileName, b.fileName)
+  if (nameCmp !== 0) return nameCmp
+  return b.uploadTimestamp - a.uploadTimestamp
 }
 
 import { missingCapabilitiesFor } from './capabilities.ts'
@@ -2653,6 +2667,7 @@ export class B2Simulator {
         return this.listFileNames(
           body as {
             bucketId: string
+            delimiter?: string
             maxFileCount?: number
             prefix?: string
             startFileName?: string
@@ -2662,6 +2677,7 @@ export class B2Simulator {
         return this.listFileVersions(
           body as {
             bucketId: string
+            delimiter?: string
             maxFileCount?: number
             startFileName?: string
             startFileId?: string
@@ -3746,6 +3762,7 @@ export class B2Simulator {
 
   private listFileNames(req: {
     bucketId: string
+    delimiter?: string
     maxFileCount?: number
     prefix?: string
     startFileName?: string
@@ -3764,12 +3781,19 @@ export class B2Simulator {
     // of the listing would diverge from production behaviour and hide a
     // real test seam: the action / SDK consumer must skip hide-action
     // entries when iterating over "live" files.
-    let allFiles = [...bucket.files.entries()]
+    const currentVersions = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .map(([_, versions]) => versions[versions.length - 1])
       .filter((v): v is StoredFile => v !== undefined)
       .map((v) => v.fileVersion)
       .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
+
+    let allFiles = this.applyListDelimiter({
+      bucketId: req.bucketId,
+      delimiter: req.delimiter,
+      entries: currentVersions,
+      prefix,
+    })
 
     if (req.startFileName) {
       const start = req.startFileName
@@ -3784,6 +3808,7 @@ export class B2Simulator {
 
   private listFileVersions(req: {
     bucketId: string
+    delimiter?: string
     maxFileCount?: number
     startFileName?: string
     startFileId?: string
@@ -3796,7 +3821,7 @@ export class B2Simulator {
     if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
-    const allVersions = [...bucket.files.entries()]
+    const versions = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .flatMap(([_, versions]) => versions.map((v) => v.fileVersion))
       .sort((a, b) => {
@@ -3804,6 +3829,12 @@ export class B2Simulator {
         if (nameCmp !== 0) return nameCmp
         return b.uploadTimestamp - a.uploadTimestamp
       })
+    const allVersions = this.applyListDelimiter({
+      bucketId: req.bucketId,
+      delimiter: req.delimiter,
+      entries: versions,
+      prefix,
+    })
 
     // Pagination cursor: `(startFileName, startFileId)` is composite. B2
     // returns BOTH at a page boundary and expects the client to pass BOTH
@@ -3838,6 +3869,67 @@ export class B2Simulator {
     const nextFileId = hasMore ? (allVersions[startIdx + max]?.fileId ?? null) : null
 
     return { status: 200, body: { files: sliced, nextFileName, nextFileId } }
+  }
+
+  private applyListDelimiter(params: {
+    bucketId: string
+    delimiter: string | undefined
+    entries: readonly FileVersion[]
+    prefix: string
+  }): FileVersionListEntry[] {
+    if (params.delimiter === undefined || params.delimiter === '') {
+      return params.entries.map((entry) => this.toListEntry(entry))
+    }
+
+    const grouped: FileVersionListEntry[] = []
+    const seenFolders = new Set<string>()
+    for (const entry of params.entries) {
+      const delimiterIndex = entry.fileName.indexOf(params.delimiter, params.prefix.length)
+      if (delimiterIndex === -1) {
+        grouped.push(this.toListEntry(entry))
+        continue
+      }
+
+      const folderName = entry.fileName.slice(0, delimiterIndex + params.delimiter.length)
+      if (!seenFolders.has(folderName)) {
+        seenFolders.add(folderName)
+        grouped.push(this.makeFolderListEntry(params.bucketId, folderName))
+      }
+    }
+
+    return grouped.sort(compareFileVersionListEntries)
+  }
+
+  private toListEntry(entry: FileVersion): FileVersionListEntry {
+    if (entry.action !== FileAction.Hide) return entry as ListedFileVersion
+    const {
+      contentType: _contentType,
+      fileRetention,
+      legalHold,
+      serverSideEncryption,
+      ...listed
+    } = entry
+    void _contentType
+    void fileRetention
+    void legalHold
+    void serverSideEncryption
+    return { ...listed, action: FileAction.Hide, contentType: null }
+  }
+
+  private makeFolderListEntry(bucketId: string, fileName: string): FolderFileVersion {
+    return {
+      accountId: accountIdOf(this.accountId),
+      action: FileAction.Folder,
+      bucketId: bucketIdOf(bucketId),
+      contentLength: 0,
+      contentMd5: null,
+      contentSha1: null,
+      contentType: null,
+      fileId: null,
+      fileInfo: {},
+      fileName,
+      uploadTimestamp: 0,
+    }
   }
 
   private getFileInfo(req: { fileId: string }): SimulatorJsonResponse {
@@ -4811,7 +4903,7 @@ export class B2Simulator {
     readonly contentType: string
     readonly contentLength: number
     readonly contentSha1: string
-    readonly action: FileAction
+    readonly action: ConcreteFileAction
     readonly fileInfo?: Record<string, string>
     readonly fileRetention?: FileRetentionValue | null
     readonly legalHold?: LegalHoldValue | null

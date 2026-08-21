@@ -21,7 +21,12 @@ import {
   SSE_NONE,
   sseCustomer,
 } from '../types/encryption.ts'
-import { MetadataDirective } from '../types/file.ts'
+import {
+  FileAction,
+  type FileVersionListEntry,
+  type ListedFileVersion,
+  MetadataDirective,
+} from '../types/file.ts'
 import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { ReplicationConfiguration } from '../types/replication.ts'
@@ -44,6 +49,19 @@ import {
  * Each test cites the spec source inline so future maintainers can
  * verify against the live B2 docs.
  */
+
+function expectConcreteListEntry(
+  entry: FileVersionListEntry | undefined,
+): asserts entry is ListedFileVersion {
+  expect(entry).toBeDefined()
+  if (
+    entry === undefined ||
+    entry.action === FileAction.Folder ||
+    entry.action === FileAction.Hide
+  ) {
+    throw new Error('expected a listed file-version entry with file metadata')
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Input validation
@@ -1027,6 +1045,159 @@ describe('B2Simulator listing order', () => {
       bucketId: bucket.id,
     })
     expect(unfinished.files.map((file) => file.fileName)).toEqual(['Z-large.bin', 'a-large.bin'])
+  })
+
+  it('honors delimiter and prefix in listFileNames with virtual folder rows', async () => {
+    for (const fileName of [
+      'photos/alice.jpg',
+      'photos/alfred.jpg',
+      'photos/cats/fluffy.jpg',
+      'photos/cats/mittens.jpg',
+      'photos/dogs/spot.jpg',
+      'photos/lilly.jpg',
+    ]) {
+      await bucket.upload({
+        fileName,
+        contentType: 'image/jpeg',
+        source: new BufferSource(new TextEncoder().encode(fileName)),
+      })
+    }
+
+    const root = await bucket.listFileNames({ delimiter: '/' })
+    expect(root.files.map((file) => ({ action: file.action, fileName: file.fileName }))).toEqual([
+      { action: FileAction.Folder, fileName: 'photos/' },
+    ])
+    expect(root.files[0]).toMatchObject({
+      action: FileAction.Folder,
+      contentLength: 0,
+      contentMd5: null,
+      contentSha1: null,
+      contentType: null,
+      fileId: null,
+      fileInfo: {},
+      uploadTimestamp: 0,
+    })
+
+    const photos = await bucket.listFileNames({ prefix: 'photos/', delimiter: '/' })
+    expect(
+      photos.files.map((file) => ({
+        action: file.action,
+        contentType: file.contentType,
+        fileId: file.fileId,
+        fileName: file.fileName,
+      })),
+    ).toEqual([
+      {
+        action: FileAction.Upload,
+        contentType: 'image/jpeg',
+        fileId: expect.any(String),
+        fileName: 'photos/alfred.jpg',
+      },
+      {
+        action: FileAction.Upload,
+        contentType: 'image/jpeg',
+        fileId: expect.any(String),
+        fileName: 'photos/alice.jpg',
+      },
+      {
+        action: FileAction.Folder,
+        contentType: null,
+        fileId: null,
+        fileName: 'photos/cats/',
+      },
+      {
+        action: FileAction.Folder,
+        contentType: null,
+        fileId: null,
+        fileName: 'photos/dogs/',
+      },
+      {
+        action: FileAction.Upload,
+        contentType: 'image/jpeg',
+        fileId: expect.any(String),
+        fileName: 'photos/lilly.jpg',
+      },
+    ])
+  })
+
+  it('honors delimiter in listFileVersions and nulls folder and hide fields', async () => {
+    const changelog = await bucket.upload({
+      fileName: 'docs/changelog.txt',
+      contentType: 'text/plain',
+      source: new BufferSource(new TextEncoder().encode('visible changelog')),
+    })
+    await bucket.upload({
+      fileName: 'docs/archive/old.txt',
+      contentType: 'text/plain',
+      source: new BufferSource(new TextEncoder().encode('old')),
+    })
+    await bucket.upload({
+      fileName: 'docs/archive/older.txt',
+      contentType: 'text/plain',
+      source: new BufferSource(new TextEncoder().encode('older')),
+    })
+    const readme = await bucket.upload({
+      fileName: 'docs/readme.txt',
+      contentType: 'text/markdown',
+      source: new BufferSource(new TextEncoder().encode('# docs')),
+    })
+    const hidden = await bucket.hideFile('docs/changelog.txt')
+
+    const versions = await bucket.listFileVersions({ prefix: 'docs/', delimiter: '/' })
+    expect(
+      versions.files.map((file) => ({
+        action: file.action,
+        contentType: file.contentType,
+        fileId: file.fileId,
+        fileName: file.fileName,
+      })),
+    ).toEqual([
+      {
+        action: FileAction.Folder,
+        contentType: null,
+        fileId: null,
+        fileName: 'docs/archive/',
+      },
+      {
+        action: FileAction.Hide,
+        contentType: null,
+        fileId: hidden.fileId,
+        fileName: 'docs/changelog.txt',
+      },
+      {
+        action: FileAction.Upload,
+        contentType: 'text/plain',
+        fileId: changelog.fileId,
+        fileName: 'docs/changelog.txt',
+      },
+      {
+        action: FileAction.Upload,
+        contentType: 'text/markdown',
+        fileId: readme.fileId,
+        fileName: 'docs/readme.txt',
+      },
+    ])
+    const hideRow = versions.files.find((file) => file.action === FileAction.Hide)
+    expect(hideRow).toMatchObject({
+      action: FileAction.Hide,
+      contentType: null,
+      fileId: hidden.fileId,
+      fileName: 'docs/changelog.txt',
+    })
+    expect(hideRow).not.toHaveProperty('fileRetention')
+    expect(hideRow).not.toHaveProperty('legalHold')
+    expect(hideRow).not.toHaveProperty('serverSideEncryption')
+
+    expect(versions.files[0]).toMatchObject({
+      action: FileAction.Folder,
+      contentLength: 0,
+      contentMd5: null,
+      contentSha1: null,
+      contentType: null,
+      fileId: null,
+      fileInfo: {},
+      uploadTimestamp: 0,
+    })
   })
 })
 
@@ -4423,10 +4594,14 @@ describe('B2Simulator upload write-path validation', () => {
     expect(fileInfo.replicationStatus).toBe('PENDING')
 
     const names = await bucket.listFileNames({ prefix: 'replicated/small.bin' })
-    expect(names.files[0]?.replicationStatus).toBe('PENDING')
+    const listedName = names.files[0]
+    expectConcreteListEntry(listedName)
+    expect(listedName.replicationStatus).toBe('PENDING')
 
     const versions = await bucket.listFileVersions({ prefix: 'replicated/small.bin' })
-    expect(versions.files[0]?.replicationStatus).toBe('PENDING')
+    const listedVersion = versions.files[0]
+    expectConcreteListEntry(listedVersion)
+    expect(listedVersion.replicationStatus).toBe('PENDING')
 
     const hidden = await bucket.hideFile('replicated/small.bin')
     expect(hidden).not.toHaveProperty('replicationStatus')
@@ -4853,7 +5028,12 @@ describe('B2Simulator server-side encryption fidelity', () => {
     expect(finished.serverSideEncryption).toEqual({ mode: null, algorithm: null })
 
     const listed = await bucket.listFileNames({ prefix: 'no-encryption' })
-    expect(listed.files.map((file) => file.serverSideEncryption)).toEqual([
+    expect(
+      listed.files.map((file) => {
+        expectConcreteListEntry(file)
+        return file.serverSideEncryption
+      }),
+    ).toEqual([
       { mode: null, algorithm: null },
       { mode: null, algorithm: null },
     ])
@@ -5342,8 +5522,10 @@ describe('B2Simulator server-side encryption fidelity', () => {
       { fileId: uploaded.fileId },
     )
     const listed = await bucket.listFileNames({ prefix: 'sse-c-download.txt' })
+    const listedFile = listed.files[0]
+    expectConcreteListEntry(listedFile)
     expect(info.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
-    expect(listed.files[0]?.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+    expect(listedFile.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
     expect(JSON.stringify([uploaded, info, listed])).not.toContain(encryption.customerKey)
     expect(JSON.stringify([uploaded, info, listed])).not.toContain(encryption.customerKeyMd5)
   })

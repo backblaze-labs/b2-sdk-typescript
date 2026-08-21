@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { sha1Hex } from '../streams/hash.ts'
 import { EncryptionMode } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { readLocalSha1File } from './local-sha1.ts'
 import { preparePairForCompare } from './policies/compare.ts'
@@ -41,7 +41,7 @@ function makeB2SyncPath(relativePath: string, size: number, contentSha1: string)
     size,
     contentSha1,
     selectedVersion: version,
-    allVersions: [version],
+    allVersions: [version as ListedFileVersion],
   }
 }
 

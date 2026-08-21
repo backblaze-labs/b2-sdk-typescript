@@ -79,18 +79,29 @@ export {
 export type { B2ErrorCode, B2ErrorResponse, KnownB2ErrorCode } from './errors.ts'
 export { KNOWN_B2_ERROR_CODES } from './errors.ts'
 export type {
+  ConcreteFileAction,
   CopyFileRequest,
   CopyPartRequest,
   CopyPartResponse,
   DeleteFileVersionRequest,
   DeleteFileVersionResponse,
   FileVersion,
+  FileVersionListEntry,
+  FolderFileVersion,
   GetFileInfoRequest,
   HideFileRequest,
+  ListedConcreteFileVersion,
+  ListedFileAction,
+  ListedFileVersion,
+  ListedHideFileVersion,
   ListFileNamesRequest,
   ListFileNamesResponse,
+  ListFileNamesWithDelimiterRequest,
+  ListFileNamesWithDelimiterResponse,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
+  ListFileVersionsWithDelimiterRequest,
+  ListFileVersionsWithDelimiterResponse,
   ReplicationStatus,
 } from './file.ts'
 // `FileAction` and `MetadataDirective` are forwarded as both type and value.

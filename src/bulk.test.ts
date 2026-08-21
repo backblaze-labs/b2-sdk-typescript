@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket, DeleteAllEvent, DeleteTarget } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
 import { makeClient } from './test-utils/index.ts'
 import { BucketType } from './types/bucket.ts'
+import { FileAction } from './types/file.ts'
 
 async function uploadN(bucket: Bucket, n: number, prefix = ''): Promise<DeleteTarget[]> {
   const targets: DeleteTarget[] = []
@@ -123,6 +124,34 @@ describe('Bucket.deleteAll', () => {
 
     const remaining = await bucket.listFileNames()
     expect(remaining.files).toHaveLength(4)
+  })
+
+  it('throws when listFileVersions returns a null fileId row', async () => {
+    vi.spyOn(bucket, 'listFileVersions').mockResolvedValueOnce({
+      files: [
+        {
+          action: FileAction.Folder,
+          contentLength: 0,
+          contentMd5: null,
+          contentSha1: null,
+          contentType: null,
+          fileId: null,
+          fileInfo: {},
+          fileName: 'private/',
+          uploadTimestamp: 0,
+        },
+      ],
+      nextFileName: null,
+      nextFileId: null,
+    } as never)
+
+    await expect(
+      (async () => {
+        for await (const event of bucket.deleteAll({ prefix: 'private/' })) {
+          void event
+        }
+      })(),
+    ).rejects.toThrow('listFileVersions returned a row without a fileId')
   })
 
   it('honours prefix filter', async () => {

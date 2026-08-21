@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
@@ -13,6 +13,7 @@ import {
 } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
+import { FileAction } from './types/file.ts'
 import type { LargeFileId } from './types/ids.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
@@ -1598,6 +1599,37 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
 
     const result = await bucket.unhideFile('plain.txt')
     expect(result).toBeNull()
+  })
+
+  it('unhideFile rejects a hide marker without a string fileId', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'unhide-bad-id',
+      bucketType: BucketType.AllPrivate,
+    })
+    vi.spyOn(bucket, 'listFileVersions').mockResolvedValueOnce({
+      files: [
+        {
+          action: FileAction.Hide,
+          bucketId: bucket.id,
+          contentLength: 0,
+          contentMd5: null,
+          contentSha1: 'none',
+          contentType: null,
+          fileId: 123,
+          fileInfo: {},
+          fileName: 'broken.txt',
+          uploadTimestamp: 1,
+        },
+      ],
+      nextFileName: null,
+      nextFileId: null,
+    } as never)
+    const deleteSpy = vi.spyOn(bucket, 'deleteFileVersion')
+
+    await expect(bucket.unhideFile('broken.txt')).rejects.toThrow(
+      'unhideFile: listFileVersions returned a hide marker without a fileId',
+    )
+    expect(deleteSpy).not.toHaveBeenCalled()
   })
 
   it('unhideFile returns null when the file does not exist', async () => {

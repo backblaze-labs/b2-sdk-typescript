@@ -1,5 +1,5 @@
 import type { EncryptionSetting } from '../types/encryption.ts'
-import type { FileVersion } from '../types/file.ts'
+import type { FileVersion, ListedConcreteFileVersion } from '../types/file.ts'
 import type { SyncSha1State } from './sha1-metadata.ts'
 
 /**
@@ -161,7 +161,7 @@ export interface B2SyncPath extends SyncPath {
   /** The most recent visible file version. */
   readonly selectedVersion: FileVersion
   /** All versions of this file, sorted newest first. */
-  readonly allVersions: FileVersion[]
+  readonly allVersions: ListedConcreteFileVersion[]
 }
 
 /** Discriminated event types emitted during synchronization. */

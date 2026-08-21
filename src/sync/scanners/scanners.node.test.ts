@@ -8,7 +8,12 @@ import { BufferSource } from '../../streams/source.ts'
 import { makeClient } from '../../test-utils/index.ts'
 import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
-import { FileAction, type FileVersion } from '../../types/file.ts'
+import {
+  type ConcreteFileAction,
+  FileAction,
+  type FileVersion,
+  type FolderFileVersion,
+} from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
@@ -52,7 +57,7 @@ function tick(): void {
 function makeB2FileVersion(
   name: string,
   ts = 1,
-  action: FileAction = FileAction.Upload,
+  action: ConcreteFileAction = FileAction.Upload,
 ): FileVersion {
   return {
     accountId: 'acc' as unknown as AccountId,
@@ -69,6 +74,22 @@ function makeB2FileVersion(
     legalHold: { isClientAuthorizedToRead: true, value: null },
     serverSideEncryption: { mode: EncryptionMode.None },
     uploadTimestamp: ts,
+  }
+}
+
+function makeB2FolderListEntry(fileName: string): FolderFileVersion {
+  return {
+    accountId: 'acc' as unknown as AccountId,
+    action: FileAction.Folder,
+    bucketId: 'b' as unknown as BucketId,
+    contentLength: 0,
+    contentMd5: null,
+    contentSha1: null,
+    contentType: null,
+    fileId: null,
+    fileInfo: {},
+    fileName,
+    uploadTimestamp: 0,
   }
 }
 
@@ -792,6 +813,46 @@ describe('B2Folder', () => {
     ).rejects.toThrow('maxScanEntries=1')
   })
 
+  it('rejects malformed B2 folder rows before scanning unbounded pages', async () => {
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [makeB2FolderListEntry('a/'), makeB2FolderListEntry('b/')],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket)
+
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'delimiter folder row',
+    )
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['non-string', 123],
+  ])('rejects malformed B2 rows with a %s fileId', async (_name, fileIdValue) => {
+    const file: Record<string, unknown> = { ...makeB2FileVersion('a.txt') }
+    if (fileIdValue === undefined) delete file['fileId']
+    else file['fileId'] = fileIdValue
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [file],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket)
+
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'row without a string fileId',
+    )
+  })
+
   it('counts unsafe B2 names against scan limits', async () => {
     const bucket = {
       async listFileVersions() {
@@ -1141,7 +1202,7 @@ describe('B2Folder', () => {
     function makeFileVersion(
       fileName: string,
       uploadTimestamp: number,
-      action: FileAction = FileAction.Upload,
+      action: ConcreteFileAction = FileAction.Upload,
     ): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
@@ -1437,7 +1498,7 @@ describe('B2Folder', () => {
     function makeFileVersion(
       name: string,
       ts: number,
-      action: FileAction = FileAction.Upload,
+      action: ConcreteFileAction = FileAction.Upload,
     ): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,

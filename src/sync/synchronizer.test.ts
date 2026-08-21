@@ -5,7 +5,7 @@ import { type ContentSource, FileSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
@@ -82,7 +82,7 @@ function makeB2SyncPath(
     size,
     ...(pathContentSha1 !== undefined ? { contentSha1: pathContentSha1 } : {}),
     selectedVersion: fv,
-    allVersions: [fv],
+    allVersions: [fv as ListedFileVersion],
   }
 }
 
