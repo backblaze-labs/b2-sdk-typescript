@@ -23,22 +23,40 @@ export interface RedactedPartnerAuthorizeResponseJson
   readonly authorizationToken: string
 }
 
+/**
+ * JSON-safe create-group-member result with the one-time application key
+ * secret replaced by a placeholder string.
+ */
 export type RedactedCreateGroupMemberResultJson = Omit<
   CreateGroupMemberResult,
   'applicationKey'
 > & {
+  /** Redacted application key secret placeholder. */
   readonly applicationKey: string
 }
 
+/**
+ * JSON-safe create-group-member response with every one-time application key
+ * secret replaced by a placeholder string.
+ */
 export type RedactedCreateGroupMemberResponseJson = readonly RedactedCreateGroupMemberResultJson[]
 
+/**
+ * JSON-safe reserve-trial account result with the one-time application key
+ * secret replaced by a placeholder string.
+ */
 export type RedactedReserveTrialCreateAccountResultJson = Omit<
   ReserveTrialCreateAccountResult,
   'applicationKey'
 > & {
+  /** Redacted application key secret placeholder. */
   readonly applicationKey: string
 }
 
+/**
+ * JSON-safe reserve-trial account response with every one-time application key
+ * secret replaced by a placeholder string.
+ */
 export type RedactedReserveTrialCreateAccountResponseJson =
   readonly RedactedReserveTrialCreateAccountResultJson[]
 
