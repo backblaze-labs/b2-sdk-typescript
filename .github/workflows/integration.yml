@@ -85,7 +85,7 @@ jobs:
     # Key-management secrets can create/list/delete account keys, so make them
     # available only to trusted code checked out from main. Pull-request
     # code and manually-dispatched non-main refs must never receive them.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       max-parallel: 1
