@@ -112,6 +112,49 @@ describe('B2Client with simulator', () => {
     expect(buckets[0]?.name).toBe('test-bucket')
   })
 
+  it('does not let runtime accountId or bucketId override trusted bucket requests', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const bucketRequests: Record<string, unknown>[] = []
+    const scopedClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(req) {
+          if (req.url.includes('b2_create_bucket') || req.url.includes('b2_update_bucket')) {
+            bucketRequests.push(JSON.parse(String(req.body)) as Record<string, unknown>)
+          }
+          return inner.send(req)
+        },
+      },
+    })
+    await scopedClient.authorize()
+
+    const bucket = await scopedClient.createBucket({
+      accountId: 'attacker-account',
+      bucketId: 'attacker-bucket',
+      bucketName: 'trusted-create',
+      bucketType: BucketType.AllPrivate,
+    } as unknown as Parameters<B2Client['createBucket']>[0])
+    await bucket.update({
+      accountId: 'attacker-account',
+      bucketId: 'attacker-bucket',
+      bucketInfo: { source: 'trusted' },
+    } as unknown as Parameters<typeof bucket.update>[0])
+
+    expect(bucketRequests).toHaveLength(2)
+    expect(bucketRequests[0]).toMatchObject({
+      accountId: scopedClient.accountInfo.getAccountId(),
+      bucketName: 'trusted-create',
+    })
+    expect(bucketRequests[0]?.['bucketId']).toBeUndefined()
+    expect(bucketRequests[1]).toMatchObject({
+      accountId: scopedClient.accountInfo.getAccountId(),
+      bucketId: bucket.id,
+      bucketInfo: { source: 'trusted' },
+    })
+  })
+
   it('propagates fileLockEnabled into the returned bucket info', async () => {
     // Regression: simulator previously hardcoded
     // `isFileLockEnabled: false` regardless of the create request,

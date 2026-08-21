@@ -8,6 +8,7 @@ import {
 
 import {
   AccessDeniedError,
+  B2BucketConfigurationError,
   B2Error,
   B2RealmConfigurationError,
   B2RedirectError,
@@ -597,6 +598,27 @@ describe('B2RealmConfigurationError', () => {
     expect(err.status).toBe(400)
     expect(err.code).toBe('bad_request')
     expect(err.message).toBe('bad realm')
+    expect(err.retryable).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// B2BucketConfigurationError
+// ---------------------------------------------------------------------------
+
+describe('B2BucketConfigurationError', () => {
+  it('extends B2Error and stores the rejected field', () => {
+    const err = new B2BucketConfigurationError(
+      'bucketInfo',
+      'bucketInfo key "b2-system" must not start with reserved prefix "b2-"',
+      'invalid_bucket_info',
+    )
+
+    expect(err).toBeInstanceOf(B2Error)
+    expect(err.name).toBe('B2BucketConfigurationError')
+    expect(err.status).toBe(400)
+    expect(err.code).toBe('invalid_bucket_info')
+    expect(err.field).toBe('bucketInfo')
     expect(err.retryable).toBe(false)
   })
 })

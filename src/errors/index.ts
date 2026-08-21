@@ -8,10 +8,11 @@
  * appropriate subclass.
  *
  * Convention: most `B2Error` subclasses represent failures returned by the B2
- * API. The client-side exceptions are {@link B2RealmConfigurationError} and
- * {@link B2PartnerAuthorizationError}; they extend `B2Error` so realm- and
- * Partner-authorization failures can be handled with the SDK error hierarchy
- * before or without a server round-trip.
+ * API. The client-side exceptions are {@link B2BucketConfigurationError},
+ * {@link B2RealmConfigurationError}, and {@link B2PartnerAuthorizationError};
+ * they extend `B2Error` so validation, realm-, and Partner-authorization
+ * failures can be handled with the SDK error hierarchy before or without a
+ * server round-trip.
  *
  * Other programming errors and SDK preconditions, such as "not yet authorized",
  * "stream consumed twice", or "called before init", use the native `Error`
@@ -727,6 +728,32 @@ export class B2PartnerAuthorizationError extends B2Error {
   constructor(message: string) {
     super({ status: 400, code: 'bad_request', message })
     this.name = 'B2PartnerAuthorizationError'
+  }
+}
+
+/** Bucket create/update field rejected by client-side bucket configuration validation. */
+export type B2BucketConfigurationErrorField = 'bucketInfo' | 'corsRules'
+
+/** Thrown when bucket create/update metadata fails SDK client-side validation. */
+export class B2BucketConfigurationError extends B2Error {
+  /** The request field that failed validation. */
+  readonly field: B2BucketConfigurationErrorField
+
+  /**
+   * Creates a new B2BucketConfigurationError instance.
+   *
+   * @param field - The bucket configuration field that failed validation.
+   * @param message - Human-readable validation failure.
+   * @param code - B2-style error code for the rejected field.
+   */
+  constructor(
+    field: B2BucketConfigurationErrorField,
+    message: string,
+    code: B2ErrorCode = 'bad_request',
+  ) {
+    super({ status: 400, code, message })
+    this.name = 'B2BucketConfigurationError'
+    this.field = field
   }
 }
 

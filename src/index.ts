@@ -38,11 +38,17 @@ export {
   type DeleteManyResult,
   type DeleteTarget,
 } from './bucket.ts'
+export {
+  assertValidBucketConfiguration,
+  assertValidBucketInfo,
+  assertValidCorsRules,
+} from './bucket-validation.ts'
 export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
 export type { DownloadResult, HeadResult } from './download/single.ts'
-export type { B2ErrorOptions } from './errors/index.ts'
+export type { B2BucketConfigurationErrorField, B2ErrorOptions } from './errors/index.ts'
 export {
   AccessDeniedError,
+  B2BucketConfigurationError,
   B2Error,
   B2InsufficientCapabilityError,
   B2PartnerAuthorizationError,
@@ -129,7 +135,24 @@ export { Capability } from './types/auth.ts'
 // (`BucketType.AllPrivate` instead of `'allPrivate'`) without breaking the
 // existing string-literal call sites. Each export here has a matching type
 // of the same name forwarded by the `export type *` line below.
-export { BucketRetentionMode, BucketType, CorsOperation } from './types/bucket.ts'
+export {
+  BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
+  BUCKET_INFO_RESERVED_PREFIX,
+  BUCKET_INFO_VALUES_MAX_BYTES,
+  BucketRetentionMode,
+  BucketType,
+  CORS_ALLOWED_OPERATIONS,
+  CORS_MAX_AGE_SECONDS_MAX,
+  CORS_RULE_MAX_BYTES,
+  CORS_RULE_NAME_MAX_LENGTH,
+  CORS_RULE_NAME_MIN_LENGTH,
+  CORS_RULE_NAME_PATTERN,
+  CORS_RULE_NAME_RESERVED_PREFIX,
+  CORS_RULES_MAX_COUNT,
+  CorsOperation,
+} from './types/bucket.ts'
 export {
   DownloadClientUnauthorizedToReadMarker,
   DownloadHeaderName,
