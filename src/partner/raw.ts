@@ -1,5 +1,6 @@
 import { assertSecureRealmUrl } from '../auth/realms.ts'
 import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
+import type { PartnerNonIdempotentMutationEndpoint } from '../http/non-idempotent-mutations.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import {
   getTransportUrlGuard,
@@ -629,7 +630,7 @@ export class PartnerRawClient {
   private async postNonRetryingMutationJson<T>(
     groupsApiUrl: string,
     authToken: string,
-    endpoint: string,
+    endpoint: PartnerNonIdempotentMutationEndpoint,
     body: unknown,
     options?: PartnerRawRequestOptions,
   ): Promise<T> {

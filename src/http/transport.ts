@@ -8,6 +8,10 @@ import {
 } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import {
+  isBackupNonIdempotentMutationEndpoint,
+  isPartnerNonIdempotentMutationEndpoint,
+} from './non-idempotent-mutations.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
@@ -468,16 +472,11 @@ function isStartLargeFileEndpoint(url: string): boolean {
 }
 
 function isKnownPartnerNonIdempotentMutationEndpoint(url: string): boolean {
-  const endpoint = b2ApiEndpointName(url)
-  return (
-    endpoint === 'b2_create_group_member' ||
-    endpoint === 'b2_eject_group_member' ||
-    endpoint === 'b2_reserve_trial_create_account'
-  )
+  return isPartnerNonIdempotentMutationEndpoint(b2ApiEndpointName(url))
 }
 
 function isKnownBackupNonIdempotentMutationEndpoint(url: string): boolean {
-  return backupApiEndpointName(url) === 'bz_delete_computer'
+  return isBackupNonIdempotentMutationEndpoint(backupApiEndpointName(url))
 }
 
 function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
@@ -508,7 +507,8 @@ function backupApiEndpointName(url: string): string | undefined {
   return segments[apiRootIndex + 3]
 }
 
-function isReplayUnsafePostRequest(request: HttpRequest): boolean {
+function isReplayUnsafeRequest(request: HttpRequest): boolean {
+  if (request.idempotent === false) return true
   if (request.method !== 'POST') return false
   return (
     isUploadEndpoint(request.url) ||
@@ -688,7 +688,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isReplayUnsafePostRequest(request) || attempt === retryOptions.maxRetries) {
+        if (isReplayUnsafeRequest(request) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 

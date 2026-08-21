@@ -15,6 +15,10 @@ import {
 } from '../errors/index.ts'
 import { RawClient } from '../raw/index.ts'
 import type { AccountId, LargeFileId } from '../types/ids.ts'
+import {
+  BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
+  PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
+} from './non-idempotent-mutations.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
 import { FetchTransport, RetryTransport } from './transport.ts'
 
@@ -74,20 +78,15 @@ const baseRequest: HttpRequest = {
 }
 
 const knownNonIdempotentMutationRequests = [
-  [
-    'b2_create_group_member',
-    'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
-  ],
-  [
-    'b2_eject_group_member',
-    'https://groups.backblazeb2.com/partner/b2api/v3/b2_eject_group_member',
-  ],
-  [
-    'b2_reserve_trial_create_account',
-    'https://groups.backblazeb2.com/partner/b2api/v3/b2_reserve_trial_create_account',
-  ],
-  ['bz_delete_computer', 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer'],
-] as const
+  ...PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
+    (endpoint) =>
+      [endpoint, `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`] as const,
+  ),
+  ...BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
+    (endpoint) =>
+      [endpoint, `https://backup.backblazeb2.com/backup/api/backup/v1/${endpoint}`] as const,
+  ),
+]
 
 function dropIdempotent(request: HttpRequest): HttpRequest {
   const copy: HttpRequest = { ...request }
@@ -1634,6 +1633,26 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: 'https://api.backblazeb2.com/b2api/v3/b2_future_non_idempotent_mutation',
+          idempotent: false,
+        }),
+      ).rejects.toThrow(NetworkError)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry network errors for replay opt-out GETs', async () => {
+      innerTransport.send
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',
+          method: 'GET',
           idempotent: false,
         }),
       ).rejects.toThrow(NetworkError)

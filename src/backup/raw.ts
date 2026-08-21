@@ -1,3 +1,4 @@
+import type { BackupNonIdempotentMutationEndpoint } from '../http/non-idempotent-mutations.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
@@ -225,7 +226,7 @@ export class BackupRawClient {
   private async postNonRetryingMutationJson<T>(
     backupApiUrl: string,
     authToken: string,
-    endpoint: string,
+    endpoint: BackupNonIdempotentMutationEndpoint,
     body: unknown,
     options?: BackupRawRequestOptions,
   ): Promise<T> {
