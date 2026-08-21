@@ -559,13 +559,12 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(bucket.id).toBeTruthy()
   })
 
-  it('uses v4 POST JSON for raw read/list endpoints against live B2', async (ctx) => {
-    const feature = 'raw v4 POST JSON contract'
+  it('uses v4 POST JSON for raw file read/list endpoints against live B2', async (ctx) => {
+    const feature = 'raw file v4 POST JSON contract'
     skipIfMissingFeatureCapabilities(ctx, client, feature, [
       Capability.WriteFiles,
       Capability.ListFiles,
       Capability.ReadFiles,
-      Capability.ListKeys,
     ])
 
     const seenRequests: HttpRequest[] = []
@@ -595,17 +594,10 @@ describe.skipIf(skip)('B2 integration', () => {
       })
       expect(names.files.some((file) => file.fileName === fileName)).toBe(true)
 
-      const keys = await raw.listKeys(apiUrl, authToken, {
-        accountId: accountId(client.accountInfo.getAccountId()),
-        maxKeyCount: 1,
-      })
-      expect(Array.isArray(keys.keys)).toBe(true)
-
       const contractEndpoints = new Set([
         'b2_get_upload_url',
         'b2_get_file_info',
         'b2_list_file_names',
-        'b2_list_keys',
       ])
       const contractRequests = seenRequests.filter((request) =>
         contractEndpoints.has(endpointName(request.url)),
@@ -637,16 +629,45 @@ describe.skipIf(skip)('B2 integration', () => {
           method: 'POST',
           contentType: 'application/json',
         },
-        {
-          endpoint: 'b2_list_keys',
-          pathname: '/b2api/v4/b2_list_keys',
-          method: 'POST',
-          contentType: 'application/json',
-        },
       ])
     } finally {
       await bucket.deleteFileVersion(fileName, uploaded.fileId).catch(() => {})
     }
+  })
+
+  it('uses v4 POST JSON for raw key listing against live B2', async (ctx) => {
+    const feature = 'raw key v4 POST JSON contract'
+    skipIfMissingFeatureCapabilities(ctx, client, feature, [Capability.ListKeys])
+
+    const seenRequests: HttpRequest[] = []
+    const raw = new RawClient({ transport: recordingLiveTransport(seenRequests) })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+
+    const keys = await raw.listKeys(apiUrl, authToken, {
+      accountId: accountId(client.accountInfo.getAccountId()),
+      maxKeyCount: 1,
+    })
+    expect(Array.isArray(keys.keys)).toBe(true)
+
+    const keyRequests = seenRequests.filter(
+      (request) => endpointName(request.url) === 'b2_list_keys',
+    )
+    expect(
+      keyRequests.map((request) => ({
+        endpoint: endpointName(request.url),
+        pathname: new URL(request.url).pathname,
+        method: request.method,
+        contentType: request.headers?.['Content-Type'],
+      })),
+    ).toEqual([
+      {
+        endpoint: 'b2_list_keys',
+        pathname: '/b2api/v4/b2_list_keys',
+        method: 'POST',
+        contentType: 'application/json',
+      },
+    ])
   })
 
   it('lists unfinished large files with inclusive startFileId and resolved auto content type', async () => {
