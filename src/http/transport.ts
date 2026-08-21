@@ -8,6 +8,10 @@ import {
 } from '../errors/index.ts'
 import type { B2ErrorResponse } from '../types/errors.ts'
 import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import {
+  isBackupNonIdempotentMutationEndpoint,
+  isPartnerNonIdempotentMutationEndpoint,
+} from './non-idempotent-mutations.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
 import { UrlGuard } from './url-guard.ts'
 import { getUserAgent } from './user-agent.ts'
@@ -29,6 +33,11 @@ export interface HttpRequest {
   readonly signal?: AbortSignal
   /** Optional per-request retry override. */
   readonly retry?: Partial<RetryOptions>
+  /**
+   * Set false to disable automatic retry and expired-token reauth replay.
+   * This is not a general idempotency override.
+   */
+  readonly idempotent?: false
 }
 
 /** Represents a parsed HTTP response from the B2 API. */
@@ -462,23 +471,22 @@ function isStartLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_start_large_file'
 }
 
-function isPartnerMutationEndpoint(url: string): boolean {
-  const endpoint = b2ApiEndpointName(url)
-  return (
-    endpoint === 'b2_create_group_member' ||
-    endpoint === 'b2_eject_group_member' ||
-    endpoint === 'b2_reserve_trial_create_account'
-  )
+function isKnownPartnerNonIdempotentMutationEndpoint(url: string): boolean {
+  return isPartnerNonIdempotentMutationEndpoint(b2ApiEndpointName(url))
 }
 
-function isBackupMutationEndpoint(url: string): boolean {
-  return backupApiEndpointName(url) === 'bz_delete_computer'
+function isKnownBackupNonIdempotentMutationEndpoint(url: string): boolean {
+  return isBackupNonIdempotentMutationEndpoint(backupApiEndpointName(url))
 }
 
 function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
+  // Defense in depth: known mutations must not replay if a wrapper drops
+  // the raw client's explicit `idempotent: false` marker.
   return (
-    request.method === 'POST' &&
-    (isPartnerMutationEndpoint(request.url) || isBackupMutationEndpoint(request.url))
+    request.idempotent === false ||
+    (request.method === 'POST' &&
+      (isKnownPartnerNonIdempotentMutationEndpoint(request.url) ||
+        isKnownBackupNonIdempotentMutationEndpoint(request.url)))
   )
 }
 
@@ -499,7 +507,8 @@ function backupApiEndpointName(url: string): string | undefined {
   return segments[apiRootIndex + 3]
 }
 
-function isReplayUnsafePostRequest(request: HttpRequest): boolean {
+function isReplayUnsafeRequest(request: HttpRequest): boolean {
+  if (request.idempotent === false) return true
   if (request.method !== 'POST') return false
   return (
     isUploadEndpoint(request.url) ||
@@ -679,7 +688,7 @@ export class RetryTransport implements HttpTransport {
           err,
         )
 
-        if (isReplayUnsafePostRequest(request) || attempt === retryOptions.maxRetries) {
+        if (isReplayUnsafeRequest(request) || attempt === retryOptions.maxRetries) {
           throw networkErr
         }
 

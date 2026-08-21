@@ -1,5 +1,6 @@
 import { assertSecureRealmUrl } from '../auth/realms.ts'
 import { B2PartnerAuthorizationError, B2RealmConfigurationError } from '../errors/index.ts'
+import type { PartnerNonIdempotentMutationEndpoint } from '../http/non-idempotent-mutations.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import {
   getTransportUrlGuard,
@@ -420,7 +421,7 @@ export class PartnerRawClient {
     request: CreateGroupMemberRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<CreateGroupMemberResponse> {
-    const response = await this.postJson<CreateGroupMemberResponse>(
+    const response = await this.postNonRetryingMutationJson<CreateGroupMemberResponse>(
       groupsApiUrl,
       authToken,
       'b2_create_group_member',
@@ -430,7 +431,7 @@ export class PartnerRawClient {
         memberEmail: request.memberEmail,
         ...(request.region != null ? { region: request.region } : {}),
       },
-      nonRetryingMutationRequestOptions(options),
+      options,
     )
     return redactCreateGroupMemberResponse(response)
   }
@@ -454,7 +455,7 @@ export class PartnerRawClient {
     request: EjectGroupMemberRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<EjectGroupMemberResponse> {
-    return this.postJson<EjectGroupMemberResponse>(
+    return this.postNonRetryingMutationJson<EjectGroupMemberResponse>(
       groupsApiUrl,
       authToken,
       'b2_eject_group_member',
@@ -464,7 +465,7 @@ export class PartnerRawClient {
         memberAccountId: request.memberAccountId,
         ...(request.email !== undefined ? { email: request.email } : {}),
       },
-      nonRetryingMutationRequestOptions(options),
+      options,
     )
   }
 
@@ -506,12 +507,12 @@ export class PartnerRawClient {
     request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
     options?: PartnerRawRequestOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
-    const response = await this.postJson<ReserveTrialCreateAccountResponse>(
+    const response = await this.postNonRetryingMutationJson<ReserveTrialCreateAccountResponse>(
       groupsApiUrl,
       authToken,
       'b2_reserve_trial_create_account',
       reserveTrialCreateAccountRequestBody(request),
-      nonRetryingMutationRequestOptions(options),
+      options,
     )
     return redactReserveTrialCreateAccountResponse(response)
   }
@@ -617,7 +618,7 @@ export class PartnerRawClient {
   }
 
   /**
-   * Sends a JSON POST request to the specified Partner API endpoint.
+   * Sends a non-retrying JSON mutation POST request to the specified Partner API endpoint.
    * @param groupsApiUrl - The Partner API base URL.
    * @param authToken - The Partner API authorization token.
    * @param endpoint - The Partner API endpoint name.
@@ -626,10 +627,10 @@ export class PartnerRawClient {
    *
    * @returns The parsed JSON response.
    */
-  private async postJson<T>(
+  private async postNonRetryingMutationJson<T>(
     groupsApiUrl: string,
     authToken: string,
-    endpoint: string,
+    endpoint: PartnerNonIdempotentMutationEndpoint,
     body: unknown,
     options?: PartnerRawRequestOptions,
   ): Promise<T> {
@@ -638,6 +639,7 @@ export class PartnerRawClient {
       this.authorizedEndpointSuffixes,
       groupsApiUrl,
     )
+    const requestOptions = nonRetryingMutationRequestOptions(options)
     const response = await this.transport.send({
       url: b2Url(safeGroupsApiUrl, { ...PARTNER_API_V3, endpoint }),
       method: 'POST',
@@ -646,8 +648,9 @@ export class PartnerRawClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+      ...(requestOptions.signal !== undefined ? { signal: requestOptions.signal } : {}),
+      ...(requestOptions.idempotent !== undefined ? { idempotent: requestOptions.idempotent } : {}),
+      ...(requestOptions.retry !== undefined ? { retry: requestOptions.retry } : {}),
     })
     return response.json<T>()
   }

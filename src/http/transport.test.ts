@@ -15,6 +15,10 @@ import {
 } from '../errors/index.ts'
 import { RawClient } from '../raw/index.ts'
 import type { AccountId, LargeFileId } from '../types/ids.ts'
+import {
+  BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
+  PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
+} from './non-idempotent-mutations.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './transport.ts'
 import { FetchTransport, RetryTransport } from './transport.ts'
 
@@ -71,6 +75,23 @@ const baseRequest: HttpRequest = {
   method: 'POST',
   headers: { Authorization: 'token-123' },
   body: JSON.stringify({ accountId: 'abc' }),
+}
+
+const knownNonIdempotentMutationRequests = [
+  ...PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
+    (endpoint) =>
+      [endpoint, `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`] as const,
+  ),
+  ...BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
+    (endpoint) =>
+      [endpoint, `https://backup.backblazeb2.com/backup/api/backup/v1/${endpoint}`] as const,
+  ),
+]
+
+function dropIdempotent(request: HttpRequest): HttpRequest {
+  const copy: HttpRequest = { ...request }
+  delete (copy as { idempotent?: false }).idempotent
+  return copy
 }
 
 const textEncoder = new TextEncoder()
@@ -946,11 +967,7 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    it.each([
-      'b2_create_group_member',
-      'b2_eject_group_member',
-      'b2_reserve_trial_create_account',
-    ] as const)('does not retry %s transient responses in place', async (endpoint) => {
+    it('does not retry replay opt-out POST transient responses in place', async () => {
       const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
       innerTransport.send
         .mockResolvedValueOnce(mockResponse(503, errorBody))
@@ -965,32 +982,36 @@ describe('RetryTransport', () => {
         transport.send({
           ...baseRequest,
           method: 'POST',
-          url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_future_non_idempotent_mutation',
+          idempotent: false,
         }),
       ).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    it('does not retry bz_delete_computer transient responses in place', async () => {
-      const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
-      innerTransport.send
-        .mockResolvedValueOnce(mockResponse(503, errorBody))
-        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+    it.each(knownNonIdempotentMutationRequests)(
+      'fails closed for untagged known %s transient responses',
+      async (_endpoint, url) => {
+        const errorBody = { status: 503, code: 'service_unavailable', message: 'try later' }
+        innerTransport.send
+          .mockResolvedValueOnce(mockResponse(503, errorBody))
+          .mockResolvedValueOnce(mockResponse(200, { ok: true }))
 
-      const transport = makeRetryTransport({
-        transport: innerTransport,
-        retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
-      })
+        const transport = makeRetryTransport({
+          transport: innerTransport,
+          retry: { maxRetries: 5, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+        })
 
-      await expect(
-        transport.send({
-          ...baseRequest,
-          method: 'POST',
-          url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
-        }),
-      ).rejects.toBeInstanceOf(B2Error)
-      expect(innerTransport.send).toHaveBeenCalledTimes(1)
-    })
+        await expect(
+          transport.send({
+            ...baseRequest,
+            method: 'POST',
+            url,
+          }),
+        ).rejects.toBeInstanceOf(B2Error)
+        expect(innerTransport.send).toHaveBeenCalledTimes(1)
+      },
+    )
 
     // Retryable upload pod failures are not retried in place. Upload endpoints
     // are URL-pinned, so pod failures bubble to the upload layer for fresh-URL
@@ -1308,7 +1329,7 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it('does not reauth and resend Partner group mutation POSTs', async () => {
+    it('does not reauth and resend replay opt-out POSTs', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
       const onReauth = vi.fn().mockResolvedValue('storage-token')
@@ -1325,31 +1346,67 @@ describe('RetryTransport', () => {
         transport.send({
           ...baseRequest,
           method: 'POST',
-          url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_future_non_idempotent_mutation',
+          idempotent: false,
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
       expect(onReauth).not.toHaveBeenCalled()
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
     })
 
-    it('does not reauth and resend Backup delete mutation POSTs', async () => {
+    it.each(knownNonIdempotentMutationRequests)(
+      'fails closed for untagged known %s expired-token responses',
+      async (_endpoint, url) => {
+        const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
+        const error401 = mockResponse(401, errorBody)
+        const onReauth = vi.fn().mockResolvedValue('fresh-token')
+
+        innerTransport.send.mockResolvedValueOnce(error401)
+
+        const transport = makeRetryTransport({
+          transport: innerTransport,
+          onReauth,
+          retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+        })
+
+        await expect(
+          transport.send({
+            ...baseRequest,
+            method: 'POST',
+            url,
+          }),
+        ).rejects.toThrow(ExpiredAuthTokenError)
+        expect(onReauth).not.toHaveBeenCalled()
+        expect(innerTransport.send).toHaveBeenCalledTimes(1)
+      },
+    )
+
+    it('fails closed when a wrapper drops replay metadata from a known mutation', async () => {
       const errorBody = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, errorBody)
-      const onReauth = vi.fn().mockResolvedValue('backup-token')
+      const onReauth = vi.fn().mockResolvedValue('fresh-token')
 
-      innerTransport.send.mockResolvedValueOnce(error401)
+      innerTransport.send
+        .mockResolvedValueOnce(error401)
+        .mockResolvedValueOnce(mockResponse(200, {}))
 
-      const transport = makeRetryTransport({
+      const retryTransport = makeRetryTransport({
         transport: innerTransport,
         onReauth,
         retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
       })
+      const droppingWrapper: HttpTransport = {
+        send(request) {
+          return retryTransport.send(dropIdempotent(request))
+        },
+      }
 
       await expect(
-        transport.send({
+        droppingWrapper.send({
           ...baseRequest,
           method: 'POST',
-          url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
+          url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+          idempotent: false,
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
       expect(onReauth).not.toHaveBeenCalled()
@@ -1561,9 +1618,50 @@ describe('RetryTransport', () => {
       expect(innerTransport.send).toHaveBeenCalledTimes(2)
     })
 
-    it.each(['b2_create_group_member', 'b2_eject_group_member'] as const)(
-      'does not retry network errors for %s',
-      async (endpoint) => {
+    it('does not retry network errors for replay opt-out POSTs', async () => {
+      innerTransport.send
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          ...baseRequest,
+          method: 'POST',
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_future_non_idempotent_mutation',
+          idempotent: false,
+        }),
+      ).rejects.toThrow(NetworkError)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not retry network errors for replay opt-out GETs', async () => {
+      innerTransport.send
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+        .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 3, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(
+        transport.send({
+          url: 'https://api.backblazeb2.com/b2api/v3/b2_list_buckets',
+          method: 'GET',
+          idempotent: false,
+        }),
+      ).rejects.toThrow(NetworkError)
+      expect(innerTransport.send).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(knownNonIdempotentMutationRequests)(
+      'fails closed for untagged known %s network errors',
+      async (_endpoint, url) => {
         innerTransport.send
           .mockRejectedValueOnce(new TypeError('Failed to fetch'))
           .mockResolvedValueOnce(mockResponse(200, { ok: true }))
@@ -1577,7 +1675,7 @@ describe('RetryTransport', () => {
           transport.send({
             ...baseRequest,
             method: 'POST',
-            url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+            url,
           }),
         ).rejects.toThrow(NetworkError)
         expect(innerTransport.send).toHaveBeenCalledTimes(1)

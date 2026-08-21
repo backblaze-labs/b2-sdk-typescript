@@ -25,6 +25,8 @@ export interface MutationRequestOptions {
   readonly signal?: AbortSignal
   /** Per-request retry override. */
   readonly retry?: Partial<RetryOptions>
+  /** Marks the request unsafe for transport-level retry or reauth replay. */
+  readonly idempotent?: false
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -171,6 +173,7 @@ export function nonRetryingMutationRequestOptions(
 ): MutationRequestOptions {
   return {
     ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    idempotent: false,
     retry: { ...(options?.retry ?? {}), maxRetries: 0 },
   }
 }
