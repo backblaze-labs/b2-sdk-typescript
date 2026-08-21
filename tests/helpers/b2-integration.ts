@@ -4,7 +4,7 @@ import type { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
 import type { Capability as CapabilityValue } from '../../src/types/auth.ts'
 import type { FileId } from '../../src/types/ids.ts'
-import { LegalHoldValue } from '../../src/types/lock.ts'
+import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { deleteFileVersionOnce, hasB2ErrorCode } from './b2-cleanup.ts'
 
 export const integrationBucketPrefix = 'sdk-it-'
@@ -383,12 +383,23 @@ async function clearRetentionForDelete(
     try {
       await clearRetention(bucket, fileName, fileId)
     } catch (err) {
-      if (!hasB2ErrorCode(err, 'file_lock_compliance_protected')) throw err
+      if (!isComplianceRetentionClearBlocked(err)) throw err
       const info = await bucket.file(fileName).getFileInfo(fileId)
-      await waitUntilRetentionExpires(info.fileRetention.value?.retainUntilTimestamp ?? null)
-      await clearRetention(bucket, fileName, fileId)
+      if (info.fileRetention.value?.mode !== RetentionMode.Compliance) throw err
+      await waitUntilRetentionExpires(info.fileRetention.value.retainUntilTimestamp)
+      try {
+        await clearRetention(bucket, fileName, fileId)
+      } catch (retryErr) {
+        if (!isComplianceRetentionClearBlocked(retryErr)) throw retryErr
+      }
     }
   })
+}
+
+function isComplianceRetentionClearBlocked(err: unknown): boolean {
+  return (
+    hasB2ErrorCode(err, 'file_lock_compliance_protected') || hasB2ErrorCode(err, 'access_denied')
+  )
 }
 
 async function clearRetention(bucket: Bucket, fileName: string, fileId: FileId): Promise<void> {

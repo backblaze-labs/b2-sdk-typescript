@@ -42,6 +42,7 @@ const retentionToleranceMs = 1_000
 const probeAttempts = 3
 const probeTimeoutMs = 15_000
 const probeRetryDelayMs = 500
+const protectedDeleteErrorCode = 'access_denied'
 const objectLockFeature = 'Object Lock retention/legal hold'
 
 const requiredCapabilities: readonly Capability[] = [
@@ -304,10 +305,7 @@ async function assertLegalHoldSetGetAndDeleteBlock(bucket: Bucket): Promise<void
   expect(holdOn.legalHold).toBe(LegalHoldValue.On)
   expectLegalHold(await bucket.file(fileName).getFileInfo(file.fileId), LegalHoldValue.On)
 
-  await expectB2ErrorCode(
-    bucket.deleteFileVersion(fileName, file.fileId),
-    'file_lock_legal_hold_protected',
-  )
+  await expectB2ErrorCode(bucket.deleteFileVersion(fileName, file.fileId), protectedDeleteErrorCode)
 
   const holdOff = await bucket.updateFileLegalHold(fileName, file.fileId, LegalHoldValue.Off)
   expect(holdOff.legalHold).toBe(LegalHoldValue.Off)
@@ -327,10 +325,7 @@ async function assertGovernanceRetentionSetGetAndBypass(bucket: Bucket): Promise
   expect(retained.fileRetention.mode).toBe(RetentionMode.Governance)
   expectFileRetention(await bucket.file(fileName).getFileInfo(file.fileId), retention)
 
-  await expectB2ErrorCode(
-    bucket.deleteFileVersion(fileName, file.fileId),
-    'file_lock_governance_protected',
-  )
+  await expectB2ErrorCode(bucket.deleteFileVersion(fileName, file.fileId), protectedDeleteErrorCode)
   await bucket.deleteFileVersion(fileName, file.fileId, { bypassGovernance: true })
 }
 
@@ -348,7 +343,7 @@ async function assertComplianceRetentionSetGetAndDeleteBlock(bucket: Bucket): Pr
 
   await expectB2ErrorCode(
     bucket.deleteFileVersion(fileName, file.fileId, { bypassGovernance: true }),
-    'file_lock_compliance_protected',
+    protectedDeleteErrorCode,
   )
 }
 
