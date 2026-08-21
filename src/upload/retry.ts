@@ -305,11 +305,23 @@ function isUploadRetryable(
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
     if (!options.uploadStarted) return true
+    if (isConnectionRefusedNetworkError(err)) return true
     return options.retryResponseBodyFailures === true
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
   return err instanceof B2Error && err.retryable
+}
+
+function isConnectionRefusedNetworkError(err: NetworkError): boolean {
+  let current: unknown = err
+  const seen = new Set<unknown>()
+  while (typeof current === 'object' && current !== null && !seen.has(current)) {
+    seen.add(current)
+    if ((current as { readonly code?: unknown }).code === 'ECONNREFUSED') return true
+    current = (current as { readonly cause?: unknown }).cause
+  }
+  return false
 }
 
 function isUploadRateLimitError(err: unknown): err is B2Error {
