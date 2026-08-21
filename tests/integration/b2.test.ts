@@ -9,226 +9,45 @@
  * exercise file operations, and clean up after themselves.
  */
 
-import { afterAll, beforeAll, describe, expect, it, type TestContext, vi } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
-import { BadBucketIdError } from '../../src/errors/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { Capability, type Capability as CapabilityValue } from '../../src/types/auth.ts'
+import { Capability } from '../../src/types/auth.ts'
 import { SSE_B2 } from '../../src/types/encryption.ts'
 import type { LargeFileId } from '../../src/types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
-import { deleteFileVersionOnce, hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
+import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
+import {
+  cancelUnfinishedLargeFiles,
+  deleteBucketIfPresent,
+  deleteObjectLockBucketIfPresent,
+  emptyObjectLockBucket,
+  integrationBucketPrefix,
+  isObjectLockUnavailableError,
+  logFeatureSkip,
+  makeBucketName,
+  maxBucketNameLength,
+  objectLockBucketPrefix,
+  requireFeatureCapabilities,
+  safeErrorSummary,
+  setupStep,
+  skipIfMissingFeatureCapabilities,
+  staleBucketAgeMs,
+  sweepStaleIntegrationBuckets,
+} from '../helpers/b2-integration.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
 const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
 
 const skip = !keyId || !appKey
-const currentBucketPrefix = 'sdk-it-'
-const legacyBucketPrefix = 'sdk-test-'
-const staleBucketAgeMs = 60 * 60 * 1000
-const setupStepTimeoutMs = 60 * 1000
-const cleanupAttempts = 3
-const cleanupRetryDelayMs = 250
 
 if (skip && requireCredentials) {
   throw new Error(
     'B2 integration credentials are required when B2_INTEGRATION_REQUIRE_CREDENTIALS=1',
-  )
-}
-
-function makeBucketName(label?: string): string {
-  const runId = process.env.GITHUB_RUN_ID
-  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? '1'
-  const now = Date.now()
-  const suffix = label === undefined ? `${now}` : `${label}-${now}`
-  if (runId !== undefined && runId !== '') {
-    return `${currentBucketPrefix}${runId}-${runAttempt}-${suffix}`
-  }
-  return `${currentBucketPrefix}${suffix}`
-}
-
-function isIntegrationBucketName(name: string): boolean {
-  return name.startsWith(currentBucketPrefix) || name.startsWith(legacyBucketPrefix)
-}
-
-function bucketTimestamp(name: string): number | null {
-  const matches = [...name.matchAll(/\d{13}/g)]
-  const last = matches.at(-1)?.[0]
-  if (last === undefined) return null
-  const timestamp = Number(last)
-  return Number.isSafeInteger(timestamp) ? timestamp : null
-}
-
-function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
-  if (!isIntegrationBucketName(name)) return false
-  const createdAt = bucketTimestamp(name)
-  return createdAt !== null && now - createdAt > staleBucketAgeMs
-}
-
-async function emptyBucket(bucket: Bucket): Promise<void> {
-  const cleanupErrors: unknown[] = []
-  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
-
-  const deleted = new Set<string>()
-  for await (const file of bucket.paginateFileNames()) {
-    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors)
-  }
-
-  const versions = await bucket.listFileVersions()
-  for (const fv of versions.files) {
-    await deleteFileVersionForCleanup(bucket, fv.fileName, fv.fileId, deleted, cleanupErrors)
-  }
-
-  throwCleanupErrors('empty bucket', cleanupErrors)
-}
-
-async function emptyObjectLockBucket(bucket: Bucket): Promise<void> {
-  const cleanupErrors: unknown[] = []
-  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
-
-  const deleted = new Set<string>()
-  for await (const file of bucket.paginateFileVersions()) {
-    await clearLegalHoldForDelete(bucket, file.fileName, file.fileId)
-    await clearRetentionForDelete(bucket, file.fileName, file.fileId)
-    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors, {
-      bypassGovernance: true,
-    })
-  }
-
-  throwCleanupErrors('empty Object Lock bucket', cleanupErrors)
-}
-
-async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
-  try {
-    await emptyBucket(bucket)
-    await bucket.delete()
-  } catch (err) {
-    if (err instanceof BadBucketIdError) return
-    throw err
-  }
-}
-
-async function deleteObjectLockBucketIfPresent(bucket: Bucket): Promise<void> {
-  try {
-    await emptyObjectLockBucket(bucket)
-    await bucket.delete()
-  } catch (err) {
-    if (err instanceof BadBucketIdError) return
-    throw err
-  }
-}
-
-async function cancelUnfinishedLargeFiles(
-  bucket: Bucket,
-  namePrefix?: string,
-  cleanupErrors: unknown[] = [],
-): Promise<void> {
-  for await (const file of bucket.paginateUnfinishedLargeFiles(
-    namePrefix === undefined ? undefined : { namePrefix },
-  )) {
-    const cancelled = await retryCleanupStep(
-      'cancel unfinished large file',
-      bucket,
-      file.fileName,
-      file.fileId,
-      () => bucket.cancelLargeFile(file.fileId),
-    )
-    if (!cancelled.ok) cleanupErrors.push(cancelled.err)
-  }
-}
-
-async function clearLegalHoldForDelete(
-  bucket: Bucket,
-  fileName: string,
-  fileId: Parameters<Bucket['deleteFileVersion']>[1],
-): Promise<void> {
-  await retryCleanupStep('clear legal hold', bucket, fileName, fileId, () =>
-    bucket.updateFileLegalHold(fileName, fileId, LegalHoldValue.Off),
-  )
-}
-
-async function clearRetentionForDelete(
-  bucket: Bucket,
-  fileName: string,
-  fileId: Parameters<Bucket['deleteFileVersion']>[1],
-): Promise<void> {
-  await retryCleanupStep('clear retention', bucket, fileName, fileId, () =>
-    bucket.updateFileRetention(
-      fileName,
-      fileId,
-      { mode: null, retainUntilTimestamp: null },
-      { bypassGovernance: true },
-    ),
-  )
-}
-
-async function deleteFileVersionForCleanup(
-  bucket: Bucket,
-  fileName: string,
-  fileId: Parameters<Bucket['deleteFileVersion']>[1],
-  deleted: Set<string>,
-  cleanupErrors: unknown[],
-  options?: Parameters<Bucket['deleteFileVersion']>[2],
-): Promise<void> {
-  const deletedVersion = await retryCleanupStep(
-    'delete file version',
-    bucket,
-    fileName,
-    fileId,
-    () => deleteFileVersionOnce(bucket, fileName, fileId, deleted, options),
-  )
-  if (!deletedVersion.ok) cleanupErrors.push(deletedVersion.err)
-}
-
-async function retryCleanupStep(
-  action: string,
-  bucket: Bucket,
-  fileName: string,
-  fileId: string,
-  fn: () => Promise<unknown>,
-): Promise<{ ok: true } | { ok: false; err: unknown }> {
-  let lastError: unknown
-  for (let attempt = 1; attempt <= cleanupAttempts; attempt++) {
-    try {
-      await fn()
-      return { ok: true }
-    } catch (err) {
-      lastError = err
-      logCleanupFailure(
-        `${action} attempt=${attempt}/${cleanupAttempts}`,
-        bucket,
-        fileName,
-        fileId,
-        err,
-      )
-      if (attempt < cleanupAttempts) await delay(cleanupRetryDelayMs)
-    }
-  }
-  return { ok: false, err: lastError }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function throwCleanupErrors(action: string, errors: readonly unknown[]): void {
-  if (errors.length === 0) return
-  throw new AggregateError(errors, `${action} failed for ${errors.length} cleanup operation(s)`)
-}
-
-function logCleanupFailure(
-  action: string,
-  bucket: Bucket,
-  fileName: string,
-  fileId: string,
-  err: unknown,
-): void {
-  console.warn(
-    `[b2 integration cleanup] ${action} failed bucket=${bucket.id} fileName=${fileName} fileId=${fileId} error=${safeErrorSummary(err)}`,
   )
 }
 
@@ -293,64 +112,6 @@ async function uploadRawPart(
   return part.contentSha1
 }
 
-function safeErrorSummary(err: unknown): string {
-  // Deliberately omit err.message from live-service logs. SDK errors are expected
-  // to redact credentials, but setup/cleanup paths can see arbitrary thrown
-  // values, so CI logs only include structural error fields.
-  if (typeof err !== 'object' || err === null) return typeof err
-  const fields: string[] = []
-  const maybeError = err as {
-    readonly name?: unknown
-    readonly status?: unknown
-    readonly code?: unknown
-  }
-  if (typeof maybeError.name === 'string') fields.push(maybeError.name)
-  if (typeof maybeError.status === 'number') fields.push(`status=${maybeError.status}`)
-  if (typeof maybeError.code === 'string') fields.push(`code=${maybeError.code}`)
-  if (fields.length > 0) return fields.join(' ')
-  if (err instanceof Error) return err.name
-  return 'object'
-}
-
-function logSetup(message: string): void {
-  console.info(`[b2 integration setup] ${message}`)
-}
-
-function logFeatureSkip(feature: string, reason: string): void {
-  console.warn(`[b2 integration] ${feature}: skipped (${reason})`)
-}
-
-function requireFeatureCapabilities(
-  client: B2Client,
-  feature: string,
-  capabilities: readonly CapabilityValue[],
-): void {
-  const check = client.hasCapabilities(capabilities)
-  if (check.ok) return
-  throw new Error(`${feature} requires B2 capabilities: ${check.missing.join(', ')}`)
-}
-
-function skipIfMissingFeatureCapabilities(
-  ctx: TestContext,
-  client: B2Client,
-  feature: string,
-  capabilities: readonly CapabilityValue[],
-): void {
-  const check = client.hasCapabilities(capabilities)
-  if (check.ok) return
-  const reason = `missing capabilities: ${check.missing.join(', ')}`
-  logFeatureSkip(feature, reason)
-  ctx.skip(reason)
-}
-
-function isObjectLockUnavailableError(err: unknown): boolean {
-  return (
-    hasB2ErrorCode(err, 'unauthorized') ||
-    hasB2ErrorCode(err, 'access_denied') ||
-    hasB2ErrorCode(err, 'file_lock_not_enabled')
-  )
-}
-
 async function withRecommendedPartSize<T>(
   client: B2Client,
   partSize: number,
@@ -366,71 +127,38 @@ async function withRecommendedPartSize<T>(
   }
 }
 
-async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
-  const start = performance.now()
-  let timedOut = false
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  const operation = Promise.resolve().then(fn)
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
-      timedOut = true
-      reject(
-        new Error(`B2 integration setup step "${name}" timed out after ${setupStepTimeoutMs}ms`),
-      )
-    }, setupStepTimeoutMs)
+describe('B2 integration cleanup safety', () => {
+  it('keeps generated bucket names within the B2 length limit', () => {
+    const previousRunId = process.env['GITHUB_RUN_ID']
+    const previousRunAttempt = process.env['GITHUB_RUN_ATTEMPT']
+    process.env['GITHUB_RUN_ID'] = '123456789012345'
+    process.env['GITHUB_RUN_ATTEMPT'] = '123'
+
+    try {
+      const objectLockName = makeBucketName('object-lock', { objectLock: true })
+      const longLabelName = makeBucketName('object-lock-cleanup-overflow', {
+        objectLock: true,
+      })
+
+      expect(objectLockName.startsWith(objectLockBucketPrefix)).toBe(true)
+      expect(objectLockName).toMatch(/\d{13}$/)
+      expect(objectLockName.length).toBeLessThanOrEqual(maxBucketNameLength)
+      expect(longLabelName).toMatch(/\d{13}$/)
+      expect(longLabelName.length).toBeLessThanOrEqual(maxBucketNameLength)
+    } finally {
+      if (previousRunId === undefined) {
+        delete process.env['GITHUB_RUN_ID']
+      } else {
+        process.env['GITHUB_RUN_ID'] = previousRunId
+      }
+      if (previousRunAttempt === undefined) {
+        delete process.env['GITHUB_RUN_ATTEMPT']
+      } else {
+        process.env['GITHUB_RUN_ATTEMPT'] = previousRunAttempt
+      }
+    }
   })
 
-  logSetup(`${name}: start`)
-  try {
-    const result = await Promise.race([operation, timeoutPromise])
-    logSetup(`${name}: ok (${Math.round(performance.now() - start)}ms)`)
-    return result
-  } catch (err) {
-    logSetup(`${name}: failed after ${Math.round(performance.now() - start)}ms`)
-    console.error(`[b2 integration setup] ${name}: ${safeErrorSummary(err)}`)
-    throw err
-  } finally {
-    if (timeout !== undefined) clearTimeout(timeout)
-    if (timedOut) {
-      void operation.catch((err) => {
-        console.warn(
-          `[b2 integration setup] ${name}: underlying operation rejected after timeout (${safeErrorSummary(err)})`,
-        )
-      })
-    }
-  }
-}
-
-async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]): Promise<void> {
-  const now = Date.now()
-  const staleBuckets = existing.filter((bucket) => isStaleIntegrationBucket(bucket.name, now))
-  let deletedCount = 0
-  let skippedCount = 0
-
-  logSetup(`stale bucket sweep: ${staleBuckets.length} candidate(s) among ${existing.length}`)
-
-  for (const bucket of staleBuckets) {
-    const start = performance.now()
-    try {
-      await deleteBucketIfPresent(bucket)
-      deletedCount += 1
-      logSetup(
-        `delete stale bucket ${bucket.name}: ok (${Math.round(performance.now() - start)}ms)`,
-      )
-    } catch (err) {
-      skippedCount += 1
-      console.warn(
-        `[b2 integration setup] delete stale bucket ${bucket.name}: skipped after ${Math.round(
-          performance.now() - start,
-        )}ms (${safeErrorSummary(err)})`,
-      )
-    }
-  }
-
-  logSetup(`stale bucket sweep: deleted ${deletedCount}, skipped ${skippedCount}`)
-}
-
-describe('B2 integration cleanup safety', () => {
   it('does not use Object Lock bypass cleanup for prefix-discovered stale buckets', async () => {
     const calls = {
       updateFileLegalHold: 0,
@@ -439,7 +167,7 @@ describe('B2 integration cleanup safety', () => {
     }
     const fakeBucket = {
       id: 'bucket-stale',
-      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      name: `${integrationBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
       async *paginateUnfinishedLargeFiles() {},
       async *paginateFileNames() {
         yield { fileName: 'locked.txt', fileId: 'file-locked' }
@@ -472,6 +200,90 @@ describe('B2 integration cleanup safety', () => {
       updateFileLegalHold: 0,
       updateFileRetention: 0,
       bypassDelete: 0,
+    })
+  })
+
+  it('uses Object Lock cleanup for stale Object Lock buckets', async () => {
+    const calls = {
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+      deleteBucket: 0,
+    }
+    const fakeBucket = {
+      id: 'bucket-lock-stale',
+      name: `${objectLockBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield { fileName: 'locked.txt', fileId: 'file-locked' }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+      },
+      async delete() {
+        calls.deleteBucket += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      updateFileLegalHold: 1,
+      updateFileRetention: 1,
+      bypassDelete: 1,
+      deleteBucket: 1,
+    })
+  })
+
+  it('uses Object Lock cleanup for stale legacy file-lock buckets', async () => {
+    const calls = {
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+      deleteBucket: 0,
+    }
+    const fakeBucket = {
+      id: 'bucket-legacy-lock-stale',
+      name: `${integrationBucketPrefix}12345678901-2-lock-${Date.now() - staleBucketAgeMs - 1}`,
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield { fileName: 'locked.txt', fileId: 'file-locked' }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+      },
+      async delete() {
+        calls.deleteBucket += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      updateFileLegalHold: 1,
+      updateFileRetention: 1,
+      bypassDelete: 1,
+      deleteBucket: 1,
     })
   })
 
@@ -788,7 +600,7 @@ describe.skipIf(skip)('B2 integration', () => {
     let lockBucket: Bucket
     try {
       lockBucket = await client.createBucket({
-        bucketName: makeBucketName('lock'),
+        bucketName: makeBucketName('b2-lock', { objectLock: true }),
         bucketType: 'allPrivate',
         fileLockEnabled: true,
       })
