@@ -2345,7 +2345,7 @@ describe('upload fresh-URL retry', () => {
     expect(freshFetches).toBe(0)
   })
 
-  it('does not retry spoofable upload ECONNREFUSED errors after the POST starts', async () => {
+  it('does not retry spoofable upload ECONNREFUSED errors after upload callback starts', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
     let committedVersions = 0
