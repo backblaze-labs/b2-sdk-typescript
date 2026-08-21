@@ -16,7 +16,7 @@ import type {
   ListComputersResponse,
 } from '../types/backup.ts'
 
-const BACKUP_API_V1: B2EndpointUrlOptions = { prefix: 'api/backup', version: 'v1' }
+const BACKUP_API: B2EndpointUrlOptions = { prefix: 'api/backup', version: 'v1' }
 
 /** Configuration for constructing a {@link BackupRawClient}. */
 export interface BackupRawClientOptions {
@@ -63,6 +63,10 @@ function backupEndpointAllowedSuffixes(
     unlockedGuard:
       'Computer Backup endpoint requests require a locked URL guard before sending Partner tokens',
   })
+}
+
+function backupEndpointUrl(backupApiUrl: string, endpoint: string): string {
+  return b2Url(backupApiUrl, { ...BACKUP_API, endpoint })
 }
 
 /**
@@ -198,10 +202,7 @@ export class BackupRawClient {
     options?: BackupRawRequestOptions,
   ): Promise<T> {
     const response = await this.transport.send({
-      url: withQueryString(
-        b2Url(this.safeBackupApiUrl(backupApiUrl), { ...BACKUP_API_V1, endpoint }),
-        query,
-      ),
+      url: withQueryString(backupEndpointUrl(this.safeBackupApiUrl(backupApiUrl), endpoint), query),
       method: 'GET',
       headers: {
         Authorization: authToken,
@@ -232,7 +233,7 @@ export class BackupRawClient {
   ): Promise<T> {
     const requestOptions = nonRetryingMutationRequestOptions(options)
     const response = await this.transport.send({
-      url: b2Url(this.safeBackupApiUrl(backupApiUrl), { ...BACKUP_API_V1, endpoint }),
+      url: backupEndpointUrl(this.safeBackupApiUrl(backupApiUrl), endpoint),
       method: 'POST',
       headers: {
         Authorization: authToken,

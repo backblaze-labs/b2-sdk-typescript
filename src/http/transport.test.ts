@@ -80,7 +80,7 @@ const baseRequest: HttpRequest = {
 const knownNonIdempotentMutationRequests = [
   ...PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
     (endpoint) =>
-      [endpoint, `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`] as const,
+      [endpoint, `https://groups.backblazeb2.com/partner/b2api/v4/${endpoint}`] as const,
   ),
   ...BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS.map(
     (endpoint) =>
@@ -1437,7 +1437,7 @@ describe('RetryTransport', () => {
         transport.send({
           ...baseRequest,
           method: 'POST',
-          url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+          url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_create_group_member',
         }),
       ).rejects.toThrow(ctor)
       expect(onReauth).not.toHaveBeenCalled()

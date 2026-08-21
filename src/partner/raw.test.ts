@@ -52,6 +52,10 @@ function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
 }
 
+function apiVersionSegment(request: HttpRequest): string {
+  return new URL(request.url).pathname.split('/').at(-2) ?? ''
+}
+
 function partnerAuthorizeResponse(
   overrides: { readonly groupsApiUrl?: string; readonly backupApiUrl?: string } = {},
 ) {
@@ -320,6 +324,51 @@ describe('PartnerRawClient group management endpoints', () => {
     s3Endpoint: 's3.us-west-004.backblazeb2.com',
   }
 
+  it('pins Partner group-management methods to v4 endpoints', async () => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_create_group_member: [],
+      b2_eject_group_member: groupMember,
+      b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
+      b2_list_group_members: [
+        {
+          groupId: group,
+          groupName: 'Example Group',
+          groupMembers: [],
+          nextEmail: null,
+        },
+      ],
+      b2_reserve_trial_create_account: [],
+    })
+
+    await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+    await raw.ejectGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberAccountId,
+    })
+    await raw.listGroups(groupsApiUrl, authToken, { adminAccountId })
+    await raw.listGroupMembers(groupsApiUrl, authToken, { adminAccountId, groupId: group })
+    await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+      email: 'trial-one@example.com',
+      term: 7,
+      storage: 1,
+    })
+
+    expect(
+      seenRequests.map((request) => [apiEndpointName(request), apiVersionSegment(request)]),
+    ).toEqual([
+      ['b2_create_group_member', 'v4'],
+      ['b2_eject_group_member', 'v4'],
+      ['b2_list_groups', 'v4'],
+      ['b2_list_group_members', 'v4'],
+      ['b2_reserve_trial_create_account', 'v4'],
+    ])
+  })
+
   it('sends Partner POST bodies through the partner base path', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
       b2_create_group_member: [
@@ -354,7 +403,7 @@ describe('PartnerRawClient group management endpoints', () => {
       throw new Error('expected create and eject requests')
     }
     expect(createRequest).toMatchObject({
-      url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+      url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_create_group_member',
       method: 'POST',
       headers: {
         Authorization: authToken,
@@ -369,7 +418,7 @@ describe('PartnerRawClient group management endpoints', () => {
       region: Region.UsWest,
     })
     expect(ejectRequest).toMatchObject({
-      url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_eject_group_member',
+      url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_eject_group_member',
       method: 'POST',
       headers: {
         Authorization: authToken,
@@ -459,12 +508,12 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(members[0]?.nextEmail).toBe('next@example.com')
     expect(seenRequests).toEqual([
       {
-        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account&groupName=Example%20Group&startGroupId=254&maxGroupCount=10',
+        url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_list_groups?adminAccountId=admin-account&groupName=Example%20Group&startGroupId=254&maxGroupCount=10',
         method: 'GET',
         headers: { Authorization: authToken },
       },
       {
-        url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_group_members?adminAccountId=admin-account&groupId=254&startEmail=next%40example.com&maxMemberCount=1000',
+        url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_list_group_members?adminAccountId=admin-account&groupId=254&startEmail=next%40example.com&maxMemberCount=1000',
         method: 'GET',
         headers: { Authorization: authToken },
       },
@@ -690,10 +739,10 @@ describe('PartnerRawClient group management endpoints', () => {
       memberAccountId,
     })
     expect(seenRequests[2]?.url).toBe(
-      'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_groups?adminAccountId=admin-account',
+      'https://groups.backblazeb2.com/partner/b2api/v4/b2_list_groups?adminAccountId=admin-account',
     )
     expect(seenRequests[3]?.url).toBe(
-      'https://groups.backblazeb2.com/partner/b2api/v3/b2_list_group_members?adminAccountId=admin-account&groupId=254',
+      'https://groups.backblazeb2.com/partner/b2api/v4/b2_list_group_members?adminAccountId=admin-account&groupId=254',
     )
   })
 
@@ -1006,7 +1055,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     const reserveRequest = seenRequests.at(-1)
     if (reserveRequest === undefined) throw new Error('expected reserve trial request')
     expect(reserveRequest).toMatchObject({
-      url: `${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`,
+      url: `${groupsApiUrl}/b2api/v4/b2_reserve_trial_create_account`,
       method: 'POST',
       headers: {
         Authorization: authToken,
@@ -1190,7 +1239,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     ).rejects.toThrow()
 
     expect(requests).toHaveLength(1)
-    expect(requests[0]?.url).toBe(`${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`)
+    expect(requests[0]?.url).toBe(`${groupsApiUrl}/b2api/v4/b2_reserve_trial_create_account`)
     expect(requests[0]?.idempotent).toBe(false)
   })
 
