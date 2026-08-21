@@ -23,10 +23,12 @@ import type {
 import type { DownloadAuthorizationResponse } from './types/download.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type {
+  FileNameListEntry,
   FileVersion,
   FileVersionListEntry,
   ListedConcreteFileVersion,
   ListedFileVersion,
+  ListedHideFileVersion,
   ListFileNamesResponse,
   ListFileNamesWithDelimiterResponse,
   ListFileVersionsResponse,
@@ -159,6 +161,12 @@ export interface BucketListFileNamesWithDelimiterOptions extends BucketListFileN
   delimiter: string
 }
 
+/** Options for callers that dynamically include a delimiter. */
+export interface BucketListFileNamesMaybeDelimiterOptions extends BucketListFileNamesBaseOptions {
+  /** Optional delimiter for virtual directory grouping. */
+  delimiter?: string | undefined
+}
+
 /** Shared options for {@link Bucket.listFileVersions}. */
 export interface BucketListFileVersionsBaseOptions {
   /** Start listing after this file name (for pagination). */
@@ -189,6 +197,13 @@ export interface BucketListFileVersionsWithDelimiterOptions
   delimiter: string
 }
 
+/** Options for callers that dynamically include a delimiter. */
+export interface BucketListFileVersionsMaybeDelimiterOptions
+  extends BucketListFileVersionsBaseOptions {
+  /** Optional delimiter for virtual directory grouping. */
+  delimiter?: string | undefined
+}
+
 /** Options for non-delimiter {@link Bucket.paginateFileNames} iterators. */
 export type BucketPaginateFileNamesOptions = {
   /** Only yield files whose names start with this prefix. */
@@ -205,6 +220,14 @@ export type BucketPaginateFileNamesWithDelimiterOptions = {
   delimiter: string
 } & PaginatorOptions
 
+/** Options for callers that dynamically include a delimiter. */
+export type BucketPaginateFileNamesMaybeDelimiterOptions = {
+  /** Only yield files whose names start with this prefix. */
+  prefix?: string
+  /** Optional delimiter for virtual directory grouping. */
+  delimiter?: string | undefined
+} & PaginatorOptions
+
 /** Options for non-delimiter {@link Bucket.paginateFileVersions} iterators. */
 export type BucketPaginateFileVersionsOptions = {
   /** Only yield versions whose names start with this prefix. */
@@ -219,6 +242,14 @@ export type BucketPaginateFileVersionsWithDelimiterOptions = {
   prefix?: string
   /** Delimiter for virtual directory grouping. */
   delimiter: string
+} & PaginatorOptions
+
+/** Options for callers that dynamically include a delimiter. */
+export type BucketPaginateFileVersionsMaybeDelimiterOptions = {
+  /** Only yield versions whose names start with this prefix. */
+  prefix?: string
+  /** Optional delimiter for virtual directory grouping. */
+  delimiter?: string | undefined
 } & PaginatorOptions
 
 interface BucketDefaultRetentionSnapshot {
@@ -263,6 +294,106 @@ function listedVersionFileIdOrThrow(version: ListedConcreteFileVersion): FileId 
       version.fileName,
     )}; delimiter folder rows are invalid because deleteAll does not request delimiter grouping`,
   )
+}
+
+function listedFileIdOrThrow(
+  version: { readonly action: unknown; readonly fileId?: unknown; readonly fileName: string },
+  operation: string,
+): FileId {
+  if (typeof version.fileId === 'string') return version.fileId as FileId
+  throw new Error(
+    `${operation}: list response returned a row without a string fileId for ${JSON.stringify(
+      version.fileName,
+    )}`,
+  )
+}
+
+function assertNotFolderListEntry(
+  version: FileVersionListEntry,
+  operation: string,
+): asserts version is ListedConcreteFileVersion {
+  if (version.action !== FileAction.Folder) return
+  throw new Error(
+    `${operation}: list response returned a delimiter folder row for ${JSON.stringify(
+      version.fileName,
+    )} without requesting delimiter grouping`,
+  )
+}
+
+function validateListedConcreteEntry(
+  version: FileVersionListEntry,
+  operation: string,
+): ListedConcreteFileVersion {
+  assertNotFolderListEntry(version, operation)
+  listedFileIdOrThrow(version, operation)
+  return version
+}
+
+function validateListedNameEntry(
+  version: FileNameListEntry | ListedConcreteFileVersion,
+  operation: string,
+  options: { allowFolder: boolean },
+): FileNameListEntry {
+  if (version.action === FileAction.Folder) {
+    if (options.allowFolder) return version
+    throw new Error(
+      `${operation}: list response returned a delimiter folder row for ${JSON.stringify(
+        version.fileName,
+      )} without requesting delimiter grouping`,
+    )
+  }
+  if (version.action === FileAction.Hide) {
+    throw new Error(
+      `${operation}: list response returned a hide marker for ${JSON.stringify(
+        version.fileName,
+      )}; b2_list_file_names only returns visible file versions`,
+    )
+  }
+  listedFileIdOrThrow(version, operation)
+  return version
+}
+
+function validateListFileNamesResponse(
+  response: ListFileNamesResponse | ListFileNamesWithDelimiterResponse,
+  options: { allowFolder: false },
+): ListFileNamesResponse
+function validateListFileNamesResponse(
+  response: ListFileNamesResponse | ListFileNamesWithDelimiterResponse,
+  options: { allowFolder: true },
+): ListFileNamesWithDelimiterResponse
+function validateListFileNamesResponse(
+  response: ListFileNamesResponse | ListFileNamesWithDelimiterResponse,
+  options: { allowFolder: boolean },
+): ListFileNamesResponse | ListFileNamesWithDelimiterResponse {
+  const files = response.files.map((version) =>
+    validateListedNameEntry(version, 'listFileNames', options),
+  )
+  return { ...response, files }
+}
+
+function validateListFileVersionsResponse(
+  response: ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse,
+  options: { allowFolder: false },
+): ListFileVersionsResponse
+function validateListFileVersionsResponse(
+  response: ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse,
+  options: { allowFolder: true },
+): ListFileVersionsWithDelimiterResponse
+function validateListFileVersionsResponse(
+  response: ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse,
+  options: { allowFolder: boolean },
+): ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse {
+  if (options.allowFolder) {
+    const files = response.files.map((version) => {
+      if (version.action === FileAction.Folder) return version
+      return validateListedConcreteEntry(version, 'listFileVersions')
+    })
+    return { ...response, files }
+  }
+  const files = response.files.map((version) =>
+    validateListedConcreteEntry(version, 'listFileVersions'),
+  )
+  return { ...response, files }
 }
 
 /**
@@ -413,9 +544,15 @@ export class Bucket {
   ): Promise<ListFileNamesWithDelimiterResponse>
   async listFileNames(options?: BucketListFileNamesOptions): Promise<ListFileNamesResponse>
   async listFileNames(
-    options?: BucketListFileNamesOptions | BucketListFileNamesWithDelimiterOptions,
+    options: BucketListFileNamesMaybeDelimiterOptions,
+  ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse>
+  async listFileNames(
+    options?:
+      | BucketListFileNamesOptions
+      | BucketListFileNamesWithDelimiterOptions
+      | BucketListFileNamesMaybeDelimiterOptions,
   ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse> {
-    return this.client.raw.listFileNames(
+    const response = await this.client.raw.listFileNames(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
       {
@@ -429,6 +566,9 @@ export class Bucket {
         ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       },
     )
+    return options?.delimiter !== undefined
+      ? validateListFileNamesResponse(response, { allowFolder: true })
+      : validateListFileNamesResponse(response, { allowFolder: false })
   }
 
   /**
@@ -445,9 +585,15 @@ export class Bucket {
   ): Promise<ListFileVersionsWithDelimiterResponse>
   async listFileVersions(options?: BucketListFileVersionsOptions): Promise<ListFileVersionsResponse>
   async listFileVersions(
-    options?: BucketListFileVersionsOptions | BucketListFileVersionsWithDelimiterOptions,
+    options: BucketListFileVersionsMaybeDelimiterOptions,
+  ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse>
+  async listFileVersions(
+    options?:
+      | BucketListFileVersionsOptions
+      | BucketListFileVersionsWithDelimiterOptions
+      | BucketListFileVersionsMaybeDelimiterOptions,
   ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse> {
-    return this.client.raw.listFileVersions(
+    const response = await this.client.raw.listFileVersions(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
       {
@@ -462,6 +608,9 @@ export class Bucket {
         ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       },
     )
+    return options?.delimiter !== undefined
+      ? validateListFileVersionsResponse(response, { allowFolder: true })
+      : validateListFileVersionsResponse(response, { allowFolder: false })
   }
 
   /**
@@ -488,13 +637,19 @@ export class Bucket {
    */
   paginateFileNames(
     options: BucketPaginateFileNamesWithDelimiterOptions,
-  ): AsyncIterableIterator<FileVersionListEntry>
+  ): AsyncIterableIterator<FileNameListEntry>
   paginateFileNames(
     options?: BucketPaginateFileNamesOptions,
   ): AsyncIterableIterator<ListedFileVersion>
   paginateFileNames(
-    options?: BucketPaginateFileNamesOptions | BucketPaginateFileNamesWithDelimiterOptions,
-  ): AsyncIterableIterator<ListedFileVersion | FileVersionListEntry> {
+    options: BucketPaginateFileNamesMaybeDelimiterOptions,
+  ): AsyncIterableIterator<ListedFileVersion | FileNameListEntry>
+  paginateFileNames(
+    options?:
+      | BucketPaginateFileNamesOptions
+      | BucketPaginateFileNamesWithDelimiterOptions
+      | BucketPaginateFileNamesMaybeDelimiterOptions,
+  ): AsyncIterableIterator<ListedFileVersion | FileNameListEntry> {
     return paginateItems(
       async (cursor: string | undefined) => {
         const request = {
@@ -509,14 +664,7 @@ export class Bucket {
             : await this.listFileNames(request)
         return { page: resp, nextCursor: resp.nextFileName ?? undefined }
       },
-      // Real B2 surfaces hide markers as rows in `b2_list_file_names`. This
-      // iterator's documented contract is "latest VISIBLE version", so we
-      // drop hide-action rows here. Callers who need full history should
-      // use `paginateFileVersions`.
-      (page) =>
-        page.files.filter((f) => f.action !== FileAction.Hide) as Array<
-          ListedFileVersion | FileVersionListEntry
-        >,
+      (page) => page.files,
       options?.signal,
     )
   }
@@ -542,7 +690,13 @@ export class Bucket {
     options?: BucketPaginateFileVersionsOptions,
   ): AsyncIterableIterator<ListedConcreteFileVersion>
   paginateFileVersions(
-    options?: BucketPaginateFileVersionsOptions | BucketPaginateFileVersionsWithDelimiterOptions,
+    options: BucketPaginateFileVersionsMaybeDelimiterOptions,
+  ): AsyncIterableIterator<ListedConcreteFileVersion | FileVersionListEntry>
+  paginateFileVersions(
+    options?:
+      | BucketPaginateFileVersionsOptions
+      | BucketPaginateFileVersionsWithDelimiterOptions
+      | BucketPaginateFileVersionsMaybeDelimiterOptions,
   ): AsyncIterableIterator<ListedConcreteFileVersion | FileVersionListEntry> {
     type Cursor = { fileName: string; fileId: FileId | undefined }
     return paginateItems(
@@ -639,20 +793,15 @@ export class Bucket {
   /**
    * Looks up the latest visible version of a file by name.
    * Uses `listFileNames` under the hood; returns `null` when the file does not
-   * exist or its latest version is a hide marker.
+   * exist or is hidden.
    * @param fileName - The exact file path to look up.
    *
    * @returns The latest {@link FileVersion}, or `null` if not found.
    */
   async getFileInfoByName(fileName: string): Promise<FileVersion | null> {
-    // `listFileNames` returns the most recent version per file name,
-    // which may be a hide marker (real B2: `action: 'hide'`,
-    // `contentLength: 0`). This helper's contract is "latest LIVE
-    // version", so we treat a hide-action match as "not found".
     const resp = await this.listFileNames({ prefix: fileName, pageSize: 1 })
     const match = resp.files.find((f) => f.fileName === fileName)
-    if (!match || match.action === FileAction.Hide) return null
-    if ((match as { readonly action?: unknown }).action === FileAction.Folder) return null
+    if (!match) return null
     return match
   }
 
@@ -662,9 +811,9 @@ export class Bucket {
    * no hide marker to remove (file is already visible or does not exist).
    * @param fileName - The file path to unhide.
    *
-   * @returns The deleted hide marker version, or `null` if nothing was hidden.
+   * @returns The deleted listed hide-marker row, or `null` if nothing was hidden.
    */
-  async unhideFile(fileName: string): Promise<ListedConcreteFileVersion | null> {
+  async unhideFile(fileName: string): Promise<ListedHideFileVersion | null> {
     // The latest version of a hidden file appears in listFileVersions but not
     // in listFileNames. Walk versions until we find the hide marker on top.
     const resp = await this.listFileVersions({ prefix: fileName, pageSize: 100 })

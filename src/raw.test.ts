@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { RawClient } from './raw/index.ts'
+import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import { bucketId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
 
@@ -172,5 +173,40 @@ describe('RawClient list request controls', () => {
 
     expect(started.contentSha1).toBeNull()
     expect(unfinished.files[0]?.contentSha1).toBeNull()
+  })
+
+  it('preserves live-shaped hide marker content type in listFileVersions', async () => {
+    const transport: HttpTransport = {
+      async send() {
+        return jsonResponse({
+          files: [
+            {
+              accountId: 'account',
+              action: FileAction.Hide,
+              bucketId: 'bucket',
+              contentLength: 0,
+              contentMd5: null,
+              contentSha1: 'none',
+              contentType: HIDE_MARKER_CONTENT_TYPE,
+              fileId: 'hide-file-id',
+              fileInfo: {},
+              fileName: 'hidden.txt',
+              uploadTimestamp: 1,
+            },
+          ],
+          nextFileName: null,
+          nextFileId: null,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const versions = await raw.listFileVersions('https://api.example.test', 'auth', {
+      bucketId: 'bucket' as never,
+    })
+
+    expect(versions.files[0]?.action).toBe(FileAction.Hide)
+    expect(versions.files[0]?.contentType).toBe(HIDE_MARKER_CONTENT_TYPE)
+    expect(versions.files[0]?.contentSha1).toBeNull()
   })
 })

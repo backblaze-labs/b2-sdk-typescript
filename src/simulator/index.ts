@@ -37,6 +37,7 @@ import {
   type FileVersion,
   type FileVersionListEntry,
   type FolderFileVersion,
+  HIDE_MARKER_CONTENT_TYPE,
   type ListedFileVersion,
   type ReplicationStatus,
 } from '../types/file.ts'
@@ -3774,18 +3775,15 @@ export class B2Simulator {
     if (countError) return this.error(400, countError.code, countError.message)
     const max = req.maxFileCount ?? 1000
     const prefix = req.prefix ?? ''
-    // Real B2: `b2_list_file_names` returns the most recent version per
-    // file name. If that most-recent version is a hide marker (created via
-    // `b2_hide_file`), it IS the row that gets returned, with
-    // `action: 'hide'` and `contentLength: 0`. Filtering hide markers out
-    // of the listing would diverge from production behaviour and hide a
-    // real test seam: the action / SDK consumer must skip hide-action
-    // entries when iterating over "live" files.
+    // Real B2: `b2_list_file_names` returns only visible latest versions.
+    // Hide markers remain available through `b2_list_file_versions`, but do
+    // not appear directly here and do not create delimiter folder rows.
     const currentVersions = [...bucket.files.entries()]
       .filter(([name]) => name.startsWith(prefix))
       .map(([_, versions]) => versions[versions.length - 1])
       .filter((v): v is StoredFile => v !== undefined)
       .map((v) => v.fileVersion)
+      .filter((v) => v.action !== FileAction.Hide)
       .sort((a, b) => compareB2FileNames(a.fileName, b.fileName))
 
     let allFiles = this.applyListDelimiter({
@@ -3913,7 +3911,7 @@ export class B2Simulator {
     void fileRetention
     void legalHold
     void serverSideEncryption
-    return { ...listed, action: FileAction.Hide, contentType: null }
+    return { ...listed, action: FileAction.Hide, contentType: HIDE_MARKER_CONTENT_TYPE }
   }
 
   private makeFolderListEntry(bucketId: string, fileName: string): FolderFileVersion {
@@ -3948,7 +3946,7 @@ export class B2Simulator {
     const fileVersion = this.makeFileVersion({
       bucketId: req.bucketId,
       fileName: req.fileName,
-      contentType: 'application/octet-stream',
+      contentType: HIDE_MARKER_CONTENT_TYPE,
       contentLength: 0,
       contentSha1: 'none',
       action: FileAction.Hide,

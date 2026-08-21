@@ -23,6 +23,9 @@ export const FileAction = {
   Copy: 'copy',
 } as const
 
+/** MIME type B2 returns for hide-marker rows in `b2_list_file_versions`. */
+export const HIDE_MARKER_CONTENT_TYPE = 'application/x-bz-hide-marker' as const
+
 /**
  * The action that created a file version. Derived from {@link FileAction}.
  *
@@ -52,8 +55,11 @@ export type ReplicationStatus = 'PENDING' | 'COMPLETED' | 'FAILED' | 'REPLICA'
  * Complete metadata for a concrete file version in B2. Returned by
  * `b2_get_file_info`, `b2_upload_file`, `b2_copy_file`, `b2_hide_file`, and
  * other file-related endpoints. List endpoints return
- * {@link ListedConcreteFileVersion} unless a delimiter is requested, in which
- * case they return {@link FileVersionListEntry}.
+ * {@link ListedFileVersion} for file-name listings and
+ * {@link ListedConcreteFileVersion} for file-version listings unless a
+ * delimiter is requested, in which case file-name listings return
+ * {@link FileNameListEntry} and file-version listings return
+ * {@link FileVersionListEntry}.
  */
 export interface FileVersion {
   /** Account that owns this file. */
@@ -112,8 +118,8 @@ export interface ListedHideFileVersion
   > {
   /** Hide marker (soft delete). */
   readonly action: typeof FileAction.Hide
-  /** B2 list APIs return null for hide marker content type. */
-  readonly contentType: null
+  /** B2 list APIs return the documented hide-marker MIME type. */
+  readonly contentType: typeof HIDE_MARKER_CONTENT_TYPE
 }
 
 /** Virtual folder row returned by list endpoints when a delimiter groups file names. */
@@ -145,16 +151,16 @@ export interface FolderFileVersion {
 /** Concrete file-version entry returned by list endpoints. */
 export type ListedConcreteFileVersion = ListedFileVersion | ListedHideFileVersion
 
+/** Entry returned by `b2_list_file_names` when a delimiter groups file names. */
+export type FileNameListEntry = ListedFileVersion | FolderFileVersion
+
 /** Entry returned by `b2_list_file_names` and `b2_list_file_versions`. */
 export type FileVersionListEntry = ListedConcreteFileVersion | FolderFileVersion
 
 /**
- * Request parameters for the non-delimiter `b2_list_file_names` API call.
- * Lists the most recent version of each file in a bucket without virtual
- * folder rows. Use {@link ListFileNamesWithDelimiterRequest} when sending a
- * `delimiter`.
+ * Request parameters shared by `b2_list_file_names` calls.
  */
-export interface ListFileNamesRequest {
+export interface ListFileNamesBaseRequest {
   /** Bucket to list files from. */
   readonly bucketId: BucketId
   /** Return files starting after this name (exclusive). Used for pagination. */
@@ -165,34 +171,49 @@ export interface ListFileNamesRequest {
   readonly prefix?: string
 }
 
+/**
+ * Request parameters for the non-delimiter `b2_list_file_names` API call.
+ * Lists visible latest file versions in a bucket without hide markers or
+ * virtual folder rows. Use {@link ListFileNamesWithDelimiterRequest} when
+ * sending a `delimiter`.
+ */
+export interface ListFileNamesRequest extends ListFileNamesBaseRequest {
+  /** Omit delimiter to receive only visible concrete file-version entries. */
+  readonly delimiter?: undefined
+}
+
 /** Request parameters for delimiter-grouped `b2_list_file_names` calls. */
-export interface ListFileNamesWithDelimiterRequest extends ListFileNamesRequest {
+export interface ListFileNamesWithDelimiterRequest extends ListFileNamesBaseRequest {
   /** Delimiter for virtual folder grouping (typically `'/'`). */
   readonly delimiter: string
 }
 
+/** Request parameters for callers that dynamically include a delimiter. */
+export interface ListFileNamesMaybeDelimiterRequest extends ListFileNamesBaseRequest {
+  /** Optional delimiter for virtual folder grouping. */
+  readonly delimiter?: string | undefined
+}
+
 /** Response from non-delimiter `b2_list_file_names` calls. */
 export interface ListFileNamesResponse {
-  /** Array of concrete file-version entries matching the request. */
-  readonly files: readonly ListedConcreteFileVersion[]
+  /** Array of visible concrete file-version entries matching the request. */
+  readonly files: readonly ListedFileVersion[]
   /** Next file name to use for pagination, or null if all files have been listed. */
   readonly nextFileName: string | null
 }
 
 /** Response from delimiter-grouped `b2_list_file_names` calls. */
 export interface ListFileNamesWithDelimiterResponse {
-  /** Array of concrete file-version or virtual-folder entries matching the request. */
-  readonly files: readonly FileVersionListEntry[]
+  /** Array of visible concrete file-version or virtual-folder entries. */
+  readonly files: readonly FileNameListEntry[]
   /** Next file name to use for pagination, or null if all files have been listed. */
   readonly nextFileName: string | null
 }
 
 /**
- * Request parameters for the non-delimiter `b2_list_file_versions` API call.
- * Lists all versions of files in a bucket without virtual folder rows. Use
- * {@link ListFileVersionsWithDelimiterRequest} when sending a `delimiter`.
+ * Request parameters shared by `b2_list_file_versions` calls.
  */
-export interface ListFileVersionsRequest {
+export interface ListFileVersionsBaseRequest {
   /** Bucket to list file versions from. */
   readonly bucketId: BucketId
   /** Return files starting after this name (exclusive). Used for pagination. */
@@ -205,10 +226,26 @@ export interface ListFileVersionsRequest {
   readonly prefix?: string
 }
 
+/**
+ * Request parameters for the non-delimiter `b2_list_file_versions` API call.
+ * Lists all versions of files in a bucket without virtual folder rows. Use
+ * {@link ListFileVersionsWithDelimiterRequest} when sending a `delimiter`.
+ */
+export interface ListFileVersionsRequest extends ListFileVersionsBaseRequest {
+  /** Omit delimiter to receive only concrete file-version entries. */
+  readonly delimiter?: undefined
+}
+
 /** Request parameters for delimiter-grouped `b2_list_file_versions` calls. */
-export interface ListFileVersionsWithDelimiterRequest extends ListFileVersionsRequest {
+export interface ListFileVersionsWithDelimiterRequest extends ListFileVersionsBaseRequest {
   /** Delimiter for virtual folder grouping (typically `'/'`). */
   readonly delimiter: string
+}
+
+/** Request parameters for callers that dynamically include a delimiter. */
+export interface ListFileVersionsMaybeDelimiterRequest extends ListFileVersionsBaseRequest {
+  /** Optional delimiter for virtual folder grouping. */
+  readonly delimiter?: string | undefined
 }
 
 /** Response from non-delimiter `b2_list_file_versions` calls. */

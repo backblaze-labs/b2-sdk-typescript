@@ -17,13 +17,17 @@ export { InMemoryAccountInfo } from './auth/in-memory.ts'
 export {
   Bucket,
   type BucketListFileNamesBaseOptions,
+  type BucketListFileNamesMaybeDelimiterOptions,
   type BucketListFileNamesOptions,
   type BucketListFileNamesWithDelimiterOptions,
   type BucketListFileVersionsBaseOptions,
+  type BucketListFileVersionsMaybeDelimiterOptions,
   type BucketListFileVersionsOptions,
   type BucketListFileVersionsWithDelimiterOptions,
+  type BucketPaginateFileNamesMaybeDelimiterOptions,
   type BucketPaginateFileNamesOptions,
   type BucketPaginateFileNamesWithDelimiterOptions,
+  type BucketPaginateFileVersionsMaybeDelimiterOptions,
   type BucketPaginateFileVersionsOptions,
   type BucketPaginateFileVersionsWithDelimiterOptions,
   type DeleteAllDeleteEvent,
@@ -139,7 +143,7 @@ export {
   sseCustomer,
 } from './types/encryption.ts'
 export { KNOWN_B2_ERROR_CODES } from './types/errors.ts'
-export { FileAction, MetadataDirective } from './types/file.ts'
+export { FileAction, HIDE_MARKER_CONTENT_TYPE, MetadataDirective } from './types/file.ts'
 // Branded-ID factory functions. The `export type *` line above re-exports
 // the type aliases (BucketId, FileId, etc.) but value-level factory
 // functions are NOT included by `export type *` (it's type-only).

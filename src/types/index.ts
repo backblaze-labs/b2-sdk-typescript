@@ -85,6 +85,7 @@ export type {
   CopyPartResponse,
   DeleteFileVersionRequest,
   DeleteFileVersionResponse,
+  FileNameListEntry,
   FileVersion,
   FileVersionListEntry,
   FolderFileVersion,
@@ -94,10 +95,12 @@ export type {
   ListedFileAction,
   ListedFileVersion,
   ListedHideFileVersion,
+  ListFileNamesMaybeDelimiterRequest,
   ListFileNamesRequest,
   ListFileNamesResponse,
   ListFileNamesWithDelimiterRequest,
   ListFileNamesWithDelimiterResponse,
+  ListFileVersionsMaybeDelimiterRequest,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
   ListFileVersionsWithDelimiterRequest,
@@ -105,7 +108,7 @@ export type {
   ReplicationStatus,
 } from './file.ts'
 // `FileAction` and `MetadataDirective` are forwarded as both type and value.
-export { FileAction, MetadataDirective } from './file.ts'
+export { FileAction, HIDE_MARKER_CONTENT_TYPE, MetadataDirective } from './file.ts'
 export type {
   AccountId,
   ApplicationKeyId,

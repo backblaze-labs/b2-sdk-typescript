@@ -24,6 +24,7 @@ import {
 import {
   FileAction,
   type FileVersionListEntry,
+  HIDE_MARKER_CONTENT_TYPE,
   type ListedFileVersion,
   MetadataDirective,
 } from '../types/file.ts'
@@ -1129,7 +1130,32 @@ describe('B2Simulator listing order', () => {
     ])
   })
 
-  it('honors delimiter in listFileVersions and nulls folder and hide fields', async () => {
+  it('does not emit listFileNames rows or folders for hidden files', async () => {
+    await bucket.upload({
+      fileName: 'hidden/ghost.txt',
+      contentType: 'text/plain',
+      source: new BufferSource(new TextEncoder().encode('ghost')),
+    })
+    await bucket.hideFile('hidden/ghost.txt')
+    await bucket.upload({
+      fileName: 'visible/live.txt',
+      contentType: 'text/plain',
+      source: new BufferSource(new TextEncoder().encode('live')),
+    })
+
+    const names = await bucket.listFileNames()
+    expect(names.files.map((file) => file.fileName)).toEqual(['visible/live.txt'])
+
+    const root = await bucket.listFileNames({ delimiter: '/' })
+    expect(root.files.map((file) => ({ action: file.action, fileName: file.fileName }))).toEqual([
+      { action: FileAction.Folder, fileName: 'visible/' },
+    ])
+
+    const hiddenPrefix = await bucket.listFileNames({ prefix: 'hidden/', delimiter: '/' })
+    expect(hiddenPrefix.files).toEqual([])
+  })
+
+  it('honors delimiter in listFileVersions and shapes folder and hide fields', async () => {
     const changelog = await bucket.upload({
       fileName: 'docs/changelog.txt',
       contentType: 'text/plain',
@@ -1169,7 +1195,7 @@ describe('B2Simulator listing order', () => {
       },
       {
         action: FileAction.Hide,
-        contentType: null,
+        contentType: HIDE_MARKER_CONTENT_TYPE,
         fileId: hidden.fileId,
         fileName: 'docs/changelog.txt',
       },
@@ -1189,7 +1215,7 @@ describe('B2Simulator listing order', () => {
     const hideRow = versions.files.find((file) => file.action === FileAction.Hide)
     expect(hideRow).toMatchObject({
       action: FileAction.Hide,
-      contentType: null,
+      contentType: HIDE_MARKER_CONTENT_TYPE,
       fileId: hidden.fileId,
       fileName: 'docs/changelog.txt',
     })
