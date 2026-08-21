@@ -24,10 +24,13 @@ import type { DownloadAuthorizationResponse } from './types/download.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
 import type {
   FileVersion,
+  FileVersionListEntry,
+  ListedConcreteFileVersion,
   ListFileNamesResponse,
   ListFileVersionsResponse,
   MetadataDirective,
 } from './types/file.ts'
+import { FileAction } from './types/file.ts'
 import type { ApplicationKeyId, BucketId, FileId, LargeFileId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
@@ -383,7 +386,7 @@ export class Bucket {
    *   forwarded to `b2_list_file_names`'s `maxFileCount` (default 1000,
    *   B2-capped at 10000).
    *
-   * @returns An async iterable of {@link FileVersion} entries.
+   * @returns An async iterable of file-version or virtual-folder entries.
    *
    * @example
    * ```ts
@@ -399,7 +402,7 @@ export class Bucket {
       /** Delimiter for virtual directory grouping (typically `'/'`). */
       delimiter?: string
     } & PaginatorOptions,
-  ): AsyncIterableIterator<FileVersion> {
+  ): AsyncIterableIterator<FileVersionListEntry> {
     return paginateItems(
       async (cursor: string | undefined) => {
         const resp = await this.listFileNames({
@@ -430,7 +433,7 @@ export class Bucket {
    *
    * @param options - Filter + pagination + abort options.
    *
-   * @returns An async iterable of {@link FileVersion} entries.
+   * @returns An async iterable of file-version or virtual-folder entries.
    */
   paginateFileVersions(
     options?: {
@@ -439,7 +442,7 @@ export class Bucket {
       /** Delimiter for virtual directory grouping. */
       delimiter?: string
     } & PaginatorOptions,
-  ): AsyncIterableIterator<FileVersion> {
+  ): AsyncIterableIterator<FileVersionListEntry> {
     type Cursor = { fileName: string; fileId: FileId | undefined }
     return paginateItems(
       async (cursor: Cursor | undefined) => {
@@ -544,7 +547,9 @@ export class Bucket {
     // version", so we treat a hide-action match as "not found".
     const resp = await this.listFileNames({ prefix: fileName, pageSize: 1 })
     const match = resp.files.find((f) => f.fileName === fileName)
-    if (!match || match.action === 'hide') return null
+    if (!match || match.action === FileAction.Hide || match.action === FileAction.Folder) {
+      return null
+    }
     return match
   }
 
@@ -556,7 +561,7 @@ export class Bucket {
    *
    * @returns The deleted hide marker version, or `null` if nothing was hidden.
    */
-  async unhideFile(fileName: string): Promise<FileVersion | null> {
+  async unhideFile(fileName: string): Promise<ListedConcreteFileVersion | null> {
     // The latest version of a hidden file appears in listFileVersions but not
     // in listFileNames. Walk versions until we find the hide marker on top.
     const resp = await this.listFileVersions({ prefix: fileName, pageSize: 100 })
@@ -565,7 +570,7 @@ export class Bucket {
     // listFileVersions sorts by name asc then upload timestamp desc, so the
     // first entry is the latest version.
     const latest = versions[0]
-    if (latest?.action !== 'hide') return null
+    if (latest?.action !== FileAction.Hide || latest.fileId === null) return null
     await this.deleteFileVersion(fileName, latest.fileId)
     return latest
   }
@@ -757,6 +762,7 @@ export class Bucket {
       })
 
       for (const version of page.files) {
+        if (version.fileId === null) continue
         if (dryRun) {
           yield { type: 'skip', fileName: version.fileName, fileId: version.fileId }
           continue

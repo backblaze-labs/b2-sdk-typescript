@@ -176,6 +176,7 @@ describe('Bucket.paginateFileVersions', () => {
     // boundary lands inside the version stack.
     const seenFileIds: string[] = []
     for await (const v of bucket.paginateFileVersions({ pageSize: 2 })) {
+      if (v.fileId === null) continue
       seenFileIds.push(v.fileId)
     }
     // Every version must appear exactly once, no duplicates and no drops.

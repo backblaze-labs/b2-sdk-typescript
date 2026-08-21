@@ -1,5 +1,5 @@
 import type { Bucket } from '../../bucket.ts'
-import { FileAction, type FileVersion } from '../../types/file.ts'
+import { FileAction, type FileVersion, type ListedConcreteFileVersion } from '../../types/file.ts'
 import type { FileId } from '../../types/ids.ts'
 import { isSignalAbortError } from '../../util/abort.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
@@ -32,7 +32,7 @@ const MAX_EMPTY_B2_SCAN_PAGES = 100
 
 interface B2ScanEntry {
   relativePath: string
-  versions: FileVersion[]
+  versions: ListedConcreteFileVersion[]
 }
 
 interface VisibleB2ScanEntry extends B2ScanEntry {
@@ -117,6 +117,7 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (scanIsAborted(options)) return
+        if (fv.action === FileAction.Folder) continue
         assertScanEntryLimit(listedVersions + 1, maxScanEntries)
         listedVersions++
 

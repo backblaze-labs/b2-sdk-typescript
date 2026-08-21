@@ -8,7 +8,7 @@ import { BufferSource } from '../../streams/source.ts'
 import { makeClient } from '../../test-utils/index.ts'
 import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
-import { FileAction, type FileVersion } from '../../types/file.ts'
+import { type ConcreteFileAction, FileAction, type FileVersion } from '../../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../../types/ids.ts'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
@@ -52,7 +52,7 @@ function tick(): void {
 function makeB2FileVersion(
   name: string,
   ts = 1,
-  action: FileAction = FileAction.Upload,
+  action: ConcreteFileAction = FileAction.Upload,
 ): FileVersion {
   return {
     accountId: 'acc' as unknown as AccountId,
@@ -1141,7 +1141,7 @@ describe('B2Folder', () => {
     function makeFileVersion(
       fileName: string,
       uploadTimestamp: number,
-      action: FileAction = FileAction.Upload,
+      action: ConcreteFileAction = FileAction.Upload,
     ): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
@@ -1437,7 +1437,7 @@ describe('B2Folder', () => {
     function makeFileVersion(
       name: string,
       ts: number,
-      action: FileAction = FileAction.Upload,
+      action: ConcreteFileAction = FileAction.Upload,
     ): FileVersion {
       return {
         accountId: 'acc' as unknown as AccountId,
