@@ -120,6 +120,26 @@ describe('RawClient bucket configuration validation', () => {
       status: 400,
     })
 
+    await expect(
+      raw.updateBucket('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        bucketId: bucketId('bucket'),
+        corsRules: [
+          {
+            allowedOperations: [CorsOperation.B2DownloadFileByName],
+            allowedOrigins: ['https://example.com'],
+            corsRuleName: 'rule-3\n',
+            maxAgeSeconds: 3600,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'bad_request',
+      field: 'corsRules',
+      name: 'B2BucketConfigurationError',
+      status: 400,
+    })
+
     expect(seenRequests).toEqual([])
   })
 })

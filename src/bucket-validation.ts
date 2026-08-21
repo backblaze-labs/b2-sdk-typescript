@@ -56,7 +56,7 @@ export function assertValidBucketInfo(bucketInfo: Record<string, string>): void 
         'invalid_bucket_info',
       )
     }
-    if (!BUCKET_INFO_KEY_REGEX.test(key)) {
+    if (!matchesEntirePattern(BUCKET_INFO_KEY_REGEX, key)) {
       throw new B2BucketConfigurationError(
         'bucketInfo',
         `bucketInfo key "${key}" must match ${BUCKET_INFO_KEY_PATTERN}`,
@@ -117,7 +117,7 @@ export function assertValidCorsRules(corsRules: readonly CorsRule[]): void {
         `${rulePath}.corsRuleName must be ${CORS_RULE_NAME_MIN_LENGTH}-${CORS_RULE_NAME_MAX_LENGTH} characters`,
       )
     }
-    if (!CORS_RULE_NAME_REGEX.test(ruleName)) {
+    if (!matchesEntirePattern(CORS_RULE_NAME_REGEX, ruleName)) {
       throw new B2BucketConfigurationError(
         'corsRules',
         `${rulePath}.corsRuleName must match ${CORS_RULE_NAME_PATTERN}`,
@@ -225,6 +225,10 @@ export function assertValidBucketConfiguration(
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function matchesEntirePattern(regex: RegExp, value: string): boolean {
+  return regex.exec(value)?.[0] === value
 }
 
 function readRequiredString(record: Record<string, unknown>, key: string, path: string): string {
