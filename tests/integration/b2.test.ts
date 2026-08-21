@@ -13,11 +13,13 @@ import { afterAll, beforeAll, describe, expect, it, type TestContext, vi } from 
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
+import { FetchTransport, type HttpRequest, type HttpTransport } from '../../src/http/transport.ts'
+import { RawClient } from '../../src/raw/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
 import { Capability, type Capability as CapabilityValue } from '../../src/types/auth.ts'
 import { SSE_B2 } from '../../src/types/encryption.ts'
-import type { LargeFileId } from '../../src/types/ids.ts'
+import { accountId, type LargeFileId } from '../../src/types/ids.ts'
 import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { deleteFileVersionOnce, hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
@@ -49,6 +51,20 @@ function makeBucketName(label?: string): string {
     return `${currentBucketPrefix}${runId}-${runAttempt}-${suffix}`
   }
   return `${currentBucketPrefix}${suffix}`
+}
+
+function recordingLiveTransport(requests: HttpRequest[]): HttpTransport {
+  const inner = new FetchTransport()
+  return {
+    send(request) {
+      requests.push(request)
+      return inner.send(request)
+    },
+  }
+}
+
+function endpointName(url: string): string {
+  return new URL(url).pathname.split('/').at(-1) ?? ''
 }
 
 function isIntegrationBucketName(name: string): boolean {
@@ -541,6 +557,96 @@ describe.skipIf(skip)('B2 integration', () => {
   it('created the test bucket', () => {
     expect(bucket.name).toBe(bucketName)
     expect(bucket.id).toBeTruthy()
+  })
+
+  it('uses v4 POST JSON for raw read/list endpoints against live B2', async (ctx) => {
+    const feature = 'raw v4 POST JSON contract'
+    skipIfMissingFeatureCapabilities(ctx, client, feature, [
+      Capability.WriteFiles,
+      Capability.ListFiles,
+      Capability.ReadFiles,
+      Capability.ListKeys,
+    ])
+
+    const seenRequests: HttpRequest[] = []
+    const raw = new RawClient({ transport: recordingLiveTransport(seenRequests) })
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileName = `raw-v4-contract-${Date.now()}.txt`
+    const data = new TextEncoder().encode('raw v4 contract')
+    const uploaded = await bucket.upload({
+      fileName,
+      source: new BufferSource(data),
+      contentType: 'text/plain',
+    })
+
+    try {
+      const uploadUrl = await raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+      expect(uploadUrl.uploadUrl).toBeTruthy()
+      expect(uploadUrl.authorizationToken).toBeTruthy()
+
+      const info = await raw.getFileInfo(apiUrl, authToken, { fileId: uploaded.fileId })
+      expect(info.fileId).toBe(uploaded.fileId)
+
+      const names = await raw.listFileNames(apiUrl, authToken, {
+        bucketId: bucket.id,
+        prefix: fileName,
+        maxFileCount: 1,
+      })
+      expect(names.files.some((file) => file.fileName === fileName)).toBe(true)
+
+      const keys = await raw.listKeys(apiUrl, authToken, {
+        accountId: accountId(client.accountInfo.getAccountId()),
+        maxKeyCount: 1,
+      })
+      expect(Array.isArray(keys.keys)).toBe(true)
+
+      const contractEndpoints = new Set([
+        'b2_get_upload_url',
+        'b2_get_file_info',
+        'b2_list_file_names',
+        'b2_list_keys',
+      ])
+      const contractRequests = seenRequests.filter((request) =>
+        contractEndpoints.has(endpointName(request.url)),
+      )
+
+      expect(
+        contractRequests.map((request) => ({
+          endpoint: endpointName(request.url),
+          pathname: new URL(request.url).pathname,
+          method: request.method,
+          contentType: request.headers?.['Content-Type'],
+        })),
+      ).toEqual([
+        {
+          endpoint: 'b2_get_upload_url',
+          pathname: '/b2api/v4/b2_get_upload_url',
+          method: 'POST',
+          contentType: 'application/json',
+        },
+        {
+          endpoint: 'b2_get_file_info',
+          pathname: '/b2api/v4/b2_get_file_info',
+          method: 'POST',
+          contentType: 'application/json',
+        },
+        {
+          endpoint: 'b2_list_file_names',
+          pathname: '/b2api/v4/b2_list_file_names',
+          method: 'POST',
+          contentType: 'application/json',
+        },
+        {
+          endpoint: 'b2_list_keys',
+          pathname: '/b2api/v4/b2_list_keys',
+          method: 'POST',
+          contentType: 'application/json',
+        },
+      ])
+    } finally {
+      await bucket.deleteFileVersion(fileName, uploaded.fileId).catch(() => {})
+    }
   })
 
   it('lists unfinished large files with inclusive startFileId and resolved auto content type', async () => {

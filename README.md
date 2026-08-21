@@ -525,6 +525,18 @@ and per-request retry overrides: pass `{ signal, retry }` to `getUploadUrl`,
 `getUploadPartUrl`, `uploadFile`, and `uploadPart`. The older positional
 `signal, retry` form remains available only for source compatibility.
 
+### Raw native API version policy
+
+`RawClient` builds SDK-owned B2 native storage URLs with `/b2api/v4`, matching the
+current published native API docs. The version is centralized in the raw URL
+builder path; upload and download URLs returned by B2 are used as returned.
+
+Raw JSON endpoints use POST bodies, including read/list operations whose docs
+also show GET query examples such as `b2_get_upload_url`, `b2_get_file_info`,
+`b2_list_file_names`, and `b2_list_keys`. B2 documents POST JSON compatibility
+for these operations, so the SDK keeps the long-standing POST shape while moving
+the path version to v4.
+
 Every export is documented with full type signatures in the [API reference](https://backblaze-labs.github.io/b2-sdk-typescript/).
 
 ## Sync filters

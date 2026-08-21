@@ -666,7 +666,7 @@ describe('RawClient upload URL request controls', () => {
 })
 
 describe('RawClient URL construction', () => {
-  it('preserves storage endpoint paths through the shared URL builder', async () => {
+  it('uses v4 storage endpoint paths through the shared URL builder', async () => {
     const seenRequests: HttpRequest[] = []
     const transport: HttpTransport = {
       async send(request) {
@@ -705,10 +705,81 @@ describe('RawClient URL construction', () => {
     })
 
     expect(seenRequests.map((request) => request.url)).toEqual([
-      'https://api.example.test/b2api/v3/b2_list_buckets',
-      'https://api.example.test/b2api/v3/b2_finish_large_file',
-      'https://download.example.test/b2api/v3/b2_download_file_by_id?fileId=4_z_file',
+      'https://api.example.test/b2api/v4/b2_list_buckets',
+      'https://api.example.test/b2api/v4/b2_finish_large_file',
+      'https://download.example.test/b2api/v4/b2_download_file_by_id?fileId=4_z_file',
       'https://api.example.test/b2api/v4/b2_create_key',
+    ])
+  })
+
+  it('uses v4 POST JSON for read/list endpoints documented with GET query shapes', async () => {
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        if (request.url.includes('b2_get_upload_url')) {
+          return jsonResponse({
+            uploadUrl: 'https://upload.example.test/file',
+            authorizationToken: 'upload-auth',
+          })
+        }
+        if (request.url.includes('b2_get_file_info')) {
+          return jsonResponse({ fileId: '4_z_file', fileName: 'file.txt', contentSha1: 'none' })
+        }
+        if (request.url.includes('b2_list_file_names')) {
+          return jsonResponse({ files: [], nextFileName: null })
+        }
+        if (request.url.includes('b2_list_keys')) {
+          return jsonResponse({ keys: [], nextApplicationKeyId: null })
+        }
+        return jsonResponse({})
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.getUploadUrl('https://api.example.test', 'auth', { bucketId: bucketId('bucket') })
+    await raw.getFileInfo('https://api.example.test', 'auth', { fileId: fileId('4_z_file') })
+    await raw.listFileNames('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      maxFileCount: 1,
+    })
+    await raw.listKeys('https://api.example.test', 'auth', {
+      accountId: 'account' as never,
+      maxKeyCount: 1,
+    })
+
+    expect(
+      seenRequests.map((request) => ({
+        url: request.url,
+        method: request.method,
+        contentType: request.headers?.['Content-Type'],
+        body: JSON.parse(request.body as string),
+      })),
+    ).toEqual([
+      {
+        url: 'https://api.example.test/b2api/v4/b2_get_upload_url',
+        method: 'POST',
+        contentType: 'application/json',
+        body: { bucketId: 'bucket' },
+      },
+      {
+        url: 'https://api.example.test/b2api/v4/b2_get_file_info',
+        method: 'POST',
+        contentType: 'application/json',
+        body: { fileId: '4_z_file' },
+      },
+      {
+        url: 'https://api.example.test/b2api/v4/b2_list_file_names',
+        method: 'POST',
+        contentType: 'application/json',
+        body: { bucketId: 'bucket', maxFileCount: 1 },
+      },
+      {
+        url: 'https://api.example.test/b2api/v4/b2_list_keys',
+        method: 'POST',
+        contentType: 'application/json',
+        body: { accountId: 'account', maxKeyCount: 1 },
+      },
     ])
   })
 })
