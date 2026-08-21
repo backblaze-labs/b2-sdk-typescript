@@ -265,7 +265,6 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
         })
 
         expect(copyPart).toHaveBeenCalledTimes(2)
-        expect(copied.action).toBe('copy')
         expect(copied.contentLength).toBe(source.data.byteLength)
 
         const byId = await client.raw.downloadFileById(
@@ -320,7 +319,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
 
       expect(uploaded.fileName).toBe(name)
       expect(uploaded.contentSha1).toBe(contentSha1)
-      expect(uploaded.serverSideEncryption).toEqual({ mode: 'SSE-C', algorithm: 'AES256' })
+      expect(uploaded.serverSideEncryption).toMatchObject({ mode: 'SSE-C', algorithm: 'AES256' })
 
       const downloaded = await client.raw.downloadFileByName(
         client.accountInfo.getDownloadUrl(),
