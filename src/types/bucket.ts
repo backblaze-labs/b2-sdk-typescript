@@ -1,4 +1,4 @@
-import type { NoEncryption, NoEncryptionWireSetting, SseB2Setting } from './encryption.ts'
+import type { NoEncryption, PublicEncryptionSetting, SseB2Setting } from './encryption.ts'
 import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
@@ -154,7 +154,7 @@ export interface ReadableReplicationConfiguration {
 }
 
 /** Bucket default server-side encryption setting returned by B2 bucket responses. */
-export type BucketDefaultServerSideEncryption = SseB2Setting | NoEncryptionWireSetting
+export type BucketDefaultServerSideEncryption = PublicEncryptionSetting
 
 /** Bucket default server-side encryption setting accepted by B2 bucket requests. */
 export type BucketDefaultServerSideEncryptionSetting = SseB2Setting | NoEncryption
