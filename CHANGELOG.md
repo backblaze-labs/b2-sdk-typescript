@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **B2Simulator large-file lock echo fidelity.** `b2_start_large_file` and `b2_list_unfinished_large_files` now redact the `fileRetention` / `legalHold` echoes for callers lacking `readFileRetentions` / `readFileLegalHolds`, matching B2's capability-filtered response shape; previously the simulator always reported `isClientAuthorizedToRead: true`. The `StartLargeFileResponse` / `UnfinishedLargeFile` DTOs already expose the `fileRetention` / `legalHold` / `serverSideEncryption` echo fields and no longer carry a phantom top-level bucket `defaultRetention`. Closes #41.
 - **Upload retries no longer replay spoofable post-start network errors.** High-level uploads still retry network failures before an upload POST is attempted, but a post-start `NetworkError` with nested `ECONNREFUSED` no longer bypasses the default protection against ambiguous single-request replay. Set `retryResponseBodyFailures: true` only when duplicate versions or replayed parts are acceptable.
 - **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.
 
