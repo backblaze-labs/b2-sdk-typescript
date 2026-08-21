@@ -5,17 +5,18 @@ export async function deleteFileVersionOnce(
   fileName: string,
   fileId: Parameters<Bucket['deleteFileVersion']>[1],
   deleted: Set<string>,
+  options?: Parameters<Bucket['deleteFileVersion']>[2],
 ): Promise<void> {
   const key = `${fileName}\0${fileId}`
   if (deleted.has(key)) return
-  deleted.add(key)
   try {
-    await b.deleteFileVersion(fileName, fileId)
+    await b.deleteFileVersion(fileName, fileId, options)
   } catch (err) {
     if (!hasB2ErrorCode(err, 'file_not_present') && !hasB2ErrorCode(err, 'no_such_file')) {
       throw err
     }
   }
+  deleted.add(key)
 }
 
 export function hasB2ErrorCode(err: unknown, code: string): boolean {

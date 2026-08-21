@@ -10,7 +10,7 @@ import {
 } from '../errors/index.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
-import type { EncryptionSetting } from '../types/encryption.ts'
+import { EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { UploadPartResponse } from '../types/upload.ts'
 
@@ -154,6 +154,14 @@ interface UploadPartWithFreshUrlOptions extends UploadLayerRetryOptions {
   readonly serverSideEncryption?: EncryptionSetting | undefined
 }
 
+function uploadPartEncryption(
+  encryption: EncryptionSetting | undefined,
+): EncryptionSetting | undefined {
+  // B2-managed encryption is configured on b2_start_large_file. b2_upload_part
+  // only accepts customer-key headers, so SSE-B2 must not be repeated per part.
+  return encryption?.mode === EncryptionMode.SseC ? encryption : undefined
+}
+
 /**
  * Uploads one multipart part with fresh-URL retry.
  *
@@ -181,24 +189,24 @@ export function uploadPartWithFreshUrl(
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
     returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
     evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
-    upload: (entry) =>
-      raw.uploadPart(
+    upload: (entry) => {
+      const serverSideEncryption = uploadPartEncryption(options.serverSideEncryption)
+      return raw.uploadPart(
         entry.uploadUrl,
         {
           authorization: entry.authorizationToken,
           partNumber: options.partNumber,
           contentLength: options.contentLength,
           contentSha1: options.contentSha1,
-          ...(options.serverSideEncryption !== undefined
-            ? { serverSideEncryption: options.serverSideEncryption }
-            : {}),
+          ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
         },
         options.data,
         {
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
           ...(options.retry !== undefined ? { retry: options.retry } : {}),
         },
-      ),
+      )
+    },
   })
 }
 

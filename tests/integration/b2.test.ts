@@ -9,12 +9,18 @@
  * exercise file operations, and clean up after themselves.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, type TestContext, vi } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
+import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { deleteFileVersionOnce } from '../helpers/b2-cleanup.ts'
+import { Capability, type Capability as CapabilityValue } from '../../src/types/auth.ts'
+import { SSE_B2 } from '../../src/types/encryption.ts'
+import type { LargeFileId } from '../../src/types/ids.ts'
+import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
+import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
+import { deleteFileVersionOnce, hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 
 const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 const appKey = process.env.B2_APPLICATION_KEY ?? ''
@@ -25,6 +31,8 @@ const currentBucketPrefix = 'sdk-it-'
 const legacyBucketPrefix = 'sdk-test-'
 const staleBucketAgeMs = 60 * 60 * 1000
 const setupStepTimeoutMs = 60 * 1000
+const cleanupAttempts = 3
+const cleanupRetryDelayMs = 250
 
 if (skip && requireCredentials) {
   throw new Error(
@@ -32,14 +40,15 @@ if (skip && requireCredentials) {
   )
 }
 
-function makeBucketName(): string {
+function makeBucketName(label?: string): string {
   const runId = process.env.GITHUB_RUN_ID
   const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? '1'
   const now = Date.now()
+  const suffix = label === undefined ? `${now}` : `${label}-${now}`
   if (runId !== undefined && runId !== '') {
-    return `${currentBucketPrefix}${runId}-${runAttempt}-${now}`
+    return `${currentBucketPrefix}${runId}-${runAttempt}-${suffix}`
   }
-  return `${currentBucketPrefix}${now}`
+  return `${currentBucketPrefix}${suffix}`
 }
 
 function isIntegrationBucketName(name: string): boolean {
@@ -61,15 +70,36 @@ function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
 }
 
 async function emptyBucket(bucket: Bucket): Promise<void> {
+  const cleanupErrors: unknown[] = []
+  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
+
   const deleted = new Set<string>()
   for await (const file of bucket.paginateFileNames()) {
-    await deleteFileVersionOnce(bucket, file.fileName, file.fileId, deleted)
+    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors)
   }
 
   const versions = await bucket.listFileVersions()
   for (const fv of versions.files) {
-    await deleteFileVersionOnce(bucket, fv.fileName, fv.fileId, deleted)
+    await deleteFileVersionForCleanup(bucket, fv.fileName, fv.fileId, deleted, cleanupErrors)
   }
+
+  throwCleanupErrors('empty bucket', cleanupErrors)
+}
+
+async function emptyObjectLockBucket(bucket: Bucket): Promise<void> {
+  const cleanupErrors: unknown[] = []
+  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
+
+  const deleted = new Set<string>()
+  for await (const file of bucket.paginateFileVersions()) {
+    await clearLegalHoldForDelete(bucket, file.fileName, file.fileId)
+    await clearRetentionForDelete(bucket, file.fileName, file.fileId)
+    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors, {
+      bypassGovernance: true,
+    })
+  }
+
+  throwCleanupErrors('empty Object Lock bucket', cleanupErrors)
 }
 
 async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
@@ -82,13 +112,258 @@ async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
   }
 }
 
-function setupErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message
-  return String(err)
+async function deleteObjectLockBucketIfPresent(bucket: Bucket): Promise<void> {
+  try {
+    await emptyObjectLockBucket(bucket)
+    await bucket.delete()
+  } catch (err) {
+    if (err instanceof BadBucketIdError) return
+    throw err
+  }
+}
+
+async function cancelUnfinishedLargeFiles(
+  bucket: Bucket,
+  namePrefix?: string,
+  cleanupErrors: unknown[] = [],
+): Promise<void> {
+  for await (const file of bucket.paginateUnfinishedLargeFiles(
+    namePrefix === undefined ? undefined : { namePrefix },
+  )) {
+    const cancelled = await retryCleanupStep(
+      'cancel unfinished large file',
+      bucket,
+      file.fileName,
+      file.fileId,
+      () => bucket.cancelLargeFile(file.fileId),
+    )
+    if (!cancelled.ok) cleanupErrors.push(cancelled.err)
+  }
+}
+
+async function clearLegalHoldForDelete(
+  bucket: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+): Promise<void> {
+  await retryCleanupStep('clear legal hold', bucket, fileName, fileId, () =>
+    bucket.updateFileLegalHold(fileName, fileId, LegalHoldValue.Off),
+  )
+}
+
+async function clearRetentionForDelete(
+  bucket: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+): Promise<void> {
+  await retryCleanupStep('clear retention', bucket, fileName, fileId, () =>
+    bucket.updateFileRetention(
+      fileName,
+      fileId,
+      { mode: null, retainUntilTimestamp: null },
+      { bypassGovernance: true },
+    ),
+  )
+}
+
+async function deleteFileVersionForCleanup(
+  bucket: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+  deleted: Set<string>,
+  cleanupErrors: unknown[],
+  options?: Parameters<Bucket['deleteFileVersion']>[2],
+): Promise<void> {
+  const deletedVersion = await retryCleanupStep(
+    'delete file version',
+    bucket,
+    fileName,
+    fileId,
+    () => deleteFileVersionOnce(bucket, fileName, fileId, deleted, options),
+  )
+  if (!deletedVersion.ok) cleanupErrors.push(deletedVersion.err)
+}
+
+async function retryCleanupStep(
+  action: string,
+  bucket: Bucket,
+  fileName: string,
+  fileId: string,
+  fn: () => Promise<unknown>,
+): Promise<{ ok: true } | { ok: false; err: unknown }> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= cleanupAttempts; attempt++) {
+    try {
+      await fn()
+      return { ok: true }
+    } catch (err) {
+      lastError = err
+      logCleanupFailure(
+        `${action} attempt=${attempt}/${cleanupAttempts}`,
+        bucket,
+        fileName,
+        fileId,
+        err,
+      )
+      if (attempt < cleanupAttempts) await delay(cleanupRetryDelayMs)
+    }
+  }
+  return { ok: false, err: lastError }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function throwCleanupErrors(action: string, errors: readonly unknown[]): void {
+  if (errors.length === 0) return
+  throw new AggregateError(errors, `${action} failed for ${errors.length} cleanup operation(s)`)
+}
+
+function logCleanupFailure(
+  action: string,
+  bucket: Bucket,
+  fileName: string,
+  fileId: string,
+  err: unknown,
+): void {
+  console.warn(
+    `[b2 integration cleanup] ${action} failed bucket=${bucket.id} fileName=${fileName} fileId=${fileId} error=${safeErrorSummary(err)}`,
+  )
+}
+
+function makeBytes(size: number, seed: number): Uint8Array {
+  const bytes = new Uint8Array(size)
+  for (let i = 0; i < bytes.byteLength; i++) {
+    bytes[i] = (seed + i * 31) & 0xff
+  }
+  return bytes
+}
+
+async function readAllBytes(body: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  let total = 0
+  for (const chunk of chunks) total += chunk.byteLength
+  const combined = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return combined
+}
+
+function expectBytesEqual(actual: Uint8Array, expected: Uint8Array): void {
+  expect(actual.byteLength).toBe(expected.byteLength)
+  for (let i = 0; i < actual.byteLength; i++) {
+    if (actual[i] !== expected[i]) {
+      throw new Error(`Byte mismatch at offset ${i}: expected ${expected[i]}, got ${actual[i]}`)
+    }
+  }
+}
+
+async function uploadRawPart(
+  client: B2Client,
+  fileId: LargeFileId,
+  fileName: string,
+  partNumber: number,
+  data: Uint8Array,
+): Promise<string> {
+  const contentSha1 = await sha1Hex(data)
+  const part = await uploadPartWithFreshUrl(client.raw, client.accountInfo, fileId, {
+    fileName,
+    partNumber,
+    data,
+    contentLength: data.byteLength,
+    contentSha1,
+    retryResponseBodyFailures: true,
+  })
+  expect(part.contentSha1).toBe(contentSha1)
+  return part.contentSha1
+}
+
+function safeErrorSummary(err: unknown): string {
+  // Deliberately omit err.message from live-service logs. SDK errors are expected
+  // to redact credentials, but setup/cleanup paths can see arbitrary thrown
+  // values, so CI logs only include structural error fields.
+  if (typeof err !== 'object' || err === null) return typeof err
+  const fields: string[] = []
+  const maybeError = err as {
+    readonly name?: unknown
+    readonly status?: unknown
+    readonly code?: unknown
+  }
+  if (typeof maybeError.name === 'string') fields.push(maybeError.name)
+  if (typeof maybeError.status === 'number') fields.push(`status=${maybeError.status}`)
+  if (typeof maybeError.code === 'string') fields.push(`code=${maybeError.code}`)
+  if (fields.length > 0) return fields.join(' ')
+  if (err instanceof Error) return err.name
+  return 'object'
 }
 
 function logSetup(message: string): void {
   console.info(`[b2 integration setup] ${message}`)
+}
+
+function logFeatureSkip(feature: string, reason: string): void {
+  console.warn(`[b2 integration] ${feature}: skipped (${reason})`)
+}
+
+function requireFeatureCapabilities(
+  client: B2Client,
+  feature: string,
+  capabilities: readonly CapabilityValue[],
+): void {
+  const check = client.hasCapabilities(capabilities)
+  if (check.ok) return
+  throw new Error(`${feature} requires B2 capabilities: ${check.missing.join(', ')}`)
+}
+
+function skipIfMissingFeatureCapabilities(
+  ctx: TestContext,
+  client: B2Client,
+  feature: string,
+  capabilities: readonly CapabilityValue[],
+): void {
+  const check = client.hasCapabilities(capabilities)
+  if (check.ok) return
+  const reason = `missing capabilities: ${check.missing.join(', ')}`
+  logFeatureSkip(feature, reason)
+  ctx.skip(reason)
+}
+
+function isObjectLockUnavailableError(err: unknown): boolean {
+  return (
+    hasB2ErrorCode(err, 'unauthorized') ||
+    hasB2ErrorCode(err, 'access_denied') ||
+    hasB2ErrorCode(err, 'file_lock_not_enabled')
+  )
+}
+
+async function withRecommendedPartSize<T>(
+  client: B2Client,
+  partSize: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const recommendedPartSize = vi
+    .spyOn(client.accountInfo, 'getRecommendedPartSize')
+    .mockReturnValue(partSize)
+  try {
+    return await fn()
+  } finally {
+    recommendedPartSize.mockRestore()
+  }
 }
 
 async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
@@ -112,14 +387,14 @@ async function setupStep<T>(name: string, fn: () => Promise<T>): Promise<T> {
     return result
   } catch (err) {
     logSetup(`${name}: failed after ${Math.round(performance.now() - start)}ms`)
-    console.error(`[b2 integration setup] ${name}: ${setupErrorMessage(err)}`)
+    console.error(`[b2 integration setup] ${name}: ${safeErrorSummary(err)}`)
     throw err
   } finally {
     if (timeout !== undefined) clearTimeout(timeout)
     if (timedOut) {
       void operation.catch((err) => {
         console.warn(
-          `[b2 integration setup] ${name}: underlying operation rejected after timeout (${setupErrorMessage(err)})`,
+          `[b2 integration setup] ${name}: underlying operation rejected after timeout (${safeErrorSummary(err)})`,
         )
       })
     }
@@ -147,13 +422,85 @@ async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]): Promis
       console.warn(
         `[b2 integration setup] delete stale bucket ${bucket.name}: skipped after ${Math.round(
           performance.now() - start,
-        )}ms (${setupErrorMessage(err)})`,
+        )}ms (${safeErrorSummary(err)})`,
       )
     }
   }
 
   logSetup(`stale bucket sweep: deleted ${deletedCount}, skipped ${skippedCount}`)
 }
+
+describe('B2 integration cleanup safety', () => {
+  it('does not use Object Lock bypass cleanup for prefix-discovered stale buckets', async () => {
+    const calls = {
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    }
+    const fakeBucket = {
+      id: 'bucket-stale',
+      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileNames() {
+        yield { fileName: 'locked.txt', fileId: 'file-locked' }
+      },
+      async listFileVersions() {
+        return { files: [], nextFileName: null, nextFileId: null }
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+        throw { status: 400, code: 'file_lock_governance_protected' }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async delete() {
+        throw { status: 400, code: 'cannot_delete_non_empty_bucket' }
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    })
+  })
+
+  it('continues Object Lock cleanup after one version fails', async () => {
+    const deleted: string[] = []
+    const fakeBucket = {
+      id: 'bucket-lock',
+      name: makeBucketName('lock-cleanup'),
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield { fileName: 'blocked.txt', fileId: 'blocked' }
+        yield { fileName: 'open.txt', fileId: 'open' }
+      },
+      async updateFileLegalHold(_fileName: string, fileId: string) {
+        if (fileId === 'blocked') throw { status: 503, code: 'service_unavailable' }
+      },
+      async updateFileRetention() {},
+      async deleteFileVersion(_fileName: string, fileId: string) {
+        if (fileId === 'blocked') throw { status: 400, code: 'file_lock_governance_protected' }
+        deleted.push(fileId)
+      },
+    } as unknown as Bucket
+
+    await expect(emptyObjectLockBucket(fakeBucket)).rejects.toThrow(
+      /empty Object Lock bucket failed/,
+    )
+    expect(deleted).toEqual(['open'])
+  })
+})
 
 describe.skipIf(skip)('B2 integration', () => {
   let client: B2Client
@@ -263,6 +610,264 @@ describe.skipIf(skip)('B2 integration', () => {
     }
   })
 
+  it('uploads and finishes a multipart file against live B2', async () => {
+    const partSize = client.accountInfo.getAbsoluteMinimumPartSize()
+    const data = makeBytes(partSize + 1024, 17)
+    const fileName = 'large-finished.bin'
+    let finished = false
+
+    try {
+      const file = await withRecommendedPartSize(client, partSize, () =>
+        bucket.upload({
+          fileName,
+          source: new BufferSource(data),
+          contentType: 'application/octet-stream',
+          partSize,
+          concurrency: 2,
+        }),
+      )
+      finished = true
+
+      expect(file.fileName).toBe(fileName)
+      expect(file.action).toBe('upload')
+      expect(file.contentLength).toBe(data.byteLength)
+
+      const downloaded = await bucket.download(fileName)
+      expectBytesEqual(await readAllBytes(downloaded.body), data)
+    } finally {
+      if (!finished) await cancelUnfinishedLargeFiles(bucket, fileName)
+    }
+  })
+
+  it('resumes an explicit unfinished multipart upload and finishes it', async () => {
+    const feature = 'explicit multipart resume'
+    requireFeatureCapabilities(client, feature, [
+      Capability.ListFiles,
+      Capability.ReadFiles,
+      Capability.WriteFiles,
+      Capability.ReadFileRetentions,
+    ])
+
+    const partSize = client.accountInfo.getAbsoluteMinimumPartSize()
+    const data = makeBytes(partSize + 2048, 29)
+    const fileName = 'large-resume.bin'
+    // Keep explicit resume independent of bucket-default retention readability
+    // while still exercising the SDK's fail-closed retention verification.
+    const fileRetention = { mode: null, retainUntilTimestamp: null }
+    const started = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName,
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        serverSideEncryption: SSE_B2,
+      },
+    )
+    let finished = false
+
+    try {
+      const firstPartSha1 = await uploadRawPart(
+        client,
+        started.fileId,
+        fileName,
+        1,
+        data.subarray(0, partSize),
+      )
+      const reusedParts: number[] = []
+      const reusedPartSha1s: string[] = []
+
+      const file = await withRecommendedPartSize(client, partSize, () =>
+        bucket.upload({
+          fileName,
+          source: new BufferSource(data),
+          contentType: 'application/octet-stream',
+          partSize,
+          concurrency: 2,
+          resumeFileId: started.fileId,
+          fileRetention,
+          serverSideEncryption: SSE_B2,
+          onResumePartReused: (event) => {
+            reusedParts.push(event.partNumber)
+            reusedPartSha1s.push(event.contentSha1)
+          },
+        }),
+      )
+      finished = true
+
+      expect(file.contentLength).toBe(data.byteLength)
+      expect(reusedParts).toEqual([1])
+      expect(reusedPartSha1s).toEqual([firstPartSha1])
+
+      const downloaded = await bucket.download(fileName)
+      expectBytesEqual(await readAllBytes(downloaded.body), data)
+    } finally {
+      if (!finished) {
+        await client.raw
+          .cancelLargeFile(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
+            fileId: started.fileId,
+          })
+          .catch(() => {})
+        await cancelUnfinishedLargeFiles(bucket, fileName)
+      }
+    }
+  })
+
+  it('streams a multipart upload and downloads it with parallel ranges', async () => {
+    const partSize = client.accountInfo.getAbsoluteMinimumPartSize()
+    const data = makeBytes(partSize + 4096, 43)
+    const fileName = 'streamed-ranged.bin'
+    const { writable, done } = bucket.file(fileName).createWriteStream({
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 2,
+    })
+    const writer = writable.getWriter()
+    let finished = false
+
+    try {
+      await writer.write(data.subarray(0, Math.floor(partSize / 2)))
+      await writer.write(data.subarray(Math.floor(partSize / 2), partSize + 111))
+      await writer.write(data.subarray(partSize + 111))
+      await writer.close()
+      const file = await done
+      finished = true
+
+      expect(file.fileName).toBe(fileName)
+      expect(file.contentLength).toBe(data.byteLength)
+
+      const stream = bucket.file(fileName).createReadStream(file.fileId, file.contentLength, {
+        rangeSize: Math.floor(partSize / 3),
+        concurrency: 2,
+      })
+      expectBytesEqual(await readAllBytes(stream), data)
+    } finally {
+      if (!finished) await cancelUnfinishedLargeFiles(bucket, fileName)
+    }
+  })
+
+  it('uploads and reads an SSE-B2 encrypted file when supported', async (ctx) => {
+    const feature = 'SSE-B2 upload/download'
+    skipIfMissingFeatureCapabilities(ctx, client, feature, [
+      Capability.WriteFiles,
+      Capability.ReadFiles,
+    ])
+
+    const fileName = 'sse-b2.txt'
+    const data = new TextEncoder().encode('sse-b2 live integration')
+    const file = await bucket.upload({
+      fileName,
+      source: new BufferSource(data),
+      contentType: 'text/plain',
+      serverSideEncryption: SSE_B2,
+    })
+
+    expect(file.serverSideEncryption).toEqual(SSE_B2)
+    const head = await bucket.head(fileName)
+    expect(head.headers.serverSideEncryption).toEqual(SSE_B2)
+    const downloaded = await bucket.download(fileName)
+    expectBytesEqual(await readAllBytes(downloaded.body), data)
+  })
+
+  it('updates file retention and legal hold in a file-lock bucket when permitted', async (ctx) => {
+    const feature = 'Object Lock retention/legal hold'
+    skipIfMissingFeatureCapabilities(ctx, client, feature, [
+      Capability.WriteBuckets,
+      Capability.DeleteBuckets,
+      Capability.ListFiles,
+      Capability.WriteFiles,
+      Capability.DeleteFiles,
+      Capability.ReadFileLegalHolds,
+      Capability.WriteFileLegalHolds,
+      Capability.ReadFileRetentions,
+      Capability.WriteFileRetentions,
+      Capability.BypassGovernance,
+    ])
+
+    let lockBucket: Bucket
+    try {
+      lockBucket = await client.createBucket({
+        bucketName: makeBucketName('lock'),
+        bucketType: 'allPrivate',
+        fileLockEnabled: true,
+      })
+    } catch (err) {
+      if (isObjectLockUnavailableError(err)) {
+        const reason = `file-lock bucket unavailable: ${safeErrorSummary(err)}`
+        logFeatureSkip(feature, reason)
+        ctx.skip(reason)
+      }
+      throw err
+    }
+
+    try {
+      const fileName = 'object-lock.txt'
+      const object = lockBucket.file(fileName)
+      const file = await object.upload({
+        source: new BufferSource(new TextEncoder().encode('object lock live integration')),
+        contentType: 'text/plain',
+      })
+
+      const holdOn = await object.setLegalHold(file.fileId, LegalHoldValue.On)
+      expect(holdOn.legalHold).toBe(LegalHoldValue.On)
+      const holdOff = await object.setLegalHold(file.fileId, LegalHoldValue.Off)
+      expect(holdOff.legalHold).toBe(LegalHoldValue.Off)
+
+      const retainUntilTimestamp = Date.now() + 60_000
+      const retained = await object.setRetention(file.fileId, {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp,
+      })
+      expect(retained.fileRetention.mode).toBe(RetentionMode.Governance)
+      expect(retained.fileRetention.retainUntilTimestamp).not.toBeNull()
+      expect(
+        Math.abs((retained.fileRetention.retainUntilTimestamp ?? 0) - retainUntilTimestamp),
+      ).toBeLessThanOrEqual(1000)
+
+      const cleared = await object.setRetention(
+        file.fileId,
+        { mode: null, retainUntilTimestamp: null },
+        { bypassGovernance: true },
+      )
+      expect(cleared.fileRetention).toEqual({ mode: null, retainUntilTimestamp: null })
+    } finally {
+      await deleteObjectLockBucketIfPresent(lockBucket)
+    }
+  })
+
+  it('rejects upload with an invalid upload authorization token', async () => {
+    const data = new TextEncoder().encode('this upload should be rejected')
+    const uploadUrl = await client.raw.getUploadUrl(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+
+    let uploadError: unknown
+    try {
+      await client.raw.uploadFile(
+        uploadUrl.uploadUrl,
+        {
+          authorization: `${uploadUrl.authorizationToken}-stale`,
+          fileName: 'invalid-upload-token.txt',
+          contentType: 'text/plain',
+          contentLength: data.byteLength,
+          contentSha1: await sha1Hex(data),
+        },
+        data,
+      )
+    } catch (err) {
+      uploadError = err
+    }
+
+    expect(
+      hasB2ErrorCode(uploadError, 'bad_auth_token') ||
+        hasB2ErrorCode(uploadError, 'expired_auth_token') ||
+        hasB2ErrorCode(uploadError, 'unauthorized'),
+    ).toBe(true)
+  })
+
   it('uploads a small file', async () => {
     const data = new TextEncoder().encode('integration test content')
     const file = await bucket.upload({
@@ -279,21 +884,7 @@ describe.skipIf(skip)('B2 integration', () => {
 
   it('downloads the file by name', async () => {
     const result = await bucket.download('test-small.txt')
-    const reader = result.body.getReader()
-    const chunks: Uint8Array[] = []
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      chunks.push(value)
-    }
-    let total = 0
-    for (const c of chunks) total += c.byteLength
-    const combined = new Uint8Array(total)
-    let offset = 0
-    for (const c of chunks) {
-      combined.set(c, offset)
-      offset += c.byteLength
-    }
+    const combined = await readAllBytes(result.body)
 
     expect(new TextDecoder().decode(combined)).toBe('integration test content')
   })
