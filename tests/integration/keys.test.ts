@@ -306,5 +306,17 @@ async function expectCreateKeyRejectedWith400(options: CreateKeyOptions): Promis
 }
 
 function isAlreadyDeletedKeyError(err: unknown): boolean {
-  return hasB2ErrorCode(err, 'not_found')
+  return (
+    hasB2ErrorCode(err, 'not_found') ||
+    (hasB2ErrorCode(err, 'bad_request') && hasErrorMessage(err, 'Key not found'))
+  )
+}
+
+function hasErrorMessage(err: unknown, message: string): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'message' in err &&
+    (err as { readonly message?: unknown }).message === message
+  )
 }
