@@ -313,7 +313,7 @@ export class B2Client {
      * raw API's `maxKeyCount` parameter.
      */
     pageSize?: number
-    /** Start listing after this key ID (for pagination). */
+    /** Start listing at this key ID, usually from `nextApplicationKeyId`. */
     startApplicationKeyId?: ApplicationKeyId
   }): Promise<ListKeysResponse> {
     return this.raw.listKeys(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
