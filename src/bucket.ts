@@ -26,6 +26,7 @@ import type {
   FileVersion,
   FileVersionListEntry,
   ListedConcreteFileVersion,
+  ListedFileVersion,
   ListFileNamesResponse,
   ListFileNamesWithDelimiterResponse,
   ListFileVersionsResponse,
@@ -488,10 +489,12 @@ export class Bucket {
   paginateFileNames(
     options: BucketPaginateFileNamesWithDelimiterOptions,
   ): AsyncIterableIterator<FileVersionListEntry>
-  paginateFileNames(options?: BucketPaginateFileNamesOptions): AsyncIterableIterator<FileVersion>
+  paginateFileNames(
+    options?: BucketPaginateFileNamesOptions,
+  ): AsyncIterableIterator<ListedFileVersion>
   paginateFileNames(
     options?: BucketPaginateFileNamesOptions | BucketPaginateFileNamesWithDelimiterOptions,
-  ): AsyncIterableIterator<FileVersion | FileVersionListEntry> {
+  ): AsyncIterableIterator<ListedFileVersion | FileVersionListEntry> {
     return paginateItems(
       async (cursor: string | undefined) => {
         const request = {
@@ -512,7 +515,7 @@ export class Bucket {
       // use `paginateFileVersions`.
       (page) =>
         page.files.filter((f) => f.action !== FileAction.Hide) as Array<
-          FileVersion | FileVersionListEntry
+          ListedFileVersion | FileVersionListEntry
         >,
       options?.signal,
     )
