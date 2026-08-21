@@ -128,6 +128,9 @@ export const CorsOperation = {
 /**
  * A B2 or S3 operation that a CORS rule can permit. Derived from
  * {@link CorsOperation}.
+ *
+ * @remarks This includes the deprecated `s3_post` compatibility member. Use
+ * {@link CorsAllowedOperation} for bucket CORS rules accepted by B2.
  */
 export type CorsOperation = (typeof CorsOperation)[keyof typeof CorsOperation]
 
@@ -142,6 +145,9 @@ export const CORS_ALLOWED_OPERATIONS = [
   CorsOperation.S3Head,
   CorsOperation.S3Delete,
 ] as const satisfies readonly CorsOperation[]
+
+/** B2 bucket CORS operation values accepted by validated CORS rules. */
+export type CorsAllowedOperation = (typeof CORS_ALLOWED_OPERATIONS)[number]
 
 /** Maximum number of CORS rules allowed on a bucket. */
 export const CORS_RULES_MAX_COUNT = 100
@@ -178,9 +184,9 @@ export interface CorsRule {
   /**
    * B2 and S3 operations permitted by this rule.
    * At least one operation is required, and every value must be from
-   * {@link CorsOperation}.
+   * {@link CORS_ALLOWED_OPERATIONS}.
    */
-  readonly allowedOperations: readonly CorsOperation[]
+  readonly allowedOperations: readonly CorsAllowedOperation[]
   /**
    * Request headers allowed in preflight requests, or null/omitted if none are allowed.
    */

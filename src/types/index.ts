@@ -34,6 +34,7 @@ export type {
   BucketResponseType,
   BucketRetentionPolicy,
   BucketTypesFilter,
+  CorsAllowedOperation,
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,
