@@ -30,8 +30,10 @@ export type {
   BucketDefaultServerSideEncryption,
   BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
+  BucketListType,
   BucketResponseType,
   BucketRetentionPolicy,
+  BucketTypesFilter,
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,
@@ -43,9 +45,14 @@ export type {
   RetentionPeriod,
   UpdateBucketRequest,
 } from './bucket.ts'
-// `BucketType`, `BucketRetentionMode`, and `CorsOperation` are forwarded as
-// both type and value.
-export { BucketRetentionMode, BucketType, CorsOperation } from './bucket.ts'
+// `BucketType`, `KnownBucketResponseType`, `BucketRetentionMode`, and
+// `CorsOperation` are forwarded as both type and value.
+export {
+  BucketRetentionMode,
+  BucketType,
+  CorsOperation,
+  KnownBucketResponseType,
+} from './bucket.ts'
 export type {
   DownloadAuthorizationRequest,
   DownloadAuthorizationResponse,

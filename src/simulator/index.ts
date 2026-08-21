@@ -22,6 +22,7 @@ import {
   BucketRetentionMode,
   type BucketRetentionPolicy,
   type BucketType,
+  type BucketTypesFilter,
   type ReadableReplicationConfiguration,
 } from '../types/bucket.ts'
 import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
@@ -293,6 +294,7 @@ import {
   type ValidationError,
   validateBucketInfo,
   validateBucketName,
+  validateBucketType,
   validateBucketTypes,
   validateCorsRules,
   validateCreateKeyCapabilities,
@@ -2675,7 +2677,7 @@ export class B2Simulator {
           body as {
             bucketId?: string
             bucketName?: string
-            bucketTypes?: readonly BucketType[]
+            bucketTypes?: BucketTypesFilter
           },
           headers['authorization'],
         )
@@ -3574,6 +3576,8 @@ export class B2Simulator {
     // `400 invalid_bucket_name`; the simulator used to accept anything.
     const nameError = validateBucketName(req.bucketName)
     if (nameError) return this.error(400, nameError.code, nameError.message)
+    const bucketTypeError = validateBucketType(req.bucketType)
+    if (bucketTypeError) return this.error(400, bucketTypeError.code, bucketTypeError.message)
     const objectLockEnabled = nextObjectLockEnabled(false, req.fileLockEnabled)
     if (typeof objectLockEnabled !== 'boolean') {
       return this.error(400, objectLockEnabled.code, objectLockEnabled.message)
@@ -3628,7 +3632,7 @@ export class B2Simulator {
     req: {
       bucketId?: string
       bucketName?: string
-      bucketTypes?: readonly BucketType[]
+      bucketTypes?: BucketTypesFilter
     },
     authToken?: string,
   ): SimulatorJsonResponse {
@@ -3641,6 +3645,7 @@ export class B2Simulator {
       .filter(
         (bucket) =>
           req.bucketTypes === undefined ||
+          req.bucketTypes[0] === 'all' ||
           req.bucketTypes.some((bucketType) => bucketType === bucket.bucketType),
       )
       .map((bucket) => this.bucketInfoForResponse(bucket, authToken))
@@ -3691,6 +3696,10 @@ export class B2Simulator {
     )
     if (typeof objectLockEnabled !== 'boolean') {
       return this.error(400, objectLockEnabled.code, objectLockEnabled.message)
+    }
+    if (req['bucketType'] !== undefined) {
+      const bucketTypeError = validateBucketType(req['bucketType'])
+      if (bucketTypeError) return this.error(400, bucketTypeError.code, bucketTypeError.message)
     }
     const configError = validateBucketConfigurationFields(
       {

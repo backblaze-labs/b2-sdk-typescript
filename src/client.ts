@@ -13,6 +13,7 @@ import type {
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
+  BucketTypesFilter,
   CorsRule,
   CreateBucketRequest,
   LifecycleRule,
@@ -246,8 +247,8 @@ export class B2Client {
     bucketId?: BucketId
     /** Filter to a specific bucket by name. */
     bucketName?: string
-    /** Filter by bucket types (e.g., `["allPrivate"]`). */
-    bucketTypes?: BucketType[]
+    /** Filter by bucket types (e.g., `["allPrivate"]`, `["shared"]`, or `["all"]`). */
+    bucketTypes?: BucketTypesFilter
   }): Promise<Bucket[]> {
     const resp = await this.raw.listBuckets(
       this.accountInfo.getApiUrl(),

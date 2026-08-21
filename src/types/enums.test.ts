@@ -13,6 +13,7 @@ import {
   EventType,
   FileAction,
   groupId,
+  KnownBucketResponseType,
   LegalHoldValue,
   MetadataDirective,
   PartnerCapability,
@@ -46,8 +47,18 @@ function expectEnumMatches<T extends string>(
 }
 
 describe('const-object enums', () => {
-  it('BucketType covers every documented bucketType value', () => {
-    expectEnumMatches(BucketType, ['allPublic', 'allPrivate', 'snapshot', 'restricted', 'shared'])
+  it('BucketType covers every request bucketType value', () => {
+    expectEnumMatches(BucketType, ['allPublic', 'allPrivate', 'snapshot', 'restricted'])
+  })
+
+  it('KnownBucketResponseType covers every documented response bucketType value', () => {
+    expectEnumMatches(KnownBucketResponseType, [
+      'allPublic',
+      'allPrivate',
+      'snapshot',
+      'restricted',
+      'shared',
+    ])
   })
 
   it('BucketRetentionMode covers every BucketRetentionMode value', () => {
@@ -162,8 +173,9 @@ describe('enum value typing (compile-time)', () => {
     expect(v).toBe('allPrivate')
   })
 
-  it('BucketType.Shared is assignable to response bucket types', () => {
-    const v: BucketResponseType = BucketType.Shared
+  it('KnownBucketResponseType.Shared is assignable to known and open response bucket types', () => {
+    const known: KnownBucketResponseType = KnownBucketResponseType.Shared
+    const v: BucketResponseType = known
     expect(v).toBe('shared')
   })
 
@@ -172,7 +184,7 @@ describe('enum value typing (compile-time)', () => {
     expect(v).toBe('futureBucketType')
   })
 
-  it('BucketType.Shared is excluded from request bucket types', () => {
+  it('response-only and list-only bucket types use separate contracts', () => {
     function acceptsCreateBucketType(_value: CreateBucketRequest['bucketType']): true {
       return true
     }
@@ -181,11 +193,13 @@ describe('enum value typing (compile-time)', () => {
     }
 
     expect(acceptsCreateBucketType(BucketType.AllPrivate)).toBe(true)
+    expect(Object.values(BucketType)).not.toContain(KnownBucketResponseType.Shared)
     expect(acceptsListBucketTypes([BucketType.AllPrivate])).toBe(true)
+    expect(acceptsListBucketTypes([KnownBucketResponseType.Shared])).toBe(true)
+    expect(acceptsListBucketTypes(['futureBucketType'])).toBe(true)
+    expect(acceptsListBucketTypes(['all'])).toBe(true)
     // @ts-expect-error shared is a response-only bucket type.
-    acceptsCreateBucketType(BucketType.Shared)
-    // @ts-expect-error shared is a response-only bucket type.
-    acceptsListBucketTypes([BucketType.Shared])
+    acceptsCreateBucketType(KnownBucketResponseType.Shared)
   })
 
   it('LegalHoldValue.On is assignable to LegalHoldValue', () => {

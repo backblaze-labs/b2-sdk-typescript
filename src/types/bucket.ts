@@ -3,10 +3,7 @@ import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
 /**
- * Named constants for documented `bucketType` values.
- *
- * Some values are response-only. For example, B2 can return {@link BucketType.Shared},
- * but create and update requests cannot set it.
+ * Named constants for bucket types accepted by create/update bucket requests.
  *
  * @example
  * ```ts
@@ -22,18 +19,35 @@ export const BucketType = {
   Snapshot: 'snapshot',
   /** B2-restricted bucket (e.g., for S3-compatible workflows). */
   Restricted: 'restricted',
+} as const
+
+/** Bucket access levels accepted by B2 bucket create/update requests. */
+export type BucketType = (typeof BucketType)[keyof typeof BucketType]
+
+/** Named constants for documented bucket response types known to the SDK. */
+export const KnownBucketResponseType = {
+  ...BucketType,
   /** Response-only bucket type for buckets shared with the account. */
   Shared: 'shared',
 } as const
 
-/** Documented `bucketType` values known to the SDK. */
-type KnownBucketType = (typeof BucketType)[keyof typeof BucketType]
-
-/** Bucket access levels accepted by B2 bucket create/update requests and list filters. */
-export type BucketType = Exclude<KnownBucketType, typeof BucketType.Shared>
+/** Closed union of documented bucket response types known to the SDK. */
+export type KnownBucketResponseType =
+  (typeof KnownBucketResponseType)[keyof typeof KnownBucketResponseType]
 
 /** Bucket type returned by B2 bucket responses, including future B2-added values. */
-export type BucketResponseType = KnownBucketType | (string & {})
+export type BucketResponseType = KnownBucketResponseType | (string & {})
+
+/** Bucket type value accepted by `b2_list_buckets.bucketTypes`, excluding the special `'all'` filter. */
+export type BucketListType = BucketResponseType
+
+/**
+ * Bucket type filter accepted by `b2_list_buckets`.
+ *
+ * Use `['all']` by itself to request all bucket types. Other filters may include
+ * documented response types such as `'shared'` and future B2-added type strings.
+ */
+export type BucketTypesFilter = readonly ['all'] | readonly BucketListType[]
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -277,7 +291,7 @@ export interface ListBucketsRequest {
   /** Optional filter to return only the bucket with this name. */
   readonly bucketName?: string
   /** Optional filter to return only buckets of these types. */
-  readonly bucketTypes?: readonly BucketType[]
+  readonly bucketTypes?: BucketTypesFilter
 }
 
 /** Response from the `b2_list_buckets` API call. */
