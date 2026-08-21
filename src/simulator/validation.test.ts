@@ -729,6 +729,42 @@ describe('validateNotificationRules', () => {
       ])?.message,
     ).toMatch(/not a supported field/)
   })
+
+  it('rejects malformed notification custom headers', () => {
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [null],
+          },
+        },
+      ])?.message,
+    ).toMatch(/customHeaders\[0\] must be an object/)
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: '', value: 'value' }],
+          },
+        },
+      ])?.message,
+    ).toMatch(/customHeaders\[0\]\.name must be a non-empty string/)
+    expect(
+      validateNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'x-test', value: '\uD800' }],
+          },
+        },
+      ])?.message,
+    ).toMatch(/customHeaders\[0\] must be URL-encodable/)
+  })
 })
 
 describe('missingCapabilitiesFor', () => {
