@@ -38,7 +38,7 @@ import {
 } from '../types/ids.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
-import type { ReplicationRule } from '../types/replication.ts'
+import type { ReplicationConfiguration, ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
@@ -562,12 +562,27 @@ function replicationDestinationBucketIds(body: unknown): readonly string[] {
 }
 
 function normalizeReplicationConfiguration(
-  config: BucketInfo['replicationConfiguration'],
-): BucketInfo['replicationConfiguration'] {
+  config: ReplicationConfiguration,
+): ReplicationConfiguration {
   return {
     asReplicationSource: config.asReplicationSource ?? null,
     asReplicationDestination: config.asReplicationDestination ?? null,
   }
+}
+
+function wrapReplicationConfiguration(
+  config: ReplicationConfiguration | undefined,
+): BucketInfo['replicationConfiguration'] {
+  if (config === undefined) {
+    return { isClientAuthorizedToRead: true, value: null }
+  }
+
+  const normalized = normalizeReplicationConfiguration(config)
+  const value =
+    normalized.asReplicationSource === null && normalized.asReplicationDestination === null
+      ? null
+      : normalized
+  return { isClientAuthorizedToRead: true, value }
 }
 
 interface BucketConfigurationFields {
@@ -1893,7 +1908,7 @@ export class B2Simulator {
 
       const destinationBucket = this.buckets.get(destinationBucketId)
       const destinationApplicationKeyId =
-        destinationBucket?.info.replicationConfiguration.asReplicationDestination
+        destinationBucket?.info.replicationConfiguration.value?.asReplicationDestination
           ?.sourceToDestinationKeyMapping[sourceApplicationKeyId]
       if (destinationApplicationKeyId === undefined) {
         return this.invalidReplicationDestinationBucket()
@@ -3393,7 +3408,7 @@ export class B2Simulator {
     defaultRetention?: BucketRetentionPolicy
     fileLockEnabled?: boolean
     lifecycleRules?: BucketInfo['lifecycleRules']
-    replicationConfiguration?: BucketInfo['replicationConfiguration']
+    replicationConfiguration?: ReplicationConfiguration
   }): {
     status: number
     body: unknown
@@ -3445,10 +3460,7 @@ export class B2Simulator {
       lifecycleRules: req.lifecycleRules ?? [],
       options: [],
       revision: 1,
-      replicationConfiguration:
-        req.replicationConfiguration === undefined
-          ? { asReplicationSource: null, asReplicationDestination: null }
-          : normalizeReplicationConfiguration(req.replicationConfiguration),
+      replicationConfiguration: wrapReplicationConfiguration(req.replicationConfiguration),
     }
     this.buckets.set(bid, { info, files: new Map() })
     return { status: 200, body: info }
@@ -3546,8 +3558,8 @@ export class B2Simulator {
         : {}),
       ...(req['replicationConfiguration'] !== undefined
         ? {
-            replicationConfiguration: normalizeReplicationConfiguration(
-              req['replicationConfiguration'] as BucketInfo['replicationConfiguration'],
+            replicationConfiguration: wrapReplicationConfiguration(
+              req['replicationConfiguration'] as ReplicationConfiguration,
             ),
           }
         : {}),
@@ -4732,7 +4744,8 @@ export class B2Simulator {
     fileName: string,
   ): readonly ReplicationRule[] {
     const bucket = this.buckets.get(bucketId)
-    const sourceRules = bucket?.info.replicationConfiguration.asReplicationSource?.replicationRules
+    const sourceRules =
+      bucket?.info.replicationConfiguration.value?.asReplicationSource?.replicationRules
     return (
       sourceRules?.filter((rule) => rule.isEnabled && fileName.startsWith(rule.fileNamePrefix)) ??
       []

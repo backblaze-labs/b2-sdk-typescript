@@ -182,8 +182,13 @@ export interface BucketInfo {
   readonly options: readonly string[]
   /** Monotonically increasing revision number, incremented on each bucket update. */
   readonly revision: number
-  /** Cross-region replication configuration for this bucket. */
-  readonly replicationConfiguration: ReplicationConfiguration
+  /** Cross-region replication configuration, filtered by caller authorization. */
+  readonly replicationConfiguration: {
+    /** Whether the caller is authorized to read replication settings. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Replication settings, or null when none are configured or readable. */
+    readonly value: ReplicationConfiguration | null
+  }
 }
 
 /**

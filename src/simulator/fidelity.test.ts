@@ -281,13 +281,13 @@ describe('B2Simulator bucket configuration validation', () => {
     })
 
     expect(updated.replicationConfiguration).toEqual({
-      asReplicationDestination: null,
-      asReplicationSource: null,
+      isClientAuthorizedToRead: true,
+      value: null,
     })
     const [fresh] = await client.listBuckets({ bucketId: bucket.id })
     expect(fresh?.info.replicationConfiguration).toEqual({
-      asReplicationDestination: null,
-      asReplicationSource: null,
+      isClientAuthorizedToRead: true,
+      value: null,
     })
   })
 
@@ -450,7 +450,7 @@ describe('B2Simulator bucket configuration validation', () => {
 
     expect(bucket.info.corsRules).toHaveLength(1)
     expect(bucket.info.lifecycleRules).toHaveLength(1)
-    expect(bucket.info.replicationConfiguration.asReplicationSource).not.toBeNull()
+    expect(bucket.info.replicationConfiguration.value?.asReplicationSource).not.toBeNull()
   })
 })
 
@@ -1917,9 +1917,12 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       }),
     ).resolves.toMatchObject({
       replicationConfiguration: {
-        asReplicationSource: expect.objectContaining({
-          sourceApplicationKeyId: sourceKey.applicationKeyId,
-        }),
+        isClientAuthorizedToRead: true,
+        value: {
+          asReplicationSource: expect.objectContaining({
+            sourceApplicationKeyId: sourceKey.applicationKeyId,
+          }),
+        },
       },
     })
   })

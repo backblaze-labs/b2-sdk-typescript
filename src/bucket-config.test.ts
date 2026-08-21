@@ -45,10 +45,9 @@ describe('Bucket.replication helpers', () => {
     ;({ bucket } = await makeBucket())
   })
 
-  it('getReplication returns a no-config shape on a fresh bucket', async () => {
+  it('getReplication returns null on a fresh bucket', async () => {
     const config = await bucket.getReplication()
-    expect(config.asReplicationSource).toBeNull()
-    expect(config.asReplicationDestination).toBeNull()
+    expect(config).toBeNull()
   })
 
   it('setReplication replaces the full config in one call', async () => {
@@ -68,9 +67,11 @@ describe('Bucket.replication helpers', () => {
       },
       asReplicationDestination: null,
     })
-    expect(updated.replicationConfiguration.asReplicationSource?.replicationRules).toHaveLength(1)
     expect(
-      updated.replicationConfiguration.asReplicationSource?.replicationRules[0]
+      updated.replicationConfiguration.value?.asReplicationSource?.replicationRules,
+    ).toHaveLength(1)
+    expect(
+      updated.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]
         ?.replicationRuleName,
     ).toBe('rule-a')
   })
@@ -109,10 +110,10 @@ describe('Bucket.replication helpers', () => {
     await bucket.addReplicationRule(ruleA, { sourceApplicationKeyId: sourceKey })
     // No source key supplied: the helper must reuse the one B2 returned.
     const after = await bucket.addReplicationRule(ruleB)
-    expect(after.replicationConfiguration.asReplicationSource?.sourceApplicationKeyId).toBe(
+    expect(after.replicationConfiguration.value?.asReplicationSource?.sourceApplicationKeyId).toBe(
       sourceKey,
     )
-    const names = after.replicationConfiguration.asReplicationSource?.replicationRules.map(
+    const names = after.replicationConfiguration.value?.asReplicationSource?.replicationRules.map(
       (r) => r.replicationRuleName,
     )
     expect(names).toEqual(['rule-a', 'rule-b'])
@@ -138,13 +139,16 @@ describe('Bucket.replication helpers', () => {
     }
     await bucket.addReplicationRule(first, { sourceApplicationKeyId: sourceKey })
     const after = await bucket.addReplicationRule(replacement)
-    expect(after.replicationConfiguration.asReplicationSource?.replicationRules).toHaveLength(1)
     expect(
-      after.replicationConfiguration.asReplicationSource?.replicationRules[0]?.fileNamePrefix,
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules,
+    ).toHaveLength(1)
+    expect(
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]
+        ?.fileNamePrefix,
     ).toBe('new/')
-    expect(after.replicationConfiguration.asReplicationSource?.replicationRules[0]?.isEnabled).toBe(
-      false,
-    )
+    expect(
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]?.isEnabled,
+    ).toBe(false)
   })
 
   it('removeReplicationRule drops the named rule and leaves the rest intact', async () => {
@@ -168,7 +172,7 @@ describe('Bucket.replication helpers', () => {
     await bucket.addReplicationRule(ruleA, { sourceApplicationKeyId: sourceKey })
     await bucket.addReplicationRule(ruleB)
     const after = await bucket.removeReplicationRule('rule-a')
-    const names = after.replicationConfiguration.asReplicationSource?.replicationRules.map(
+    const names = after.replicationConfiguration.value?.asReplicationSource?.replicationRules.map(
       (r) => r.replicationRuleName,
     )
     expect(names).toEqual(['rule-b'])
@@ -177,7 +181,7 @@ describe('Bucket.replication helpers', () => {
   it('removeReplicationRule is a no-op when the rule does not exist', async () => {
     const before = await bucket.getReplication()
     const after = await bucket.removeReplicationRule('ghost-rule')
-    expect(after.replicationConfiguration.asReplicationSource).toBe(before.asReplicationSource)
+    expect(after.replicationConfiguration.value).toBe(before)
   })
 })
 

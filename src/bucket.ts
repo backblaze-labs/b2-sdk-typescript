@@ -47,6 +47,23 @@ import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 import { toError } from './util/to-error.ts'
 
+const EMPTY_REPLICATION_CONFIGURATION: ReplicationConfiguration = {
+  asReplicationSource: null,
+  asReplicationDestination: null,
+}
+
+function replicationConfigurationValue(
+  response: BucketInfo['replicationConfiguration'],
+): ReplicationConfiguration | null {
+  return response.value
+}
+
+function replicationConfigurationOrEmpty(
+  response: BucketInfo['replicationConfiguration'],
+): ReplicationConfiguration {
+  return replicationConfigurationValue(response) ?? EMPTY_REPLICATION_CONFIGURATION
+}
+
 /** A target for bulk deletion: a file name and its specific version ID. */
 export interface DeleteTarget {
   /** File name (path) of the version to delete. */
@@ -1019,11 +1036,11 @@ export class Bucket {
    * write. For add/remove flows the helper methods below handle the
    * refresh-then-set sequence for you.
    *
-   * @returns The current {@link ReplicationConfiguration}.
+   * @returns The current {@link ReplicationConfiguration}, or null when none is configured.
    */
-  async getReplication(): Promise<ReplicationConfiguration> {
+  async getReplication(): Promise<ReplicationConfiguration | null> {
     const fresh = await this.refresh()
-    return fresh.replicationConfiguration
+    return replicationConfigurationValue(fresh.replicationConfiguration)
   }
 
   /**
@@ -1061,7 +1078,7 @@ export class Bucket {
     rule: ReplicationRule,
     options?: { sourceApplicationKeyId?: ApplicationKeyId },
   ): Promise<BucketInfo> {
-    const current = (await this.refresh()).replicationConfiguration
+    const current = replicationConfigurationOrEmpty((await this.refresh()).replicationConfiguration)
     const existingSource = current.asReplicationSource
     const sourceKey = options?.sourceApplicationKeyId ?? existingSource?.sourceApplicationKeyId
     if (!sourceKey) {
@@ -1089,7 +1106,7 @@ export class Bucket {
    * @returns The updated bucket metadata.
    */
   async removeReplicationRule(replicationRuleName: string): Promise<BucketInfo> {
-    const current = (await this.refresh()).replicationConfiguration
+    const current = replicationConfigurationOrEmpty((await this.refresh()).replicationConfiguration)
     const existingSource = current.asReplicationSource
     if (!existingSource) {
       return this.setReplication(current)
