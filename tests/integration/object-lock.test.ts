@@ -45,6 +45,7 @@ const probeRetryDelayMs = 500
 const objectLockFeature = 'Object Lock retention/legal hold'
 
 const requiredCapabilities: readonly Capability[] = [
+  Capability.ListBuckets,
   Capability.WriteBuckets,
   Capability.DeleteBuckets,
   Capability.ListFiles,
