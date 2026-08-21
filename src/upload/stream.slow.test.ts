@@ -354,10 +354,9 @@ describe('B2Object.createWriteStream', () => {
     expect(got).toEqual(data)
   })
 
-  it('passes serverSideEncryption through to startLargeFile and each part upload', async () => {
-    // Exercises the SSE conditional-spread branches in both startLargeFile
-    // and the per-part uploadPart call. The simulator accepts SSE-B2
-    // without further setup.
+  it('passes serverSideEncryption through to startLargeFile', async () => {
+    // Exercises the SSE conditional-spread branch on startLargeFile. B2-managed
+    // SSE is not repeated on per-part upload calls.
     const data = deterministicBytes(5_000_010)
     const { writable, done } = bucket.file('sse-stream.bin').createWriteStream({
       partSize: 5_000_000,

@@ -2993,16 +2993,26 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   it('forwards serverSideEncryption when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const serverSideEncryption = {
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    } as const
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucketId as never,
       fileName: 'resume-sse.bin',
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
+      serverSideEncryption,
     })
     expect(result.fileName).toBe('resume-sse.bin')
     expect(result.contentLength).toBe(data.byteLength)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ serverSideEncryption })
+    for (const call of uploadPart.mock.calls) {
+      expect(call[1]).not.toHaveProperty('serverSideEncryption')
+    }
   })
 
   it('forwards fileRetention when starting a large file', async () => {
