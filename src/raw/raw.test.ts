@@ -8,7 +8,7 @@ import {
   EncryptionMode,
   SSE_C_KEY_REDACTION,
 } from '../types/encryption.ts'
-import { bucketId, fileId, largeFileId } from '../types/ids.ts'
+import { accountId, bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { EventType } from '../types/notifications.ts'
 import { RawClient } from './index.ts'
 import { b2Url, isB2ApiVersion } from './url.ts'
@@ -744,7 +744,7 @@ describe('RawClient URL construction', () => {
       maxFileCount: 1,
     })
     await raw.listKeys('https://api.example.test', 'auth', {
-      accountId: 'account' as never,
+      accountId: accountId('account'),
       maxKeyCount: 1,
     })
 
