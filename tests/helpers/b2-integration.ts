@@ -70,7 +70,13 @@ export function makeBucketName(label?: string, options: { objectLock?: boolean }
 }
 
 export function isObjectLockIntegrationBucketName(name: string): boolean {
-  return name.startsWith(objectLockBucketPrefix)
+  return name.startsWith(objectLockBucketPrefix) || isLegacyObjectLockIntegrationBucketName(name)
+}
+
+function isLegacyObjectLockIntegrationBucketName(name: string): boolean {
+  if (!name.startsWith(integrationBucketPrefix)) return false
+  const suffix = name.slice(integrationBucketPrefix.length)
+  return /^\d+-\d+-lock-\d{13}$/.test(suffix)
 }
 
 function isIntegrationBucketName(name: string): boolean {

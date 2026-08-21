@@ -245,6 +245,48 @@ describe('B2 integration cleanup safety', () => {
     })
   })
 
+  it('uses Object Lock cleanup for stale legacy file-lock buckets', async () => {
+    const calls = {
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+      deleteBucket: 0,
+    }
+    const fakeBucket = {
+      id: 'bucket-legacy-lock-stale',
+      name: `${integrationBucketPrefix}12345678901-2-lock-${Date.now() - staleBucketAgeMs - 1}`,
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield { fileName: 'locked.txt', fileId: 'file-locked' }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+      },
+      async delete() {
+        calls.deleteBucket += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      updateFileLegalHold: 1,
+      updateFileRetention: 1,
+      bypassDelete: 1,
+      deleteBucket: 1,
+    })
+  })
+
   it('continues Object Lock cleanup after one version fails', async () => {
     const deleted: string[] = []
     const fakeBucket = {
