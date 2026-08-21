@@ -52,6 +52,22 @@ function apiVersionSegment(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-2) ?? ''
 }
 
+function backupEndpointTransport(responses: Readonly<Record<string, unknown>>): {
+  readonly transport: HttpTransport
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  return {
+    transport: {
+      async send(request) {
+        seenRequests.push(request)
+        return jsonResponse(responses[apiEndpointName(request)] ?? {})
+      },
+    },
+    seenRequests,
+  }
+}
+
 function authorizedRawClient(
   transport: HttpTransport,
   suffixes: readonly string[] = ['backblazeb2.com', 'backblaze.com'],
@@ -111,7 +127,10 @@ async function makeSimulatorBackupRawClient(): Promise<{
 
 describe('BackupRawClient', () => {
   it('pins Computer Backup methods to v1 endpoints', async () => {
-    const { transport, seenRequests } = okTransport([])
+    const { transport, seenRequests } = backupEndpointTransport({
+      bz_list_computers: { nextComputerId: null, computers: [] },
+      bz_delete_computer: [],
+    })
     const raw = authorizedRawClient(transport)
 
     await raw.listComputers(
