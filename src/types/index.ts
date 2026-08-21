@@ -31,6 +31,7 @@ export type {
   BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
+  CorsAllowedOperation,
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,

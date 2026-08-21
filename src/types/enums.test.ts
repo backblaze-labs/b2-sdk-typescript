@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { CorsRule } from './index.ts'
 import {
   BucketRetentionMode,
   BucketType,
@@ -108,6 +109,24 @@ describe('const-object enums', () => {
 
   it('CORS_ALLOWED_OPERATIONS excludes deprecated S3Post', () => {
     expect(CORS_ALLOWED_OPERATIONS).not.toContain(CorsOperation.S3Post)
+  })
+
+  it('CorsRule excludes deprecated S3Post from allowed operations', () => {
+    const rule: CorsRule = {
+      allowedOperations: [CorsOperation.B2DownloadFileByName],
+      allowedOrigins: ['https://example.com'],
+      corsRuleName: 'rule-1',
+      maxAgeSeconds: 3600,
+    }
+
+    const invalidRule: CorsRule = {
+      ...rule,
+      // @ts-expect-error s3_post remains exported but is not accepted in CORS rules.
+      allowedOperations: [CorsOperation.S3Post],
+    }
+
+    expect(rule.allowedOperations).toEqual([CorsOperation.B2DownloadFileByName])
+    expect(invalidRule.allowedOperations).toEqual([CorsOperation.S3Post])
   })
 
   it('Capability covers every Capability value', () => {
