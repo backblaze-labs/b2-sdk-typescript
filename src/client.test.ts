@@ -13,8 +13,10 @@ import {
 } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
+import { SSE_B2 } from './types/encryption.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import type { LargeFileId } from './types/ids.ts'
+import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
 describe('B2Client with simulator', () => {
@@ -1123,6 +1125,56 @@ describe('large file operations', () => {
     const names = unfinished.files.map((f) => f.fileName)
     expect(names).toContain('pending1.bin')
     expect(names).toContain('pending2.bin')
+  })
+
+  it('echoes lock and encryption metadata for unfinished large files', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'large-echo-metadata',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const fileRetention = {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: daysFromNow(1),
+    }
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+
+    const startResp = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'pending-echo.bin',
+      contentType: 'application/octet-stream',
+      fileRetention,
+      legalHold: LegalHoldValue.On,
+      serverSideEncryption: SSE_B2,
+    })
+
+    expect(startResp.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: fileRetention,
+    })
+    expect(startResp.legalHold).toEqual({
+      isClientAuthorizedToRead: true,
+      value: LegalHoldValue.On,
+    })
+    expect(startResp.serverSideEncryption).toEqual(SSE_B2)
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(apiUrl, authToken, {
+      bucketId: bucket.id,
+      namePrefix: 'pending-echo.bin',
+    })
+    expect(unfinished.files).toHaveLength(1)
+    expect(unfinished.files[0]).toMatchObject({
+      fileRetention: {
+        isClientAuthorizedToRead: true,
+        value: fileRetention,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: true,
+        value: LegalHoldValue.On,
+      },
+      serverSideEncryption: SSE_B2,
+    })
   })
 })
 

@@ -29,6 +29,7 @@ import {
   MetadataDirective,
 } from '../types/file.ts'
 import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { ReplicationConfiguration } from '../types/replication.ts'
 import {
@@ -1728,6 +1729,92 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
           },
         },
         asReplicationSource: null,
+      },
+    })
+  })
+
+  it('redacts unfinished large-file lock metadata without read capabilities', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'unfinished-lock-redaction',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const restrictedKey = await client.createKey({
+      capabilities: [
+        Capability.WriteFiles,
+        Capability.ListFiles,
+        Capability.WriteFileRetentions,
+        Capability.WriteFileLegalHolds,
+      ],
+      keyName: 'unfinished-lock-redacted',
+      bucketId: bucket.id,
+    })
+    const restrictedClient = await authorizeWithKey(sim, restrictedKey)
+    const apiUrl = restrictedClient.accountInfo.getApiUrl()
+    const authToken = restrictedClient.accountInfo.getAuthToken()
+    const fileRetention = {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: Date.now() + 86_400_000,
+    } satisfies FileRetentionValue
+
+    const started = await restrictedClient.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'redacted-large.bin',
+      contentType: 'application/octet-stream',
+      fileRetention,
+      legalHold: LegalHoldValue.On,
+    })
+
+    expect(started.fileRetention).toEqual({ isClientAuthorizedToRead: false, value: null })
+    expect(started.legalHold).toEqual({ isClientAuthorizedToRead: false, value: null })
+
+    const restrictedListing = await restrictedClient.raw.listUnfinishedLargeFiles(
+      apiUrl,
+      authToken,
+      { bucketId: bucket.id, namePrefix: 'redacted-large.bin' },
+    )
+    expect(restrictedListing.files).toHaveLength(1)
+    const [restrictedFile] = restrictedListing.files
+    expect(restrictedFile).toMatchObject({
+      fileName: 'redacted-large.bin',
+      fileRetention: {
+        isClientAuthorizedToRead: false,
+        value: null,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: false,
+        value: null,
+      },
+    })
+
+    const readerKey = await client.createKey({
+      capabilities: [
+        Capability.ListFiles,
+        Capability.ReadFileRetentions,
+        Capability.ReadFileLegalHolds,
+      ],
+      keyName: 'unfinished-lock-reader',
+      bucketId: bucket.id,
+    })
+    const readerClient = await authorizeWithKey(sim, readerKey)
+    const visibleListing = await readerClient.raw.listUnfinishedLargeFiles(
+      readerClient.accountInfo.getApiUrl(),
+      readerClient.accountInfo.getAuthToken(),
+      { bucketId: bucket.id, namePrefix: 'redacted-large.bin' },
+    )
+    expect(visibleListing.files).toHaveLength(1)
+    const [visibleFile] = visibleListing.files
+    expect(visibleFile).toMatchObject({
+      fileName: 'redacted-large.bin',
+      fileRetention: {
+        isClientAuthorizedToRead: true,
+        value: fileRetention,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: true,
+        value: LegalHoldValue.On,
       },
     })
   })

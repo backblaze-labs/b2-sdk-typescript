@@ -48,7 +48,13 @@ import {
   bucketId as bucketIdOf,
   fileId as fileIdOf,
 } from '../types/ids.ts'
-import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
+import {
+  type FileRetentionValue,
+  LegalHoldValue,
+  type ReadableFileRetention,
+  type ReadableLegalHold,
+  RetentionMode,
+} from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
 import type { ReplicationConfiguration, ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
@@ -609,6 +615,21 @@ function filterReadableReplicationConfiguration(
 ): ReadableReplicationConfiguration {
   return canRead
     ? { isClientAuthorizedToRead: true, value: config.value }
+    : { isClientAuthorizedToRead: false, value: null }
+}
+
+function readableFileRetention(
+  value: FileRetentionValue | null,
+  canRead: boolean,
+): ReadableFileRetention {
+  return canRead
+    ? { isClientAuthorizedToRead: true, value }
+    : { isClientAuthorizedToRead: false, value: null }
+}
+
+function readableLegalHold(value: LegalHoldValue | null, canRead: boolean): ReadableLegalHold {
+  return canRead
+    ? { isClientAuthorizedToRead: true, value }
     : { isClientAuthorizedToRead: false, value: null }
 }
 
@@ -2720,6 +2741,7 @@ export class B2Simulator {
             legalHold?: LegalHoldValue
             serverSideEncryption?: EncryptionSetting
           },
+          headers['authorization'],
         )
       case 'b2_get_upload_part_url':
         return await this.getUploadPartUrl(body as { fileId: string }, headers['authorization'])
@@ -2735,6 +2757,7 @@ export class B2Simulator {
             startFileId?: string
             maxFileCount?: number
           },
+          headers['authorization'],
         )
       case 'b2_list_parts':
         return this.listParts(
@@ -4139,16 +4162,19 @@ export class B2Simulator {
     return { status: 200, body: fileVersion }
   }
 
-  private async startLargeFile(req: {
-    bucketId: string
-    fileName: string
-    contentType: string
-    customUploadTimestamp?: string | null
-    fileInfo?: Record<string, string>
-    fileRetention?: FileRetentionValue
-    legalHold?: LegalHoldValue
-    serverSideEncryption?: EncryptionSetting
-  }): Promise<SimulatorJsonResponse> {
+  private async startLargeFile(
+    req: {
+      bucketId: string
+      fileName: string
+      contentType: string
+      customUploadTimestamp?: string | null
+      fileInfo?: Record<string, string>
+      fileRetention?: FileRetentionValue
+      legalHold?: LegalHoldValue
+      serverSideEncryption?: EncryptionSetting
+    },
+    authToken?: string,
+  ): Promise<SimulatorJsonResponse> {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
 
@@ -4199,14 +4225,14 @@ export class B2Simulator {
         contentLength: 0,
         contentSha1: 'none',
         contentMd5: null,
-        fileRetention: {
-          isClientAuthorizedToRead: true,
-          value: large.fileRetention,
-        },
-        legalHold: {
-          isClientAuthorizedToRead: true,
-          value: large.legalHold,
-        },
+        fileRetention: readableFileRetention(
+          large.fileRetention,
+          this.requestHasCapability(authToken, Capability.ReadFileRetentions),
+        ),
+        legalHold: readableLegalHold(
+          large.legalHold,
+          this.requestHasCapability(authToken, Capability.ReadFileLegalHolds),
+        ),
         ...this.replicationStatusMetadataFor(large.replicationStatus),
         serverSideEncryption: publicServerSideEncryption(large.serverSideEncryption),
         uploadTimestamp: large.uploadTimestamp,
@@ -4368,12 +4394,15 @@ export class B2Simulator {
     }
   }
 
-  private listUnfinishedLargeFiles(req: {
-    bucketId: string
-    namePrefix?: string
-    startFileId?: string
-    maxFileCount?: number
-  }): SimulatorJsonResponse {
+  private listUnfinishedLargeFiles(
+    req: {
+      bucketId: string
+      namePrefix?: string
+      startFileId?: string
+      maxFileCount?: number
+    },
+    authToken?: string,
+  ): SimulatorJsonResponse {
     const countError = validateMaxCount(req.maxFileCount, 'b2_list_unfinished_large_files')
     if (countError) return this.error(400, countError.code, countError.message)
     const prefix = req.namePrefix ?? ''
@@ -4395,6 +4424,14 @@ export class B2Simulator {
     }
 
     const slice = candidates.slice(startIndex, startIndex + max)
+    const canReadFileRetentions = this.requestHasCapability(
+      authToken,
+      Capability.ReadFileRetentions,
+    )
+    const canReadFileLegalHolds = this.requestHasCapability(
+      authToken,
+      Capability.ReadFileLegalHolds,
+    )
     const files = slice.map((f) => ({
       fileId: f.fileId,
       fileName: f.fileName,
@@ -4406,14 +4443,8 @@ export class B2Simulator {
       contentSha1: 'none',
       contentMd5: null,
       fileInfo: f.fileInfo,
-      fileRetention: {
-        isClientAuthorizedToRead: true,
-        value: f.fileRetention,
-      },
-      legalHold: {
-        isClientAuthorizedToRead: true,
-        value: f.legalHold,
-      },
+      fileRetention: readableFileRetention(f.fileRetention, canReadFileRetentions),
+      legalHold: readableLegalHold(f.legalHold, canReadFileLegalHolds),
       ...this.replicationStatusMetadataFor(f.replicationStatus),
       serverSideEncryption: publicServerSideEncryption(f.serverSideEncryption),
       uploadTimestamp: f.uploadTimestamp,
