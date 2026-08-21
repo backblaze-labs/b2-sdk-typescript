@@ -192,16 +192,18 @@ describe('enum value typing (compile-time)', () => {
       return true
     }
 
+    const mutableRequestFilters: BucketType[] = [BucketType.AllPrivate]
+    const readonlyRequestFilters: readonly BucketType[] = [BucketType.AllPrivate]
     expect(acceptsCreateBucketType(BucketType.AllPrivate)).toBe(true)
     expect(Object.values(BucketType)).not.toContain(KnownBucketResponseType.Shared)
     expect(acceptsListBucketTypes([BucketType.AllPrivate])).toBe(true)
+    expect(acceptsListBucketTypes(mutableRequestFilters)).toBe(true)
+    expect(acceptsListBucketTypes(readonlyRequestFilters)).toBe(true)
     expect(acceptsListBucketTypes([KnownBucketResponseType.Shared])).toBe(true)
     expect(acceptsListBucketTypes(['futureBucketType'])).toBe(true)
     expect(acceptsListBucketTypes(['all'])).toBe(true)
     // @ts-expect-error shared is a response-only bucket type.
     acceptsCreateBucketType(KnownBucketResponseType.Shared)
-    // @ts-expect-error bucketTypes must contain at least one filter value.
-    acceptsListBucketTypes([])
   })
 
   it('LegalHoldValue.On is assignable to LegalHoldValue', () => {
