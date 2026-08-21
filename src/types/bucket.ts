@@ -134,6 +134,17 @@ export interface BucketRetentionPolicy {
   readonly period: RetentionPeriod | null
 }
 
+/** B2 response shape for a bucket with no default Object Lock retention. */
+export interface NoBucketDefaultRetention {
+  /** B2 returns null when no bucket default retention policy is configured. */
+  readonly mode: null
+  /** No retention period is configured. */
+  readonly period: null
+}
+
+/** Default Object Lock retention as returned in bucket metadata. */
+export type BucketDefaultRetention = BucketRetentionPolicy | NoBucketDefaultRetention
+
 /**
  * Complete bucket metadata as returned by the B2 API.
  * Corresponds to the bucket object in responses from `b2_list_buckets`, `b2_create_bucket`, and `b2_update_bucket`.
@@ -162,7 +173,7 @@ export interface BucketInfo {
       /** Whether Object Lock is enabled on this bucket. */
       readonly isFileLockEnabled: boolean
       /** Default retention policy for newly uploaded files. */
-      readonly defaultRetention: BucketRetentionPolicy
+      readonly defaultRetention: BucketDefaultRetention
     } | null
   }
   /** Lifecycle rules configured on this bucket. */

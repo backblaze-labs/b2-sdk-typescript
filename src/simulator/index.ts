@@ -15,6 +15,7 @@ import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { Capability } from '../types/auth.ts'
 import {
+  type BucketDefaultRetention,
   type BucketInfo,
   BucketRetentionMode,
   type BucketRetentionPolicy,
@@ -958,15 +959,29 @@ async function uploadServerSideEncryption(
   return await storedServerSideEncryption(fallback)
 }
 
-function bucketDefaultRetention(info: BucketInfo): BucketRetentionPolicy | undefined {
+function noBucketDefaultRetention(): BucketDefaultRetention {
+  return { mode: null, period: null }
+}
+
+function bucketDefaultRetentionForResponse(
+  policy: BucketRetentionPolicy | undefined,
+): BucketDefaultRetention {
+  if (policy === undefined || policy.mode === BucketRetentionMode.None) {
+    return noBucketDefaultRetention()
+  }
+  return policy
+}
+
+function bucketDefaultRetention(info: BucketInfo): BucketDefaultRetention | undefined {
   return info.fileLockConfiguration.value?.defaultRetention
 }
 
 function defaultFileRetention(
-  policy: BucketRetentionPolicy | undefined,
+  policy: BucketDefaultRetention | undefined,
   uploadTimestamp: number,
 ): FileRetentionValue | null {
   if (policy === undefined) return null
+  if (policy.mode === null) return null
   if (policy.mode === BucketRetentionMode.None || policy.period === null) return null
   const days = policy.period.unit === 'days' ? policy.period.duration : policy.period.duration * 365
   const retainUntilTimestamp = uploadTimestamp + days * MS_PER_DAY
@@ -3411,10 +3426,7 @@ export class B2Simulator {
     // subsequent `listBuckets` response). Previously these were
     // hardcoded to defaults, forcing tests to mutate `bucket.info`
     // post-create to simulate a non-vanilla bucket.
-    const defaultRetention = req.defaultRetention ?? {
-      mode: BucketRetentionMode.None,
-      period: null,
-    }
+    const defaultRetention = bucketDefaultRetentionForResponse(req.defaultRetention)
     const info: BucketInfo = {
       accountId: accountIdOf(req.accountId),
       bucketId: bid,
@@ -3545,7 +3557,9 @@ export class B2Simulator {
               isClientAuthorizedToRead: true,
               value: {
                 isFileLockEnabled: objectLockEnabled,
-                defaultRetention: req['defaultRetention'] as BucketRetentionPolicy,
+                defaultRetention: bucketDefaultRetentionForResponse(
+                  req['defaultRetention'] as BucketRetentionPolicy,
+                ),
               },
             },
           }
@@ -3556,10 +3570,7 @@ export class B2Simulator {
               isClientAuthorizedToRead: true,
               value: {
                 isFileLockEnabled: objectLockEnabled,
-                defaultRetention: bucketDefaultRetention(bucket.info) ?? {
-                  mode: BucketRetentionMode.None,
-                  period: null,
-                },
+                defaultRetention: bucketDefaultRetention(bucket.info) ?? noBucketDefaultRetention(),
               },
             },
           }

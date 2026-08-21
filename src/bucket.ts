@@ -10,6 +10,7 @@ import type { RetryOptions } from './http/retry.ts'
 import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
+  BucketDefaultRetention,
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
@@ -106,7 +107,7 @@ export interface DeleteAllSkipEvent {
 export type DeleteAllEvent = DeleteAllDeleteEvent | DeleteAllErrorEvent | DeleteAllSkipEvent
 
 interface BucketDefaultRetentionSnapshot {
-  readonly retention?: BucketRetentionPolicy
+  readonly retention?: BucketDefaultRetention
   readonly unreadable: boolean
 }
 
@@ -1162,10 +1163,11 @@ export class Bucket {
    * Returns the current default Object Lock retention policy for new
    * uploads to this bucket, refetched from B2.
    *
-   * @returns The default {@link BucketRetentionPolicy}, or `undefined` if
-   *   the file lock configuration is not readable.
+   * @returns The default {@link BucketDefaultRetention}, or `undefined` if
+   *   the file lock configuration is not readable. B2 represents no bucket
+   *   default retention as `{ mode: null, period: null }`.
    */
-  async getDefaultRetention(): Promise<BucketRetentionPolicy | undefined> {
+  async getDefaultRetention(): Promise<BucketDefaultRetention | undefined> {
     const fresh = await this.refresh()
     return bucketDefaultRetentionSnapshot(fresh).retention
   }

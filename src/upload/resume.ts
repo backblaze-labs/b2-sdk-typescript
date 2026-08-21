@@ -1,7 +1,11 @@
 import type { AccountInfo } from '../auth/account-info.ts'
 import { ResumeFileIdMismatchError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
-import { BucketRetentionMode, type BucketRetentionPolicy } from '../types/bucket.ts'
+import {
+  type BucketDefaultRetention,
+  BucketRetentionMode,
+  type BucketRetentionPolicy,
+} from '../types/bucket.ts'
 import {
   EncryptionMode,
   type EncryptionSetting,
@@ -86,7 +90,7 @@ export interface ResumeCandidateCriteria {
   /** Explicit Object Lock retention option, if configured by the caller. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention when the caller omits fileRetention. */
-  readonly defaultFileRetention?: BucketRetentionPolicy
+  readonly defaultFileRetention?: BucketDefaultRetention
   /** Whether bucket default retention exists but cannot be read by the caller. */
   readonly defaultFileRetentionUnreadable?: boolean
   /** Explicit legal hold option, if configured by the caller. */
@@ -468,13 +472,13 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
 function fileRetentionMatches(
   candidate: ReadableFileRetention | undefined,
   expected: FileRetentionValue | undefined,
-  defaultExpected: BucketRetentionPolicy | undefined,
+  defaultExpected: BucketDefaultRetention | undefined,
   defaultUnreadable: boolean,
   uploadTimestamp: number | undefined,
 ): boolean {
   if (expected === undefined && defaultUnreadable) return false
   if (expected === undefined && defaultExpected !== undefined) {
-    if (defaultExpected.mode === BucketRetentionMode.None) {
+    if (defaultExpected.mode === null || defaultExpected.mode === BucketRetentionMode.None) {
       if (candidate === undefined) return true
       if (!candidate.isClientAuthorizedToRead) return false
       return fileRetentionValueEquals(candidate.value, null)

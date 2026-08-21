@@ -253,9 +253,9 @@ describe('Bucket.defaultRetention helpers', () => {
     ;({ bucket } = await makeBucket({ fileLockEnabled: true }))
   })
 
-  it('getDefaultRetention returns mode "none" on a fresh bucket', async () => {
+  it('getDefaultRetention returns B2 unset retention on a fresh bucket', async () => {
     const r = await bucket.getDefaultRetention()
-    expect(r).toEqual({ mode: 'none', period: null })
+    expect(r).toEqual({ mode: null, period: null })
   })
 
   it('getDefaultRetention returns a policy configured at bucket creation', async () => {
@@ -293,5 +293,14 @@ describe('Bucket.defaultRetention helpers', () => {
       mode: BucketRetentionMode.Governance,
       period: { duration: 7, unit: 'years' },
     })
+  })
+
+  it('setDefaultRetention none returns B2 unset retention', async () => {
+    await bucket.setDefaultRetention({
+      mode: BucketRetentionMode.None,
+      period: null,
+    })
+
+    await expect(bucket.getDefaultRetention()).resolves.toEqual({ mode: null, period: null })
   })
 })

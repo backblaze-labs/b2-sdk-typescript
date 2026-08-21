@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bucket default retention metadata now matches B2's nested wire shape.** BREAKING: `BucketInfo.defaultRetention` was removed because B2 does not return a top-level default-retention field; read `bucket.info.fileLockConfiguration.value?.defaultRetention` instead. `Bucket.getDefaultRetention()` now reads that nested field and can return `undefined` when file-lock configuration is unreadable. The nested default retention type also includes B2's unset response shape `{ mode: null, period: null }`; callers that checked `BucketRetentionMode.None` for unset bucket defaults should handle `null` mode on response metadata.
+
 ### Fixed
 
 - **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.

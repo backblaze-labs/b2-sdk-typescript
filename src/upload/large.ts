@@ -4,7 +4,7 @@ import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
 import { type ContentSource, readNextNonEmptyStreamChunk } from '../streams/source.ts'
-import type { BucketRetentionPolicy } from '../types/bucket.ts'
+import type { BucketDefaultRetention } from '../types/bucket.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -78,7 +78,7 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention used when fileRetention is omitted. */
-  readonly bucketDefaultRetention?: BucketRetentionPolicy
+  readonly bucketDefaultRetention?: BucketDefaultRetention
   /** Bucket default retention exists but cannot be read, so resume must fail closed. */
   readonly bucketDefaultRetentionUnreadable?: boolean
   /** Legal hold status applied at upload time. */
