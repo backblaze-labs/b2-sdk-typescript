@@ -504,7 +504,16 @@ describe('B2Simulator bucket configuration validation', () => {
 
     expect(bucket.info.corsRules).toHaveLength(1)
     expect(bucket.info.lifecycleRules).toHaveLength(1)
-    expect(bucket.info.replicationConfiguration.value?.asReplicationSource).not.toBeNull()
+    expect(bucket.info.replicationConfiguration).toEqual({
+      isClientAuthorizedToRead: true,
+      value: {
+        asReplicationDestination: null,
+        asReplicationSource: {
+          replicationRules: [],
+          sourceApplicationKeyId: applicationKeyId('source-key-id'),
+        },
+      },
+    })
   })
 })
 
