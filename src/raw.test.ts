@@ -17,7 +17,7 @@ function jsonResponse(value: unknown): HttpResponse {
   }
 }
 
-describe('RawClient list request controls', () => {
+describe('RawClient request normalization and routing', () => {
   it('normalizes the deprecated createKey bucketId alias to bucketIds', async () => {
     const requests: HttpRequest[] = []
     const transport: HttpTransport = {

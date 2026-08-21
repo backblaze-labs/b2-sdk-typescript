@@ -6,12 +6,11 @@
  *   B2_APPLICATION_KEY
  */
 
-import { describe, expect, it, type TestContext } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, type TestContext } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { Capability, type Capability as CapabilityValue } from '../../src/types/auth.ts'
-import { BucketType } from '../../src/types/bucket.ts'
+import { Capability } from '../../src/types/auth.ts'
 import type { FileVersion } from '../../src/types/file.ts'
 import type { FileId } from '../../src/types/ids.ts'
 import {
@@ -20,20 +19,32 @@ import {
   type ReadableFileRetention,
   RetentionMode,
 } from '../../src/types/lock.ts'
-import { deleteFileVersionOnce, hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
+import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
+import {
+  deleteObjectLockBucketIfPresent,
+  emptyObjectLockBucket,
+  isObjectLockUnavailableError,
+  makeBucketName,
+  missingFeatureCapabilitiesReason,
+  safeErrorSummary,
+  setupStep,
+  sweepStaleIntegrationBuckets,
+} from '../helpers/b2-integration.ts'
 
 const keyId = process.env['B2_APPLICATION_KEY_ID'] ?? ''
 const appKey = process.env['B2_APPLICATION_KEY'] ?? ''
 const requireCredentials = process.env['B2_INTEGRATION_REQUIRE_CREDENTIALS'] === '1'
 
 const skip = !keyId || !appKey
-const bucketPrefix = 'sdk-it-lock-'
 const complianceRetentionMs = 15_000
 const governanceRetentionMs = 60_000
 const retentionToleranceMs = 1_000
-const retentionExpirySkewMs = 3_000
+const probeAttempts = 3
+const probeTimeoutMs = 15_000
+const probeRetryDelayMs = 500
+const objectLockFeature = 'Object Lock retention/legal hold'
 
-const requiredCapabilities: readonly CapabilityValue[] = [
+const requiredCapabilities: readonly Capability[] = [
   Capability.WriteBuckets,
   Capability.DeleteBuckets,
   Capability.ListFiles,
@@ -74,81 +85,6 @@ interface UpdateLegalHoldWireResponse {
   readonly fileName: string
   readonly fileId: FileId
   readonly legalHold: LegalHoldValue
-}
-
-function makeBucketName(): string {
-  const runId = process.env['GITHUB_RUN_ID']
-  const runAttempt = process.env['GITHUB_RUN_ATTEMPT'] ?? '1'
-  const unique = `${Date.now()}-${globalThis.crypto.randomUUID().slice(0, 8)}`
-  if (runId !== undefined && runId !== '') {
-    return `${bucketPrefix}${runId}-${runAttempt}-${unique}`
-  }
-  return `${bucketPrefix}${unique}`
-}
-
-function skipIfMissingFeatureCapabilities(
-  ctx: TestContext,
-  client: B2Client,
-  feature: string,
-): boolean {
-  const check = client.hasCapabilities(requiredCapabilities)
-  if (check.ok) return false
-  const reason = `${feature} requires B2 capabilities: ${check.missing.join(', ')}`
-  console.warn(`[b2 integration] ${feature}: skipped (${reason})`)
-  ctx.skip(reason)
-  return true
-}
-
-function isObjectLockUnavailableError(err: unknown): boolean {
-  return (
-    hasB2ErrorCode(err, 'unauthorized') ||
-    hasB2ErrorCode(err, 'access_denied') ||
-    hasB2ErrorCode(err, 'file_lock_not_enabled')
-  )
-}
-
-function safeErrorSummary(err: unknown): string {
-  if (typeof err !== 'object' || err === null) return typeof err
-  const fields: string[] = []
-  const maybeError = err as {
-    readonly name?: unknown
-    readonly status?: unknown
-    readonly code?: unknown
-  }
-  if (typeof maybeError.name === 'string') fields.push(maybeError.name)
-  if (typeof maybeError.status === 'number') fields.push(`status=${maybeError.status}`)
-  if (typeof maybeError.code === 'string') fields.push(`code=${maybeError.code}`)
-  if (fields.length > 0) return fields.join(' ')
-  if (err instanceof Error) return err.name
-  return 'object'
-}
-
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function waitUntilRetentionExpires(retainUntilTimestamp: number | null): Promise<void> {
-  if (retainUntilTimestamp === null) return
-  const waitMs = retainUntilTimestamp - Date.now() + retentionExpirySkewMs
-  if (waitMs > 0) await delay(waitMs)
-}
-
-async function createObjectLockBucket(ctx: TestContext, client: B2Client): Promise<Bucket | null> {
-  try {
-    return await client.createBucket({
-      bucketName: makeBucketName(),
-      bucketType: BucketType.AllPrivate,
-      fileLockEnabled: true,
-    })
-  } catch (err) {
-    if (isObjectLockUnavailableError(err)) {
-      const reason = `file-lock bucket unavailable: ${safeErrorSummary(err)}`
-      console.warn(`[b2 integration] Object Lock retention/legal hold: skipped (${reason})`)
-      ctx.skip(reason)
-      return null
-    }
-    throw err
-  }
 }
 
 async function uploadText(bucket: Bucket, fileName: string, text: string): Promise<FileVersion> {
@@ -200,16 +136,55 @@ async function postNativeJson<T>(
   endpoint: string,
   body: unknown,
 ): Promise<WireResult<T>> {
+  let lastResult: WireResult<T> | null = null
+  for (let attempt = 1; attempt <= probeAttempts; attempt += 1) {
+    const result = await postNativeJsonOnce<T>(client, version, endpoint, body)
+    if (result.ok || !isTransientWireFailure(result) || attempt === probeAttempts) return result
+    lastResult = result
+    await delay(probeRetryDelayMs * attempt)
+  }
+  return (
+    lastResult ?? {
+      ok: false,
+      status: 0,
+      code: 'probe_not_attempted',
+      message: 'probe exhausted without an attempt result',
+    }
+  )
+}
+
+async function postNativeJsonOnce<T>(
+  client: B2Client,
+  version: NativeApiVersion,
+  endpoint: string,
+  body: unknown,
+): Promise<WireResult<T>> {
   const url = new URL(`/b2api/${version}/${endpoint}`, client.accountInfo.getApiUrl())
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: client.accountInfo.getAuthToken(),
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
-  const parsed = (await response.json()) as unknown
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), probeTimeoutMs)
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      code: controller.signal.aborted ? 'request_timeout' : 'network_error',
+      message: safeErrorSummary(err),
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+
+  const parsed = parseJsonBody(await response.text())
   if (response.ok) return { ok: true, body: parsed as T }
 
   const error = parsed as {
@@ -223,6 +198,26 @@ async function postNativeJson<T>(
     code: typeof error.code === 'string' ? error.code : 'unknown',
     message: typeof error.message === 'string' ? error.message : '',
   }
+}
+
+function parseJsonBody(text: string): unknown {
+  if (text.length === 0) return {}
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return { code: 'non_json_response', message: text }
+  }
+}
+
+function isTransientWireFailure<T>(result: WireResult<T>): boolean {
+  return (
+    !result.ok &&
+    (result.status === 0 || result.status === 408 || result.status === 429 || result.status >= 500)
+  )
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function expectVersionProbe<T>(endpoint: string, v3: WireResult<T>, v4: WireResult<T>): void {
@@ -356,88 +351,114 @@ async function assertComplianceRetentionSetGetAndDeleteBlock(bucket: Bucket): Pr
     bucket.deleteFileVersion(fileName, file.fileId, { bypassGovernance: true }),
     'file_lock_compliance_protected',
   )
-
-  await waitUntilRetentionExpires(retention.retainUntilTimestamp)
-  await bucket.deleteFileVersion(fileName, file.fileId, { bypassGovernance: true })
-}
-
-async function emptyObjectLockBucket(bucket: Bucket): Promise<void> {
-  const deleted = new Set<string>()
-  const versions = await bucket.listFileVersions()
-  for (const file of versions.files) {
-    const fileId = file.fileId
-    await clearLegalHoldForDelete(bucket, file.fileName, fileId)
-    await clearRetentionForDelete(bucket, file.fileName, fileId)
-    await deleteFileVersionOnce(bucket, file.fileName, fileId, deleted, { bypassGovernance: true })
-  }
-}
-
-async function clearLegalHoldForDelete(
-  bucket: Bucket,
-  fileName: string,
-  fileId: FileId,
-): Promise<void> {
-  try {
-    await bucket.updateFileLegalHold(fileName, fileId, LegalHoldValue.Off)
-  } catch (err) {
-    if (!hasB2ErrorCode(err, 'file_not_present') && !hasB2ErrorCode(err, 'no_such_file')) {
-      throw err
-    }
-  }
-}
-
-async function clearRetentionForDelete(
-  bucket: Bucket,
-  fileName: string,
-  fileId: FileId,
-): Promise<void> {
-  try {
-    await bucket.updateFileRetention(
-      fileName,
-      fileId,
-      { mode: null, retainUntilTimestamp: null },
-      { bypassGovernance: true },
-    )
-    return
-  } catch (err) {
-    if (!hasB2ErrorCode(err, 'file_lock_compliance_protected')) throw err
-  }
-
-  const info = await bucket.file(fileName).getFileInfo(fileId)
-  await waitUntilRetentionExpires(info.fileRetention.value?.retainUntilTimestamp ?? null)
-  await bucket.updateFileRetention(
-    fileName,
-    fileId,
-    { mode: null, retainUntilTimestamp: null },
-    { bypassGovernance: true },
-  )
-}
-
-async function deleteObjectLockBucketIfPresent(bucket: Bucket): Promise<void> {
-  await emptyObjectLockBucket(bucket)
-  await bucket.delete()
 }
 
 describe.skipIf(skip)('B2 Object Lock integration', () => {
-  it('sets, gets, probes, and deletes Object Lock file versions', async (ctx) => {
-    const feature = 'Object Lock retention/legal hold'
-    const client = new B2Client({
+  let client: B2Client | null = null
+  let bucket: Bucket | null = null
+  let setupSkipReason: string | null = null
+
+  beforeAll(async () => {
+    const liveClient = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
     })
-    await client.authorize()
-    if (skipIfMissingFeatureCapabilities(ctx, client, feature)) return
+    client = liveClient
+    await setupStep('authorize', () => liveClient.authorize())
 
-    const bucket = await createObjectLockBucket(ctx, client)
-    if (bucket === null) return
+    const missingCapabilities = missingFeatureCapabilitiesReason(
+      liveClient,
+      objectLockFeature,
+      requiredCapabilities,
+    )
+    if (missingCapabilities !== null) {
+      setupSkipReason = missingCapabilities
+      return
+    }
+
+    const existing = await setupStep('list buckets', () => liveClient.listBuckets())
+    await setupStep('sweep stale integration buckets', () => sweepStaleIntegrationBuckets(existing))
 
     try {
-      await probeWireVersions(client, bucket)
-      await assertLegalHoldSetGetAndDeleteBlock(bucket)
-      await assertGovernanceRetentionSetGetAndBypass(bucket)
-      await assertComplianceRetentionSetGetAndDeleteBlock(bucket)
-    } finally {
-      await deleteObjectLockBucketIfPresent(bucket)
+      bucket = await setupStep('create Object Lock bucket', () =>
+        liveClient.createBucket({
+          bucketName: makeBucketName('object-lock', { objectLock: true }),
+          bucketType: 'allPrivate',
+          fileLockEnabled: true,
+        }),
+      )
+    } catch (err) {
+      if (isObjectLockUnavailableError(err)) {
+        setupSkipReason = `file-lock bucket unavailable: ${safeErrorSummary(err)}`
+        return
+      }
+      throw err
     }
   })
+
+  afterEach(async () => {
+    if (bucket === null) return
+    await emptyObjectLockBucket(bucket)
+  })
+
+  afterAll(async () => {
+    if (bucket === null) return
+    await deleteObjectLockBucketIfPresent(bucket)
+  })
+
+  it('probes retention and legal-hold v3/v4 wire versions', async (ctx) => {
+    const liveClient = requireObjectLockClient(ctx, client, setupSkipReason)
+    const liveBucket = requireObjectLockBucket(ctx, bucket, setupSkipReason)
+    if (liveClient === null || liveBucket === null) return
+
+    await probeWireVersions(liveClient, liveBucket)
+  })
+
+  it('sets, gets, and removes legal hold', async (ctx) => {
+    const liveBucket = requireObjectLockBucket(ctx, bucket, setupSkipReason)
+    if (liveBucket === null) return
+
+    await assertLegalHoldSetGetAndDeleteBlock(liveBucket)
+  })
+
+  it('sets, gets, and bypasses governance retention', async (ctx) => {
+    const liveBucket = requireObjectLockBucket(ctx, bucket, setupSkipReason)
+    if (liveBucket === null) return
+
+    await assertGovernanceRetentionSetGetAndBypass(liveBucket)
+  })
+
+  it('sets and gets compliance retention', async (ctx) => {
+    const liveBucket = requireObjectLockBucket(ctx, bucket, setupSkipReason)
+    if (liveBucket === null) return
+
+    await assertComplianceRetentionSetGetAndDeleteBlock(liveBucket)
+  })
 })
+
+function requireObjectLockClient(
+  ctx: TestContext,
+  client: B2Client | null,
+  setupSkipReason: string | null,
+): B2Client | null {
+  if (skipIfSetupUnavailable(ctx, setupSkipReason)) return null
+  if (client !== null) return client
+  throw new Error('Object Lock client was not initialized')
+}
+
+function requireObjectLockBucket(
+  ctx: TestContext,
+  bucket: Bucket | null,
+  setupSkipReason: string | null,
+): Bucket | null {
+  if (skipIfSetupUnavailable(ctx, setupSkipReason)) return null
+  if (bucket !== null) return bucket
+  throw new Error('Object Lock bucket was not initialized')
+}
+
+function skipIfSetupUnavailable(ctx: TestContext, setupSkipReason: string | null): boolean {
+  if (setupSkipReason === null) return false
+  console.warn(`[b2 integration] ${objectLockFeature}: skipped (${setupSkipReason})`)
+  ctx.skip(setupSkipReason)
+  return true
+}
