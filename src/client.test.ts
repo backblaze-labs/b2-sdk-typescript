@@ -1163,6 +1163,7 @@ describe('large file operations', () => {
       bucketId: bucket.id,
       namePrefix: 'pending-echo.bin',
     })
+    expect(unfinished.files).toHaveLength(1)
     expect(unfinished.files[0]).toMatchObject({
       fileRetention: {
         isClientAuthorizedToRead: true,
