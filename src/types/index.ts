@@ -27,6 +27,8 @@ export type {
 } from './backup.ts'
 export type {
   BucketDefaultRetention,
+  BucketDefaultServerSideEncryption,
+  BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
   CorsRule,

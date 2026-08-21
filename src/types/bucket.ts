@@ -1,4 +1,4 @@
-import type { EncryptionSetting } from './encryption.ts'
+import type { NoEncryption, NoEncryptionWireSetting, SseB2Setting } from './encryption.ts'
 import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
@@ -152,6 +152,13 @@ export interface ReadableReplicationConfiguration {
   /** Replication settings, or null when none are configured or the caller is not authorized to read them. */
   readonly value: ReplicationConfiguration | null
 }
+
+/** Bucket default server-side encryption setting returned by B2 bucket responses. */
+export type BucketDefaultServerSideEncryption = SseB2Setting | NoEncryptionWireSetting
+
+/** Bucket default server-side encryption setting accepted by B2 bucket requests. */
+export type BucketDefaultServerSideEncryptionSetting = SseB2Setting | NoEncryption
+
 /**
  * Complete bucket metadata as returned by the B2 API.
  * Corresponds to the bucket object in responses from `b2_list_buckets`, `b2_create_bucket`, and `b2_update_bucket`.
@@ -170,7 +177,12 @@ export interface BucketInfo {
   /** CORS rules configured on this bucket. */
   readonly corsRules: readonly CorsRule[]
   /** Default server-side encryption setting for new files in this bucket. */
-  readonly defaultServerSideEncryption: EncryptionSetting
+  readonly defaultServerSideEncryption: {
+    /** Whether the caller is authorized to read default server-side encryption settings. */
+    readonly isClientAuthorizedToRead: boolean
+    /** Default server-side encryption settings, or null if the caller lacks read authorization. */
+    readonly value: BucketDefaultServerSideEncryption | null
+  }
   /** File Lock configuration including authorization status and current settings. */
   readonly fileLockConfiguration: {
     /** Whether the caller is authorized to read file lock settings. */
@@ -208,7 +220,7 @@ export interface CreateBucketRequest {
   /** Optional CORS rules. */
   readonly corsRules?: readonly CorsRule[]
   /** Optional default server-side encryption setting. */
-  readonly defaultServerSideEncryption?: EncryptionSetting
+  readonly defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
   /** Optional default Object Lock retention policy. */
   readonly defaultRetention?: BucketRetentionPolicy
   /** Whether to enable Object Lock on the bucket. Cannot be changed after creation. */
@@ -234,7 +246,7 @@ export interface UpdateBucketRequest {
   /** Updated CORS rules. Replaces all existing rules. */
   readonly corsRules?: readonly CorsRule[]
   /** Updated default server-side encryption setting. */
-  readonly defaultServerSideEncryption?: EncryptionSetting
+  readonly defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
   /** Updated default Object Lock retention policy. */
   readonly defaultRetention?: BucketRetentionPolicy
   /** Whether to enable Object Lock. Can only transition from disabled to enabled. */

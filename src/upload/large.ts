@@ -4,7 +4,7 @@ import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
 import { type ContentSource, readNextNonEmptyStreamChunk } from '../streams/source.ts'
-import type { BucketDefaultRetention } from '../types/bucket.ts'
+import type { BucketDefaultRetention, BucketDefaultServerSideEncryption } from '../types/bucket.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
@@ -73,8 +73,10 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption settings applied to each part. */
   readonly serverSideEncryption?: EncryptionSetting
-  /** Effective bucket default encryption used when serverSideEncryption is omitted. */
-  readonly bucketDefaultServerSideEncryption?: EncryptionSetting
+  /** Effective readable bucket default encryption used when serverSideEncryption is omitted. */
+  readonly bucketDefaultServerSideEncryption?: BucketDefaultServerSideEncryption
+  /** Bucket default encryption exists but cannot be read, so resume must fail closed. */
+  readonly bucketDefaultServerSideEncryptionUnreadable?: boolean
   /** File retention policy applied at upload time. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention used when fileRetention is omitted. */
@@ -189,7 +191,9 @@ function createResumeCandidateCriteria(
       ? { serverSideEncryption: request.serverSideEncryption }
       : options.bucketDefaultServerSideEncryption !== undefined
         ? { serverSideEncryption: options.bucketDefaultServerSideEncryption }
-        : {}),
+        : options.bucketDefaultServerSideEncryptionUnreadable === true
+          ? { defaultServerSideEncryptionUnreadable: true }
+          : {}),
     ...(request.fileRetention !== undefined
       ? { fileRetention: request.fileRetention }
       : options.bucketDefaultRetention !== undefined

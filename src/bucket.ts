@@ -11,6 +11,8 @@ import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 import type {
   BucketDefaultRetention,
+  BucketDefaultServerSideEncryption,
+  BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
@@ -129,11 +131,25 @@ interface BucketDefaultRetentionSnapshot {
   readonly unreadable: boolean
 }
 
+interface BucketDefaultServerSideEncryptionSnapshot {
+  readonly encryption?: BucketDefaultServerSideEncryption
+  readonly unreadable: boolean
+}
+
 function bucketDefaultRetentionSnapshot(info: BucketInfo): BucketDefaultRetentionSnapshot {
   const fileLock = info.fileLockConfiguration
   if (!fileLock.isClientAuthorizedToRead) return { unreadable: true }
   if (fileLock.value === null) return { unreadable: false }
   return { retention: fileLock.value.defaultRetention, unreadable: false }
+}
+
+function bucketDefaultServerSideEncryptionSnapshot(
+  info: BucketInfo,
+): BucketDefaultServerSideEncryptionSnapshot {
+  const encryption = info.defaultServerSideEncryption
+  if (!encryption.isClientAuthorizedToRead) return { unreadable: true }
+  if (encryption.value === null) return { unreadable: false }
+  return { encryption: encryption.value, unreadable: false }
 }
 
 function resumeNeedsFreshBucketDefaults(options: BucketUploadOptions): boolean {
@@ -205,11 +221,17 @@ export class Bucket {
     if (isLarge) {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
       const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
+      const bucketDefaultSse = bucketDefaultServerSideEncryptionSnapshot(bucketInfo)
       return uploadLargeFile(this.client.raw, this.client.accountInfo, {
         ...options,
         bucketId: this.id,
         retry: uploadRetryOptions,
-        bucketDefaultServerSideEncryption: bucketInfo.defaultServerSideEncryption,
+        ...(bucketDefaultSse.encryption !== undefined
+          ? { bucketDefaultServerSideEncryption: bucketDefaultSse.encryption }
+          : {}),
+        ...(bucketDefaultSse.unreadable
+          ? { bucketDefaultServerSideEncryptionUnreadable: true }
+          : {}),
         ...(bucketDefaultRetention.retention !== undefined
           ? { bucketDefaultRetention: bucketDefaultRetention.retention }
           : {}),
@@ -883,7 +905,7 @@ export class Bucket {
     /** Replace CORS rules. */
     corsRules?: CorsRule[]
     /** Change default server-side encryption. */
-    defaultServerSideEncryption?: EncryptionSetting
+    defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
     /** Change default file retention policy. */
     defaultRetention?: BucketRetentionPolicy
     /** Replace lifecycle rules. */

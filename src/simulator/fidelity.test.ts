@@ -14,7 +14,13 @@ import {
   type LifecycleRule,
 } from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
-import { EncryptionKey, type EncryptionSetting, SSE_B2, sseCustomer } from '../types/encryption.ts'
+import {
+  EncryptionKey,
+  type EncryptionSetting,
+  SSE_B2,
+  SSE_NONE,
+  sseCustomer,
+} from '../types/encryption.ts'
 import { MetadataDirective } from '../types/file.ts'
 import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
@@ -128,6 +134,36 @@ describe('B2Simulator bucket configuration validation', () => {
       status: 400,
       code: 'bad_request',
     })
+  })
+
+  it('rejects SSE-C bucket default encryption on create and update', async () => {
+    const sseCDefault = { mode: 'SSE-C', algorithm: 'AES256' } as unknown as NonNullable<
+      Parameters<B2Client['createBucket']>[0]['defaultServerSideEncryption']
+    >
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-sse-create',
+        bucketType: BucketType.AllPrivate,
+        defaultServerSideEncryption: sseCDefault,
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('cannot use SSE-C'),
+    })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-sse-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(bucket.update({ defaultServerSideEncryption: sseCDefault })).rejects.toMatchObject(
+      {
+        status: 400,
+        code: 'bad_request',
+        message: expect.stringContaining('cannot use SSE-C'),
+      },
+    )
   })
 
   it('enforces the CORS maxAgeSeconds upper bound on create and update', async () => {
@@ -1892,6 +1928,64 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     expect(scopedClient.accountInfo.getAllowedBucketIds()).toBeNull()
     await expect(scopedClient.listBuckets({ bucketId: first.id })).resolves.toHaveLength(1)
     await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
+  })
+
+  it('hides bucket default encryption from keys without readBucketEncryption', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const readableSseB2 = {
+      isClientAuthorizedToRead: true,
+      value: SSE_B2,
+    }
+    const unreadable = {
+      isClientAuthorizedToRead: false,
+      value: null,
+    }
+    const readableNone = {
+      isClientAuthorizedToRead: true,
+      value: { mode: null, algorithm: null },
+    }
+
+    const bucket = await client.createBucket({
+      bucketName: 'hidden-bucket-encryption',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    expect(bucket.info.defaultServerSideEncryption).toEqual(readableSseB2)
+
+    const hiddenKey = await client.createKey({
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.WriteBuckets,
+        Capability.WriteBucketEncryption,
+      ],
+      keyName: 'hidden-bucket-encryption-key',
+      bucketIds: null,
+    })
+    const hiddenClient = await authorizeWithKey(sim, hiddenKey)
+    const hiddenList = await hiddenClient.listBuckets({ bucketId: bucket.id })
+    expect(hiddenList[0]?.info.defaultServerSideEncryption).toEqual(unreadable)
+
+    const hiddenCreated = await hiddenClient.createBucket({
+      bucketName: 'hidden-created-encryption',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    expect(hiddenCreated.info.defaultServerSideEncryption).toEqual(unreadable)
+
+    const hiddenUpdated = await hiddenCreated.update({ defaultServerSideEncryption: SSE_NONE })
+    expect(hiddenUpdated.defaultServerSideEncryption).toEqual(unreadable)
+
+    const readableKey = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.ReadBucketEncryption],
+      keyName: 'readable-bucket-encryption-key',
+      bucketIds: null,
+    })
+    const readableClient = await authorizeWithKey(sim, readableKey)
+    const listedSseB2 = await readableClient.listBuckets({ bucketId: bucket.id })
+    expect(listedSseB2[0]?.info.defaultServerSideEncryption).toEqual(readableSseB2)
+    const listedNone = await readableClient.listBuckets({ bucketId: hiddenCreated.id })
+    expect(listedNone[0]?.info.defaultServerSideEncryption).toEqual(readableNone)
   })
 
   it('rejects bucket creation with bucket-scoped application keys', async () => {
@@ -4688,6 +4782,31 @@ describe('B2Simulator server-side encryption fidelity', () => {
     })
   }
 
+  it('returns bucket default encryption in a read-authorized envelope', async () => {
+    const defaultNone = {
+      isClientAuthorizedToRead: true,
+      value: { mode: null, algorithm: null },
+    }
+    expect(bucket.info.defaultServerSideEncryption).toEqual(defaultNone)
+
+    const sseB2Bucket = await client.createBucket({
+      bucketName: 'encryption-fidelity-default-sse-b2',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    const defaultSseB2 = {
+      isClientAuthorizedToRead: true,
+      value: SSE_B2,
+    }
+    expect(sseB2Bucket.info.defaultServerSideEncryption).toEqual(defaultSseB2)
+
+    const listed = await client.listBuckets({ bucketId: sseB2Bucket.id })
+    expect(listed[0]?.info.defaultServerSideEncryption).toEqual(defaultSseB2)
+
+    const updated = await sseB2Bucket.update({ defaultServerSideEncryption: SSE_NONE })
+    expect(updated.defaultServerSideEncryption).toEqual(defaultNone)
+  })
+
   it('returns B2 null no-encryption shapes from public upload responses', async () => {
     const apiUrl = client.accountInfo.getApiUrl()
     const authToken = client.accountInfo.getAuthToken()
@@ -5012,11 +5131,47 @@ describe('B2Simulator server-side encryption fidelity', () => {
       customerKey: valid.customerKey,
       customerKeyMd5: valid.customerKeyMd5,
     } as unknown as EncryptionSetting
+    const nullWithoutAlgorithm = { mode: null } as unknown as EncryptionSetting
+    const nullWithExtraField = {
+      mode: null,
+      algorithm: null,
+      extra: 'ignored',
+    } as unknown as EncryptionSetting
+    const nullWithCustomerKey = {
+      mode: null,
+      algorithm: null,
+      customerKey: valid.customerKey,
+      customerKeyMd5: valid.customerKeyMd5,
+    } as unknown as EncryptionSetting
     await expect(
       rawStartLargeFile('sse-b2-extra-key.bin', sseB2WithCustomerKey),
     ).rejects.toMatchObject({ status: 400 })
     await expect(
       rawStartLargeFile('none-extra-key.bin', noneWithCustomerKey),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      rawStartLargeFile('null-missing-algorithm.bin', nullWithoutAlgorithm),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      rawStartLargeFile('null-extra-field.bin', nullWithExtraField),
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'No-encryption wire settings must be exactly { mode: null, algorithm: null }',
+    })
+    await expect(
+      bucket.copyFile({
+        sourceFileId: source.fileId,
+        fileName: 'null-extra-field-copy.txt',
+        destinationServerSideEncryption: nullWithExtraField,
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      client.raw.copyPart(apiUrl, authToken, {
+        sourceFileId: source.fileId,
+        largeFileId: fileIdOf(started.fileId),
+        partNumber: 2,
+        destinationServerSideEncryption: nullWithCustomerKey,
+      }),
     ).rejects.toMatchObject({ status: 400 })
   })
 
