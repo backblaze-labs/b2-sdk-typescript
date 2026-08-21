@@ -7,6 +7,10 @@ name: Integration (real B2)
 # Required repo secrets:
 #   B2_APPLICATION_KEY_ID
 #   B2_APPLICATION_KEY
+# Optional dedicated application-key lifecycle secrets:
+#   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
+#   B2_KEY_MANAGEMENT_APPLICATION_KEY
+#   B2_KEY_MANAGEMENT_BUCKET_ID
 # Recommended: scope the key to a dedicated test account. The tests create
 # ephemeral `sdk-it-<timestamp>` buckets and clean up after themselves (including
 # a defensive sweep at startup for stale `sdk-it-*` / legacy `sdk-test-*` buckets
@@ -61,6 +65,9 @@ jobs:
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_KEY_MANAGEMENT_APPLICATION_KEY_ID: ${{ secrets.B2_KEY_MANAGEMENT_APPLICATION_KEY_ID }}
+          B2_KEY_MANAGEMENT_APPLICATION_KEY: ${{ secrets.B2_KEY_MANAGEMENT_APPLICATION_KEY }}
+          B2_KEY_MANAGEMENT_BUCKET_ID: ${{ secrets.B2_KEY_MANAGEMENT_BUCKET_ID }}
           B2_INTEGRATION_REQUIRE_CREDENTIALS: '1'
         run: |
           if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then
