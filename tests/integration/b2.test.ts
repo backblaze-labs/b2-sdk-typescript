@@ -667,7 +667,6 @@ describe.skipIf(skip)('B2 integration', () => {
         fileName,
         contentType: 'application/octet-stream',
         fileInfo: {},
-        fileRetention,
         serverSideEncryption: SSE_B2,
       },
     )
