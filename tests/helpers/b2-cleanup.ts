@@ -9,7 +9,6 @@ export async function deleteFileVersionOnce(
 ): Promise<void> {
   const key = `${fileName}\0${fileId}`
   if (deleted.has(key)) return
-  deleted.add(key)
   try {
     await b.deleteFileVersion(fileName, fileId, options)
   } catch (err) {
@@ -17,6 +16,7 @@ export async function deleteFileVersionOnce(
       throw err
     }
   }
+  deleted.add(key)
 }
 
 export function hasB2ErrorCode(err: unknown, code: string): boolean {

@@ -365,7 +365,6 @@ function candidateMetadataRejectReason(
     criteria.serverSideEncryption,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
-  const explicitResume = criteria.resumeFileId !== undefined
   if (
     !fileRetentionMatches(
       candidate.fileRetention,
@@ -373,12 +372,11 @@ function candidateMetadataRejectReason(
       criteria.defaultFileRetention,
       criteria.defaultFileRetentionUnreadable === true,
       candidate.uploadTimestamp,
-      explicitResume,
     )
   ) {
     return 'retention-mismatch'
   }
-  if (!legalHoldMatches(candidate.legalHold, criteria.legalHold, explicitResume)) {
+  if (!legalHoldMatches(candidate.legalHold, criteria.legalHold)) {
     return 'legal-hold-mismatch'
   }
 
@@ -473,9 +471,7 @@ function fileRetentionMatches(
   defaultExpected: BucketRetentionPolicy | undefined,
   defaultUnreadable: boolean,
   uploadTimestamp: number | undefined,
-  acceptOmittedExplicit: boolean,
 ): boolean {
-  if (expected === undefined && defaultExpected === undefined && acceptOmittedExplicit) return true
   if (expected === undefined && defaultUnreadable) return false
   if (expected === undefined && defaultExpected !== undefined) {
     if (defaultExpected.mode === BucketRetentionMode.None) {
@@ -525,9 +521,7 @@ function fileRetentionValueEquals(
 function legalHoldMatches(
   candidate: ReadableLegalHold | undefined,
   expected: LegalHoldValue | undefined,
-  acceptOmittedExplicit: boolean,
 ): boolean {
-  if (expected === undefined && acceptOmittedExplicit) return true
   if (expected === undefined) {
     if (candidate === undefined) return true
     if (!candidate.isClientAuthorizedToRead) return false

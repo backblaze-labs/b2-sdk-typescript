@@ -175,7 +175,6 @@ function createResumeCandidateCriteria(
   partSize: number,
   parts: readonly RangePlan[],
 ): ResumeCandidateCriteria {
-  const explicitResume = options.resumeFileId !== undefined
   return {
     contentType: request.contentType,
     fileInfo: request.fileInfo,
@@ -188,14 +187,14 @@ function createResumeCandidateCriteria(
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(request.serverSideEncryption !== undefined
       ? { serverSideEncryption: request.serverSideEncryption }
-      : !explicitResume && options.bucketDefaultServerSideEncryption !== undefined
+      : options.bucketDefaultServerSideEncryption !== undefined
         ? { serverSideEncryption: options.bucketDefaultServerSideEncryption }
         : {}),
     ...(request.fileRetention !== undefined
       ? { fileRetention: request.fileRetention }
-      : !explicitResume && options.bucketDefaultRetention !== undefined
+      : options.bucketDefaultRetention !== undefined
         ? { defaultFileRetention: options.bucketDefaultRetention }
-        : !explicitResume && options.bucketDefaultRetentionUnreadable === true
+        : options.bucketDefaultRetentionUnreadable === true
           ? { defaultFileRetentionUnreadable: true }
           : {}),
     ...(request.legalHold !== undefined ? { legalHold: request.legalHold } : {}),

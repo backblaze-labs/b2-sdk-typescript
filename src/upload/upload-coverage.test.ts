@@ -3216,25 +3216,23 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 
     expect(result.fileName).toBe('unreadable-default-auto.bin')
     expect(rejected).toEqual(['retention-mismatch'])
-    const explicitResult = await hiddenDefaultBucket
-      .file('unreadable-default-explicit.bin')
-      .upload({
+    await expect(
+      hiddenDefaultBucket.file('unreadable-default-explicit.bin').upload({
         source: new BufferSource(data),
         contentType: 'application/octet-stream',
         partSize,
         concurrency: 1,
         resumeFileId: explicit.fileId,
-      })
-    expect(explicitResult.fileName).toBe('unreadable-default-explicit.bin')
+      }),
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
     const unfinished = await hiddenDefaultClient.raw.listUnfinishedLargeFiles(
       hiddenDefaultClient.accountInfo.getApiUrl(),
       hiddenDefaultClient.accountInfo.getAuthToken(),
       { bucketId: hiddenDefaultBucket.id },
     )
     expect(unfinished.files.map((file) => file.fileId)).toEqual(
-      expect.arrayContaining([auto.fileId]),
+      expect.arrayContaining([auto.fileId, explicit.fileId]),
     )
-    expect(unfinished.files.map((file) => file.fileId)).not.toContain(explicit.fileId)
   })
 
   it('fails high-level resume when fresh bucket defaults cannot be fetched', async () => {
@@ -3428,14 +3426,15 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     })
     expect(result.fileRetention.value?.mode).toBe(RetentionMode.Governance)
     expect(rejected).toEqual(expect.arrayContaining(['retention-mismatch', 'encryption-mismatch']))
-    const explicitResult = await originalBucket.file('default-explicit.bin').upload({
-      source: new BufferSource(data),
-      contentType: 'application/octet-stream',
-      partSize,
-      concurrency: 1,
-      resumeFileId: explicitNoRetention.fileId,
-    })
-    expect(explicitResult.fileName).toBe('default-explicit.bin')
+    await expect(
+      originalBucket.file('default-explicit.bin').upload({
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+        partSize,
+        concurrency: 1,
+        resumeFileId: explicitNoRetention.fileId,
+      }),
+    ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
 
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
@@ -3446,7 +3445,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(unfinishedIds).toEqual(
       expect.arrayContaining([autoNoEncryption.fileId, autoNoRetention.fileId]),
     )
-    expect(unfinishedIds).not.toContain(explicitNoRetention.fileId)
+    expect(unfinishedIds).toContain(explicitNoRetention.fileId)
   })
 
   it('leaves reused unfinished files available after local upload failures', async () => {

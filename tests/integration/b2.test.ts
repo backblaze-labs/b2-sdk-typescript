@@ -9,7 +9,7 @@
  * exercise file operations, and clean up after themselves.
  */
 
-import { afterAll, beforeAll, describe, expect, it, type TestContext } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, type TestContext, vi } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { BadBucketIdError } from '../../src/errors/index.ts'
@@ -30,6 +30,8 @@ const currentBucketPrefix = 'sdk-it-'
 const legacyBucketPrefix = 'sdk-test-'
 const staleBucketAgeMs = 60 * 60 * 1000
 const setupStepTimeoutMs = 60 * 1000
+const cleanupAttempts = 3
+const cleanupRetryDelayMs = 250
 
 if (skip && requireCredentials) {
   throw new Error(
@@ -67,30 +69,36 @@ function isStaleIntegrationBucket(name: string, now = Date.now()): boolean {
 }
 
 async function emptyBucket(bucket: Bucket): Promise<void> {
-  await cancelUnfinishedLargeFiles(bucket)
+  const cleanupErrors: unknown[] = []
+  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
 
   const deleted = new Set<string>()
   for await (const file of bucket.paginateFileNames()) {
-    await deleteFileVersionOnce(bucket, file.fileName, file.fileId, deleted)
+    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors)
   }
 
   const versions = await bucket.listFileVersions()
   for (const fv of versions.files) {
-    await deleteFileVersionOnce(bucket, fv.fileName, fv.fileId, deleted)
+    await deleteFileVersionForCleanup(bucket, fv.fileName, fv.fileId, deleted, cleanupErrors)
   }
+
+  throwCleanupErrors('empty bucket', cleanupErrors)
 }
 
 async function emptyObjectLockBucket(bucket: Bucket): Promise<void> {
-  await cancelUnfinishedLargeFiles(bucket)
+  const cleanupErrors: unknown[] = []
+  await cancelUnfinishedLargeFiles(bucket, undefined, cleanupErrors)
 
   const deleted = new Set<string>()
   for await (const file of bucket.paginateFileVersions()) {
     await clearLegalHoldForDelete(bucket, file.fileName, file.fileId)
     await clearRetentionForDelete(bucket, file.fileName, file.fileId)
-    await deleteFileVersionOnce(bucket, file.fileName, file.fileId, deleted, {
+    await deleteFileVersionForCleanup(bucket, file.fileName, file.fileId, deleted, cleanupErrors, {
       bypassGovernance: true,
     })
   }
+
+  throwCleanupErrors('empty Object Lock bucket', cleanupErrors)
 }
 
 async function deleteBucketIfPresent(bucket: Bucket): Promise<void> {
@@ -113,16 +121,22 @@ async function deleteObjectLockBucketIfPresent(bucket: Bucket): Promise<void> {
   }
 }
 
-async function cancelUnfinishedLargeFiles(bucket: Bucket, namePrefix?: string): Promise<void> {
+async function cancelUnfinishedLargeFiles(
+  bucket: Bucket,
+  namePrefix?: string,
+  cleanupErrors: unknown[] = [],
+): Promise<void> {
   for await (const file of bucket.paginateUnfinishedLargeFiles(
     namePrefix === undefined ? undefined : { namePrefix },
   )) {
-    try {
-      await bucket.cancelLargeFile(file.fileId)
-    } catch (err) {
-      logCleanupFailure('cancel unfinished large file', bucket, file.fileName, file.fileId, err)
-      throw err
-    }
+    const cancelled = await retryCleanupStep(
+      'cancel unfinished large file',
+      bucket,
+      file.fileName,
+      file.fileId,
+      () => bucket.cancelLargeFile(file.fileId),
+    )
+    if (!cancelled.ok) cleanupErrors.push(cancelled.err)
   }
 }
 
@@ -131,12 +145,9 @@ async function clearLegalHoldForDelete(
   fileName: string,
   fileId: Parameters<Bucket['deleteFileVersion']>[1],
 ): Promise<void> {
-  try {
-    await bucket.updateFileLegalHold(fileName, fileId, LegalHoldValue.Off)
-  } catch (err) {
-    logCleanupFailure('clear legal hold', bucket, fileName, fileId, err)
-    throw err
-  }
+  await retryCleanupStep('clear legal hold', bucket, fileName, fileId, () =>
+    bucket.updateFileLegalHold(fileName, fileId, LegalHoldValue.Off),
+  )
 }
 
 async function clearRetentionForDelete(
@@ -144,17 +155,68 @@ async function clearRetentionForDelete(
   fileName: string,
   fileId: Parameters<Bucket['deleteFileVersion']>[1],
 ): Promise<void> {
-  try {
-    await bucket.updateFileRetention(
+  await retryCleanupStep('clear retention', bucket, fileName, fileId, () =>
+    bucket.updateFileRetention(
       fileName,
       fileId,
       { mode: null, retainUntilTimestamp: null },
       { bypassGovernance: true },
-    )
-  } catch (err) {
-    logCleanupFailure('clear retention', bucket, fileName, fileId, err)
-    throw err
+    ),
+  )
+}
+
+async function deleteFileVersionForCleanup(
+  bucket: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+  deleted: Set<string>,
+  cleanupErrors: unknown[],
+  options?: Parameters<Bucket['deleteFileVersion']>[2],
+): Promise<void> {
+  const deletedVersion = await retryCleanupStep(
+    'delete file version',
+    bucket,
+    fileName,
+    fileId,
+    () => deleteFileVersionOnce(bucket, fileName, fileId, deleted, options),
+  )
+  if (!deletedVersion.ok) cleanupErrors.push(deletedVersion.err)
+}
+
+async function retryCleanupStep(
+  action: string,
+  bucket: Bucket,
+  fileName: string,
+  fileId: string,
+  fn: () => Promise<unknown>,
+): Promise<{ ok: true } | { ok: false; err: unknown }> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= cleanupAttempts; attempt++) {
+    try {
+      await fn()
+      return { ok: true }
+    } catch (err) {
+      lastError = err
+      logCleanupFailure(
+        `${action} attempt=${attempt}/${cleanupAttempts}`,
+        bucket,
+        fileName,
+        fileId,
+        err,
+      )
+      if (attempt < cleanupAttempts) await delay(cleanupRetryDelayMs)
+    }
   }
+  return { ok: false, err: lastError }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function throwCleanupErrors(action: string, errors: readonly unknown[]): void {
+  if (errors.length === 0) return
+  throw new AggregateError(errors, `${action} failed for ${errors.length} cleanup operation(s)`)
 }
 
 function logCleanupFailure(
@@ -237,6 +299,9 @@ async function uploadRawPart(
 }
 
 function safeErrorSummary(err: unknown): string {
+  // Deliberately omit err.message from live-service logs. SDK errors are expected
+  // to redact credentials, but setup/cleanup paths can see arbitrary thrown
+  // values, so CI logs only include structural error fields.
   if (typeof err !== 'object' || err === null) return typeof err
   const fields: string[] = []
   const maybeError = err as {
@@ -275,9 +340,9 @@ function skipIfMissingFeatureCapabilities(
   client: B2Client,
   feature: string,
   capabilities: readonly CapabilityValue[],
-): boolean {
+): void {
   const check = client.hasCapabilities(capabilities)
-  if (check.ok) return false
+  if (check.ok) return
   const reason = `missing capabilities: ${check.missing.join(', ')}`
   logFeatureSkip(feature, reason)
   ctx.skip(reason)
@@ -296,15 +361,13 @@ async function withRecommendedPartSize<T>(
   partSize: number,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const accountInfo = client.accountInfo as typeof client.accountInfo & {
-    getRecommendedPartSize: () => number
-  }
-  const original = accountInfo.getRecommendedPartSize.bind(accountInfo)
-  accountInfo.getRecommendedPartSize = () => partSize
+  const recommendedPartSize = vi
+    .spyOn(client.accountInfo, 'getRecommendedPartSize')
+    .mockReturnValue(partSize)
   try {
     return await fn()
   } finally {
-    accountInfo.getRecommendedPartSize = original
+    recommendedPartSize.mockRestore()
   }
 }
 
@@ -415,6 +478,32 @@ describe('B2 integration cleanup safety', () => {
       updateFileRetention: 0,
       bypassDelete: 0,
     })
+  })
+
+  it('continues Object Lock cleanup after one version fails', async () => {
+    const deleted: string[] = []
+    const fakeBucket = {
+      id: 'bucket-lock',
+      name: makeBucketName('lock-cleanup'),
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield { fileName: 'blocked.txt', fileId: 'blocked' }
+        yield { fileName: 'open.txt', fileId: 'open' }
+      },
+      async updateFileLegalHold(_fileName: string, fileId: string) {
+        if (fileId === 'blocked') throw { status: 503, code: 'service_unavailable' }
+      },
+      async updateFileRetention() {},
+      async deleteFileVersion(_fileName: string, fileId: string) {
+        if (fileId === 'blocked') throw { status: 400, code: 'file_lock_governance_protected' }
+        deleted.push(fileId)
+      },
+    } as unknown as Bucket
+
+    await expect(emptyObjectLockBucket(fakeBucket)).rejects.toThrow(
+      /empty Object Lock bucket failed/,
+    )
+    expect(deleted).toEqual(['open'])
   })
 })
 
