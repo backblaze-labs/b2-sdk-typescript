@@ -2,9 +2,11 @@ import { B2BucketConfigurationError } from './errors/index.ts'
 import {
   BUCKET_INFO_KEY_MAX_BYTES,
   BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_RESERVED_PREFIX,
   BUCKET_INFO_VALUES_MAX_BYTES,
   CORS_ALLOWED_OPERATIONS,
+  CORS_MAX_AGE_SECONDS_MAX,
   CORS_RULE_MAX_BYTES,
   CORS_RULE_NAME_MAX_LENGTH,
   CORS_RULE_NAME_MIN_LENGTH,
@@ -17,6 +19,7 @@ import {
 } from './types/bucket.ts'
 import { utf8Encoder } from './util/text-codec.ts'
 
+const BUCKET_INFO_KEY_REGEX = new RegExp(BUCKET_INFO_KEY_PATTERN)
 const CORS_RULE_NAME_REGEX = new RegExp(CORS_RULE_NAME_PATTERN)
 const CORS_OPERATION_SET = new Set<string>(CORS_ALLOWED_OPERATIONS)
 
@@ -50,6 +53,13 @@ export function assertValidBucketInfo(bucketInfo: Record<string, string>): void 
       throw new B2BucketConfigurationError(
         'bucketInfo',
         `bucketInfo key "${key}" must not start with reserved prefix "${BUCKET_INFO_RESERVED_PREFIX}"`,
+        'invalid_bucket_info',
+      )
+    }
+    if (!BUCKET_INFO_KEY_REGEX.test(key)) {
+      throw new B2BucketConfigurationError(
+        'bucketInfo',
+        `bucketInfo key "${key}" must match ${BUCKET_INFO_KEY_PATTERN}`,
         'invalid_bucket_info',
       )
     }
@@ -176,6 +186,12 @@ export function assertValidCorsRules(corsRules: readonly CorsRule[]): void {
         `${rulePath}.maxAgeSeconds must be a non-negative safe integer`,
       )
     }
+    if ((maxAgeSeconds as number) > CORS_MAX_AGE_SECONDS_MAX) {
+      throw new B2BucketConfigurationError(
+        'corsRules',
+        `${rulePath}.maxAgeSeconds must be at most ${CORS_MAX_AGE_SECONDS_MAX}`,
+      )
+    }
 
     const ruleBytes =
       utf8ByteLength(ruleName) +
@@ -242,9 +258,9 @@ function readNullableStringArray(
   path: string,
 ): readonly string[] | null {
   const value = record[key]
-  if (value === null) return null
+  if (value === null || value === undefined) return null
   if (!Array.isArray(value)) {
-    throw new B2BucketConfigurationError('corsRules', `${path} must be an array or null`)
+    throw new B2BucketConfigurationError('corsRules', `${path} must be an array, null, or omitted`)
   }
   for (const [index, item] of value.entries()) {
     if (typeof item !== 'string') {

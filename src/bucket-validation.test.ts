@@ -9,6 +9,7 @@ import { B2BucketConfigurationError } from './errors/index.ts'
 import {
   BUCKET_INFO_KEY_MAX_BYTES,
   BUCKET_INFO_VALUES_MAX_BYTES,
+  CORS_MAX_AGE_SECONDS_MAX,
   CORS_RULE_MAX_BYTES,
   CORS_RULE_NAME_MAX_LENGTH,
   CORS_RULE_NAME_MIN_LENGTH,
@@ -61,7 +62,7 @@ function expectBucketConfigurationError(
 describe('bucket configuration validation', () => {
   it('accepts valid bucketInfo without a pair-count cap', () => {
     const bucketInfo: Record<string, string> = {}
-    for (let i = 0; i < 60; i++) bucketInfo[`key ${i}`] = 'v'
+    for (let i = 0; i < 60; i++) bucketInfo[`key_${i}`] = 'v'
 
     expect(() => assertValidBucketInfo(bucketInfo)).not.toThrow()
   })
@@ -89,6 +90,15 @@ describe('bucket configuration validation', () => {
       'bucketInfo',
       'invalid_bucket_info',
       'must not start with reserved prefix "b2-"',
+    )
+  })
+
+  it('rejects bucketInfo keys with unsupported characters', () => {
+    expectBucketConfigurationError(
+      () => assertValidBucketInfo({ 'bad/key': 'value' }),
+      'bucketInfo',
+      'invalid_bucket_info',
+      'must match ^[A-Za-z0-9_-]+$',
     )
   })
 
@@ -127,6 +137,19 @@ describe('bucket configuration validation', () => {
           ],
           exposeHeaders: ['x-bz-content-sha1'],
         }),
+      ]),
+    ).not.toThrow()
+  })
+
+  it('accepts CORS rules with omitted optional header fields', () => {
+    expect(() =>
+      assertValidCorsRules([
+        {
+          allowedOperations: [CorsOperation.B2DownloadFileByName],
+          allowedOrigins: ['https://example.com'],
+          corsRuleName: 'rule-1',
+          maxAgeSeconds: 3600,
+        },
       ]),
     ).not.toThrow()
   })
@@ -232,6 +255,15 @@ describe('bucket configuration validation', () => {
       'corsRules',
       'bad_request',
       'unsupported operation "s3_post"',
+    )
+  })
+
+  it(`rejects maxAgeSeconds above ${CORS_MAX_AGE_SECONDS_MAX}`, () => {
+    expectBucketConfigurationError(
+      () => assertValidCorsRules([validCorsRule({ maxAgeSeconds: CORS_MAX_AGE_SECONDS_MAX + 1 })]),
+      'corsRules',
+      'bad_request',
+      `maxAgeSeconds must be at most ${CORS_MAX_AGE_SECONDS_MAX}`,
     )
   })
 

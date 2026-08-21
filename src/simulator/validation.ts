@@ -30,15 +30,24 @@ import {
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
 import { Capability } from '../types/auth.ts'
-import { BucketRetentionMode, BucketType, CorsOperation, type CorsRule } from '../types/bucket.ts'
+import {
+  BUCKET_INFO_VALUES_MAX_BYTES,
+  BucketRetentionMode,
+  BucketType,
+  CORS_MAX_AGE_SECONDS_MAX,
+  CorsOperation,
+  type CorsRule,
+} from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
 
 export {
   BUCKET_INFO_KEY_MAX_BYTES,
   BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_RESERVED_PREFIX,
   BUCKET_INFO_VALUES_MAX_BYTES,
+  CORS_MAX_AGE_SECONDS_MAX,
   CORS_RULE_MAX_BYTES,
   CORS_RULE_NAME_MAX_LENGTH,
   CORS_RULE_NAME_MIN_LENGTH,
@@ -46,6 +55,22 @@ export {
   CORS_RULE_NAME_RESERVED_PREFIX,
   CORS_RULES_MAX_COUNT,
 } from '../types/bucket.ts'
+
+/**
+ * Deprecated compatibility alias for the former simulator bucketInfo pair-count cap.
+ *
+ * @deprecated B2 bucketInfo has no documented pair-count cap. Use the byte
+ * limit constants instead.
+ */
+export const BUCKET_INFO_MAX_KEYS = Number.POSITIVE_INFINITY
+
+/**
+ * Deprecated compatibility alias for the former simulator per-value bucketInfo cap.
+ *
+ * @deprecated B2 bucketInfo limits aggregate value bytes, not per-value bytes.
+ * Use {@link BUCKET_INFO_VALUES_MAX_BYTES}.
+ */
+export const BUCKET_INFO_VALUE_MAX = BUCKET_INFO_VALUES_MAX_BYTES
 
 /** Shape returned by validation functions when input is rejected. */
 export interface ValidationError {
@@ -420,6 +445,7 @@ function validateStringArray(
   path: string,
   options: { readonly allowNull?: boolean; readonly requireNonEmpty?: boolean } = {},
 ): ValidationError | null {
+  if (value === undefined && options.allowNull === true) return null
   if (value === null && options.allowNull === true) return null
   if (!Array.isArray(value)) {
     return { code: 'bad_request', message: `${path} must be an array of strings` }
@@ -544,7 +570,6 @@ const CORS_RULE_FIELDS = new Set([
   'maxAgeSeconds',
 ])
 
-const CORS_MAX_AGE_SECONDS_MAX = 86_400
 const KNOWN_CORS_OPERATIONS = new Set<string>(Object.values(CorsOperation))
 
 /**

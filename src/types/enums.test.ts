@@ -5,6 +5,7 @@ import {
   BucketRetentionMode,
   BucketType,
   Capability,
+  CORS_ALLOWED_OPERATIONS,
   CorsOperation,
   type CreateBucketRequest,
   computerId,
@@ -110,10 +111,15 @@ describe('const-object enums', () => {
       'b2_upload_file',
       'b2_upload_part',
       's3_get',
+      's3_post',
       's3_put',
       's3_head',
       's3_delete',
     ])
+  })
+
+  it('CORS_ALLOWED_OPERATIONS excludes deprecated S3Post', () => {
+    expect(CORS_ALLOWED_OPERATIONS).not.toContain(CorsOperation.S3Post)
   })
 
   it('Capability covers every Capability value', () => {

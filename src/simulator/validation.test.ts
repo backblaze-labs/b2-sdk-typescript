@@ -10,6 +10,8 @@ import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
   BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_MAX_KEYS,
+  BUCKET_INFO_VALUE_MAX,
   BUCKET_INFO_VALUES_MAX_BYTES,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
   DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
@@ -147,8 +149,12 @@ describe('validateBucketInfo', () => {
   })
   it('does not enforce a bucketInfo pair-count cap', () => {
     const big: Record<string, string> = {}
-    for (let i = 0; i < 60; i++) big[`key ${i}`] = 'v'
+    for (let i = 0; i < 60; i++) big[`key_${i}`] = 'v'
     expect(validateBucketInfo(big)).toBeNull()
+  })
+  it('keeps deprecated simulator bucketInfo aliases compiling', () => {
+    expect(BUCKET_INFO_MAX_KEYS).toBe(Number.POSITIVE_INFINITY)
+    expect(BUCKET_INFO_VALUE_MAX).toBe(BUCKET_INFO_VALUES_MAX_BYTES)
   })
   it(`rejects keys over ${BUCKET_INFO_KEY_MAX_BYTES} UTF-8 bytes`, () => {
     const longKey = 'é'.repeat(Math.floor(BUCKET_INFO_KEY_MAX_BYTES / 2) + 1)
@@ -156,6 +162,9 @@ describe('validateBucketInfo', () => {
   })
   it('rejects keys with the reserved b2- prefix', () => {
     expect(validateBucketInfo({ 'b2-key': 'v' })?.code).toBe('invalid_bucket_info')
+  })
+  it('rejects keys with unsupported characters', () => {
+    expect(validateBucketInfo({ 'bad key': 'v' })?.code).toBe('invalid_bucket_info')
   })
   it('rejects a non-string value', () => {
     expect(validateBucketInfo({ k: 5 as unknown as string })?.code).toBe('invalid_bucket_info')
@@ -268,6 +277,14 @@ describe('validateCorsRules', () => {
   it('returns null for an empty list and valid CORS rules', () => {
     expect(validateCorsRules([])).toBeNull()
     expect(validateCorsRules([validRule])).toBeNull()
+  })
+
+  it('accepts omitted optional CORS header fields', () => {
+    const rule: Record<string, unknown> = { ...validRule }
+    delete rule['allowedHeaders']
+    delete rule['exposeHeaders']
+
+    expect(validateCorsRules([rule])).toBeNull()
   })
 
   it('rejects malformed CORS rule fields', () => {
