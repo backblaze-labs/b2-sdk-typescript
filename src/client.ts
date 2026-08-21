@@ -9,6 +9,7 @@ import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
+  BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
@@ -16,7 +17,6 @@ import type {
   CreateBucketRequest,
   LifecycleRule,
 } from './types/bucket.ts'
-import type { EncryptionSetting } from './types/encryption.ts'
 import type { ApplicationKeyId, BucketId } from './types/ids.ts'
 import { accountId } from './types/ids.ts'
 import type {
@@ -213,7 +213,7 @@ export class B2Client {
     /** CORS rules for browser-based access. */
     corsRules?: CorsRule[]
     /** Default server-side encryption for new files. */
-    defaultServerSideEncryption?: EncryptionSetting
+    defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
     /** Default retention policy for new files (requires file lock). */
     defaultRetention?: BucketRetentionPolicy
     /** Enable file lock (Object Lock) on the bucket. Cannot be disabled once set. */

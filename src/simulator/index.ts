@@ -17,6 +17,7 @@ import { Capability } from '../types/auth.ts'
 import {
   type BucketDefaultRetention,
   type BucketDefaultServerSideEncryption,
+  type BucketDefaultServerSideEncryptionSetting,
   type BucketInfo,
   BucketRetentionMode,
   type BucketRetentionPolicy,
@@ -599,6 +600,7 @@ function filterReadableReplicationConfiguration(
 interface BucketConfigurationFields {
   readonly bucketInfo?: unknown
   readonly corsRules?: unknown
+  readonly defaultServerSideEncryption?: unknown
   readonly defaultRetention?: unknown
   readonly lifecycleRules?: unknown
   readonly replicationConfiguration?: unknown
@@ -620,6 +622,12 @@ function validateBucketConfigurationFields(
     const lifecycleError = validateLifecycleRules(fields.lifecycleRules)
     if (lifecycleError) return lifecycleError
   }
+  if (fields.defaultServerSideEncryption !== undefined) {
+    const encryptionError = validateBucketDefaultServerSideEncryption(
+      fields.defaultServerSideEncryption,
+    )
+    if (encryptionError) return encryptionError
+  }
   if (fields.replicationConfiguration !== undefined) {
     const replicationError = validateReplicationConfiguration(fields.replicationConfiguration)
     if (replicationError) return replicationError
@@ -638,6 +646,37 @@ function validateBucketConfigurationFields(
     }
   }
   return null
+}
+
+function validateBucketDefaultServerSideEncryption(encryption: unknown): ValidationError | null {
+  const runtimeEncryption = requestRecord(encryption)
+  if (runtimeEncryption === null) {
+    return { code: 'bad_request', message: 'defaultServerSideEncryption must be an object' }
+  }
+  if (hasCustomerEncryptionFields(runtimeEncryption)) {
+    return {
+      code: 'bad_request',
+      message: 'Bucket default server-side encryption cannot use SSE-C',
+    }
+  }
+  const mode = runtimeEncryption['mode']
+  if (mode === EncryptionMode.None) return null
+  if (mode === EncryptionMode.SseB2) {
+    if (runtimeEncryption['algorithm'] !== EncryptionAlgorithm.Aes256) {
+      return { code: 'bad_request', message: 'SSE-B2 algorithm must be AES256' }
+    }
+    return null
+  }
+  if (mode === EncryptionMode.SseC) {
+    return {
+      code: 'bad_request',
+      message: 'Bucket default server-side encryption cannot use SSE-C',
+    }
+  }
+  return {
+    code: 'bad_request',
+    message: `Unsupported bucket default server-side encryption mode: ${String(mode)}`,
+  }
 }
 
 function nextObjectLockEnabled(current: boolean, requested: unknown): boolean | ValidationError {
@@ -799,7 +838,7 @@ function publicServerSideEncryption(
 }
 
 function publicBucketDefaultServerSideEncryption(
-  encryption: EncryptionSetting | undefined,
+  encryption: BucketDefaultServerSideEncryptionSetting | undefined,
 ): BucketInfo['defaultServerSideEncryption'] {
   return {
     isClientAuthorizedToRead: true,
@@ -808,7 +847,7 @@ function publicBucketDefaultServerSideEncryption(
 }
 
 function publicBucketDefaultServerSideEncryptionValue(
-  encryption: EncryptionSetting | undefined,
+  encryption: BucketDefaultServerSideEncryptionSetting | undefined,
 ): BucketDefaultServerSideEncryption {
   if (encryption?.mode === EncryptionMode.SseB2) return encryption
   return { mode: null, algorithm: null }
@@ -3468,18 +3507,11 @@ export class B2Simulator {
       accountId: string
       bucketInfo?: Record<string, string>
       corsRules?: BucketInfo['corsRules']
-      defaultServerSideEncryption?: EncryptionSetting
-<<<<<<< HEAD
+      defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
       defaultRetention?: BucketRetentionPolicy
       fileLockEnabled?: boolean
       lifecycleRules?: BucketInfo['lifecycleRules']
       replicationConfiguration?: ReplicationConfiguration
-=======
-      defaultRetention?: BucketInfo['defaultRetention']
-      fileLockEnabled?: boolean
-      lifecycleRules?: BucketInfo['lifecycleRules']
-      replicationConfiguration?: BucketInfo['replicationConfiguration']
->>>>>>> 4536312 (fix: fail closed on unreadable bucket SSE)
     },
     authToken?: string,
   ): {
@@ -3611,6 +3643,7 @@ export class B2Simulator {
       {
         bucketInfo: req['bucketInfo'],
         corsRules: req['corsRules'],
+        defaultServerSideEncryption: req['defaultServerSideEncryption'],
         defaultRetention: req['defaultRetention'],
         lifecycleRules: req['lifecycleRules'],
         replicationConfiguration: req['replicationConfiguration'],
@@ -3669,7 +3702,7 @@ export class B2Simulator {
       ...(req['defaultServerSideEncryption'] !== undefined
         ? {
             defaultServerSideEncryption: publicBucketDefaultServerSideEncryption(
-              req['defaultServerSideEncryption'] as EncryptionSetting,
+              req['defaultServerSideEncryption'] as BucketDefaultServerSideEncryptionSetting,
             ),
           }
         : {}),

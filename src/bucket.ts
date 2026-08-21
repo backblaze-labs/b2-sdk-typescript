@@ -12,6 +12,7 @@ import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './obje
 import type {
   BucketDefaultRetention,
   BucketDefaultServerSideEncryption,
+  BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
   BucketType,
@@ -904,7 +905,7 @@ export class Bucket {
     /** Replace CORS rules. */
     corsRules?: CorsRule[]
     /** Change default server-side encryption. */
-    defaultServerSideEncryption?: EncryptionSetting
+    defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
     /** Change default file retention policy. */
     defaultRetention?: BucketRetentionPolicy
     /** Replace lifecycle rules. */

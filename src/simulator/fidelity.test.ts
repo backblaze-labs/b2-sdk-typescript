@@ -136,6 +136,36 @@ describe('B2Simulator bucket configuration validation', () => {
     })
   })
 
+  it('rejects SSE-C bucket default encryption on create and update', async () => {
+    const sseCDefault = { mode: 'SSE-C', algorithm: 'AES256' } as unknown as NonNullable<
+      Parameters<B2Client['createBucket']>[0]['defaultServerSideEncryption']
+    >
+
+    await expect(
+      client.createBucket({
+        bucketName: 'bad-sse-create',
+        bucketType: BucketType.AllPrivate,
+        defaultServerSideEncryption: sseCDefault,
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_request',
+      message: expect.stringContaining('cannot use SSE-C'),
+    })
+
+    const bucket = await client.createBucket({
+      bucketName: 'bad-sse-update',
+      bucketType: BucketType.AllPrivate,
+    })
+    await expect(bucket.update({ defaultServerSideEncryption: sseCDefault })).rejects.toMatchObject(
+      {
+        status: 400,
+        code: 'bad_request',
+        message: expect.stringContaining('cannot use SSE-C'),
+      },
+    )
+  })
+
   it('enforces the CORS maxAgeSeconds upper bound on create and update', async () => {
     const boundaryCorsRule: CorsRule = {
       allowedHeaders: null,

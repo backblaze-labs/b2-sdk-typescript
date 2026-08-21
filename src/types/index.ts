@@ -28,6 +28,7 @@ export type {
 export type {
   BucketDefaultRetention,
   BucketDefaultServerSideEncryption,
+  BucketDefaultServerSideEncryptionSetting,
   BucketInfo,
   BucketRetentionPolicy,
   CorsRule,
