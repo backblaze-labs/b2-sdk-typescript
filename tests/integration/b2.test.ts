@@ -650,11 +650,15 @@ describe.skipIf(skip)('B2 integration', () => {
       Capability.ListFiles,
       Capability.ReadFiles,
       Capability.WriteFiles,
+      Capability.ReadFileRetentions,
     ])
 
     const partSize = client.accountInfo.getAbsoluteMinimumPartSize()
     const data = makeBytes(partSize + 2048, 29)
     const fileName = 'large-resume.bin'
+    // Keep explicit resume independent of bucket-default retention readability
+    // while still exercising the SDK's fail-closed retention verification.
+    const fileRetention = { mode: null, retainUntilTimestamp: null }
     const started = await client.raw.startLargeFile(
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
@@ -663,6 +667,8 @@ describe.skipIf(skip)('B2 integration', () => {
         fileName,
         contentType: 'application/octet-stream',
         fileInfo: {},
+        fileRetention,
+        serverSideEncryption: SSE_B2,
       },
     )
     let finished = false
@@ -685,6 +691,8 @@ describe.skipIf(skip)('B2 integration', () => {
           partSize,
           concurrency: 2,
           resumeFileId: started.fileId,
+          fileRetention,
+          serverSideEncryption: SSE_B2,
           onResumePartReused: (event) => {
             reusedParts.push(event.partNumber)
             reusedPartSha1s.push(event.contentSha1)
