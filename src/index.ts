@@ -149,7 +149,11 @@ export {
 } from './types/ids.ts'
 export type * from './types/index.ts'
 export { LegalHoldValue, RetentionMode } from './types/lock.ts'
-export { EventType } from './types/notifications.ts'
+export {
+  EventType,
+  notificationCustomHeadersToRecord,
+  recordToNotificationCustomHeaders,
+} from './types/notifications.ts'
 export { PartnerCapability, Region } from './types/partner.ts'
 export type {
   AmbiguousFinishCleanupFailureEvent,

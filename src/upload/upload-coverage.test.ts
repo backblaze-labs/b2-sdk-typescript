@@ -2329,6 +2329,80 @@ describe('upload fresh-URL retry', () => {
     expect(freshFetches).toBe(0)
   })
 
+  it('retries upload connection refusals with a fresh upload URL', async () => {
+    let uploadAttempts = 0
+    let freshFetches = 0
+    const retryEvents: UploadRetryEvent[] = []
+    const firstEntry = { uploadUrl: 'https://upload-1.example.test', authorizationToken: 'auth-1' }
+    const secondEntry = { uploadUrl: 'https://upload-2.example.test', authorizationToken: 'auth-2' }
+    const refusedCause = Object.assign(new Error('connect ECONNREFUSED 203.0.113.10:443'), {
+      code: 'ECONNREFUSED',
+    })
+    const networkError = new NetworkError(
+      'fetch failed',
+      new TypeError('fetch failed', { cause: refusedCause }),
+    )
+
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'connection-refused.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      checkout: () => firstEntry,
+      fetchFresh: () => {
+        freshFetches += 1
+        return Promise.resolve(secondEntry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        if (uploadAttempts === 1) return Promise.reject(networkError)
+        return Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
+
+    expect(result).toBe('uploaded')
+    expect(uploadAttempts).toBe(2)
+    expect(freshFetches).toBe(1)
+    expect(retryEvents).toHaveLength(1)
+    expect(retryEvents[0]?.error).toBe(networkError)
+  })
+
+  it('does not replay generic single-request upload network errors by default', async () => {
+    let uploadAttempts = 0
+    let freshFetches = 0
+    const retryEvents: UploadRetryEvent[] = []
+    const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
+    const networkError = new NetworkError('socket closed')
+
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'ambiguous-network.txt',
+        partNumber: null,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
+        checkout: () => entry,
+        fetchFresh: () => {
+          freshFetches += 1
+          return Promise.resolve(entry)
+        },
+        returnEntry: () => {},
+        evictEntry: () => {},
+        upload: () => {
+          uploadAttempts += 1
+          return Promise.reject(networkError)
+        },
+        onUploadRetry: (event) => retryEvents.push(event),
+      }),
+    ).rejects.toBe(networkError)
+
+    expect(uploadAttempts).toBe(1)
+    expect(freshFetches).toBe(0)
+    expect(retryEvents).toHaveLength(0)
+  })
+
   it('returns upload URLs before surfacing upload-layer rate limits', async () => {
     let uploadAttempts = 0
     let returnedEntries = 0

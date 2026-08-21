@@ -143,14 +143,19 @@ export type {
 // `LegalHoldValue` and `RetentionMode` are forwarded as both type and value.
 export { LegalHoldValue, RetentionMode } from './lock.ts'
 export type {
+  EventNotificationCustomHeader,
   EventNotificationRule,
   GetBucketNotificationRulesRequest,
   GetBucketNotificationRulesResponse,
   SetBucketNotificationRulesRequest,
   SetBucketNotificationRulesResponse,
 } from './notifications.ts'
-// `EventType` is forwarded as both type and value.
-export { EventType } from './notifications.ts'
+// `EventType` is forwarded as both type and value; custom-header helpers are values.
+export {
+  EventType,
+  notificationCustomHeadersToRecord,
+  recordToNotificationCustomHeaders,
+} from './notifications.ts'
 export type {
   CreateGroupMemberRequest,
   CreateGroupMemberResponse,

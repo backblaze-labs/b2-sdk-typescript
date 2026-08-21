@@ -401,6 +401,7 @@ await bucket.setNotificationRules([
       targetType: 'webhook',
       url: 'https://my-app.com/webhooks/b2',
       hmacSha256SigningSecret: process.env.B2_WEBHOOK_SECRET,
+      customHeaders: [{ name: 'X-B2-Source', value: 'uploads' }],
     },
   },
 ])

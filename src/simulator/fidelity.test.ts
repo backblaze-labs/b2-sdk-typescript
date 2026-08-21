@@ -809,6 +809,129 @@ describe('B2Simulator input validation: notification rules', () => {
     ).rejects.toThrow(/https URL/)
   })
 
+  it('accepts and validates customHeaders as wire-shaped objects', async () => {
+    const customHeaders = [
+      { name: 'X-B2-Source', value: 'sdk-test' },
+      { name: 'X-B2-Rule', value: 'upload-webhook' },
+    ] as const
+
+    await bucket.setNotificationRules([
+      {
+        ...validRule,
+        targetConfiguration: {
+          ...validRule.targetConfiguration,
+          customHeaders,
+        },
+      },
+    ])
+    await expect(bucket.getNotificationRules()).resolves.toMatchObject({
+      eventNotificationRules: [{ targetConfiguration: { customHeaders } }],
+    })
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: { 'X-B2-Source': 'sdk-test' },
+          } as unknown as EventNotificationRule['targetConfiguration'],
+        },
+      ]),
+    ).rejects.toThrow(/customHeaders must be an array/)
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'X-B2-Source' }],
+          } as unknown as EventNotificationRule['targetConfiguration'],
+        },
+      ]),
+    ).rejects.toThrow(/customHeaders\[0\]\.value/)
+  })
+
+  it('rejects customHeaders that production B2 rejects', async () => {
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'X-Bz-Event-Notification-Signature', value: 'spoofed' }],
+          },
+        },
+      ]),
+    ).rejects.toThrow(/must not begin with X-Bz-/)
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [
+              { name: 'X-Webhook-Dupe', value: 'one' },
+              { name: 'x-webhook-dupe', value: 'two' },
+            ],
+          },
+        },
+      ]),
+    ).rejects.toThrow(/must be unique/)
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'X-Webhook-Inject', value: 'ok\r\nAuthorization: bad' }],
+          },
+        },
+      ]),
+    ).rejects.toThrow(/valid HTTP header value/)
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'X Webhook Bad', value: 'bad' }],
+          },
+        },
+      ]),
+    ).rejects.toThrow(/valid HTTP header name/)
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: Array.from({ length: 11 }, (_, index) => ({
+              name: `X-Webhook-${index}`,
+              value: 'ok',
+            })),
+          },
+        },
+      ]),
+    ).rejects.toThrow(/no more than 10/)
+
+    await expect(
+      bucket.setNotificationRules([
+        {
+          ...validRule,
+          targetConfiguration: {
+            ...validRule.targetConfiguration,
+            customHeaders: [{ name: 'X-A', value: 'a'.repeat(2043) }],
+          },
+        },
+      ]),
+    ).rejects.toThrow(/URL-encoded name\/value bytes/)
+  })
+
   it('rejects unknown rule fields', async () => {
     await expect(
       bucket.setNotificationRules([

@@ -951,7 +951,7 @@ export class Bucket {
    * @returns The updated notification rules for this bucket.
    */
   async setNotificationRules(
-    rules: EventNotificationRule[],
+    rules: readonly EventNotificationRule[],
   ): Promise<GetBucketNotificationRulesResponse> {
     return this.client.raw.setBucketNotificationRules(
       this.client.accountInfo.getApiUrl(),
