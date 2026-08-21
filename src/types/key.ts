@@ -111,7 +111,7 @@ export interface ListKeysRequest {
   readonly accountId: AccountId
   /** Maximum number of keys to return per request. */
   readonly maxKeyCount?: number
-  /** Application key ID to start listing from (exclusive). Used for pagination. */
+  /** Application key ID to start listing at, usually from `nextApplicationKeyId`. */
   readonly startApplicationKeyId?: ApplicationKeyId
 }
 
