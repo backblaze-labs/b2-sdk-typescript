@@ -6,6 +6,7 @@ import { sha1Hex } from './streams/hash.ts'
 import { BufferSource } from './streams/source.ts'
 import {
   daysFromNow,
+  deferred,
   jsonResponse,
   makeClient,
   readStream,
@@ -18,6 +19,10 @@ import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import type { LargeFileId } from './types/ids.ts'
 import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
+
+function apiEndpointName(request: { readonly url: string }): string {
+  return new URL(request.url).pathname.split('/').at(-1) ?? ''
+}
 
 describe('B2Client with simulator', () => {
   let client: B2Client
@@ -44,6 +49,176 @@ describe('B2Client with simulator', () => {
 
     await expect(expiringClient.listBuckets()).resolves.toEqual([])
     expect(expiringClient.accountInfo.getAuthToken()).not.toBe(originalToken)
+  })
+
+  it('collapses concurrent expired-token reauthorization into one authorize call', async () => {
+    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const inner = sim.transport()
+    let authorizeCount = 0
+    const expiredRequestsSeen = deferred<void>()
+    const reauthStarted = deferred<void>()
+    const reauthGate = deferred<void>()
+    const listAuthorizations: string[] = []
+    const concurrentClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(request) {
+          const endpoint = apiEndpointName(request)
+          if (endpoint === 'b2_authorize_account') {
+            authorizeCount += 1
+            if (authorizeCount > 1) {
+              reauthStarted.resolve(undefined)
+              await reauthGate.promise
+            }
+          }
+          if (endpoint === 'b2_list_buckets') {
+            listAuthorizations.push(request.headers?.['Authorization'] ?? '')
+            if (listAuthorizations.length === 5) expiredRequestsSeen.resolve(undefined)
+          }
+          return inner.send(request)
+        },
+      },
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await concurrentClient.authorize()
+    const originalToken = concurrentClient.accountInfo.getAuthToken()
+    sim.advanceTime(2000)
+
+    const calls = Array.from({ length: 5 }, () => concurrentClient.listBuckets())
+    await Promise.all([expiredRequestsSeen.promise, reauthStarted.promise])
+    const authorizeCountDuringReauth = authorizeCount
+    reauthGate.resolve(undefined)
+    const bucketPages = await Promise.all(calls)
+
+    expect(bucketPages.every((buckets) => buckets.length === 0)).toBe(true)
+    expect(authorizeCountDuringReauth).toBe(2)
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations).toEqual([
+      originalToken,
+      originalToken,
+      originalToken,
+      originalToken,
+      originalToken,
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+    ])
+  })
+
+  it('keeps previous auth when concurrent reauthorization waiters abort', async () => {
+    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const inner = sim.transport()
+    let authorizeCount = 0
+    const reauthStarted = deferred<void>()
+    const reauthAborted = deferred<void>()
+    const abortingClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(request) {
+          if (apiEndpointName(request) === 'b2_authorize_account') {
+            authorizeCount += 1
+            if (authorizeCount === 2) {
+              reauthStarted.resolve(undefined)
+              return new Promise((_, reject) => {
+                const rejectOnAbort = (): void => {
+                  reauthAborted.resolve(undefined)
+                  reject(request.signal?.reason ?? new DOMException('Aborted', 'AbortError'))
+                }
+                if (request.signal?.aborted === true) {
+                  rejectOnAbort()
+                  return
+                }
+                request.signal?.addEventListener('abort', rejectOnAbort, { once: true })
+              })
+            }
+          }
+          return inner.send(request)
+        },
+      },
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    const reauth = abortingClient as unknown as {
+      reauthorize(signal?: AbortSignal): Promise<string>
+    }
+
+    await abortingClient.authorize()
+    const originalToken = abortingClient.accountInfo.getAuthToken()
+    sim.advanceTime(2000)
+
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const first = reauth.reauthorize(firstController.signal)
+    const second = reauth.reauthorize(secondController.signal)
+    await reauthStarted.promise
+
+    const firstReason = new DOMException('first caller canceled', 'AbortError')
+    firstController.abort(firstReason)
+    await expect(first).rejects.toBe(firstReason)
+    expect(abortingClient.accountInfo.getAuthToken()).toBe(originalToken)
+
+    const secondReason = new DOMException('second caller canceled', 'AbortError')
+    secondController.abort(secondReason)
+    await expect(second).rejects.toBe(secondReason)
+    await reauthAborted.promise
+    expect(abortingClient.accountInfo.getAuthToken()).toBe(originalToken)
+
+    await expect(abortingClient.listBuckets()).resolves.toEqual([])
+    expect(authorizeCount).toBe(3)
+    expect(abortingClient.accountInfo.getAuthToken()).not.toBe(originalToken)
+  })
+
+  it('lets late storage requests join in-flight reauthorization', async () => {
+    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const inner = sim.transport()
+    let authorizeCount = 0
+    const reauthStarted = deferred<void>()
+    const lateExpiredRequestSeen = deferred<void>()
+    const reauthGate = deferred<void>()
+    const listAuthorizations: string[] = []
+    const lateClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(request) {
+          const endpoint = apiEndpointName(request)
+          if (endpoint === 'b2_authorize_account') {
+            authorizeCount += 1
+            if (authorizeCount > 1) {
+              reauthStarted.resolve(undefined)
+              await reauthGate.promise
+            }
+          }
+          if (endpoint === 'b2_list_buckets') {
+            listAuthorizations.push(request.headers?.['Authorization'] ?? '')
+            if (listAuthorizations.length === 2) lateExpiredRequestSeen.resolve(undefined)
+          }
+          return inner.send(request)
+        },
+      },
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await lateClient.authorize()
+    const originalToken = lateClient.accountInfo.getAuthToken()
+    sim.advanceTime(2000)
+
+    const first = lateClient.listBuckets()
+    await reauthStarted.promise
+    const late = lateClient.listBuckets()
+    await lateExpiredRequestSeen.promise
+
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations).toEqual([originalToken, originalToken])
+
+    reauthGate.resolve(undefined)
+    await expect(Promise.all([first, late])).resolves.toEqual([[], []])
+    expect(authorizeCount).toBe(2)
+    expect(lateClient.accountInfo.getAuthToken()).not.toBe(originalToken)
   })
 
   it('reauthorizes and returns the fresh auth token', async () => {

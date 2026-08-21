@@ -313,6 +313,7 @@ boilerplate
 breakages
 broaden
 catchable
+coalescer
 configurable
 copyable
 denylist

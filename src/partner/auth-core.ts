@@ -1,10 +1,11 @@
 import { getRealmUrl } from '../auth/realms.ts'
+import { ReauthCoalescer } from '../auth/reauth-coalescer.ts'
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import { FetchTransport, RetryTransport } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
 import type { PartnerAuthorizeResponse } from '../types/partner.ts'
-import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
+import { throwIfSignalAborted } from '../util/abort.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import {
@@ -45,13 +46,6 @@ export interface PartnerAuthCoreAuthorizeOptions {
   readonly signal?: AbortSignal
 }
 
-interface InflightPartnerReauth {
-  readonly controller: AbortController
-  readonly promise: Promise<string>
-  waiters: number
-  settled: boolean
-}
-
 /**
  * Internal Partner authorization state machine shared by public facades.
  *
@@ -76,7 +70,7 @@ export class PartnerAuthCore {
   readonly #masterKey: string
   private readonly additionalAllowedSuffixes: readonly string[] | undefined
   private readonly disableSsrfGuard: boolean
-  #inflightReauth: InflightPartnerReauth | null = null
+  private readonly reauthCoalescer: ReauthCoalescer<string>
 
   /**
    * Creates a shared Partner authorization core.
@@ -91,6 +85,7 @@ export class PartnerAuthCore {
     this.additionalAllowedSuffixes = options.additionalAllowedHostSuffixes
     this.disableSsrfGuard = options.disableSsrfGuard ?? false
     this.allowCustomAuthorizeRealm = options.allowCustomAuthorizeRealm ?? false
+    this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -221,34 +216,7 @@ export class PartnerAuthCore {
   }
 
   private reauthorize(signal: AbortSignal | undefined): Promise<string> {
-    throwIfSignalAborted(signal)
-    const inflight = this.#inflightReauth ?? this.startReauthorize()
-    inflight.waiters += 1
-    return raceWithAbort(inflight.promise, signal).finally(() => {
-      inflight.waiters -= 1
-      if (inflight.waiters === 0 && !inflight.settled && !inflight.controller.signal.aborted) {
-        inflight.controller.abort(signal?.aborted === true ? abortReason(signal) : undefined)
-      }
-    })
-  }
-
-  private startReauthorize(): InflightPartnerReauth {
-    const controller = new AbortController()
-    const promise = raceWithAbort(this.doReauthorize(controller.signal), controller.signal).finally(
-      () => {
-        if (this.#inflightReauth?.controller !== controller) return
-        this.#inflightReauth.settled = true
-        this.#inflightReauth = null
-      },
-    )
-    const inflight: InflightPartnerReauth = {
-      controller,
-      promise,
-      waiters: 0,
-      settled: false,
-    }
-    this.#inflightReauth = inflight
-    return inflight
+    return this.reauthCoalescer.run(signal)
   }
 
   private async doReauthorize(signal: AbortSignal): Promise<string> {

@@ -90,6 +90,9 @@ export interface RawClientOptions {
 /** Optional request controls for {@link RawClient.listFileNames}. */
 export type ListFileNamesOptions = RawRequestOptions
 
+/** Optional request controls for {@link RawClient.authorizeAccount}. */
+export type AuthorizeAccountOptions = RawRequestOptions
+
 /** Optional request controls for {@link RawClient.listFileVersions}. */
 export type ListFileVersionsOptions = RawRequestOptions
 
@@ -299,6 +302,7 @@ export class RawClient {
    * @param applicationKeyId - The application key ID for authentication.
    * @param applicationKey - The application key secret.
    * @param realmUrl - The B2 realm URL to authenticate against.
+   * @param options - Optional request controls.
    *
    * @returns The authorization response with API URLs and credentials.
    */
@@ -306,6 +310,7 @@ export class RawClient {
     applicationKeyId: string,
     applicationKey: string,
     realmUrl = 'https://api.backblazeb2.com',
+    options?: AuthorizeAccountOptions,
   ): Promise<AuthorizeAccountResponse> {
     assertSecureRealmUrl(realmUrl)
     const response = await this.transport.send({
@@ -314,6 +319,8 @@ export class RawClient {
       headers: {
         Authorization: `Basic ${btoa(`${applicationKeyId}:${applicationKey}`)}`,
       },
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     return normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>())
   }

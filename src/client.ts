@@ -1,6 +1,7 @@
 import type { AccountInfo } from './auth/account-info.ts'
 import { InMemoryAccountInfo } from './auth/in-memory.ts'
 import { getRealmUrl } from './auth/realms.ts'
+import { ReauthCoalescer } from './auth/reauth-coalescer.ts'
 import { Bucket } from './bucket.ts'
 import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
@@ -27,6 +28,7 @@ import type {
   ListKeysResponse,
 } from './types/key.ts'
 import type { ReplicationConfiguration } from './types/replication.ts'
+import { throwIfSignalAborted } from './util/abort.ts'
 import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 
@@ -85,6 +87,12 @@ export interface B2ClientOptions {
   readonly followSameOriginRedirects?: boolean
 }
 
+/** Options for {@link B2Client.authorize}. */
+export interface B2ClientAuthorizeOptions {
+  /** Abort signal for cancelling the authorize request. */
+  readonly signal?: AbortSignal
+}
+
 /**
  * High-level B2 client providing ergonomic access to buckets, files, and keys.
  *
@@ -114,6 +122,7 @@ export class B2Client {
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
   private readonly resolvedUploadRetryOptions: RetryOptions
+  private readonly reauthCoalescer: ReauthCoalescer<string>
 
   /**
    * Creates a new B2Client. Call {@link authorize} before making API requests.
@@ -127,6 +136,7 @@ export class B2Client {
     bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     this.resolvedUploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
 
     let baseTransport: HttpTransport
     if (options.transport !== undefined) {
@@ -147,7 +157,7 @@ export class B2Client {
     const retryTransport = new RetryTransport({
       transport: baseTransport,
       retry: this.resolvedUploadRetryOptions,
-      onReauth: () => this.reauthorize(),
+      onReauth: (signal) => this.reauthorize(signal),
     })
 
     const cachedAuth = this.accountInfo.getAuth()
@@ -159,14 +169,19 @@ export class B2Client {
   /**
    * Authenticates with B2 and stores the authorization state. Must be called before other methods.
    *
+   * @param options - Optional request controls.
+   *
    * @returns The authorization response containing tokens, URLs, and capabilities.
    */
-  async authorize(): Promise<AuthorizeAccountResponse> {
+  async authorize(options?: B2ClientAuthorizeOptions): Promise<AuthorizeAccountResponse> {
+    throwIfSignalAborted(options?.signal)
     const auth = await this.raw.authorizeAccount(
       this.applicationKeyId,
       this.applicationKey,
       this.realmUrl,
+      options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
+    throwIfSignalAborted(options?.signal)
     this.accountInfo.setAuth(auth)
     this.lockUrlGuard(auth)
     return auth
@@ -190,11 +205,16 @@ export class B2Client {
    * {@link RetryTransport} can rewrite the in-flight request's
    * Authorization header before retrying.
    *
+   * @param signal - Optional abort signal for the request that triggered reauthorization.
+   *
    * @returns The fresh authorization token.
    */
-  private async reauthorize(): Promise<string> {
-    this.accountInfo.clear()
-    const auth = await this.authorize()
+  private reauthorize(signal: AbortSignal | undefined): Promise<string> {
+    return this.reauthCoalescer.run(signal)
+  }
+
+  private async doReauthorize(signal: AbortSignal): Promise<string> {
+    const auth = await this.authorize({ signal })
     return auth.authorizationToken
   }
 
