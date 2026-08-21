@@ -23,12 +23,26 @@ const BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET: ReadonlySet<string> = new Set
   BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
 )
 
+/**
+ * Checks whether a Partner endpoint name is a non-idempotent mutation.
+ *
+ * @param endpoint - Partner endpoint name parsed from the request URL.
+ *
+ * @returns Whether the endpoint must opt out of automatic replay.
+ */
 export function isPartnerNonIdempotentMutationEndpoint(
   endpoint: string | undefined,
 ): endpoint is PartnerNonIdempotentMutationEndpoint {
   return endpoint !== undefined && PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET.has(endpoint)
 }
 
+/**
+ * Checks whether a Computer Backup endpoint name is a non-idempotent mutation.
+ *
+ * @param endpoint - Computer Backup endpoint name parsed from the request URL.
+ *
+ * @returns Whether the endpoint must opt out of automatic replay.
+ */
 export function isBackupNonIdempotentMutationEndpoint(
   endpoint: string | undefined,
 ): endpoint is BackupNonIdempotentMutationEndpoint {
