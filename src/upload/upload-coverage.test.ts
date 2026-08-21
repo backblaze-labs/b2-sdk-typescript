@@ -2345,9 +2345,10 @@ describe('upload fresh-URL retry', () => {
     expect(freshFetches).toBe(0)
   })
 
-  it('retries upload connection refusals with a fresh upload URL', async () => {
+  it('does not retry spoofable upload ECONNREFUSED errors after the POST starts', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
+    let committedVersions = 0
     const retryEvents: UploadRetryEvent[] = []
     const firstEntry = { uploadUrl: 'https://upload-1.example.test', authorizationToken: 'auth-1' }
     const secondEntry = { uploadUrl: 'https://upload-2.example.test', authorizationToken: 'auth-2' }
@@ -2359,31 +2360,32 @@ describe('upload fresh-URL retry', () => {
       new TypeError('fetch failed', { cause: refusedCause }),
     )
 
-    const result = await withFreshUploadUrlRetry({
-      fileName: 'connection-refused.txt',
-      partNumber: null,
-      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-      retryResponseBodyFailures: false,
-      checkout: () => firstEntry,
-      fetchFresh: () => {
-        freshFetches += 1
-        return Promise.resolve(secondEntry)
-      },
-      returnEntry: () => {},
-      evictEntry: () => {},
-      upload: () => {
-        uploadAttempts += 1
-        if (uploadAttempts === 1) return Promise.reject(networkError)
-        return Promise.resolve('uploaded')
-      },
-      onUploadRetry: (event) => retryEvents.push(event),
-    })
+    await expect(
+      withFreshUploadUrlRetry({
+        fileName: 'connection-refused.txt',
+        partNumber: null,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+        retryResponseBodyFailures: false,
+        checkout: () => firstEntry,
+        fetchFresh: () => {
+          freshFetches += 1
+          return Promise.resolve(secondEntry)
+        },
+        returnEntry: () => {},
+        evictEntry: () => {},
+        upload: () => {
+          uploadAttempts += 1
+          committedVersions += 1
+          return Promise.reject(networkError)
+        },
+        onUploadRetry: (event) => retryEvents.push(event),
+      }),
+    ).rejects.toBe(networkError)
 
-    expect(result).toBe('uploaded')
-    expect(uploadAttempts).toBe(2)
-    expect(freshFetches).toBe(1)
-    expect(retryEvents).toHaveLength(1)
-    expect(retryEvents[0]?.error).toBe(networkError)
+    expect(uploadAttempts).toBe(1)
+    expect(committedVersions).toBe(1)
+    expect(freshFetches).toBe(0)
+    expect(retryEvents).toHaveLength(0)
   })
 
   it('does not replay generic single-request upload network errors by default', async () => {

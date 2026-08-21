@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Refused upload hosts retry with a fresh upload URL.** High-level uploads now treat Node `ECONNREFUSED` failures from an upload host as recoverable with the existing fresh-upload-URL retry path, preserving the default protection against ambiguous single-request replay for other post-upload network failures.
+- **Upload retries no longer replay spoofable post-start network errors.** High-level uploads still retry network failures before an upload POST is attempted, but a post-start `NetworkError` with nested `ECONNREFUSED` no longer bypasses the default protection against ambiguous single-request replay. Set `retryResponseBodyFailures: true` only when duplicate versions or replayed parts are acceptable.
 - **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.
 
 ## [0.3.0] - 2026-08-18
