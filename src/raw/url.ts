@@ -17,9 +17,9 @@ export interface B2UrlOptions {
   /** Base path prefix before the optional version segment. Defaults to `b2api`. */
   readonly prefix?: string
   /**
-   * Optional API version segment. SDK storage endpoints use `v3` and `v4`;
-   * Computer Backup endpoints use the same `vN` segment shape under a
-   * different prefix, such as `api/backup/v1`.
+   * Optional API version segment. SDK-built B2 native storage endpoints use
+   * the current published `v4` segment; Computer Backup endpoints use the same
+   * `vN` segment shape under a different prefix, such as `api/backup/v1`.
    */
   readonly version?: B2ApiVersion
   /** Endpoint name appended after the prefix and optional version. */
