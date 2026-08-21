@@ -145,6 +145,13 @@ export interface NoBucketDefaultRetention {
 /** Default Object Lock retention as returned in bucket metadata. */
 export type BucketDefaultRetention = BucketRetentionPolicy | NoBucketDefaultRetention
 
+/** Cross-region replication settings as returned by readable B2 bucket metadata. */
+export interface ReadableReplicationConfiguration {
+  /** Whether the caller is authorized to read replication settings. */
+  readonly isClientAuthorizedToRead: boolean
+  /** Replication settings, or null when none are configured or the caller is not authorized to read them. */
+  readonly value: ReplicationConfiguration | null
+}
 /**
  * Complete bucket metadata as returned by the B2 API.
  * Corresponds to the bucket object in responses from `b2_list_buckets`, `b2_create_bucket`, and `b2_update_bucket`.
@@ -182,8 +189,8 @@ export interface BucketInfo {
   readonly options: readonly string[]
   /** Monotonically increasing revision number, incremented on each bucket update. */
   readonly revision: number
-  /** Cross-region replication configuration for this bucket. */
-  readonly replicationConfiguration: ReplicationConfiguration
+  /** Cross-region replication configuration, filtered by caller authorization. */
+  readonly replicationConfiguration: ReadableReplicationConfiguration
 }
 
 /**

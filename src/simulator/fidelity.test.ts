@@ -281,13 +281,13 @@ describe('B2Simulator bucket configuration validation', () => {
     })
 
     expect(updated.replicationConfiguration).toEqual({
-      asReplicationDestination: null,
-      asReplicationSource: null,
+      isClientAuthorizedToRead: true,
+      value: null,
     })
     const [fresh] = await client.listBuckets({ bucketId: bucket.id })
     expect(fresh?.info.replicationConfiguration).toEqual({
-      asReplicationDestination: null,
-      asReplicationSource: null,
+      isClientAuthorizedToRead: true,
+      value: null,
     })
   })
 
@@ -450,7 +450,7 @@ describe('B2Simulator bucket configuration validation', () => {
 
     expect(bucket.info.corsRules).toHaveLength(1)
     expect(bucket.info.lifecycleRules).toHaveLength(1)
-    expect(bucket.info.replicationConfiguration.asReplicationSource).not.toBeNull()
+    expect(bucket.info.replicationConfiguration.value?.asReplicationSource).not.toBeNull()
   })
 })
 
@@ -1309,6 +1309,64 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     )
   })
 
+  it('filters replication configuration by readBucketReplications', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'auth-repl-filter',
+      bucketType: BucketType.AllPrivate,
+    })
+    const sourceKey = await client.createKey({
+      capabilities: [Capability.ReadFiles, Capability.ListFiles],
+      keyName: 'auth-repl-filter-source',
+      bucketId: bucket.id,
+    })
+    const destinationKey = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'auth-repl-filter-destination',
+      bucketId: bucket.id,
+    })
+    await bucket.setReplication({
+      asReplicationDestination: {
+        sourceToDestinationKeyMapping: {
+          [sourceKey.applicationKeyId]: destinationKey.applicationKeyId,
+        },
+      },
+      asReplicationSource: null,
+    })
+
+    const deniedKey = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'auth-repl-filter-denied',
+      bucketId: bucket.id,
+    })
+    const deniedClient = await authorizeWithKey(sim, deniedKey)
+    const [deniedBucket] = await deniedClient.listBuckets({ bucketId: bucket.id })
+    expect(deniedBucket?.info.replicationConfiguration).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+
+    const allowedKey = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.ReadBucketReplications],
+      keyName: 'auth-repl-filter-allowed',
+      bucketId: bucket.id,
+    })
+    const allowedClient = await authorizeWithKey(sim, allowedKey)
+    const [allowedBucket] = await allowedClient.listBuckets({ bucketId: bucket.id })
+    expect(allowedBucket?.info.replicationConfiguration).toEqual({
+      isClientAuthorizedToRead: true,
+      value: {
+        asReplicationDestination: {
+          sourceToDestinationKeyMapping: {
+            [sourceKey.applicationKeyId]: destinationKey.applicationKeyId,
+          },
+        },
+        asReplicationSource: null,
+      },
+    })
+  })
+
   it('rejects unknown capabilities during key creation', async () => {
     const { client } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()
@@ -1917,9 +1975,8 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       }),
     ).resolves.toMatchObject({
       replicationConfiguration: {
-        asReplicationSource: expect.objectContaining({
-          sourceApplicationKeyId: sourceKey.applicationKeyId,
-        }),
+        isClientAuthorizedToRead: false,
+        value: null,
       },
     })
   })

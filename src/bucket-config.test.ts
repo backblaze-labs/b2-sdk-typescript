@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
-import type { B2Client } from './client.ts'
+import { B2Client } from './client.ts'
+import type { B2Simulator } from './simulator/index.ts'
 import { makeClient } from './test-utils/index.ts'
+import { Capability } from './types/auth.ts'
 import {
   BucketRetentionMode,
   type BucketRetentionPolicy,
@@ -38,6 +40,20 @@ async function makeBucket(
   return { bucket, client }
 }
 
+async function authorizeWithKey(
+  sim: B2Simulator,
+  key: { readonly applicationKeyId: string; readonly applicationKey: string },
+): Promise<B2Client> {
+  const client = new B2Client({
+    applicationKeyId: key.applicationKeyId,
+    applicationKey: key.applicationKey,
+    transport: sim.transport(),
+    retry: { maxRetries: 0 },
+  })
+  await client.authorize()
+  return client
+}
+
 describe('Bucket.replication helpers', () => {
   let bucket: Bucket
 
@@ -45,10 +61,9 @@ describe('Bucket.replication helpers', () => {
     ;({ bucket } = await makeBucket())
   })
 
-  it('getReplication returns a no-config shape on a fresh bucket', async () => {
+  it('getReplication returns a readable no-config wrapper on a fresh bucket', async () => {
     const config = await bucket.getReplication()
-    expect(config.asReplicationSource).toBeNull()
-    expect(config.asReplicationDestination).toBeNull()
+    expect(config).toEqual({ isClientAuthorizedToRead: true, value: null })
   })
 
   it('setReplication replaces the full config in one call', async () => {
@@ -68,9 +83,11 @@ describe('Bucket.replication helpers', () => {
       },
       asReplicationDestination: null,
     })
-    expect(updated.replicationConfiguration.asReplicationSource?.replicationRules).toHaveLength(1)
     expect(
-      updated.replicationConfiguration.asReplicationSource?.replicationRules[0]
+      updated.replicationConfiguration.value?.asReplicationSource?.replicationRules,
+    ).toHaveLength(1)
+    expect(
+      updated.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]
         ?.replicationRuleName,
     ).toBe('rule-a')
   })
@@ -109,10 +126,10 @@ describe('Bucket.replication helpers', () => {
     await bucket.addReplicationRule(ruleA, { sourceApplicationKeyId: sourceKey })
     // No source key supplied: the helper must reuse the one B2 returned.
     const after = await bucket.addReplicationRule(ruleB)
-    expect(after.replicationConfiguration.asReplicationSource?.sourceApplicationKeyId).toBe(
+    expect(after.replicationConfiguration.value?.asReplicationSource?.sourceApplicationKeyId).toBe(
       sourceKey,
     )
-    const names = after.replicationConfiguration.asReplicationSource?.replicationRules.map(
+    const names = after.replicationConfiguration.value?.asReplicationSource?.replicationRules.map(
       (r) => r.replicationRuleName,
     )
     expect(names).toEqual(['rule-a', 'rule-b'])
@@ -138,13 +155,16 @@ describe('Bucket.replication helpers', () => {
     }
     await bucket.addReplicationRule(first, { sourceApplicationKeyId: sourceKey })
     const after = await bucket.addReplicationRule(replacement)
-    expect(after.replicationConfiguration.asReplicationSource?.replicationRules).toHaveLength(1)
     expect(
-      after.replicationConfiguration.asReplicationSource?.replicationRules[0]?.fileNamePrefix,
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules,
+    ).toHaveLength(1)
+    expect(
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]
+        ?.fileNamePrefix,
     ).toBe('new/')
-    expect(after.replicationConfiguration.asReplicationSource?.replicationRules[0]?.isEnabled).toBe(
-      false,
-    )
+    expect(
+      after.replicationConfiguration.value?.asReplicationSource?.replicationRules[0]?.isEnabled,
+    ).toBe(false)
   })
 
   it('removeReplicationRule drops the named rule and leaves the rest intact', async () => {
@@ -168,7 +188,7 @@ describe('Bucket.replication helpers', () => {
     await bucket.addReplicationRule(ruleA, { sourceApplicationKeyId: sourceKey })
     await bucket.addReplicationRule(ruleB)
     const after = await bucket.removeReplicationRule('rule-a')
-    const names = after.replicationConfiguration.asReplicationSource?.replicationRules.map(
+    const names = after.replicationConfiguration.value?.asReplicationSource?.replicationRules.map(
       (r) => r.replicationRuleName,
     )
     expect(names).toEqual(['rule-b'])
@@ -177,7 +197,99 @@ describe('Bucket.replication helpers', () => {
   it('removeReplicationRule is a no-op when the rule does not exist', async () => {
     const before = await bucket.getReplication()
     const after = await bucket.removeReplicationRule('ghost-rule')
-    expect(after.replicationConfiguration.asReplicationSource).toBe(before.asReplicationSource)
+    expect(after.replicationConfiguration.value).toBe(before.value)
+  })
+
+  it('fails closed when refreshed replication settings are unreadable', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+
+    const source = await client.createBucket({
+      bucketName: 'cfg-repl-source',
+      bucketType: BucketType.AllPrivate,
+    })
+    const destination = await client.createBucket({
+      bucketName: 'cfg-repl-destination',
+      bucketType: BucketType.AllPrivate,
+    })
+    const sourceKey = await client.createKey({
+      capabilities: [Capability.ReadFiles, Capability.ListFiles],
+      keyName: 'cfg-repl-source-key',
+      bucketId: source.id,
+    })
+    const destinationKey = await client.createKey({
+      capabilities: [Capability.WriteFiles],
+      keyName: 'cfg-repl-destination-key',
+      bucketId: destination.id,
+    })
+    await destination.setReplication({
+      asReplicationDestination: {
+        sourceToDestinationKeyMapping: {
+          [sourceKey.applicationKeyId]: destinationKey.applicationKeyId,
+        },
+      },
+      asReplicationSource: null,
+    })
+
+    const existingRule: ReplicationRule = {
+      destinationBucketId: destination.id,
+      fileNamePrefix: 'existing/',
+      includeExistingFiles: false,
+      isEnabled: true,
+      priority: 1,
+      replicationRuleName: 'existing-rule',
+    }
+    await source.setReplication({
+      asReplicationSource: {
+        sourceApplicationKeyId: sourceKey.applicationKeyId,
+        replicationRules: [existingRule],
+      },
+      asReplicationDestination: null,
+    })
+
+    const writerKey = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.WriteBuckets],
+      keyName: 'cfg-repl-writer-no-read',
+      bucketIds: null,
+    })
+    const writerClient = await authorizeWithKey(sim, writerKey)
+    const [hiddenBucket] = await writerClient.listBuckets({ bucketId: source.id })
+    expect(hiddenBucket).toBeDefined()
+    if (hiddenBucket === undefined) throw new Error('expected scoped bucket')
+    expect(hiddenBucket.info.replicationConfiguration).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+    await expect(hiddenBucket.getReplication()).resolves.toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+
+    const replacementRule: ReplicationRule = {
+      destinationBucketId: destination.id,
+      fileNamePrefix: 'replacement/',
+      includeExistingFiles: false,
+      isEnabled: true,
+      priority: 2,
+      replicationRuleName: 'replacement-rule',
+    }
+    await expect(
+      hiddenBucket.addReplicationRule(replacementRule, {
+        sourceApplicationKeyId: sourceKey.applicationKeyId,
+      }),
+    ).rejects.toThrow(/readBucketReplications/)
+    await expect(hiddenBucket.removeReplicationRule('existing-rule')).rejects.toThrow(
+      /readBucketReplications/,
+    )
+
+    const [fresh] = await client.listBuckets({ bucketId: source.id })
+    expect(fresh).toBeDefined()
+    if (fresh === undefined) throw new Error('expected source bucket')
+    expect(
+      fresh.info.replicationConfiguration.value?.asReplicationSource?.replicationRules.map(
+        (rule) => rule.replicationRuleName,
+      ),
+    ).toEqual(['existing-rule'])
   })
 })
 

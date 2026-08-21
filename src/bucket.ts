@@ -16,6 +16,7 @@ import type {
   BucketType,
   CorsRule,
   LifecycleRule,
+  ReadableReplicationConfiguration,
 } from './types/bucket.ts'
 import type { DownloadAuthorizationResponse } from './types/download.ts'
 import type { EncryptionSetting } from './types/encryption.ts'
@@ -46,6 +47,23 @@ import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
 import { toError } from './util/to-error.ts'
+
+const EMPTY_REPLICATION_CONFIGURATION: ReplicationConfiguration = {
+  asReplicationSource: null,
+  asReplicationDestination: null,
+}
+
+function readableReplicationConfigurationOrEmpty(
+  response: ReadableReplicationConfiguration,
+  operation: string,
+): ReplicationConfiguration {
+  if (!response.isClientAuthorizedToRead) {
+    throw new Error(
+      `${operation}: replication configuration is not readable; grant readBucketReplications before composing replication updates`,
+    )
+  }
+  return response.value ?? EMPTY_REPLICATION_CONFIGURATION
+}
 
 /** A target for bulk deletion: a file name and its specific version ID. */
 export interface DeleteTarget {
@@ -1019,9 +1037,11 @@ export class Bucket {
    * write. For add/remove flows the helper methods below handle the
    * refresh-then-set sequence for you.
    *
-   * @returns The current {@link ReplicationConfiguration}.
+   * @returns The current readable replication wrapper. Its `value` is null
+   *   when no replication is configured or when the caller is not authorized
+   *   to read replication settings.
    */
-  async getReplication(): Promise<ReplicationConfiguration> {
+  async getReplication(): Promise<ReadableReplicationConfiguration> {
     const fresh = await this.refresh()
     return fresh.replicationConfiguration
   }
@@ -1056,12 +1076,16 @@ export class Bucket {
    *
    * @throws If no source-side replication exists yet and the caller did
    *   not supply `sourceApplicationKeyId`.
+   * @throws If the caller is not authorized to read current replication settings.
    */
   async addReplicationRule(
     rule: ReplicationRule,
     options?: { sourceApplicationKeyId?: ApplicationKeyId },
   ): Promise<BucketInfo> {
-    const current = (await this.refresh()).replicationConfiguration
+    const current = readableReplicationConfigurationOrEmpty(
+      (await this.refresh()).replicationConfiguration,
+      'addReplicationRule',
+    )
     const existingSource = current.asReplicationSource
     const sourceKey = options?.sourceApplicationKeyId ?? existingSource?.sourceApplicationKeyId
     if (!sourceKey) {
@@ -1087,9 +1111,14 @@ export class Bucket {
    * @param replicationRuleName - Name of the rule to remove.
    *
    * @returns The updated bucket metadata.
+   *
+   * @throws If the caller is not authorized to read current replication settings.
    */
   async removeReplicationRule(replicationRuleName: string): Promise<BucketInfo> {
-    const current = (await this.refresh()).replicationConfiguration
+    const current = readableReplicationConfigurationOrEmpty(
+      (await this.refresh()).replicationConfiguration,
+      'removeReplicationRule',
+    )
     const existingSource = current.asReplicationSource
     if (!existingSource) {
       return this.setReplication(current)

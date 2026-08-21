@@ -20,6 +20,7 @@ import {
   BucketRetentionMode,
   type BucketRetentionPolicy,
   type BucketType,
+  type ReadableReplicationConfiguration,
 } from '../types/bucket.ts'
 import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
@@ -38,7 +39,7 @@ import {
 } from '../types/ids.ts'
 import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
-import type { ReplicationRule } from '../types/replication.ts'
+import type { ReplicationConfiguration, ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
@@ -562,12 +563,36 @@ function replicationDestinationBucketIds(body: unknown): readonly string[] {
 }
 
 function normalizeReplicationConfiguration(
-  config: BucketInfo['replicationConfiguration'],
-): BucketInfo['replicationConfiguration'] {
+  config: ReplicationConfiguration,
+): ReplicationConfiguration {
   return {
     asReplicationSource: config.asReplicationSource ?? null,
     asReplicationDestination: config.asReplicationDestination ?? null,
   }
+}
+
+function wrapReplicationConfiguration(
+  config: ReplicationConfiguration | undefined,
+): ReadableReplicationConfiguration {
+  if (config === undefined) {
+    return { isClientAuthorizedToRead: true, value: null }
+  }
+
+  const normalized = normalizeReplicationConfiguration(config)
+  const value =
+    normalized.asReplicationSource === null && normalized.asReplicationDestination === null
+      ? null
+      : normalized
+  return { isClientAuthorizedToRead: true, value }
+}
+
+function filterReadableReplicationConfiguration(
+  config: ReadableReplicationConfiguration,
+  canRead: boolean,
+): ReadableReplicationConfiguration {
+  return canRead
+    ? { isClientAuthorizedToRead: true, value: config.value }
+    : { isClientAuthorizedToRead: false, value: null }
 }
 
 interface BucketConfigurationFields {
@@ -1825,6 +1850,16 @@ export class B2Simulator {
     return this.issuedTokens.get(authToken)?.capabilities.includes(capability) === true
   }
 
+  private bucketInfoForResponse(info: BucketInfo, authToken: string | undefined): BucketInfo {
+    return {
+      ...info,
+      replicationConfiguration: filterReadableReplicationConfiguration(
+        info.replicationConfiguration,
+        this.requestHasCapability(authToken, Capability.ReadBucketReplications),
+      ),
+    }
+  }
+
   private requireFileLockEnabled(bucket: StoredBucket): SimulatorJsonResponse | null {
     if (bucket.info.fileLockConfiguration.value?.isFileLockEnabled === true) return null
     return this.error(400, 'file_lock_not_enabled', 'Bucket does not have file lock enabled')
@@ -1893,7 +1928,7 @@ export class B2Simulator {
 
       const destinationBucket = this.buckets.get(destinationBucketId)
       const destinationApplicationKeyId =
-        destinationBucket?.info.replicationConfiguration.asReplicationDestination
+        destinationBucket?.info.replicationConfiguration.value?.asReplicationDestination
           ?.sourceToDestinationKeyMapping[sourceApplicationKeyId]
       if (destinationApplicationKeyId === undefined) {
         return this.invalidReplicationDestinationBucket()
@@ -2508,6 +2543,7 @@ export class B2Simulator {
       case 'b2_create_bucket':
         return this.createBucket(
           body as { bucketName: string; bucketType: BucketType; accountId: string },
+          headers['authorization'],
         )
       case 'b2_list_buckets':
         return this.listBuckets(
@@ -2516,11 +2552,12 @@ export class B2Simulator {
             bucketName?: string
             bucketTypes?: readonly BucketType[]
           },
+          headers['authorization'],
         )
       case 'b2_delete_bucket':
-        return this.deleteBucket(body as { bucketId: string })
+        return this.deleteBucket(body as { bucketId: string }, headers['authorization'])
       case 'b2_update_bucket':
-        return this.updateBucket(body as Record<string, unknown>)
+        return this.updateBucket(body as Record<string, unknown>, headers['authorization'])
       case 'b2_get_upload_url':
         return await this.getUploadUrl(body as { bucketId: string }, headers['authorization'])
       case 'b2_list_file_names':
@@ -3383,18 +3420,21 @@ export class B2Simulator {
     }
   }
 
-  private createBucket(req: {
-    bucketName: string
-    bucketType: BucketType
-    accountId: string
-    bucketInfo?: Record<string, string>
-    corsRules?: BucketInfo['corsRules']
-    defaultServerSideEncryption?: BucketInfo['defaultServerSideEncryption']
-    defaultRetention?: BucketRetentionPolicy
-    fileLockEnabled?: boolean
-    lifecycleRules?: BucketInfo['lifecycleRules']
-    replicationConfiguration?: BucketInfo['replicationConfiguration']
-  }): {
+  private createBucket(
+    req: {
+      bucketName: string
+      bucketType: BucketType
+      accountId: string
+      bucketInfo?: Record<string, string>
+      corsRules?: BucketInfo['corsRules']
+      defaultServerSideEncryption?: BucketInfo['defaultServerSideEncryption']
+      defaultRetention?: BucketRetentionPolicy
+      fileLockEnabled?: boolean
+      lifecycleRules?: BucketInfo['lifecycleRules']
+      replicationConfiguration?: ReplicationConfiguration
+    },
+    authToken?: string,
+  ): {
     status: number
     body: unknown
   } {
@@ -3445,20 +3485,20 @@ export class B2Simulator {
       lifecycleRules: req.lifecycleRules ?? [],
       options: [],
       revision: 1,
-      replicationConfiguration:
-        req.replicationConfiguration === undefined
-          ? { asReplicationSource: null, asReplicationDestination: null }
-          : normalizeReplicationConfiguration(req.replicationConfiguration),
+      replicationConfiguration: wrapReplicationConfiguration(req.replicationConfiguration),
     }
     this.buckets.set(bid, { info, files: new Map() })
-    return { status: 200, body: info }
+    return { status: 200, body: this.bucketInfoForResponse(info, authToken) }
   }
 
-  private listBuckets(req: {
-    bucketId?: string
-    bucketName?: string
-    bucketTypes?: readonly BucketType[]
-  }): SimulatorJsonResponse {
+  private listBuckets(
+    req: {
+      bucketId?: string
+      bucketName?: string
+      bucketTypes?: readonly BucketType[]
+    },
+    authToken?: string,
+  ): SimulatorJsonResponse {
     const bucketTypesError = validateBucketTypes(req.bucketTypes)
     if (bucketTypesError) return this.error(400, bucketTypesError.code, bucketTypesError.message)
     const buckets = [...this.buckets.values()]
@@ -3468,10 +3508,11 @@ export class B2Simulator {
       .filter(
         (bucket) => req.bucketTypes === undefined || req.bucketTypes.includes(bucket.bucketType),
       )
+      .map((bucket) => this.bucketInfoForResponse(bucket, authToken))
     return { status: 200, body: { buckets } }
   }
 
-  private deleteBucket(req: { bucketId: string }): SimulatorJsonResponse {
+  private deleteBucket(req: { bucketId: string }, authToken?: string): SimulatorJsonResponse {
     const bucket = this.buckets.get(req.bucketId)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     if (this.bucketHasContents(bucket)) {
@@ -3482,7 +3523,7 @@ export class B2Simulator {
       )
     }
     this.buckets.delete(req.bucketId)
-    return { status: 200, body: bucket.info }
+    return { status: 200, body: this.bucketInfoForResponse(bucket.info, authToken) }
   }
 
   private bucketHasContents(bucket: StoredBucket): boolean {
@@ -3495,7 +3536,7 @@ export class B2Simulator {
     return false
   }
 
-  private updateBucket(req: Record<string, unknown>): SimulatorJsonResponse {
+  private updateBucket(req: Record<string, unknown>, authToken?: string): SimulatorJsonResponse {
     const bucket = this.buckets.get(req['bucketId'] as string)
     if (!bucket) return this.error(400, 'bad_bucket_id', 'Bucket not found')
     const revisionGuard = req['ifRevisionIs']
@@ -3546,8 +3587,8 @@ export class B2Simulator {
         : {}),
       ...(req['replicationConfiguration'] !== undefined
         ? {
-            replicationConfiguration: normalizeReplicationConfiguration(
-              req['replicationConfiguration'] as BucketInfo['replicationConfiguration'],
+            replicationConfiguration: wrapReplicationConfiguration(
+              req['replicationConfiguration'] as ReplicationConfiguration,
             ),
           }
         : {}),
@@ -3585,7 +3626,7 @@ export class B2Simulator {
       revision: bucket.info.revision + 1,
     }
     this.buckets.set(req['bucketId'] as string, { info: updated, files: bucket.files })
-    return { status: 200, body: updated }
+    return { status: 200, body: this.bucketInfoForResponse(updated, authToken) }
   }
 
   private async getUploadUrl(
@@ -4732,7 +4773,8 @@ export class B2Simulator {
     fileName: string,
   ): readonly ReplicationRule[] {
     const bucket = this.buckets.get(bucketId)
-    const sourceRules = bucket?.info.replicationConfiguration.asReplicationSource?.replicationRules
+    const sourceRules =
+      bucket?.info.replicationConfiguration.value?.asReplicationSource?.replicationRules
     return (
       sourceRules?.filter((rule) => rule.isEnabled && fileName.startsWith(rule.fileNamePrefix)) ??
       []
