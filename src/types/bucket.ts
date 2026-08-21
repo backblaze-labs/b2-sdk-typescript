@@ -3,11 +3,10 @@ import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
 /**
- * Named constants for the bucket access level.
+ * Named constants for documented `bucketType` values.
  *
- * The {@link BucketType} type alias is derived from the values of this
- * object, so the const is the single source of truth: adding a key here
- * automatically widens the type union.
+ * Some values are response-only. For example, B2 can return {@link BucketType.Shared},
+ * but create and update requests cannot set it.
  *
  * @example
  * ```ts
@@ -23,10 +22,18 @@ export const BucketType = {
   Snapshot: 'snapshot',
   /** B2-restricted bucket (e.g., for S3-compatible workflows). */
   Restricted: 'restricted',
+  /** Response-only bucket type for buckets shared with the account. */
+  Shared: 'shared',
 } as const
 
-/** Access level for a B2 bucket. Derived from {@link BucketType}. */
-export type BucketType = (typeof BucketType)[keyof typeof BucketType]
+/** Documented `bucketType` values known to the SDK. */
+type KnownBucketType = (typeof BucketType)[keyof typeof BucketType]
+
+/** Bucket access levels accepted by B2 bucket create/update requests and list filters. */
+export type BucketType = Exclude<KnownBucketType, typeof BucketType.Shared>
+
+/** Bucket type returned by B2 bucket responses, including future B2-added values. */
+export type BucketResponseType = KnownBucketType | (string & {})
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -170,8 +177,8 @@ export interface BucketInfo {
   readonly bucketId: BucketId
   /** Globally unique name of this bucket. */
   readonly bucketName: string
-  /** Access level of this bucket. */
-  readonly bucketType: BucketType
+  /** Access level or response-only type of this bucket. */
+  readonly bucketType: BucketResponseType
   /** User-defined key-value metadata stored on the bucket. */
   readonly bucketInfo: Record<string, string>
   /** CORS rules configured on this bucket. */

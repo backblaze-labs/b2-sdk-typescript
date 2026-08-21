@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import type { ListBucketsRequest } from './bucket.ts'
 import {
+  type BucketResponseType,
   BucketRetentionMode,
   BucketType,
   Capability,
   CorsOperation,
+  type CreateBucketRequest,
   computerId,
   EncryptionAlgorithm,
   EncryptionMode,
@@ -18,13 +21,11 @@ import {
 } from './index.ts'
 
 /**
- * Property tests that lock in the contract between each string-literal type
- * alias and its paired `as const` enum object:
+ * Property tests that lock in the contract between string-literal type
+ * aliases and their paired `as const` enum objects:
  *
- *   - every key in the enum object resolves to a value that is still in the
- *     union (no typo can drift the const out of the type)
- *   - every value in the union appears exactly once in the enum object (no
- *     value can be added to the type and forgotten here)
+ *   - every key in the enum object resolves to an expected string literal
+ *   - every expected enum value appears exactly once in the enum object
  *
  * If either invariant is broken, the test fails loudly rather than only
  * `typecheck` catching it — meaning developers running `pnpm test` see the
@@ -45,8 +46,8 @@ function expectEnumMatches<T extends string>(
 }
 
 describe('const-object enums', () => {
-  it('BucketType covers every BucketType value', () => {
-    expectEnumMatches(BucketType, ['allPublic', 'allPrivate', 'snapshot', 'restricted'])
+  it('BucketType covers every documented bucketType value', () => {
+    expectEnumMatches(BucketType, ['allPublic', 'allPrivate', 'snapshot', 'restricted', 'shared'])
   })
 
   it('BucketRetentionMode covers every BucketRetentionMode value', () => {
@@ -159,6 +160,32 @@ describe('enum value typing (compile-time)', () => {
   it('BucketType.AllPrivate is assignable to BucketType', () => {
     const v: BucketType = BucketType.AllPrivate
     expect(v).toBe('allPrivate')
+  })
+
+  it('BucketType.Shared is assignable to response bucket types', () => {
+    const v: BucketResponseType = BucketType.Shared
+    expect(v).toBe('shared')
+  })
+
+  it('BucketResponseType accepts future B2 bucket type strings', () => {
+    const v: BucketResponseType = 'futureBucketType'
+    expect(v).toBe('futureBucketType')
+  })
+
+  it('BucketType.Shared is excluded from request bucket types', () => {
+    function acceptsCreateBucketType(_value: CreateBucketRequest['bucketType']): true {
+      return true
+    }
+    function acceptsListBucketTypes(_value: NonNullable<ListBucketsRequest['bucketTypes']>): true {
+      return true
+    }
+
+    expect(acceptsCreateBucketType(BucketType.AllPrivate)).toBe(true)
+    expect(acceptsListBucketTypes([BucketType.AllPrivate])).toBe(true)
+    // @ts-expect-error shared is a response-only bucket type.
+    acceptsCreateBucketType(BucketType.Shared)
+    // @ts-expect-error shared is a response-only bucket type.
+    acceptsListBucketTypes([BucketType.Shared])
   })
 
   it('LegalHoldValue.On is assignable to LegalHoldValue', () => {

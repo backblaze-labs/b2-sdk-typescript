@@ -3639,7 +3639,9 @@ export class B2Simulator {
       .filter((bucket) => req.bucketId === undefined || bucket.bucketId === req.bucketId)
       .filter((bucket) => req.bucketName === undefined || bucket.bucketName === req.bucketName)
       .filter(
-        (bucket) => req.bucketTypes === undefined || req.bucketTypes.includes(bucket.bucketType),
+        (bucket) =>
+          req.bucketTypes === undefined ||
+          req.bucketTypes.some((bucketType) => bucketType === bucket.bucketType),
       )
       .map((bucket) => this.bucketInfoForResponse(bucket, authToken))
     return { status: 200, body: { buckets } }

@@ -496,7 +496,12 @@ function validateUniqueName(
 // Bucket configuration (`b2_create_bucket`, `b2_update_bucket`)
 // ---------------------------------------------------------------------------
 
-const KNOWN_BUCKET_TYPES = new Set<string>(Object.values(BucketType))
+const REQUEST_BUCKET_TYPES = new Set<string>([
+  BucketType.AllPublic,
+  BucketType.AllPrivate,
+  BucketType.Snapshot,
+  BucketType.Restricted,
+])
 
 /**
  * Validates a `b2_list_buckets.bucketTypes` filter.
@@ -513,7 +518,7 @@ export function validateBucketTypes(bucketTypes: unknown): ValidationError | nul
     return { code: 'bad_request', message: 'bucketTypes must be an array' }
   }
   for (const [index, bucketType] of bucketTypes.entries()) {
-    if (typeof bucketType !== 'string' || !KNOWN_BUCKET_TYPES.has(bucketType)) {
+    if (typeof bucketType !== 'string' || !REQUEST_BUCKET_TYPES.has(bucketType)) {
       return {
         code: 'bad_request',
         message: `bucketTypes[${index}] must be a known bucket type`,

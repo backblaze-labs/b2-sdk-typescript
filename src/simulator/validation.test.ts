@@ -221,6 +221,7 @@ describe('validateBucketTypes', () => {
     expect(validateBucketTypes(null)?.code).toBe('bad_request')
     expect(validateBucketTypes({})?.code).toBe('bad_request')
     expect(validateBucketTypes('allPrivate')?.code).toBe('bad_request')
+    expect(validateBucketTypes(['shared'])?.code).toBe('bad_request')
     expect(validateBucketTypes(['allPrivate', 'not-real'])?.code).toBe('bad_request')
   })
 })
