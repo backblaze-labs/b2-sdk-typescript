@@ -67,7 +67,7 @@ export interface EventNotificationCustomHeader {
 export function notificationCustomHeadersToRecord(
   customHeaders: readonly EventNotificationCustomHeader[] | undefined,
 ): Record<string, string> {
-  const record: Record<string, string> = {}
+  const record = Object.create(null) as Record<string, string>
   for (const { name, value } of customHeaders ?? []) {
     record[name] = value
   }

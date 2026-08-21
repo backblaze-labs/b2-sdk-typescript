@@ -22,4 +22,15 @@ describe('notification custom header helpers', () => {
       }),
     ).toEqual(wireHeaders)
   })
+
+  it('uses a null-prototype record for unsafe header names', () => {
+    const record = notificationCustomHeadersToRecord([
+      { name: '__proto__', value: 'literal-proto' },
+      { name: 'constructor', value: 'literal-constructor' },
+    ])
+
+    expect(Object.getPrototypeOf(record)).toBeNull()
+    expect(Object.getOwnPropertyDescriptor(record, '__proto__')?.value).toBe('literal-proto')
+    expect(record['constructor']).toBe('literal-constructor')
+  })
 })
