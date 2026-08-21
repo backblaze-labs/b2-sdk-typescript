@@ -1,5 +1,10 @@
 import type { Bucket } from '../../bucket.ts'
-import { FileAction, type FileVersion, type ListedConcreteFileVersion } from '../../types/file.ts'
+import {
+  FileAction,
+  type FileVersion,
+  type ListedConcreteFileVersion,
+  type ListFileVersionsResponse,
+} from '../../types/file.ts'
 import type { FileId } from '../../types/ids.ts'
 import { isSignalAbortError } from '../../util/abort.ts'
 import { sanitizeErrorReason } from '../../util/error-reason.ts'
@@ -88,7 +93,7 @@ export class B2Folder implements SyncFolder {
     while (true) {
       if (scanIsAborted(options)) return
 
-      let listing: Awaited<ReturnType<Bucket['listFileVersions']>>
+      let listing: ListFileVersionsResponse
       try {
         listing = await this.bucket.listFileVersions({
           ...(listPrefix !== '' ? { prefix: listPrefix } : {}),

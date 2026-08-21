@@ -45,10 +45,12 @@ import type {
   HideFileRequest,
   ListBucketsRequest,
   ListBucketsResponse,
+  ListFileNamesMaybeDelimiterRequest,
   ListFileNamesRequest,
   ListFileNamesResponse,
   ListFileNamesWithDelimiterRequest,
   ListFileNamesWithDelimiterResponse,
+  ListFileVersionsMaybeDelimiterRequest,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
   ListFileVersionsWithDelimiterRequest,
@@ -577,7 +579,16 @@ export class RawClient {
   async listFileNames(
     apiUrl: string,
     authToken: string,
-    request: ListFileNamesRequest | ListFileNamesWithDelimiterRequest,
+    request: ListFileNamesMaybeDelimiterRequest,
+    options?: ListFileNamesOptions,
+  ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse>
+  async listFileNames(
+    apiUrl: string,
+    authToken: string,
+    request:
+      | ListFileNamesRequest
+      | ListFileNamesWithDelimiterRequest
+      | ListFileNamesMaybeDelimiterRequest,
     options?: ListFileNamesOptions,
   ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse> {
     return normalizeFileVersionListSha1(
@@ -617,7 +628,16 @@ export class RawClient {
   async listFileVersions(
     apiUrl: string,
     authToken: string,
-    request: ListFileVersionsRequest | ListFileVersionsWithDelimiterRequest,
+    request: ListFileVersionsMaybeDelimiterRequest,
+    options?: ListFileVersionsOptions,
+  ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse>
+  async listFileVersions(
+    apiUrl: string,
+    authToken: string,
+    request:
+      | ListFileVersionsRequest
+      | ListFileVersionsWithDelimiterRequest
+      | ListFileVersionsMaybeDelimiterRequest,
     options?: ListFileVersionsOptions,
   ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse> {
     return normalizeFileVersionListSha1(

@@ -13,7 +13,7 @@ import {
 } from './test-utils/index.ts'
 import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
-import { FileAction } from './types/file.ts'
+import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import type { LargeFileId } from './types/ids.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
@@ -555,12 +555,7 @@ describe('file operations', () => {
     expect(info.fileId).toBe(uploaded.fileId)
   })
 
-  it('hides a file and surfaces it in listing as a hide marker', async () => {
-    // Real B2 behaviour: `b2_list_file_names` returns one entry per file
-    // name, taking the most recent version. For a hidden file, the most
-    // recent version IS the hide marker, so it appears in the listing
-    // with `action: 'hide'` and `contentLength: 0`. Consumers must skip
-    // hide-action rows when iterating over "live" files.
+  it('hides a file and removes it from listFileNames', async () => {
     const bucket = await client.createBucket({
       bucketName: 'hide-test',
       bucketType: BucketType.AllPrivate,
@@ -581,10 +576,16 @@ describe('file operations', () => {
     const listing = await bucket.listFileNames()
     const byName = new Map(listing.files.map((f) => [f.fileName, f]))
     expect(byName.get('visible.txt')?.action).toBe('upload')
-    const hiddenEntry = byName.get('hidden.txt')
-    expect(hiddenEntry).toBeDefined()
-    expect(hiddenEntry?.action).toBe('hide')
-    expect(hiddenEntry?.contentLength).toBe(0)
+    expect(byName.has('hidden.txt')).toBe(false)
+
+    const versions = await bucket.listFileVersions({ prefix: 'hidden.txt' })
+    const hiddenEntry = versions.files.find((file) => file.action === FileAction.Hide)
+    expect(hiddenEntry).toMatchObject({
+      action: FileAction.Hide,
+      contentLength: 0,
+      contentType: HIDE_MARKER_CONTENT_TYPE,
+      fileName: 'hidden.txt',
+    })
   })
 
   it('hides a file via B2Object.hide()', async () => {
@@ -601,21 +602,11 @@ describe('file operations', () => {
     const result = await obj.hide()
     expect(result.action).toBe('hide')
 
-    // Hide markers are surfaced in listings (see the previous test for
-    // rationale). The row exists with `action: 'hide'`.
     const listing = await bucket.listFileNames()
-    expect(listing.files).toHaveLength(1)
-    expect(listing.files[0]?.action).toBe('hide')
-    expect(listing.files[0]?.fileName).toBe('to-hide.txt')
+    expect(listing.files).toHaveLength(0)
   })
 
-  it('paginateFileNames skips hide markers but listFileNames includes them', async () => {
-    // Real B2: `b2_list_file_names` returns one row per file name; for a
-    // hidden file that row is the hide marker. The SDK's
-    // `Bucket.paginateFileNames` iterator advertises "latest VISIBLE
-    // version" semantics and therefore filters hide-action rows. This
-    // test pins both contracts simultaneously so a future simulator
-    // tweak can't silently drift the SDK's iterator behaviour.
+  it('listFileNames and paginateFileNames both exclude hidden files', async () => {
     const bucket = await client.createBucket({
       bucketName: 'hide-vs-paginate',
       bucketType: BucketType.AllPrivate,
@@ -634,17 +625,194 @@ describe('file operations', () => {
     })
     await bucket.hideFile('will-hide.txt')
 
-    // Raw API surfaces all three rows; the hidden one carries action: 'hide'.
     const raw = await bucket.listFileNames()
-    expect(raw.files).toHaveLength(3)
-    const hideRow = raw.files.find((f) => f.fileName === 'will-hide.txt')
-    expect(hideRow?.action).toBe('hide')
-    expect(hideRow?.contentLength).toBe(0)
+    expect(raw.files.map((file) => file.fileName).sort()).toEqual(['live-1.txt', 'live-2.txt'])
 
-    // Async iterator drops the hide-action row.
     const viaIterator: string[] = []
     for await (const f of bucket.paginateFileNames()) viaIterator.push(f.fileName)
     expect(viaIterator.sort()).toEqual(['live-1.txt', 'live-2.txt'])
+  })
+
+  it('listFileNames delimiter ignores folders that contain only hidden files', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'hide-delimiter',
+      bucketType: BucketType.AllPrivate,
+    })
+    await bucket.upload({
+      fileName: 'visible/live.txt',
+      source: new BufferSource(new TextEncoder().encode('a')),
+    })
+    await bucket.upload({
+      fileName: 'hidden/ghost.txt',
+      source: new BufferSource(new TextEncoder().encode('b')),
+    })
+    await bucket.hideFile('hidden/ghost.txt')
+
+    const root = await bucket.listFileNames({ delimiter: '/' })
+    expect(root.files.map((file) => ({ action: file.action, fileName: file.fileName }))).toEqual([
+      { action: FileAction.Folder, fileName: 'visible/' },
+    ])
+
+    const hiddenPrefix = await bucket.listFileNames({ prefix: 'hidden/', delimiter: '/' })
+    expect(hiddenPrefix.files).toEqual([])
+  })
+
+  it.each([
+    [
+      'folder',
+      {
+        action: FileAction.Folder,
+        contentLength: 0,
+        contentMd5: null,
+        contentSha1: null,
+        contentType: null,
+        fileId: null,
+        fileInfo: {},
+        fileName: 'folder/',
+        uploadTimestamp: 0,
+      },
+      /delimiter folder row/,
+    ],
+    [
+      'null fileId',
+      {
+        action: FileAction.Upload,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: null,
+        fileInfo: {},
+        fileName: 'bad-null.txt',
+        uploadTimestamp: 1,
+      },
+      /without a string fileId/,
+    ],
+    [
+      'missing fileId',
+      {
+        action: FileAction.Upload,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        fileName: 'bad-missing.txt',
+        uploadTimestamp: 1,
+      },
+      /without a string fileId/,
+    ],
+    [
+      'non-string fileId',
+      {
+        action: FileAction.Upload,
+        contentLength: 1,
+        contentMd5: null,
+        contentSha1: 'sha1',
+        contentType: 'application/octet-stream',
+        fileId: 123,
+        fileInfo: {},
+        fileName: 'bad-number.txt',
+        uploadTimestamp: 1,
+      },
+      /without a string fileId/,
+    ],
+  ])('rejects %s rows from non-delimiter list facade methods', async (_name, row, message) => {
+    const bucket = await client.createBucket({
+      bucketName: `bad-list-${_name.replaceAll(' ', '-').toLowerCase()}`,
+      bucketType: BucketType.AllPrivate,
+    })
+
+    vi.spyOn(client.raw, 'listFileNames').mockResolvedValueOnce({
+      files: [row],
+      nextFileName: null,
+    } as never)
+    await expect(bucket.listFileNames()).rejects.toThrow(message)
+
+    vi.spyOn(client.raw, 'listFileVersions').mockResolvedValueOnce({
+      files: [row],
+      nextFileName: null,
+      nextFileId: null,
+    } as never)
+    await expect(bucket.listFileVersions()).rejects.toThrow(message)
+
+    vi.spyOn(client.raw, 'listFileNames').mockResolvedValueOnce({
+      files: [row],
+      nextFileName: null,
+    } as never)
+    await expect(bucket.paginateFileNames().next()).rejects.toThrow(message)
+
+    vi.spyOn(client.raw, 'listFileVersions').mockResolvedValueOnce({
+      files: [row],
+      nextFileName: null,
+      nextFileId: null,
+    } as never)
+    await expect(bucket.paginateFileVersions().next()).rejects.toThrow(message)
+  })
+
+  it('rejects hide rows from listFileNames facade methods', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'bad-list-hide',
+      bucketType: BucketType.AllPrivate,
+    })
+    const hideRow = {
+      action: FileAction.Hide,
+      contentLength: 0,
+      contentMd5: null,
+      contentSha1: null,
+      contentType: HIDE_MARKER_CONTENT_TYPE,
+      fileId: 'hide-file-id',
+      fileInfo: {},
+      fileName: 'hidden.txt',
+      uploadTimestamp: 1,
+    }
+
+    vi.spyOn(client.raw, 'listFileNames').mockResolvedValueOnce({
+      files: [hideRow],
+      nextFileName: null,
+    } as never)
+    await expect(bucket.listFileNames()).rejects.toThrow(/hide marker/)
+
+    vi.spyOn(client.raw, 'listFileNames').mockResolvedValueOnce({
+      files: [hideRow],
+      nextFileName: null,
+    } as never)
+    await expect(bucket.paginateFileNames().next()).rejects.toThrow(/hide marker/)
+  })
+
+  it('allows delimiter folder rows from list facade methods', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'good-list-folder',
+      bucketType: BucketType.AllPrivate,
+    })
+    const folderRow = {
+      action: FileAction.Folder,
+      contentLength: 0,
+      contentMd5: null,
+      contentSha1: null,
+      contentType: null,
+      fileId: null,
+      fileInfo: {},
+      fileName: 'folder/',
+      uploadTimestamp: 0,
+    }
+
+    vi.spyOn(client.raw, 'listFileNames').mockResolvedValueOnce({
+      files: [folderRow],
+      nextFileName: null,
+    } as never)
+    await expect(bucket.listFileNames({ delimiter: '/' })).resolves.toMatchObject({
+      files: [folderRow],
+    })
+
+    vi.spyOn(client.raw, 'listFileVersions').mockResolvedValueOnce({
+      files: [folderRow],
+      nextFileName: null,
+      nextFileId: null,
+    } as never)
+    await expect(bucket.listFileVersions({ delimiter: '/' })).resolves.toMatchObject({
+      files: [folderRow],
+    })
   })
 
   it('deletes a file version', async () => {
@@ -1614,7 +1782,7 @@ describe('Bucket.getFileInfoByName and Bucket.unhide', () => {
           contentLength: 0,
           contentMd5: null,
           contentSha1: 'none',
-          contentType: null,
+          contentType: HIDE_MARKER_CONTENT_TYPE,
           fileId: 123,
           fileInfo: {},
           fileName: 'broken.txt',
