@@ -36,6 +36,7 @@ export type {
   ListBucketsRequest,
   ListBucketsResponse,
   NoBucketDefaultRetention,
+  ReadableReplicationConfiguration,
   RetentionPeriod,
   UpdateBucketRequest,
 } from './bucket.ts'
