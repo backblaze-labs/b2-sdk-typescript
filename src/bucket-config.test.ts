@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import type { B2Client } from './client.ts'
 import { makeClient } from './test-utils/index.ts'
-import { BucketRetentionMode, BucketType, type LifecycleRule } from './types/bucket.ts'
+import {
+  BucketRetentionMode,
+  type BucketRetentionPolicy,
+  BucketType,
+  type LifecycleRule,
+} from './types/bucket.ts'
 import { applicationKeyId, bucketId as bucketIdOf } from './types/ids.ts'
 import type { ReplicationRule } from './types/replication.ts'
 
@@ -15,13 +20,19 @@ import type { ReplicationRule } from './types/replication.ts'
  */
 
 async function makeBucket(
-  options: { readonly fileLockEnabled?: boolean } = {},
+  options: {
+    readonly defaultRetention?: BucketRetentionPolicy
+    readonly fileLockEnabled?: boolean
+  } = {},
 ): Promise<{ bucket: Bucket; client: B2Client }> {
   const { client } = makeClient()
   await client.authorize()
   const bucket = await client.createBucket({
     bucketName: 'cfg-bucket',
     bucketType: BucketType.AllPrivate,
+    ...(options.defaultRetention !== undefined
+      ? { defaultRetention: options.defaultRetention }
+      : {}),
     ...(options.fileLockEnabled !== undefined ? { fileLockEnabled: options.fileLockEnabled } : {}),
   })
   return { bucket, client }
@@ -242,10 +253,22 @@ describe('Bucket.defaultRetention helpers', () => {
     ;({ bucket } = await makeBucket({ fileLockEnabled: true }))
   })
 
-  it('getDefaultRetention returns mode "none" on a fresh bucket', async () => {
+  it('getDefaultRetention returns B2 unset retention on a fresh bucket', async () => {
     const r = await bucket.getDefaultRetention()
-    expect(r.mode).toBe('none')
-    expect(r.period).toBeNull()
+    expect(r).toEqual({ mode: null, period: null })
+  })
+
+  it('getDefaultRetention returns a policy configured at bucket creation', async () => {
+    const policy = {
+      mode: BucketRetentionMode.Compliance,
+      period: { duration: 30, unit: 'days' },
+    } satisfies BucketRetentionPolicy
+    const { bucket: configured } = await makeBucket({
+      defaultRetention: policy,
+      fileLockEnabled: true,
+    })
+
+    await expect(configured.getDefaultRetention()).resolves.toEqual(policy)
   })
 
   it('setDefaultRetention persists a compliance-mode policy', async () => {
@@ -253,9 +276,11 @@ describe('Bucket.defaultRetention helpers', () => {
       mode: BucketRetentionMode.Compliance,
       period: { duration: 30, unit: 'days' },
     })
-    expect(after.defaultRetention.mode).toBe(BucketRetentionMode.Compliance)
-    expect(after.defaultRetention.period?.duration).toBe(30)
-    expect(after.defaultRetention.period?.unit).toBe('days')
+    expect(after.fileLockConfiguration.value?.defaultRetention.mode).toBe(
+      BucketRetentionMode.Compliance,
+    )
+    expect(after.fileLockConfiguration.value?.defaultRetention.period?.duration).toBe(30)
+    expect(after.fileLockConfiguration.value?.defaultRetention.period?.unit).toBe('days')
   })
 
   it('setDefaultRetention round-trips via getDefaultRetention', async () => {
@@ -264,8 +289,18 @@ describe('Bucket.defaultRetention helpers', () => {
       period: { duration: 7, unit: 'years' },
     })
     const fetched = await bucket.getDefaultRetention()
-    expect(fetched.mode).toBe(BucketRetentionMode.Governance)
-    expect(fetched.period?.duration).toBe(7)
-    expect(fetched.period?.unit).toBe('years')
+    expect(fetched).toEqual({
+      mode: BucketRetentionMode.Governance,
+      period: { duration: 7, unit: 'years' },
+    })
+  })
+
+  it('setDefaultRetention none returns B2 unset retention', async () => {
+    await bucket.setDefaultRetention({
+      mode: BucketRetentionMode.None,
+      period: null,
+    })
+
+    await expect(bucket.getDefaultRetention()).resolves.toEqual({ mode: null, period: null })
   })
 })

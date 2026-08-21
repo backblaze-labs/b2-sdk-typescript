@@ -26,6 +26,7 @@ export type {
   ListComputersResult,
 } from './backup.ts'
 export type {
+  BucketDefaultRetention,
   BucketInfo,
   BucketRetentionPolicy,
   CorsRule,
@@ -34,6 +35,7 @@ export type {
   LifecycleRule,
   ListBucketsRequest,
   ListBucketsResponse,
+  NoBucketDefaultRetention,
   RetentionPeriod,
   UpdateBucketRequest,
 } from './bucket.ts'

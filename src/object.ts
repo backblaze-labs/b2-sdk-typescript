@@ -13,7 +13,7 @@ import type { RetryOptions } from './http/retry.ts'
 import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import type { SseCDownloadKey } from './raw/index.ts'
 import type { ProgressListener } from './streams/progress.ts'
-import type { BucketRetentionPolicy } from './types/bucket.ts'
+import type { BucketDefaultRetention } from './types/bucket.ts'
 import type { FileVersion } from './types/file.ts'
 import type { FileId } from './types/ids.ts'
 import type { FileRetentionValue, LegalHoldValue } from './types/lock.ts'
@@ -28,7 +28,7 @@ import { uploadSmallFile } from './upload/single.ts'
 import { createWriteStream, type UploadWriteHandle } from './upload/stream.ts'
 
 interface BucketDefaultRetentionSnapshot {
-  readonly retention?: BucketRetentionPolicy
+  readonly retention?: BucketDefaultRetention
   readonly unreadable: boolean
 }
 

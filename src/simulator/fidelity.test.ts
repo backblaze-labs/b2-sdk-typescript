@@ -346,7 +346,7 @@ describe('B2Simulator bucket configuration validation', () => {
         fileLockEnabled: true,
       }),
     ).resolves.toMatchObject({
-      info: { defaultRetention: retainingPolicy },
+      info: { fileLockConfiguration: { value: { defaultRetention: retainingPolicy } } },
     })
 
     const locked = await client.createBucket({
@@ -355,7 +355,7 @@ describe('B2Simulator bucket configuration validation', () => {
       fileLockEnabled: true,
     })
     await expect(locked.update({ defaultRetention: retainingPolicy })).resolves.toMatchObject({
-      defaultRetention: retainingPolicy,
+      fileLockConfiguration: { value: { defaultRetention: retainingPolicy } },
     })
   })
 
@@ -404,7 +404,9 @@ describe('B2Simulator bucket configuration validation', () => {
         period: { duration: 1, unit: 'days' },
       },
     })
-    expect(accepted.info.defaultRetention.mode).toBe(BucketRetentionMode.Governance)
+    expect(accepted.info.fileLockConfiguration.value?.defaultRetention.mode).toBe(
+      BucketRetentionMode.Governance,
+    )
 
     const retained = await accepted.upload({
       fileName: 'accepted-retention.bin',
