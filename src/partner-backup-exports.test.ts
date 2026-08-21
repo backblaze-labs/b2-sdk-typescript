@@ -8,12 +8,19 @@ import {
   computerId,
 } from './backup/index.ts'
 import {
+  APPLICATION_KEY_REDACTED,
+  createGroupMemberResponseToRedactedJson,
+  createGroupMemberResultToRedactedJson,
   InMemoryPartnerAccountInfo,
+  PARTNER_TOKEN_REDACTED,
   PartnerCapability,
   PartnerClient,
   PartnerRawClient,
   partnerAuthorizeResponseForPersistence,
+  partnerAuthorizeResponseToRedactedJson,
   Region,
+  reserveTrialCreateAccountResponseToRedactedJson,
+  reserveTrialCreateAccountResultToRedactedJson,
 } from './partner/index.ts'
 
 describe('Partner and Backup subpath imports', () => {
@@ -28,5 +35,12 @@ describe('Partner and Backup subpath imports', () => {
     expect(BackupPartnerCapability.All).toBe('all')
     expect(Region.UsWest).toBe('us-west')
     expect(computerId('computer-id')).toBe('computer-id')
+    expect(PARTNER_TOKEN_REDACTED).toBe('[redacted Partner token]')
+    expect(APPLICATION_KEY_REDACTED).toBe('[redacted application key]')
+    expect(partnerAuthorizeResponseToRedactedJson).toBeTypeOf('function')
+    expect(createGroupMemberResultToRedactedJson).toBeTypeOf('function')
+    expect(createGroupMemberResponseToRedactedJson).toBeTypeOf('function')
+    expect(reserveTrialCreateAccountResultToRedactedJson).toBeTypeOf('function')
+    expect(reserveTrialCreateAccountResponseToRedactedJson).toBeTypeOf('function')
   })
 })

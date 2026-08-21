@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Partner redaction helpers are public.** The `@backblaze-labs/b2-sdk/partner` subpath now exports `PARTNER_TOKEN_REDACTED`, `APPLICATION_KEY_REDACTED`, and the pure `*ToRedactedJson` projection helpers and JSON result types for secret-scrubbed Partner authorization, group-member creation, and B2 Reserve trial-account responses. Closes #225.
+
 ### Changed
 
 - **Bucket default retention metadata now matches B2's nested wire shape.** BREAKING: `BucketInfo.defaultRetention` was removed because B2 does not return a top-level default-retention field; read `bucket.info.fileLockConfiguration.value?.defaultRetention` instead. `Bucket.getDefaultRetention()` now reads that nested field and can return `undefined` when file-lock configuration is unreadable. The nested default retention type also includes B2's unset response shape `{ mode: null, period: null }`; callers that checked `BucketRetentionMode.None` for unset bucket defaults should handle `null` mode on response metadata.

@@ -64,6 +64,34 @@ export const publicExportProbes = [
         'InMemoryPartnerAccountInfo export missing',
       ],
       ["entry.PartnerCapability?.All === 'all'", 'PartnerCapability enum export drifted'],
+      [
+        "entry.PARTNER_TOKEN_REDACTED === '[redacted Partner token]'",
+        'Partner token redaction placeholder export missing or drifted',
+      ],
+      [
+        "entry.APPLICATION_KEY_REDACTED === '[redacted application key]'",
+        'application key redaction placeholder export missing or drifted',
+      ],
+      [
+        "typeof entry.partnerAuthorizeResponseToRedactedJson === 'function'",
+        'partnerAuthorizeResponseToRedactedJson export missing',
+      ],
+      [
+        "typeof entry.createGroupMemberResultToRedactedJson === 'function'",
+        'createGroupMemberResultToRedactedJson export missing',
+      ],
+      [
+        "typeof entry.createGroupMemberResponseToRedactedJson === 'function'",
+        'createGroupMemberResponseToRedactedJson export missing',
+      ],
+      [
+        "typeof entry.reserveTrialCreateAccountResultToRedactedJson === 'function'",
+        'reserveTrialCreateAccountResultToRedactedJson export missing',
+      ],
+      [
+        "typeof entry.reserveTrialCreateAccountResponseToRedactedJson === 'function'",
+        'reserveTrialCreateAccountResponseToRedactedJson export missing',
+      ],
     ],
   },
   {
