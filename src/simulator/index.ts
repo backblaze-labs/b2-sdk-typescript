@@ -16,6 +16,7 @@ import { sha1Hex } from '../streams/hash.ts'
 import { Capability } from '../types/auth.ts'
 import {
   type BucketDefaultRetention,
+  type BucketDefaultServerSideEncryption,
   type BucketInfo,
   BucketRetentionMode,
   type BucketRetentionPolicy,
@@ -802,11 +803,20 @@ function publicBucketDefaultServerSideEncryption(
 ): BucketInfo['defaultServerSideEncryption'] {
   return {
     isClientAuthorizedToRead: true,
-    value: publicServerSideEncryption(encryption ?? { mode: EncryptionMode.None }),
+    value: publicBucketDefaultServerSideEncryptionValue(encryption),
   }
 }
 
-function bucketDefaultServerSideEncryptionForStorage(info: BucketInfo): PublicEncryptionSetting {
+function publicBucketDefaultServerSideEncryptionValue(
+  encryption: EncryptionSetting | undefined,
+): BucketDefaultServerSideEncryption {
+  if (encryption?.mode === EncryptionMode.SseB2) return encryption
+  return { mode: null, algorithm: null }
+}
+
+function bucketDefaultServerSideEncryptionForStorage(
+  info: BucketInfo,
+): BucketDefaultServerSideEncryption {
   const encryption = info.defaultServerSideEncryption
   if (!encryption.isClientAuthorizedToRead) return { mode: null, algorithm: null }
   return encryption.value ?? { mode: null, algorithm: null }
@@ -898,7 +908,7 @@ function hasCustomerEncryptionHeaders(headers: Record<string, string>): boolean 
 }
 
 async function storedServerSideEncryption(
-  encryption: EncryptionSetting | PublicEncryptionSetting,
+  encryption: EncryptionSetting | BucketDefaultServerSideEncryption,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const runtimeEncryption = encryption as unknown as Record<string, unknown>
   if (encryption.mode === null) {
@@ -970,7 +980,7 @@ async function storedServerSideEncryption(
 
 async function uploadServerSideEncryption(
   headers: Record<string, string>,
-  fallback: EncryptionSetting | PublicEncryptionSetting,
+  fallback: EncryptionSetting | BucketDefaultServerSideEncryption,
 ): Promise<StoredServerSideEncryption | SimulatorJsonResponse> {
   const customerAlgorithm = headers['x-bz-server-side-encryption-customer-algorithm']
   const customerKey = headers['x-bz-server-side-encryption-customer-key']
@@ -1876,6 +1886,12 @@ export class B2Simulator {
   private bucketInfoForResponse(info: BucketInfo, authToken: string | undefined): BucketInfo {
     return {
       ...info,
+      defaultServerSideEncryption: this.requestHasCapability(
+        authToken,
+        Capability.ReadBucketEncryption,
+      )
+        ? info.defaultServerSideEncryption
+        : { isClientAuthorizedToRead: false, value: null },
       replicationConfiguration: filterReadableReplicationConfiguration(
         info.replicationConfiguration,
         this.requestHasCapability(authToken, Capability.ReadBucketReplications),
@@ -3453,10 +3469,17 @@ export class B2Simulator {
       bucketInfo?: Record<string, string>
       corsRules?: BucketInfo['corsRules']
       defaultServerSideEncryption?: EncryptionSetting
+<<<<<<< HEAD
       defaultRetention?: BucketRetentionPolicy
       fileLockEnabled?: boolean
       lifecycleRules?: BucketInfo['lifecycleRules']
       replicationConfiguration?: ReplicationConfiguration
+=======
+      defaultRetention?: BucketInfo['defaultRetention']
+      fileLockEnabled?: boolean
+      lifecycleRules?: BucketInfo['lifecycleRules']
+      replicationConfiguration?: BucketInfo['replicationConfiguration']
+>>>>>>> 4536312 (fix: fail closed on unreadable bucket SSE)
     },
     authToken?: string,
   ): {

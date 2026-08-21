@@ -30,11 +30,13 @@ import {
   makeClient,
   readStream,
 } from '../test-utils/index.ts'
+import { Capability } from '../types/auth.ts'
 import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
 import {
   EncryptionAlgorithm,
   EncryptionKey,
   EncryptionMode,
+  SSE_B2,
   sseCustomer,
 } from '../types/encryption.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
@@ -67,6 +69,20 @@ import { type UploadRetryEvent, withFreshUploadUrlRetry } from './retry.ts'
 
 function makeSmallPartClient(): { client: B2Client; sim: B2Simulator } {
   return makeClient({ minimumPartSize: 100_000 })
+}
+
+async function authorizeWithKey(
+  sim: B2Simulator,
+  key: { readonly applicationKeyId: string; readonly applicationKey: string },
+): Promise<B2Client> {
+  const client = new B2Client({
+    applicationKeyId: key.applicationKeyId,
+    applicationKey: key.applicationKey,
+    transport: sim.transport(),
+    retry: { maxRetries: 0 },
+  })
+  await client.authorize()
+  return client
 }
 
 function makeClientWithOneFreshUrlFailure(endpoint: string): {
@@ -3530,6 +3546,86 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       expect.arrayContaining([autoNoEncryption.fileId, autoNoRetention.fileId]),
     )
     expect(unfinishedIds).toContain(explicitNoRetention.fileId)
+  })
+
+  it('fails closed when bucket default SSE is unreadable during resume', async () => {
+    const { client, sim } = makeClient({
+      sim: { minimumPartSize: 100_000, recommendedPartSize: 100_000, strictAuth: true },
+      client: { retry: { maxRetries: 0 } },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'resume-unreadable-sse',
+      bucketType: BucketType.AllPrivate,
+    })
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const noEncryptionCandidate = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'unreadable-default.bin',
+        contentType: 'application/octet-stream',
+      },
+    )
+
+    await bucket.update({ defaultServerSideEncryption: SSE_B2 })
+    const sseB2Candidate = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'unreadable-default.bin',
+        contentType: 'application/octet-stream',
+        serverSideEncryption: SSE_B2,
+      },
+    )
+    const restrictedKey = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.ListFiles, Capability.WriteFiles],
+      keyName: 'resume-unreadable-sse-key',
+      bucketId: bucket.id,
+    })
+    const restrictedClient = await authorizeWithKey(sim, restrictedKey)
+    const restrictedBucket = (await restrictedClient.listBuckets({ bucketId: bucket.id }))[0]
+    if (restrictedBucket === undefined) throw new Error('expected restricted bucket')
+    expect(restrictedBucket.info.defaultServerSideEncryption).toEqual({
+      isClientAuthorizedToRead: false,
+      value: null,
+    })
+
+    const rejected: string[] = []
+    const result = await restrictedBucket.upload({
+      fileName: 'unreadable-default.bin',
+      source: new BufferSource(data),
+      contentType: 'application/octet-stream',
+      partSize,
+      concurrency: 1,
+      resume: true,
+      onResumeCandidateRejected: (event) => {
+        rejected.push(`${event.fileId}:${event.reason}`)
+      },
+    })
+
+    expect(result.serverSideEncryption).toEqual(SSE_B2)
+    expect(rejected).toEqual(
+      expect.arrayContaining([
+        `${noEncryptionCandidate.fileId}:encryption-mismatch`,
+        `${sseB2Candidate.fileId}:encryption-mismatch`,
+      ]),
+    )
+
+    for (const candidate of [noEncryptionCandidate, sseB2Candidate]) {
+      await expect(
+        restrictedBucket.file('unreadable-default.bin').upload({
+          source: new BufferSource(data),
+          contentType: 'application/octet-stream',
+          partSize,
+          concurrency: 1,
+          resumeFileId: candidate.fileId,
+        }),
+      ).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+    }
   })
 
   it('leaves reused unfinished files available after local upload failures', async () => {

@@ -1,4 +1,4 @@
-import type { EncryptionSetting, PublicEncryptionSetting } from './encryption.ts'
+import type { EncryptionSetting, NoEncryptionWireSetting, SseB2Setting } from './encryption.ts'
 import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
@@ -152,6 +152,9 @@ export interface ReadableReplicationConfiguration {
   /** Replication settings, or null when none are configured or the caller is not authorized to read them. */
   readonly value: ReplicationConfiguration | null
 }
+
+/** Bucket default server-side encryption setting returned by B2 bucket responses. */
+export type BucketDefaultServerSideEncryption = SseB2Setting | NoEncryptionWireSetting
 /**
  * Complete bucket metadata as returned by the B2 API.
  * Corresponds to the bucket object in responses from `b2_list_buckets`, `b2_create_bucket`, and `b2_update_bucket`.
@@ -174,7 +177,7 @@ export interface BucketInfo {
     /** Whether the caller is authorized to read default server-side encryption settings. */
     readonly isClientAuthorizedToRead: boolean
     /** Default server-side encryption settings, or null if the caller lacks read authorization. */
-    readonly value: PublicEncryptionSetting | null
+    readonly value: BucketDefaultServerSideEncryption | null
   }
   /** File Lock configuration including authorization status and current settings. */
   readonly fileLockConfiguration: {

@@ -1900,6 +1900,64 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
     await expect(scopedClient.listBuckets({ bucketId: second.id })).resolves.toHaveLength(1)
   })
 
+  it('hides bucket default encryption from keys without readBucketEncryption', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const readableSseB2 = {
+      isClientAuthorizedToRead: true,
+      value: SSE_B2,
+    }
+    const unreadable = {
+      isClientAuthorizedToRead: false,
+      value: null,
+    }
+    const readableNone = {
+      isClientAuthorizedToRead: true,
+      value: { mode: null, algorithm: null },
+    }
+
+    const bucket = await client.createBucket({
+      bucketName: 'hidden-bucket-encryption',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    expect(bucket.info.defaultServerSideEncryption).toEqual(readableSseB2)
+
+    const hiddenKey = await client.createKey({
+      capabilities: [
+        Capability.ListBuckets,
+        Capability.WriteBuckets,
+        Capability.WriteBucketEncryption,
+      ],
+      keyName: 'hidden-bucket-encryption-key',
+      bucketIds: null,
+    })
+    const hiddenClient = await authorizeWithKey(sim, hiddenKey)
+    const hiddenList = await hiddenClient.listBuckets({ bucketId: bucket.id })
+    expect(hiddenList[0]?.info.defaultServerSideEncryption).toEqual(unreadable)
+
+    const hiddenCreated = await hiddenClient.createBucket({
+      bucketName: 'hidden-created-encryption',
+      bucketType: BucketType.AllPrivate,
+      defaultServerSideEncryption: SSE_B2,
+    })
+    expect(hiddenCreated.info.defaultServerSideEncryption).toEqual(unreadable)
+
+    const hiddenUpdated = await hiddenCreated.update({ defaultServerSideEncryption: SSE_NONE })
+    expect(hiddenUpdated.defaultServerSideEncryption).toEqual(unreadable)
+
+    const readableKey = await client.createKey({
+      capabilities: [Capability.ListBuckets, Capability.ReadBucketEncryption],
+      keyName: 'readable-bucket-encryption-key',
+      bucketIds: null,
+    })
+    const readableClient = await authorizeWithKey(sim, readableKey)
+    const listedSseB2 = await readableClient.listBuckets({ bucketId: bucket.id })
+    expect(listedSseB2[0]?.info.defaultServerSideEncryption).toEqual(readableSseB2)
+    const listedNone = await readableClient.listBuckets({ bucketId: hiddenCreated.id })
+    expect(listedNone[0]?.info.defaultServerSideEncryption).toEqual(readableNone)
+  })
+
   it('rejects bucket creation with bucket-scoped application keys', async () => {
     const { client, sim } = makeClient({ sim: { strictAuth: true } })
     await client.authorize()

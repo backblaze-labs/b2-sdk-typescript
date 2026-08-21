@@ -3,6 +3,7 @@ import { ResumeFileIdMismatchError } from '../errors/index.ts'
 import type { RawClient } from '../raw/index.ts'
 import {
   type BucketDefaultRetention,
+  type BucketDefaultServerSideEncryption,
   BucketRetentionMode,
   type BucketRetentionPolicy,
 } from '../types/bucket.ts'
@@ -86,7 +87,9 @@ export interface ResumeCandidateCriteria {
   /** Requested B2 upload timestamp override, if configured by the caller. */
   readonly customUploadTimestamp?: number
   /** Explicit or effective readable bucket default server-side encryption. */
-  readonly serverSideEncryption?: EncryptionSetting | PublicEncryptionSetting
+  readonly serverSideEncryption?: EncryptionSetting | BucketDefaultServerSideEncryption
+  /** Whether bucket default encryption exists but cannot be read by the caller. */
+  readonly defaultServerSideEncryptionUnreadable?: boolean
   /** Explicit Object Lock retention option, if configured by the caller. */
   readonly fileRetention?: FileRetentionValue
   /** Effective readable bucket default retention when the caller omits fileRetention. */
@@ -367,6 +370,7 @@ function candidateMetadataRejectReason(
   const encryptionRejectReason = serverSideEncryptionRejectReason(
     candidate.serverSideEncryption,
     criteria.serverSideEncryption,
+    criteria.defaultServerSideEncryptionUnreadable === true,
   )
   if (encryptionRejectReason !== null) return encryptionRejectReason
   if (
@@ -625,9 +629,11 @@ type ListedEncryption = PublicEncryptionSetting | undefined
 
 function serverSideEncryptionRejectReason(
   candidate: ListedEncryption,
-  expected: EncryptionSetting | PublicEncryptionSetting | undefined,
+  expected: EncryptionSetting | BucketDefaultServerSideEncryption | undefined,
+  defaultUnreadable: boolean,
 ): 'encryption-mismatch' | 'sse-c-unsupported' | null {
   if (expected?.mode === EncryptionMode.SseC) return 'sse-c-unsupported'
+  if (expected === undefined && defaultUnreadable) return 'encryption-mismatch'
 
   const actual = normalizeEncryption(candidate)
   if (expected === undefined) {
