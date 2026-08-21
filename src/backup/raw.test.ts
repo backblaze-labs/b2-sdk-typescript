@@ -280,6 +280,7 @@ describe('BackupRawClient', () => {
     )
 
     expect(seenRequests[0]?.retry).toEqual({ maxRetries: 0, requestTimeoutMs: 1000 })
+    expect(seenRequests[0]?.idempotent).toBe(false)
   })
 
   it('does not retry delete POSTs through RetryTransport by default', async () => {

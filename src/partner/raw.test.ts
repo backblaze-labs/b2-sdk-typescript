@@ -1191,6 +1191,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
 
     expect(requests).toHaveLength(1)
     expect(requests[0]?.url).toBe(`${groupsApiUrl}/b2api/v3/b2_reserve_trial_create_account`)
+    expect(requests[0]?.idempotent).toBe(false)
   })
 
   it('does not reauthorize reserve trial failures with an embedded b2api base segment', async () => {
@@ -1228,6 +1229,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
 
     expect(onReauth).not.toHaveBeenCalled()
     expect(requests).toHaveLength(1)
+    expect(requests[0]?.idempotent).toBe(false)
   })
 
   it.each([

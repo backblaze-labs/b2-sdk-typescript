@@ -2,7 +2,6 @@ import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
   endpointAllowedSuffixes,
-  type MutationRequestOptions,
   nonRetryingMutationRequestOptions,
   type QueryParams,
   validatePartnerEndpointUrl,
@@ -159,7 +158,7 @@ export class BackupRawClient {
     request: DeleteComputerRequest,
     options?: BackupRawRequestOptions,
   ): Promise<DeleteComputerResponse> {
-    return this.postJson<DeleteComputerResponse>(
+    return this.postNonRetryingMutationJson<DeleteComputerResponse>(
       backupApiUrl,
       authToken,
       'bz_delete_computer',
@@ -167,7 +166,7 @@ export class BackupRawClient {
         accountId: request.accountId,
         computerId: request.computerId,
       },
-      nonRetryingMutationRequestOptions(options),
+      options,
     )
   }
 
@@ -213,7 +212,7 @@ export class BackupRawClient {
   }
 
   /**
-   * Sends a JSON POST request to the specified Computer Backup API endpoint.
+   * Sends a non-retrying JSON mutation POST request to the specified Computer Backup API endpoint.
    *
    * @param backupApiUrl - The Computer Backup API base URL.
    * @param authToken - The Partner authorization token.
@@ -223,13 +222,14 @@ export class BackupRawClient {
    *
    * @returns The parsed JSON response.
    */
-  private async postJson<T>(
+  private async postNonRetryingMutationJson<T>(
     backupApiUrl: string,
     authToken: string,
     endpoint: string,
     body: unknown,
-    options?: MutationRequestOptions,
+    options?: BackupRawRequestOptions,
   ): Promise<T> {
+    const requestOptions = nonRetryingMutationRequestOptions(options)
     const response = await this.transport.send({
       url: b2Url(this.safeBackupApiUrl(backupApiUrl), { ...BACKUP_API_V1, endpoint }),
       method: 'POST',
@@ -238,9 +238,9 @@ export class BackupRawClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
-      ...(options?.idempotent !== undefined ? { idempotent: options.idempotent } : {}),
-      ...(options?.retry !== undefined ? { retry: options.retry } : {}),
+      ...(requestOptions.signal !== undefined ? { signal: requestOptions.signal } : {}),
+      ...(requestOptions.idempotent !== undefined ? { idempotent: requestOptions.idempotent } : {}),
+      ...(requestOptions.retry !== undefined ? { retry: requestOptions.retry } : {}),
     })
     return response.json<T>()
   }
