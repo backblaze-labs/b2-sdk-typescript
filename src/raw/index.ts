@@ -1239,6 +1239,8 @@ export class RawClient {
       authToken,
       'b2_update_file_retention',
       request,
+      undefined,
+      B2_NATIVE_API_V4,
     )
   }
 
@@ -1260,6 +1262,8 @@ export class RawClient {
       authToken,
       'b2_update_file_legal_hold',
       request,
+      undefined,
+      B2_NATIVE_API_V4,
     )
   }
 

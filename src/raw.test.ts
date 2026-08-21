@@ -4,6 +4,7 @@ import { RawClient } from './raw/index.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import { bucketId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
+import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
 function jsonResponse(value: unknown): HttpResponse {
   return {
@@ -105,6 +106,50 @@ describe('RawClient list request controls', () => {
     ).rejects.toThrow('either bucketIds or deprecated bucketId')
 
     expect(requests).toEqual([])
+  })
+
+  it('pins Object Lock mutation endpoints to native API v4', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        if (request.url.endsWith('/b2_update_file_legal_hold')) {
+          return jsonResponse({
+            fileName: 'locked.txt',
+            fileId: 'file-id',
+            legalHold: LegalHoldValue.On,
+          })
+        }
+        return jsonResponse({
+          fileName: 'locked.txt',
+          fileId: 'file-id',
+          fileRetention: {
+            mode: RetentionMode.Governance,
+            retainUntilTimestamp: 1_762_000_000_000,
+          },
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.updateFileRetention('https://api.example.test', 'auth', {
+      fileName: 'locked.txt',
+      fileId: 'file-id' as never,
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: 1_762_000_000_000,
+      },
+    })
+    await raw.updateFileLegalHold('https://api.example.test', 'auth', {
+      fileName: 'locked.txt',
+      fileId: 'file-id' as never,
+      legalHold: LegalHoldValue.On,
+    })
+
+    expect(requests.map((request) => request.url)).toEqual([
+      'https://api.example.test/b2api/v4/b2_update_file_retention',
+      'https://api.example.test/b2api/v4/b2_update_file_legal_hold',
+    ])
   })
 
   it('passes abort signals and retry through listUnfinishedLargeFiles and listParts', async () => {
