@@ -19,6 +19,18 @@ import type { LargeFileId } from './types/ids.ts'
 import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
+function apiEndpointName(request: { readonly url: string }): string {
+  return new URL(request.url).pathname.split('/').at(-1) ?? ''
+}
+
+async function waitUntil(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 50; i++) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('condition was not met')
+}
+
 describe('B2Client with simulator', () => {
   let client: B2Client
 
@@ -44,6 +56,61 @@ describe('B2Client with simulator', () => {
 
     await expect(expiringClient.listBuckets()).resolves.toEqual([])
     expect(expiringClient.accountInfo.getAuthToken()).not.toBe(originalToken)
+  })
+
+  it('collapses concurrent expired-token reauthorization into one authorize call', async () => {
+    const sim = new B2Simulator({ strictAuth: true, authTokenTtlMs: 1000 })
+    const inner = sim.transport()
+    let authorizeCount = 0
+    let releaseReauth: (() => void) | undefined
+    const reauthGate = new Promise<void>((resolve) => {
+      releaseReauth = resolve
+    })
+    const listAuthorizations: string[] = []
+    const concurrentClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: {
+        async send(request) {
+          const endpoint = apiEndpointName(request)
+          if (endpoint === 'b2_authorize_account') {
+            authorizeCount += 1
+            if (authorizeCount > 1) await reauthGate
+          }
+          if (endpoint === 'b2_list_buckets') {
+            listAuthorizations.push(request.headers?.['Authorization'] ?? '')
+          }
+          return inner.send(request)
+        },
+      },
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+
+    await concurrentClient.authorize()
+    const originalToken = concurrentClient.accountInfo.getAuthToken()
+    sim.advanceTime(2000)
+
+    const calls = Array.from({ length: 5 }, () => concurrentClient.listBuckets())
+    await waitUntil(() => listAuthorizations.length === 5 && authorizeCount >= 2)
+    const authorizeCountDuringReauth = authorizeCount
+    releaseReauth?.()
+    const bucketPages = await Promise.all(calls)
+
+    expect(bucketPages.every((buckets) => buckets.length === 0)).toBe(true)
+    expect(authorizeCountDuringReauth).toBe(2)
+    expect(authorizeCount).toBe(2)
+    expect(listAuthorizations).toEqual([
+      originalToken,
+      originalToken,
+      originalToken,
+      originalToken,
+      originalToken,
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+      concurrentClient.accountInfo.getAuthToken(),
+    ])
   })
 
   it('reauthorizes and returns the fresh auth token', async () => {

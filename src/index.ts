@@ -38,7 +38,12 @@ export {
   type DeleteManyResult,
   type DeleteTarget,
 } from './bucket.ts'
-export { B2Client, type B2ClientOptions, type CapabilityCheckResult } from './client.ts'
+export {
+  B2Client,
+  type B2ClientAuthorizeOptions,
+  type B2ClientOptions,
+  type CapabilityCheckResult,
+} from './client.ts'
 export type { DownloadResult, HeadResult } from './download/single.ts'
 export type { B2ErrorOptions } from './errors/index.ts'
 export {
@@ -107,6 +112,7 @@ export { FetchTransport, getTransportUrlGuard, RetryTransport } from './http/tra
 export { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 export { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
 export {
+  type AuthorizeAccountOptions,
   type DownloadFileOptions,
   RawClient,
   type RawClientOptions,
