@@ -830,6 +830,29 @@ describe('B2Folder', () => {
     )
   })
 
+  it.each([
+    ['missing', undefined],
+    ['non-string', 123],
+  ])('rejects malformed B2 rows with a %s fileId', async (_name, fileIdValue) => {
+    const file: Record<string, unknown> = { ...makeB2FileVersion('a.txt') }
+    if (fileIdValue === undefined) delete file['fileId']
+    else file['fileId'] = fileIdValue
+    const bucket = {
+      async listFileVersions() {
+        return {
+          files: [file],
+          nextFileName: null,
+          nextFileId: null,
+        }
+      },
+    }
+    const folder = new B2Folder(bucket as unknown as Bucket)
+
+    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
+      'row without a string fileId',
+    )
+  })
+
   it('counts unsafe B2 names against scan limits', async () => {
     const bucket = {
       async listFileVersions() {

@@ -121,12 +121,12 @@ export class B2Folder implements SyncFolder {
         listedVersions++
 
         const runtimeFile = fv as { readonly action?: unknown; readonly fileId?: unknown }
-        if (runtimeFile.action === FileAction.Folder || runtimeFile.fileId === null) {
+        if (runtimeFile.action === FileAction.Folder || typeof runtimeFile.fileId !== 'string') {
           throw emitScanError(
             options,
             'failed to scan B2 file versions',
             new Error(
-              'B2 listFileVersions returned a delimiter folder row even though the scanner did not request delimiter grouping',
+              'B2 listFileVersions returned a delimiter folder row or row without a string fileId even though the scanner did not request delimiter grouping',
             ),
           )
         }

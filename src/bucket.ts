@@ -670,8 +670,16 @@ export class Bucket {
     // listFileVersions sorts by name asc then upload timestamp desc, so the
     // first entry is the latest version.
     const latest = versions[0]
-    if (latest?.action !== FileAction.Hide || latest.fileId === null) return null
-    await this.deleteFileVersion(fileName, latest.fileId)
+    if (latest?.action !== FileAction.Hide) return null
+    const latestFileId = (latest as { readonly fileId?: unknown }).fileId
+    if (typeof latestFileId !== 'string') {
+      throw new Error(
+        `unhideFile: listFileVersions returned a hide marker without a fileId for ${JSON.stringify(
+          fileName,
+        )}`,
+      )
+    }
+    await this.deleteFileVersion(fileName, latestFileId as FileId)
     return latest
   }
 
