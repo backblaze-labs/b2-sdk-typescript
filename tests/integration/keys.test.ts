@@ -1,8 +1,9 @@
 /**
  * Integration tests for live Backblaze B2 application-key lifecycle APIs.
  *
- * Uses B2_KEY_MANAGEMENT_APPLICATION_KEY_ID / B2_KEY_MANAGEMENT_APPLICATION_KEY
- * when present, otherwise falls back to B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY.
+ * Requires dedicated B2_KEY_MANAGEMENT_APPLICATION_KEY_ID /
+ * B2_KEY_MANAGEMENT_APPLICATION_KEY credentials. The shared integration
+ * credentials intentionally do not enable these tests.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -11,15 +12,13 @@ import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
 import { Capability, type Capability as CapabilityValue } from '../../src/types/auth.ts'
 import { type ApplicationKeyId, type BucketId, bucketId } from '../../src/types/ids.ts'
-import type { ApplicationKey, FullApplicationKey } from '../../src/types/key.ts'
+import type { ApplicationKey, CreateKeyOptions, FullApplicationKey } from '../../src/types/key.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 
-const baseKeyId = env('B2_APPLICATION_KEY_ID')
-const baseAppKey = env('B2_APPLICATION_KEY')
 const keyManagementKeyId = env('B2_KEY_MANAGEMENT_APPLICATION_KEY_ID')
 const keyManagementAppKey = env('B2_KEY_MANAGEMENT_APPLICATION_KEY')
 const explicitBucketId = env('B2_KEY_MANAGEMENT_BUCKET_ID')
-const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
+const requireCredentials = process.env.B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS === '1'
 
 const hasPartialKeyManagementCredentials =
   (keyManagementKeyId === undefined) !== (keyManagementAppKey === undefined)
@@ -30,13 +29,13 @@ if (hasPartialKeyManagementCredentials) {
   )
 }
 
-const keyId = keyManagementKeyId ?? baseKeyId ?? ''
-const appKey = keyManagementAppKey ?? baseAppKey ?? ''
+const keyId = keyManagementKeyId ?? ''
+const appKey = keyManagementAppKey ?? ''
 const skip = !keyId || !appKey
 
 if (skip && requireCredentials) {
   throw new Error(
-    'B2 key lifecycle integration credentials are required when B2_INTEGRATION_REQUIRE_CREDENTIALS=1',
+    'B2 key lifecycle integration credentials are required when B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS=1',
   )
 }
 
@@ -44,8 +43,15 @@ const requiredKeyCapabilities = [
   Capability.WriteKeys,
   Capability.ListKeys,
   Capability.DeleteKeys,
+  Capability.ReadFiles,
 ] as const
-const scopedCapabilities = [Capability.ListKeys] as const
+const scopedCapabilities = [Capability.ReadFiles] as const
+const subsetRejectionCandidateCapabilities = [
+  Capability.ListFiles,
+  Capability.WriteFiles,
+  Capability.ShareFiles,
+  Capability.DeleteFiles,
+] as const
 const keyNamePrefix = 'sdk-it-key-'
 const bucketNamePrefix = 'sdk-it-key-bucket-'
 const namePrefix = `keys/${runLabel()}/`
@@ -54,7 +60,7 @@ const keyDurationSeconds = 60 * 60
 let client: B2Client
 let scopedBucketId: BucketId
 let createdBucket: Bucket | undefined
-let missingCapability: CapabilityValue | undefined
+let missingScopeableCapability: CapabilityValue | undefined
 const createdKeyIds = new Set<ApplicationKeyId>()
 
 describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
@@ -66,14 +72,9 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     await client.authorize()
 
     requireCapabilities('application-key lifecycle', requiredKeyCapabilities)
-    missingCapability = Object.values(Capability).find(
+    missingScopeableCapability = subsetRejectionCandidateCapabilities.find(
       (capability) => !client.hasCapabilities([capability]).ok,
     )
-    if (missingCapability === undefined && requireCredentials) {
-      throw new Error(
-        'application-key lifecycle subset rejection requires a contract key missing at least one capability',
-      )
-    }
 
     scopedBucketId = await resolveScopedBucketId()
   })
@@ -86,7 +87,7 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
         await client.deleteKey(keyId)
         createdKeyIds.delete(keyId)
       } catch (err) {
-        if (isMissingKeyError(err)) {
+        if (isAlreadyDeletedKeyError(err)) {
           createdKeyIds.delete(keyId)
         } else {
           cleanupErrors.push(err)
@@ -127,7 +128,7 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     expect(allowed?.buckets?.map((bucket) => bucket.id)).toEqual([scopedBucketId])
     expect(allowed?.namePrefix).toBe(namePrefix)
 
-    const listed = await findListedKey(created.applicationKeyId)
+    const listed = await getListedKeyById(created.applicationKeyId)
     expect(listed).toBeDefined()
     assertKeyHasNoSecret(listed)
     expectScopedKey(listed)
@@ -141,26 +142,22 @@ describe.skipIf(skip)('B2 application-key lifecycle integration', () => {
     assertKeyHasNoSecret(deleted)
     expectScopedKey(deleted)
 
-    await expect(findListedKey(created.applicationKeyId)).resolves.toBeUndefined()
+    await expect(getListedKeyById(created.applicationKeyId)).resolves.toBeUndefined()
   })
 
   it('rejects requested capabilities outside the creator grant with 400', async (ctx) => {
-    if (missingCapability === undefined) {
-      ctx.skip('contract credential has every known capability')
+    if (missingScopeableCapability === undefined) {
+      ctx.skip('key-management credential has every checked file-scopeable capability')
       return
     }
 
-    const keyName = makeKeyName('rejected')
-    await expect(
-      client.createKey({
-        keyName,
-        capabilities: [...scopedCapabilities, missingCapability],
-        bucketIds: [scopedBucketId],
-        namePrefix,
-        validDurationInSeconds: keyDurationSeconds,
-      }),
-    ).rejects.toMatchObject({ status: 400 })
-    await expect(findListedKeyByName(keyName)).resolves.toBeUndefined()
+    await expectCreateKeyRejectedWith400({
+      keyName: makeKeyName('rejected'),
+      capabilities: [...scopedCapabilities, missingScopeableCapability],
+      bucketIds: [scopedBucketId],
+      namePrefix,
+      validDurationInSeconds: keyDurationSeconds,
+    })
   })
 })
 
@@ -247,36 +244,10 @@ async function deleteCreatedKey(id: ApplicationKeyId): Promise<void> {
   createdKeyIds.delete(id)
 }
 
-async function findListedKey(id: ApplicationKeyId): Promise<ApplicationKey | undefined> {
-  return findListedKeyWhere((key) => key.applicationKeyId === id)
-}
-
-async function findListedKeyByName(keyName: string): Promise<ApplicationKey | undefined> {
-  return findListedKeyWhere((key) => key.keyName === keyName)
-}
-
-async function findListedKeyWhere(
-  predicate: (key: ApplicationKey) => boolean,
-): Promise<ApplicationKey | undefined> {
-  let startApplicationKeyId: ApplicationKeyId | undefined
-  const seenCursors = new Set<string>()
-
-  for (;;) {
-    const page = await client.listKeys({
-      pageSize: 100,
-      ...(startApplicationKeyId !== undefined ? { startApplicationKeyId } : {}),
-    })
-    const found = page.keys.find(predicate)
-    if (found !== undefined) return found
-
-    const next = page.nextApplicationKeyId
-    if (next === null) return undefined
-    if (seenCursors.has(next)) {
-      throw new Error(`listKeys pagination cursor repeated: ${next}`)
-    }
-    seenCursors.add(next)
-    startApplicationKeyId = next
-  }
+async function getListedKeyById(id: ApplicationKeyId): Promise<ApplicationKey | undefined> {
+  const page = await client.listKeys({ pageSize: 1, startApplicationKeyId: id })
+  const first = page.keys[0]
+  return first?.applicationKeyId === id ? first : undefined
 }
 
 async function expectPaginationRoundTrip(): Promise<void> {
@@ -310,6 +281,30 @@ function assertKeyHasNoSecret(key: ApplicationKey | undefined): void {
   expect(Object.hasOwn(key as object, 'applicationKey')).toBe(false)
 }
 
-function isMissingKeyError(err: unknown): boolean {
-  return hasB2ErrorCode(err, 'not_found') || hasB2ErrorCode(err, 'bad_request')
+async function expectCreateKeyRejectedWith400(options: CreateKeyOptions): Promise<void> {
+  let created: FullApplicationKey | undefined
+  try {
+    created = await client.createKey(options)
+    createdKeyIds.add(created.applicationKeyId)
+  } catch (err) {
+    expect(err).toMatchObject({ status: 400 })
+    return
+  }
+
+  let cleanupDeferred = false
+  try {
+    await deleteCreatedKey(created.applicationKeyId)
+  } catch {
+    cleanupDeferred = true
+  }
+
+  throw new Error(
+    `expected createKey to reject with 400, but B2 created ${created.applicationKeyId}${
+      cleanupDeferred ? '; cleanup deferred to afterAll' : ''
+    }`,
+  )
+}
+
+function isAlreadyDeletedKeyError(err: unknown): boolean {
+  return hasB2ErrorCode(err, 'not_found')
 }
