@@ -1775,13 +1775,18 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       authToken,
       { bucketId: bucket.id, namePrefix: 'redacted-large.bin' },
     )
-    expect(restrictedListing.files[0]?.fileRetention).toEqual({
-      isClientAuthorizedToRead: false,
-      value: null,
-    })
-    expect(restrictedListing.files[0]?.legalHold).toEqual({
-      isClientAuthorizedToRead: false,
-      value: null,
+    expect(restrictedListing.files).toHaveLength(1)
+    const [restrictedFile] = restrictedListing.files
+    expect(restrictedFile).toMatchObject({
+      fileName: 'redacted-large.bin',
+      fileRetention: {
+        isClientAuthorizedToRead: false,
+        value: null,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: false,
+        value: null,
+      },
     })
 
     const readerKey = await client.createKey({
@@ -1799,13 +1804,18 @@ describe('B2Simulator strictAuth: capability enforcement', () => {
       readerClient.accountInfo.getAuthToken(),
       { bucketId: bucket.id, namePrefix: 'redacted-large.bin' },
     )
-    expect(visibleListing.files[0]?.fileRetention).toEqual({
-      isClientAuthorizedToRead: true,
-      value: fileRetention,
-    })
-    expect(visibleListing.files[0]?.legalHold).toEqual({
-      isClientAuthorizedToRead: true,
-      value: LegalHoldValue.On,
+    expect(visibleListing.files).toHaveLength(1)
+    const [visibleFile] = visibleListing.files
+    expect(visibleFile).toMatchObject({
+      fileName: 'redacted-large.bin',
+      fileRetention: {
+        isClientAuthorizedToRead: true,
+        value: fileRetention,
+      },
+      legalHold: {
+        isClientAuthorizedToRead: true,
+        value: LegalHoldValue.On,
+      },
     })
   })
 
