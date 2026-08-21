@@ -381,6 +381,9 @@ describe('Bucket.defaultRetention helpers', () => {
     })
 
     await expect(configured.getDefaultRetention()).resolves.toEqual(policy)
+    expect(configured.info.fileLockConfiguration.value?.defaultRetention).toEqual(policy)
+    // @ts-expect-error Regression for #212: BucketInfo has no phantom top-level retention field.
+    expect(configured.info.defaultRetention).toBeUndefined()
   })
 
   it('setDefaultRetention persists a compliance-mode policy', async () => {
