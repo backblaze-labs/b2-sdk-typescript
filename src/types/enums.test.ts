@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import type { ListBucketsRequest } from './bucket.ts'
 import {
+  type BucketResponseType,
   BucketRetentionMode,
   BucketType,
   Capability,
   CorsOperation,
+  type CreateBucketRequest,
   computerId,
   EncryptionAlgorithm,
   EncryptionMode,
   EventType,
   FileAction,
   groupId,
+  KnownBucketResponseType,
   LegalHoldValue,
   MetadataDirective,
   PartnerCapability,
@@ -18,13 +22,11 @@ import {
 } from './index.ts'
 
 /**
- * Property tests that lock in the contract between each string-literal type
- * alias and its paired `as const` enum object:
+ * Property tests that lock in the contract between string-literal type
+ * aliases and their paired `as const` enum objects:
  *
- *   - every key in the enum object resolves to a value that is still in the
- *     union (no typo can drift the const out of the type)
- *   - every value in the union appears exactly once in the enum object (no
- *     value can be added to the type and forgotten here)
+ *   - every key in the enum object resolves to an expected string literal
+ *   - every expected enum value appears exactly once in the enum object
  *
  * If either invariant is broken, the test fails loudly rather than only
  * `typecheck` catching it — meaning developers running `pnpm test` see the
@@ -45,8 +47,18 @@ function expectEnumMatches<T extends string>(
 }
 
 describe('const-object enums', () => {
-  it('BucketType covers every BucketType value', () => {
+  it('BucketType covers every request bucketType value', () => {
     expectEnumMatches(BucketType, ['allPublic', 'allPrivate', 'snapshot', 'restricted'])
+  })
+
+  it('KnownBucketResponseType covers every documented response bucketType value', () => {
+    expectEnumMatches(KnownBucketResponseType, [
+      'allPublic',
+      'allPrivate',
+      'snapshot',
+      'restricted',
+      'shared',
+    ])
   })
 
   it('BucketRetentionMode covers every BucketRetentionMode value', () => {
@@ -159,6 +171,39 @@ describe('enum value typing (compile-time)', () => {
   it('BucketType.AllPrivate is assignable to BucketType', () => {
     const v: BucketType = BucketType.AllPrivate
     expect(v).toBe('allPrivate')
+  })
+
+  it('KnownBucketResponseType.Shared is assignable to known and open response bucket types', () => {
+    const known: KnownBucketResponseType = KnownBucketResponseType.Shared
+    const v: BucketResponseType = known
+    expect(v).toBe('shared')
+  })
+
+  it('BucketResponseType accepts future B2 bucket type strings', () => {
+    const v: BucketResponseType = 'futureBucketType'
+    expect(v).toBe('futureBucketType')
+  })
+
+  it('response-only and list-only bucket types use separate contracts', () => {
+    function acceptsCreateBucketType(_value: CreateBucketRequest['bucketType']): true {
+      return true
+    }
+    function acceptsListBucketTypes(_value: NonNullable<ListBucketsRequest['bucketTypes']>): true {
+      return true
+    }
+
+    const mutableRequestFilters: BucketType[] = [BucketType.AllPrivate]
+    const readonlyRequestFilters: readonly BucketType[] = [BucketType.AllPrivate]
+    expect(acceptsCreateBucketType(BucketType.AllPrivate)).toBe(true)
+    expect(Object.values(BucketType)).not.toContain(KnownBucketResponseType.Shared)
+    expect(acceptsListBucketTypes([BucketType.AllPrivate])).toBe(true)
+    expect(acceptsListBucketTypes(mutableRequestFilters)).toBe(true)
+    expect(acceptsListBucketTypes(readonlyRequestFilters)).toBe(true)
+    expect(acceptsListBucketTypes([KnownBucketResponseType.Shared])).toBe(true)
+    expect(acceptsListBucketTypes(['futureBucketType'])).toBe(true)
+    expect(acceptsListBucketTypes(['all'])).toBe(true)
+    // @ts-expect-error shared is a response-only bucket type.
+    acceptsCreateBucketType(KnownBucketResponseType.Shared)
   })
 
   it('LegalHoldValue.On is assignable to LegalHoldValue', () => {

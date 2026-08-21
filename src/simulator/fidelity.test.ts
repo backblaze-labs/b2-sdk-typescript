@@ -11,6 +11,7 @@ import {
   BucketType,
   CorsOperation,
   type CorsRule,
+  KnownBucketResponseType,
   type LifecycleRule,
 } from '../types/bucket.ts'
 import type { DownloadAuthorizationRequest } from '../types/download.ts'
@@ -71,8 +72,9 @@ function expectConcreteListEntry(
 
 describe('B2Simulator input validation: bucket name', () => {
   let client: B2Client
+  let sim: B2Simulator
   beforeEach(async () => {
-    ;({ client } = makeClient())
+    ;({ client, sim } = makeClient())
     await client.authorize()
   })
 
@@ -115,6 +117,40 @@ describe('B2Simulator input validation: bucket name', () => {
       bucketType: BucketType.AllPrivate,
     })
     expect(bucket.name).toBe('happy.bucket')
+  })
+
+  it('rejects response-only bucket types on raw create and update requests', async () => {
+    const transport = sim.transport()
+
+    const createResp = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_create_bucket',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        bucketName: 'shared-create',
+        bucketType: KnownBucketResponseType.Shared,
+      }),
+    })
+    expect(createResp.status).toBe(400)
+    await expect(createResp.json()).resolves.toMatchObject({ code: 'bad_request' })
+
+    const bucket = await client.createBucket({
+      bucketName: 'request-type',
+      bucketType: BucketType.AllPrivate,
+    })
+    const updateResp = await transport.send({
+      method: 'POST',
+      url: 'http://localhost:0/b2api/v3/b2_update_bucket',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountId: 'sim_account_0001',
+        bucketId: bucket.id,
+        bucketType: KnownBucketResponseType.Shared,
+      }),
+    })
+    expect(updateResp.status).toBe(400)
+    await expect(updateResp.json()).resolves.toMatchObject({ code: 'bad_request' })
   })
 })
 
@@ -553,11 +589,16 @@ describe('B2Simulator listBuckets filters', () => {
         bucketTypes: [BucketType.AllPrivate],
       }),
     ).resolves.toEqual([])
+    await expect(client.listBuckets({ bucketTypes: ['all'] })).resolves.toHaveLength(2)
+    await expect(
+      client.listBuckets({ bucketTypes: [KnownBucketResponseType.Shared] }),
+    ).resolves.toEqual([])
+    await expect(client.listBuckets({ bucketTypes: ['futureBucketType'] })).resolves.toEqual([])
   })
 
   it('returns structured 400 responses for malformed bucketTypes filters', async () => {
     const transport = sim.transport()
-    for (const bucketTypes of [null, {}, 'allPrivate', ['not-real']]) {
+    for (const bucketTypes of [null, {}, 'allPrivate', [], [42], ['all', 'allPrivate']]) {
       const resp = await transport.send({
         method: 'POST',
         url: 'http://localhost:0/b2api/v3/b2_list_buckets',

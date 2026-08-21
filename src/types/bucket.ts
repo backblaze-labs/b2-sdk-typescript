@@ -3,11 +3,7 @@ import type { AccountId, BucketId } from './ids.ts'
 import type { ReplicationConfiguration } from './replication.ts'
 
 /**
- * Named constants for the bucket access level.
- *
- * The {@link BucketType} type alias is derived from the values of this
- * object, so the const is the single source of truth: adding a key here
- * automatically widens the type union.
+ * Named constants for bucket types accepted by create/update bucket requests.
  *
  * @example
  * ```ts
@@ -25,8 +21,42 @@ export const BucketType = {
   Restricted: 'restricted',
 } as const
 
-/** Access level for a B2 bucket. Derived from {@link BucketType}. */
+/** Bucket access levels accepted by B2 bucket create/update requests. */
 export type BucketType = (typeof BucketType)[keyof typeof BucketType]
+
+/** Named constants for documented bucket response types known to the SDK. */
+export const KnownBucketResponseType = {
+  ...BucketType,
+  /** Response-only bucket type for buckets shared with the account. */
+  Shared: 'shared',
+} as const
+
+/** Closed union of documented bucket response types known to the SDK. */
+export type KnownBucketResponseType =
+  (typeof KnownBucketResponseType)[keyof typeof KnownBucketResponseType]
+
+/** Bucket type returned by B2 bucket responses, including future B2-added values. */
+export type BucketResponseType = KnownBucketResponseType | (string & {})
+
+/**
+ * Bucket type value accepted by `b2_list_buckets.bucketTypes`.
+ *
+ * This includes future B2-added strings, so TypeScript cannot statically exclude
+ * the special `'all'` value from this open string type. Runtime validation still
+ * enforces that `'all'` is only valid as `['all']` and that filters are non-empty.
+ */
+export type BucketListType = BucketResponseType
+
+/**
+ * Bucket type filter accepted by `b2_list_buckets`.
+ *
+ * Use `['all']` by itself to request all bucket types. Other filters may include
+ * documented response types such as `'shared'` and future B2-added type strings.
+ * Because future bucket types are modeled as an open string, TypeScript cannot
+ * reject empty arrays or mixed arrays containing `'all'`; B2 and the simulator
+ * reject them at runtime.
+ */
+export type BucketTypesFilter = readonly ['all'] | readonly BucketListType[]
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -170,8 +200,8 @@ export interface BucketInfo {
   readonly bucketId: BucketId
   /** Globally unique name of this bucket. */
   readonly bucketName: string
-  /** Access level of this bucket. */
-  readonly bucketType: BucketType
+  /** Access level or response-only type of this bucket. */
+  readonly bucketType: BucketResponseType
   /** User-defined key-value metadata stored on the bucket. */
   readonly bucketInfo: Record<string, string>
   /** CORS rules configured on this bucket. */
@@ -270,7 +300,7 @@ export interface ListBucketsRequest {
   /** Optional filter to return only the bucket with this name. */
   readonly bucketName?: string
   /** Optional filter to return only buckets of these types. */
-  readonly bucketTypes?: readonly BucketType[]
+  readonly bucketTypes?: BucketTypesFilter
 }
 
 /** Response from the `b2_list_buckets` API call. */

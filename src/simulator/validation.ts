@@ -496,7 +496,24 @@ function validateUniqueName(
 // Bucket configuration (`b2_create_bucket`, `b2_update_bucket`)
 // ---------------------------------------------------------------------------
 
-const KNOWN_BUCKET_TYPES = new Set<string>(Object.values(BucketType))
+const REQUEST_BUCKET_TYPES = new Set<string>(Object.values(BucketType))
+
+/**
+ * Validates a create/update request `bucketType`.
+ *
+ * @param bucketType - Caller-supplied bucket type.
+ *
+ * @returns A `{ code, message }` pair on failure, or `null` when valid.
+ *
+ * @see https://www.backblaze.com/apidocs/b2-create-bucket
+ * @see https://www.backblaze.com/apidocs/b2-update-bucket
+ */
+export function validateBucketType(bucketType: unknown): ValidationError | null {
+  if (typeof bucketType !== 'string' || !REQUEST_BUCKET_TYPES.has(bucketType)) {
+    return { code: 'bad_request', message: 'bucketType must be a known request bucket type' }
+  }
+  return null
+}
 
 /**
  * Validates a `b2_list_buckets.bucketTypes` filter.
@@ -512,11 +529,18 @@ export function validateBucketTypes(bucketTypes: unknown): ValidationError | nul
   if (!Array.isArray(bucketTypes)) {
     return { code: 'bad_request', message: 'bucketTypes must be an array' }
   }
+  if (bucketTypes.length === 0) {
+    return { code: 'bad_request', message: 'bucketTypes must not be empty' }
+  }
+  if (bucketTypes.length === 1 && bucketTypes[0] === 'all') return null
+  if (bucketTypes.includes('all')) {
+    return { code: 'bad_request', message: "bucketTypes may contain 'all' only by itself" }
+  }
   for (const [index, bucketType] of bucketTypes.entries()) {
-    if (typeof bucketType !== 'string' || !KNOWN_BUCKET_TYPES.has(bucketType)) {
+    if (typeof bucketType !== 'string') {
       return {
         code: 'bad_request',
-        message: `bucketTypes[${index}] must be a known bucket type`,
+        message: `bucketTypes[${index}] must be a string`,
       }
     }
   }

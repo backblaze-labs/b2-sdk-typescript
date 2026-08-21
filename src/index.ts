@@ -129,7 +129,12 @@ export { Capability } from './types/auth.ts'
 // (`BucketType.AllPrivate` instead of `'allPrivate'`) without breaking the
 // existing string-literal call sites. Each export here has a matching type
 // of the same name forwarded by the `export type *` line below.
-export { BucketRetentionMode, BucketType, CorsOperation } from './types/bucket.ts'
+export {
+  BucketRetentionMode,
+  BucketType,
+  CorsOperation,
+  KnownBucketResponseType,
+} from './types/bucket.ts'
 export {
   DownloadClientUnauthorizedToReadMarker,
   DownloadHeaderName,

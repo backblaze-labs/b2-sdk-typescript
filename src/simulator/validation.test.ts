@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { Capability } from '../types/auth.ts'
-import { BucketRetentionMode, CorsOperation } from '../types/bucket.ts'
+import {
+  BucketRetentionMode,
+  BucketType,
+  CorsOperation,
+  KnownBucketResponseType,
+} from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
@@ -16,6 +21,7 @@ import {
   normalizeCreateKeyCapabilities,
   validateBucketInfo,
   validateBucketName,
+  validateBucketType,
   validateBucketTypes,
   validateCorsRules,
   validateCreateKeyCapabilities,
@@ -212,16 +218,36 @@ describe('validateDownloadAuthorizationPrefix', () => {
 })
 
 describe('validateBucketTypes', () => {
-  it('accepts undefined and known bucket type arrays', () => {
+  it('accepts undefined, documented response types, future types, and all by itself', () => {
     expect(validateBucketTypes(undefined)).toBeNull()
     expect(validateBucketTypes(['allPrivate', 'allPublic'])).toBeNull()
+    expect(validateBucketTypes([KnownBucketResponseType.Shared])).toBeNull()
+    expect(validateBucketTypes(['futureBucketType'])).toBeNull()
+    expect(validateBucketTypes(['all'])).toBeNull()
   })
 
-  it('rejects non-array and unknown bucket type values', () => {
+  it('rejects empty, non-array, non-string, and mixed all filter values', () => {
     expect(validateBucketTypes(null)?.code).toBe('bad_request')
     expect(validateBucketTypes({})?.code).toBe('bad_request')
     expect(validateBucketTypes('allPrivate')?.code).toBe('bad_request')
-    expect(validateBucketTypes(['allPrivate', 'not-real'])?.code).toBe('bad_request')
+    expect(validateBucketTypes([])?.code).toBe('bad_request')
+    expect(validateBucketTypes([42])?.code).toBe('bad_request')
+    expect(validateBucketTypes(['all', 'allPrivate'])?.code).toBe('bad_request')
+  })
+})
+
+describe('validateBucketType', () => {
+  it('accepts every exported request bucket type', () => {
+    for (const bucketType of Object.values(BucketType)) {
+      expect(validateBucketType(bucketType)).toBeNull()
+    }
+  })
+
+  it('rejects response-only and unknown request bucket types', () => {
+    expect(Object.values(BucketType)).not.toContain(KnownBucketResponseType.Shared)
+    expect(validateBucketType(KnownBucketResponseType.Shared)?.code).toBe('bad_request')
+    expect(validateBucketType('futureBucketType')?.code).toBe('bad_request')
+    expect(validateBucketType(undefined)?.code).toBe('bad_request')
   })
 })
 
