@@ -150,8 +150,8 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
    * customer key identity for unfinished files. A mismatch, or a file ID that
    * cannot be verified through B2's unfinished-large-file listing, throws
    * {@link ResumeFileIdMismatchError}. Caller-supplied Object Lock settings are
-   * verified when present; omitted unreadable Object Lock fields do not reject
-   * an explicitly targeted file.
+   * verified when present; when they are omitted, readable current bucket
+   * defaults or unreadable Object Lock state still participate in verification.
    */
   readonly resumeFileId?: LargeFileId
   /** Diagnostic callback invoked when resume discovery rejects a candidate. */

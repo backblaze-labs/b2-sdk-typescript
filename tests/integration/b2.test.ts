@@ -667,7 +667,6 @@ describe.skipIf(skip)('B2 integration', () => {
         fileName,
         contentType: 'application/octet-stream',
         fileInfo: {},
-        serverSideEncryption: SSE_B2,
       },
     )
     let finished = false
@@ -691,7 +690,6 @@ describe.skipIf(skip)('B2 integration', () => {
           concurrency: 2,
           resumeFileId: started.fileId,
           fileRetention,
-          serverSideEncryption: SSE_B2,
           onResumePartReused: (event) => {
             reusedParts.push(event.partNumber)
             reusedPartSha1s.push(event.contentSha1)
