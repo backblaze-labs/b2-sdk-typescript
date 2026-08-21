@@ -163,9 +163,8 @@ async function postNativeJsonOnce<T>(
   const url = new URL(`/b2api/${version}/${endpoint}`, client.accountInfo.getApiUrl())
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), probeTimeoutMs)
-  let response: Response
   try {
-    response = await fetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: client.accountInfo.getAuthToken(),
@@ -174,6 +173,20 @@ async function postNativeJsonOnce<T>(
       body: JSON.stringify(body),
       signal: controller.signal,
     })
+    const parsed = parseJsonBody(await response.text())
+    if (response.ok) return { ok: true, body: parsed as T }
+
+    const error = parsed as {
+      readonly status?: unknown
+      readonly code?: unknown
+      readonly message?: unknown
+    }
+    return {
+      ok: false,
+      status: typeof error.status === 'number' ? error.status : response.status,
+      code: typeof error.code === 'string' ? error.code : 'unknown',
+      message: typeof error.message === 'string' ? error.message : '',
+    }
   } catch (err) {
     return {
       ok: false,
@@ -183,21 +196,6 @@ async function postNativeJsonOnce<T>(
     }
   } finally {
     clearTimeout(timeout)
-  }
-
-  const parsed = parseJsonBody(await response.text())
-  if (response.ok) return { ok: true, body: parsed as T }
-
-  const error = parsed as {
-    readonly status?: unknown
-    readonly code?: unknown
-    readonly message?: unknown
-  }
-  return {
-    ok: false,
-    status: typeof error.status === 'number' ? error.status : response.status,
-    code: typeof error.code === 'string' ? error.code : 'unknown',
-    message: typeof error.message === 'string' ? error.message : '',
   }
 }
 
