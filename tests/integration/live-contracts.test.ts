@@ -155,7 +155,7 @@ async function createRawMultipartFile(
       await expectWrongSha1PartRejected(client, started.fileId, parts[0] ?? new Uint8Array())
     }
 
-    const uploadedParts = []
+    const uploadedParts: UploadPartResponse[] = []
     for (let i = 0; i < parts.length; i++) {
       uploadedParts.push(
         await uploadRawPart(client, started.fileId, i + 1, parts[i] ?? new Uint8Array()),

@@ -12,7 +12,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Bucket } from '../../src/bucket.ts'
 import { B2Client } from '../../src/client.ts'
-import type { HttpRequest } from '../../src/http/transport.ts'
+import { FetchTransport, type HttpRequest, type HttpTransport } from '../../src/http/transport.ts'
 import { RawClient } from '../../src/raw/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
@@ -48,6 +48,20 @@ import {
 } from '../helpers/live-b2.ts'
 
 requireB2IntegrationCredentials()
+
+function recordingLiveTransport(requests: HttpRequest[]): HttpTransport {
+  const inner = new FetchTransport()
+  return {
+    send(request) {
+      requests.push(request)
+      return inner.send(request)
+    },
+  }
+}
+
+function endpointName(url: string): string {
+  return new URL(url).pathname.split('/').at(-1) ?? ''
+}
 
 describe('B2 integration cleanup safety', () => {
   it('does not use Object Lock bypass cleanup for prefix-discovered stale buckets', async () => {
