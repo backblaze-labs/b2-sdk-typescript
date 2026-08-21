@@ -100,6 +100,13 @@ describe('bucket configuration validation', () => {
       'invalid_bucket_info',
       'must match ^[A-Za-z0-9_-]+$',
     )
+
+    expectBucketConfigurationError(
+      () => assertValidBucketInfo({ 'bad\nkey': 'value' }),
+      'bucketInfo',
+      'invalid_bucket_info',
+      'must match ^[A-Za-z0-9_-]+$',
+    )
   })
 
   it('rejects non-string bucketInfo values', () => {
@@ -192,6 +199,13 @@ describe('bucket configuration validation', () => {
   it('rejects CORS rule names with unsupported characters', () => {
     expectBucketConfigurationError(
       () => assertValidCorsRules([validCorsRule({ corsRuleName: 'bad_name' })]),
+      'corsRules',
+      'bad_request',
+      'must match ^[A-Za-z0-9-]+$',
+    )
+
+    expectBucketConfigurationError(
+      () => assertValidCorsRules([validCorsRule({ corsRuleName: 'rule-1\n' })]),
       'corsRules',
       'bad_request',
       'must match ^[A-Za-z0-9-]+$',
