@@ -925,7 +925,7 @@ describe('B2Simulator input validation: notification rules', () => {
           ...validRule,
           targetConfiguration: {
             ...validRule.targetConfiguration,
-            customHeaders: [{ name: 'X-Webhook-Oversized', value: 'a'.repeat(2049) }],
+            customHeaders: [{ name: 'X-A', value: 'a'.repeat(2043) }],
           },
         },
       ]),

@@ -974,7 +974,8 @@ const KNOWN_NOTIFICATION_EVENT_TYPES = new Set<string>(Object.values(EventType))
 
 function encodedHeaderBytes(name: string, value: string): number | null {
   try {
-    return encodeURIComponent(name).length + encodeURIComponent(value).length
+    // B2 counts the URL-encoded name/value plus the `:\r\n` separator per header.
+    return encodeURIComponent(name).length + encodeURIComponent(value).length + 3
   } catch {
     return null
   }
