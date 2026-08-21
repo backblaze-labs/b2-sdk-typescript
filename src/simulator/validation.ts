@@ -965,14 +965,44 @@ const NOTIFICATION_TARGET_FIELDS = new Set([
 ])
 
 const NOTIFICATION_CUSTOM_HEADER_FIELDS = new Set(['name', 'value'])
+const NOTIFICATION_CUSTOM_HEADER_MAX_COUNT = 10
+const NOTIFICATION_CUSTOM_HEADER_MAX_ENCODED_BYTES = 2048
+const NOTIFICATION_CUSTOM_HEADER_RESERVED_PREFIX = 'x-bz-'
+const HTTP_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
 const KNOWN_NOTIFICATION_EVENT_TYPES = new Set<string>(Object.values(EventType))
+
+function encodedHeaderBytes(name: string, value: string): number | null {
+  try {
+    return encodeURIComponent(name).length + encodeURIComponent(value).length
+  } catch {
+    return null
+  }
+}
+
+function isValidHeaderValue(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i)
+    if (code === 9) continue
+    if (code < 32 || code === 127) return false
+  }
+  return true
+}
 
 function validateNotificationCustomHeaders(value: unknown, path: string): ValidationError | null {
   if (value === undefined) return null
   if (!Array.isArray(value)) {
     return { code: 'bad_request', message: `${path} must be an array of objects` }
   }
+  if (value.length > NOTIFICATION_CUSTOM_HEADER_MAX_COUNT) {
+    return {
+      code: 'bad_request',
+      message: `${path} must contain no more than ${NOTIFICATION_CUSTOM_HEADER_MAX_COUNT} entries`,
+    }
+  }
+
+  const names = new Set<string>()
+  let encodedBytes = 0
   for (const [index, header] of value.entries()) {
     const headerPath = `${path}[${index}]`
     if (!isRecord(header)) {
@@ -985,6 +1015,42 @@ function validateNotificationCustomHeaders(value: unknown, path: string): Valida
     }
     if (typeof header['value'] !== 'string') {
       return { code: 'bad_request', message: `${headerPath}.value must be a string` }
+    }
+
+    const name = header['name']
+    const normalizedName = name.toLowerCase()
+    if (!HTTP_HEADER_NAME_RE.test(name)) {
+      return { code: 'bad_request', message: `${headerPath}.name must be a valid HTTP header name` }
+    }
+    if (normalizedName.startsWith(NOTIFICATION_CUSTOM_HEADER_RESERVED_PREFIX)) {
+      return {
+        code: 'bad_request',
+        message: `${headerPath}.name must not begin with X-Bz-`,
+      }
+    }
+    if (names.has(normalizedName)) {
+      return { code: 'bad_request', message: `${headerPath}.name must be unique` }
+    }
+    names.add(normalizedName)
+
+    const headerValue = header['value']
+    if (!isValidHeaderValue(headerValue)) {
+      return {
+        code: 'bad_request',
+        message: `${headerPath}.value must be a valid HTTP header value`,
+      }
+    }
+
+    const size = encodedHeaderBytes(name, headerValue)
+    if (size === null) {
+      return { code: 'bad_request', message: `${headerPath} must be URL-encodable` }
+    }
+    encodedBytes += size
+    if (encodedBytes > NOTIFICATION_CUSTOM_HEADER_MAX_ENCODED_BYTES) {
+      return {
+        code: 'bad_request',
+        message: `${path} URL-encoded name/value bytes must not exceed ${NOTIFICATION_CUSTOM_HEADER_MAX_ENCODED_BYTES}`,
+      }
     }
   }
   return null

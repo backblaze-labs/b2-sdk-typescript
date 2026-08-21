@@ -64,7 +64,7 @@ export interface EventNotificationCustomHeader {
  *
  * @returns A name/value lookup record.
  */
-export function customHeadersToRecord(
+export function notificationCustomHeadersToRecord(
   customHeaders: readonly EventNotificationCustomHeader[] | undefined,
 ): Record<string, string> {
   const record: Record<string, string> = {}
@@ -81,7 +81,7 @@ export function customHeadersToRecord(
  *
  * @returns Wire-shaped custom headers for an event-notification rule.
  */
-export function recordToCustomHeaders(
+export function recordToNotificationCustomHeaders(
   customHeaders: Readonly<Record<string, string>> | undefined,
 ): EventNotificationCustomHeader[] {
   if (customHeaders === undefined) return []

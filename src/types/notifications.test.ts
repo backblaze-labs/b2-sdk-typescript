@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { customHeadersToRecord, recordToCustomHeaders } from './notifications.ts'
+import {
+  notificationCustomHeadersToRecord,
+  recordToNotificationCustomHeaders,
+} from './notifications.ts'
 
 describe('notification custom header helpers', () => {
   it('converts between B2 wire arrays and lookup records', () => {
@@ -8,12 +11,12 @@ describe('notification custom header helpers', () => {
       { name: 'X-B2-Rule', value: 'upload-webhook' },
     ] as const
 
-    expect(customHeadersToRecord(wireHeaders)).toEqual({
+    expect(notificationCustomHeadersToRecord(wireHeaders)).toEqual({
       'X-B2-Source': 'sdk-test',
       'X-B2-Rule': 'upload-webhook',
     })
     expect(
-      recordToCustomHeaders({
+      recordToNotificationCustomHeaders({
         'X-B2-Source': 'sdk-test',
         'X-B2-Rule': 'upload-webhook',
       }),

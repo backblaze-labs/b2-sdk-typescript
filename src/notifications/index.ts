@@ -2,7 +2,10 @@ export type {
   EventNotificationCustomHeader,
   EventNotificationRule,
 } from '../types/notifications.ts'
-export { customHeadersToRecord, recordToCustomHeaders } from '../types/notifications.ts'
+export {
+  notificationCustomHeadersToRecord,
+  recordToNotificationCustomHeaders,
+} from '../types/notifications.ts'
 export type {
   VerifyWebhookOptions,
   VerifyWebhookResult,

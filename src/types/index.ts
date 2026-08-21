@@ -151,7 +151,11 @@ export type {
   SetBucketNotificationRulesResponse,
 } from './notifications.ts'
 // `EventType` is forwarded as both type and value; custom-header helpers are values.
-export { customHeadersToRecord, EventType, recordToCustomHeaders } from './notifications.ts'
+export {
+  EventType,
+  notificationCustomHeadersToRecord,
+  recordToNotificationCustomHeaders,
+} from './notifications.ts'
 export type {
   CreateGroupMemberRequest,
   CreateGroupMemberResponse,
