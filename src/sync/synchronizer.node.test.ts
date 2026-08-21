@@ -21,7 +21,7 @@ import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { EncryptionMode } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { localFileIoTestHooks } from './local-file-io.ts'
 import { B2Folder } from './scanners/b2.ts'
@@ -94,7 +94,7 @@ function makeB2Path(relativePath: string, size: number, fileName = relativePath)
     modTimeMillis: version.uploadTimestamp,
     size,
     selectedVersion: version,
-    allVersions: [version],
+    allVersions: [version as ListedFileVersion],
   }
 }
 

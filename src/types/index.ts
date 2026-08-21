@@ -91,11 +91,17 @@ export type {
   GetFileInfoRequest,
   HideFileRequest,
   ListedConcreteFileVersion,
+  ListedFileAction,
+  ListedFileVersion,
   ListedHideFileVersion,
   ListFileNamesRequest,
   ListFileNamesResponse,
+  ListFileNamesWithDelimiterRequest,
+  ListFileNamesWithDelimiterResponse,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
+  ListFileVersionsWithDelimiterRequest,
+  ListFileVersionsWithDelimiterResponse,
   ReplicationStatus,
 } from './file.ts'
 // `FileAction` and `MetadataDirective` are forwarded as both type and value.

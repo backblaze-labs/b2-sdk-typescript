@@ -21,7 +21,12 @@ import {
   SSE_NONE,
   sseCustomer,
 } from '../types/encryption.ts'
-import { FileAction, type FileVersionListEntry, MetadataDirective } from '../types/file.ts'
+import {
+  FileAction,
+  type FileVersionListEntry,
+  type ListedFileVersion,
+  MetadataDirective,
+} from '../types/file.ts'
 import { accountId, applicationKeyId, bucketId, fileId as fileIdOf } from '../types/ids.ts'
 import { type EventNotificationRule, EventType } from '../types/notifications.ts'
 import type { ReplicationConfiguration } from '../types/replication.ts'
@@ -47,10 +52,14 @@ import {
 
 function expectConcreteListEntry(
   entry: FileVersionListEntry | undefined,
-): asserts entry is Exclude<FileVersionListEntry, { readonly action: typeof FileAction.Folder }> {
+): asserts entry is ListedFileVersion {
   expect(entry).toBeDefined()
-  if (entry === undefined || entry.action === FileAction.Folder) {
-    throw new Error('expected a concrete file-version list entry')
+  if (
+    entry === undefined ||
+    entry.action === FileAction.Folder ||
+    entry.action === FileAction.Hide
+  ) {
+    throw new Error('expected a listed file-version entry with file metadata')
   }
 }
 
@@ -1168,6 +1177,17 @@ describe('B2Simulator listing order', () => {
         fileName: 'docs/readme.txt',
       },
     ])
+    const hideRow = versions.files.find((file) => file.action === FileAction.Hide)
+    expect(hideRow).toMatchObject({
+      action: FileAction.Hide,
+      contentType: null,
+      fileId: hidden.fileId,
+      fileName: 'docs/changelog.txt',
+    })
+    expect(hideRow).not.toHaveProperty('fileRetention')
+    expect(hideRow).not.toHaveProperty('legalHold')
+    expect(hideRow).not.toHaveProperty('serverSideEncryption')
+
     expect(versions.files[0]).toMatchObject({
       action: FileAction.Folder,
       contentLength: 0,

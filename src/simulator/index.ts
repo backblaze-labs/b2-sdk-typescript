@@ -37,6 +37,7 @@ import {
   type FileVersion,
   type FileVersionListEntry,
   type FolderFileVersion,
+  type ListedFileVersion,
   type ReplicationStatus,
 } from '../types/file.ts'
 import {
@@ -3900,8 +3901,19 @@ export class B2Simulator {
   }
 
   private toListEntry(entry: FileVersion): FileVersionListEntry {
-    if (entry.action !== FileAction.Hide) return entry
-    return { ...entry, action: FileAction.Hide, contentType: null }
+    if (entry.action !== FileAction.Hide) return entry as ListedFileVersion
+    const {
+      contentType: _contentType,
+      fileRetention,
+      legalHold,
+      serverSideEncryption,
+      ...listed
+    } = entry
+    void _contentType
+    void fileRetention
+    void legalHold
+    void serverSideEncryption
+    return { ...listed, action: FileAction.Hide, contentType: null }
   }
 
   private makeFolderListEntry(bucketId: string, fileName: string): FolderFileVersion {

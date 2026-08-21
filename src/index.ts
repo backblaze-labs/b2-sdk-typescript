@@ -16,6 +16,16 @@ export type {
 export { InMemoryAccountInfo } from './auth/in-memory.ts'
 export {
   Bucket,
+  type BucketListFileNamesBaseOptions,
+  type BucketListFileNamesOptions,
+  type BucketListFileNamesWithDelimiterOptions,
+  type BucketListFileVersionsBaseOptions,
+  type BucketListFileVersionsOptions,
+  type BucketListFileVersionsWithDelimiterOptions,
+  type BucketPaginateFileNamesOptions,
+  type BucketPaginateFileNamesWithDelimiterOptions,
+  type BucketPaginateFileVersionsOptions,
+  type BucketPaginateFileVersionsWithDelimiterOptions,
   type DeleteAllDeleteEvent,
   type DeleteAllErrorEvent,
   type DeleteAllEvent,

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EncryptionMode } from '../types/encryption.ts'
-import { FileAction, type FileVersion } from '../types/file.ts'
+import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { SkipAction, UploadAction } from './actions/index.ts'
 import { zipFolders } from './pairing.ts'
@@ -74,13 +74,13 @@ function makeB2SyncPath(
     size,
     ...(pathContentSha1 !== undefined ? { contentSha1: pathContentSha1 } : {}),
     selectedVersion: fv,
-    allVersions: [fv],
+    allVersions: [fv as ListedFileVersion],
   }
 }
 
 function withSelectedB2FileName(path: B2SyncPath, fileName: string): B2SyncPath {
   const selectedVersion = { ...path.selectedVersion, fileName }
-  return { ...path, selectedVersion, allVersions: [selectedVersion] }
+  return { ...path, selectedVersion, allVersions: [selectedVersion as ListedFileVersion] }
 }
 
 function withoutPathContentSha1(path: B2SyncPath): B2SyncPath {

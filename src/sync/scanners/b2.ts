@@ -117,9 +117,19 @@ export class B2Folder implements SyncFolder {
 
       for (const fv of listing.files) {
         if (scanIsAborted(options)) return
-        if (fv.action === FileAction.Folder) continue
         assertScanEntryLimit(listedVersions + 1, maxScanEntries)
         listedVersions++
+
+        const runtimeFile = fv as { readonly action?: unknown; readonly fileId?: unknown }
+        if (runtimeFile.action === FileAction.Folder || runtimeFile.fileId === null) {
+          throw emitScanError(
+            options,
+            'failed to scan B2 file versions',
+            new Error(
+              'B2 listFileVersions returned a delimiter folder row even though the scanner did not request delimiter grouping',
+            ),
+          )
+        }
 
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before

@@ -47,8 +47,12 @@ import type {
   ListBucketsResponse,
   ListFileNamesRequest,
   ListFileNamesResponse,
+  ListFileNamesWithDelimiterRequest,
+  ListFileNamesWithDelimiterResponse,
   ListFileVersionsRequest,
   ListFileVersionsResponse,
+  ListFileVersionsWithDelimiterRequest,
+  ListFileVersionsWithDelimiterResponse,
   ListKeysRequest,
   ListKeysResponse,
   ListPartsRequest,
@@ -554,16 +558,30 @@ export class RawClient {
    * @param request - The API request parameters.
    * @param options - Optional request controls such as an abort signal.
    *
-   * @returns The list of file names and optional continuation token.
+   * @returns The list of file names and optional continuation token. Requests
+   *   with `delimiter` use the delimiter overload and may include virtual
+   *   folder rows.
    */
+  async listFileNames(
+    apiUrl: string,
+    authToken: string,
+    request: ListFileNamesWithDelimiterRequest,
+    options?: ListFileNamesOptions,
+  ): Promise<ListFileNamesWithDelimiterResponse>
   async listFileNames(
     apiUrl: string,
     authToken: string,
     request: ListFileNamesRequest,
     options?: ListFileNamesOptions,
-  ): Promise<ListFileNamesResponse> {
+  ): Promise<ListFileNamesResponse>
+  async listFileNames(
+    apiUrl: string,
+    authToken: string,
+    request: ListFileNamesRequest | ListFileNamesWithDelimiterRequest,
+    options?: ListFileNamesOptions,
+  ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse> {
     return normalizeFileVersionListSha1(
-      await this.postJson<ListFileNamesResponse>(
+      await this.postJson<ListFileNamesResponse | ListFileNamesWithDelimiterResponse>(
         apiUrl,
         authToken,
         'b2_list_file_names',
@@ -581,15 +599,29 @@ export class RawClient {
    * @param options - Optional request controls such as an abort signal.
    *
    * @returns The list of file versions and optional continuation token.
+   *   Requests with `delimiter` use the delimiter overload and may include
+   *   virtual folder rows.
    */
+  async listFileVersions(
+    apiUrl: string,
+    authToken: string,
+    request: ListFileVersionsWithDelimiterRequest,
+    options?: ListFileVersionsOptions,
+  ): Promise<ListFileVersionsWithDelimiterResponse>
   async listFileVersions(
     apiUrl: string,
     authToken: string,
     request: ListFileVersionsRequest,
     options?: ListFileVersionsOptions,
-  ): Promise<ListFileVersionsResponse> {
+  ): Promise<ListFileVersionsResponse>
+  async listFileVersions(
+    apiUrl: string,
+    authToken: string,
+    request: ListFileVersionsRequest | ListFileVersionsWithDelimiterRequest,
+    options?: ListFileVersionsOptions,
+  ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse> {
     return normalizeFileVersionListSha1(
-      await this.postJson<ListFileVersionsResponse>(
+      await this.postJson<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse>(
         apiUrl,
         authToken,
         'b2_list_file_versions',
