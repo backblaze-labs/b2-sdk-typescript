@@ -12,6 +12,11 @@ interface InflightReauth<T> {
 
 /**
  * Coalesces concurrent reauthorization requests into one in-flight refresh.
+ * Each caller waits independently with its own abort signal. The shared
+ * refresh receives a coalescer-owned signal and is aborted only when every
+ * active waiter has stopped waiting before the refresh settles. A successful,
+ * failed, or aborted refresh clears the in-flight slot so the next call can
+ * start a new refresh.
  *
  * @internal
  */
@@ -29,7 +34,10 @@ export class ReauthCoalescer<T> {
   }
 
   /**
-   * Runs or joins the current refresh.
+   * Runs or joins the current refresh. If `signal` is already aborted, the
+   * refresh callback is not called. If this waiter aborts while other waiters
+   * remain, only this call rejects; the shared refresh continues for the
+   * remaining waiters.
    *
    * @param signal - Optional abort signal for this waiter.
    *

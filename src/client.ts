@@ -214,7 +214,6 @@ export class B2Client {
   }
 
   private async doReauthorize(signal: AbortSignal): Promise<string> {
-    this.accountInfo.clear()
     const auth = await this.authorize({ signal })
     return auth.authorizationToken
   }
