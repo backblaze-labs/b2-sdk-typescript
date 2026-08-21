@@ -964,7 +964,31 @@ const NOTIFICATION_TARGET_FIELDS = new Set([
   'url',
 ])
 
+const NOTIFICATION_CUSTOM_HEADER_FIELDS = new Set(['name', 'value'])
+
 const KNOWN_NOTIFICATION_EVENT_TYPES = new Set<string>(Object.values(EventType))
+
+function validateNotificationCustomHeaders(value: unknown, path: string): ValidationError | null {
+  if (value === undefined) return null
+  if (!Array.isArray(value)) {
+    return { code: 'bad_request', message: `${path} must be an array of objects` }
+  }
+  for (const [index, header] of value.entries()) {
+    const headerPath = `${path}[${index}]`
+    if (!isRecord(header)) {
+      return { code: 'bad_request', message: `${headerPath} must be an object` }
+    }
+    const fieldError = validateKnownFields(header, NOTIFICATION_CUSTOM_HEADER_FIELDS, headerPath)
+    if (fieldError) return fieldError
+    if (typeof header['name'] !== 'string' || header['name'].length === 0) {
+      return { code: 'bad_request', message: `${headerPath}.name must be a non-empty string` }
+    }
+    if (typeof header['value'] !== 'string') {
+      return { code: 'bad_request', message: `${headerPath}.value must be a string` }
+    }
+  }
+  return null
+}
 
 /**
  * Validates event notification rules for `b2_set_bucket_notification_rules`.
@@ -1086,6 +1110,12 @@ export function validateNotificationRules(rules: unknown): ValidationError | nul
         message: `${rulePath}.targetConfiguration.url must be a valid https URL`,
       }
     }
+
+    const customHeadersError = validateNotificationCustomHeaders(
+      targetConfiguration['customHeaders'],
+      `${rulePath}.targetConfiguration.customHeaders`,
+    )
+    if (customHeadersError) return customHeadersError
   }
 
   return null

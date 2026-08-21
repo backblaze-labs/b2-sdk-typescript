@@ -9,6 +9,7 @@ import {
   SSE_C_KEY_REDACTION,
 } from '../types/encryption.ts'
 import { bucketId, fileId, largeFileId } from '../types/ids.ts'
+import { EventType } from '../types/notifications.ts'
 import { RawClient } from './index.ts'
 import { b2Url, isB2ApiVersion } from './url.ts'
 
@@ -407,6 +408,60 @@ describe('RawClient upload URL request controls', () => {
     expect(JSON.parse(String(seenRequests[0]?.body))).toMatchObject({
       customUploadTimestamp: null,
     })
+  })
+
+  it('keeps notification customHeaders in array wire shape', async () => {
+    const customHeaders = [
+      { name: 'X-B2-Source', value: 'sdk-test' },
+      { name: 'X-B2-Rule', value: 'upload-webhook' },
+    ] as const
+    const rule = {
+      eventTypes: [EventType.ObjectCreatedAll],
+      isEnabled: true,
+      isSuspended: false,
+      name: 'upload-webhook',
+      objectNamePrefix: '',
+      suspensionReason: '',
+      targetConfiguration: {
+        targetType: 'webhook',
+        url: 'https://example.test/webhook',
+        customHeaders,
+      },
+    } as const
+    const seenRequests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        seenRequests.push(request)
+        if (request.url.includes('b2_get_bucket_notification_rules')) {
+          return jsonResponse({ bucketId: bucketId('bucket'), eventNotificationRules: [rule] })
+        }
+        const body = requestJsonBody(request)
+        return jsonResponse({
+          bucketId: body['bucketId'],
+          eventNotificationRules: body['eventNotificationRules'],
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    const setResult = await raw.setBucketNotificationRules('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+      eventNotificationRules: [rule],
+    })
+    const requestBody = requestJsonBody(seenRequests[0])
+    expect(requestBody).toMatchObject({
+      eventNotificationRules: [{ targetConfiguration: { customHeaders } }],
+    })
+    expect(setResult.eventNotificationRules[0]?.targetConfiguration.customHeaders).toEqual(
+      customHeaders,
+    )
+
+    const getResult = await raw.getBucketNotificationRules('https://api.example.test', 'auth', {
+      bucketId: bucketId('bucket'),
+    })
+    expect(getResult.eventNotificationRules[0]?.targetConfiguration.customHeaders).toEqual(
+      customHeaders,
+    )
   })
 
   it('serializes EncryptionKey SSE-C material in JSON body endpoints', async () => {

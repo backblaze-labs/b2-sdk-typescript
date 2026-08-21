@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Event notification custom headers match the B2 wire shape.** `EventNotificationRule.targetConfiguration.customHeaders` is now the documented array of `{ name, value }` objects instead of a lookup record, with simulator validation and round-trip behavior aligned to `b2_get_bucket_notification_rules` / `b2_set_bucket_notification_rules`. Closes #189.
 - **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.
 
 ## [0.3.0] - 2026-08-18

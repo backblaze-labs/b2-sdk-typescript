@@ -47,6 +47,47 @@ export const EventType = {
  */
 export type EventType = (typeof EventType)[keyof typeof EventType]
 
+/** A custom HTTP header included with event-notification webhook requests. */
+export interface EventNotificationCustomHeader {
+  /** Header name. */
+  readonly name: string
+  /** Header value. */
+  readonly value: string
+}
+
+/**
+ * Convert B2's wire-shaped custom headers to a lookup record.
+ *
+ * Duplicate header names are represented by the last value in the array.
+ *
+ * @param customHeaders - Wire-shaped custom headers from an event-notification rule.
+ *
+ * @returns A name/value lookup record.
+ */
+export function customHeadersToRecord(
+  customHeaders: readonly EventNotificationCustomHeader[] | undefined,
+): Record<string, string> {
+  const record: Record<string, string> = {}
+  for (const { name, value } of customHeaders ?? []) {
+    record[name] = value
+  }
+  return record
+}
+
+/**
+ * Convert a lookup record to B2's wire-shaped custom headers.
+ *
+ * @param customHeaders - Name/value header lookup.
+ *
+ * @returns Wire-shaped custom headers for an event-notification rule.
+ */
+export function recordToCustomHeaders(
+  customHeaders: Readonly<Record<string, string>> | undefined,
+): EventNotificationCustomHeader[] {
+  if (customHeaders === undefined) return []
+  return Object.entries(customHeaders).map(([name, value]) => ({ name, value }))
+}
+
 /** A rule that defines which bucket events trigger webhook notifications and where they are sent. */
 export interface EventNotificationRule {
   /** Event types that trigger this notification rule. */
@@ -72,7 +113,7 @@ export interface EventNotificationRule {
     /** Optional HMAC-SHA256 secret used to sign notification payloads for verification. */
     readonly hmacSha256SigningSecret?: string
     /** Optional custom headers included in webhook requests. */
-    readonly customHeaders?: Record<string, string>
+    readonly customHeaders?: readonly EventNotificationCustomHeader[]
   }
 }
 

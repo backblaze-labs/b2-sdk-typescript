@@ -1297,6 +1297,10 @@ describe('notification rules', () => {
       targetConfiguration: {
         targetType: 'webhook',
         url: 'https://example.com/webhook',
+        customHeaders: [
+          { name: 'X-B2-Source', value: 'sdk-test' },
+          { name: 'X-B2-Rule', value: 'upload-webhook' },
+        ],
       },
     }
 
@@ -1309,6 +1313,10 @@ describe('notification rules', () => {
     expect(getResult.eventNotificationRules[0]?.targetConfiguration.url).toBe(
       'https://example.com/webhook',
     )
+    expect(getResult.eventNotificationRules[0]?.targetConfiguration.customHeaders).toEqual([
+      { name: 'X-B2-Source', value: 'sdk-test' },
+      { name: 'X-B2-Rule', value: 'upload-webhook' },
+    ])
   })
 
   it('replaces notification rules', async () => {
