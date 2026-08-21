@@ -3,7 +3,7 @@ import { B2BucketConfigurationError } from './errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { RawClient } from './raw/index.ts'
 import { recordingTransport } from './test-utils/index.ts'
-import { BucketType, CorsOperation } from './types/bucket.ts'
+import { BucketType, CORS_MAX_AGE_SECONDS_MAX, CorsOperation } from './types/bucket.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import { bucketId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
@@ -30,14 +30,12 @@ describe('RawClient bucket configuration validation', () => {
     }
     const raw = new RawClient({ transport })
     const bucketInfo: Record<string, string> = {}
-    for (let i = 0; i < 12; i++) bucketInfo[`key ${i}`] = 'value'
+    for (let i = 0; i < 12; i++) bucketInfo[`key_${i}`] = 'value'
     const corsRules = [
       {
-        allowedHeaders: ['authorization'],
         allowedOperations: [CorsOperation.B2DownloadFileByName],
         allowedOrigins: ['https://example.com'],
         corsRuleName: 'rule-1',
-        exposeHeaders: ['x-bz-content-sha1'],
         maxAgeSeconds: 3600,
       },
     ]
@@ -101,6 +99,26 @@ describe('RawClient bucket configuration validation', () => {
         ],
       }),
     ).rejects.toBeInstanceOf(B2BucketConfigurationError)
+
+    await expect(
+      raw.updateBucket('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        bucketId: bucketId('bucket'),
+        corsRules: [
+          {
+            allowedOperations: [CorsOperation.B2DownloadFileByName],
+            allowedOrigins: ['https://example.com'],
+            corsRuleName: 'rule-2',
+            maxAgeSeconds: CORS_MAX_AGE_SECONDS_MAX + 1,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      code: 'bad_request',
+      field: 'corsRules',
+      name: 'B2BucketConfigurationError',
+      status: 400,
+    })
 
     expect(seenRequests).toEqual([])
   })

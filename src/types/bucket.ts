@@ -36,6 +36,8 @@ export const BUCKET_INFO_KEY_MAX_BYTES = 50
 export const BUCKET_INFO_VALUES_MAX_BYTES = 10_000
 /** Reserved bucketInfo key prefix used by Backblaze. */
 export const BUCKET_INFO_RESERVED_PREFIX = 'b2-'
+/** BucketInfo keys must match this regular-expression source. */
+export const BUCKET_INFO_KEY_PATTERN = '^[A-Za-z0-9_-]+$'
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -77,6 +79,14 @@ export const CorsOperation = {
   B2UploadPart: 'b2_upload_part',
   /** S3-compatible GET. */
   S3Get: 's3_get',
+  /**
+   * S3-compatible POST.
+   *
+   * @deprecated B2 bucket CORS rules do not accept `s3_post`. This member is
+   * preserved so existing imports continue to compile. Use one of
+   * {@link CORS_ALLOWED_OPERATIONS} for newly validated bucket CORS rules.
+   */
+  S3Post: 's3_post',
   /** S3-compatible PUT. */
   S3Put: 's3_put',
   /** S3-compatible HEAD. */
@@ -115,6 +125,8 @@ export const CORS_RULE_NAME_PATTERN = '^[A-Za-z0-9-]+$'
 export const CORS_RULE_NAME_RESERVED_PREFIX = 'b2-'
 /** Exclusive UTF-8 byte-size ceiling for each CORS rule definition. */
 export const CORS_RULE_MAX_BYTES = 1_000
+/** Maximum accepted CORS preflight cache duration in seconds. */
+export const CORS_MAX_AGE_SECONDS_MAX = 86_400
 
 /**
  * Cross-Origin Resource Sharing (CORS) rule for browser-based access to a bucket.
@@ -139,11 +151,15 @@ export interface CorsRule {
    * {@link CorsOperation}.
    */
   readonly allowedOperations: readonly CorsOperation[]
-  /** Request headers allowed in preflight requests, or null if none are allowed. */
-  readonly allowedHeaders: readonly string[] | null
-  /** Response headers exposed to the browser, or null if none are exposed. */
-  readonly exposeHeaders: readonly string[] | null
-  /** Maximum time (in seconds) browsers may cache the preflight response. */
+  /**
+   * Request headers allowed in preflight requests, or null/omitted if none are allowed.
+   */
+  readonly allowedHeaders?: readonly string[] | null
+  /**
+   * Response headers exposed to the browser, or null/omitted if none are exposed.
+   */
+  readonly exposeHeaders?: readonly string[] | null
+  /** Maximum time (0-86400 seconds) browsers may cache the preflight response. */
   readonly maxAgeSeconds: number
 }
 
@@ -265,8 +281,8 @@ export interface CreateBucketRequest {
   /**
    * Optional user-defined key-value metadata.
    * Keys must be 1-50 UTF-8 bytes and must not start with `b2-`; the aggregate
-   * UTF-8 byte length of all values must be at most 10,000 bytes. BucketInfo has
-   * no documented pair-count cap.
+   * UTF-8 byte length of all values must be at most 10,000 bytes. Keys must
+   * match `[A-Za-z0-9_-]`. BucketInfo has no documented pair-count cap.
    */
   readonly bucketInfo?: Record<string, string>
   /**
@@ -274,7 +290,7 @@ export interface CreateBucketRequest {
    * A bucket may have at most 100 rules. Each rule name must be unique, 6-63
    * characters, match `[A-Za-z0-9-]`, and not start with `b2-`. Each rule's
    * name, origins, operations, allowed headers, and exposed headers must total
-   * less than 1,000 UTF-8 bytes.
+   * less than 1,000 UTF-8 bytes. `maxAgeSeconds` must be at most 86,400.
    */
   readonly corsRules?: readonly CorsRule[]
   /** Optional default server-side encryption setting. */
@@ -302,8 +318,8 @@ export interface UpdateBucketRequest {
   /**
    * Updated user-defined key-value metadata. Replaces all existing metadata.
    * Keys must be 1-50 UTF-8 bytes and must not start with `b2-`; the aggregate
-   * UTF-8 byte length of all values must be at most 10,000 bytes. BucketInfo has
-   * no documented pair-count cap.
+   * UTF-8 byte length of all values must be at most 10,000 bytes. Keys must
+   * match `[A-Za-z0-9_-]`. BucketInfo has no documented pair-count cap.
    */
   readonly bucketInfo?: Record<string, string>
   /**
@@ -311,7 +327,7 @@ export interface UpdateBucketRequest {
    * A bucket may have at most 100 rules. Each rule name must be unique, 6-63
    * characters, match `[A-Za-z0-9-]`, and not start with `b2-`. Each rule's
    * name, origins, operations, allowed headers, and exposed headers must total
-   * less than 1,000 UTF-8 bytes.
+   * less than 1,000 UTF-8 bytes. `maxAgeSeconds` must be at most 86,400.
    */
   readonly corsRules?: readonly CorsRule[]
   /** Updated default server-side encryption setting. */
