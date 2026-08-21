@@ -4,10 +4,7 @@ import { IncrementalSha1 } from '../streams/hash.ts'
 import type { ProgressListener } from '../streams/progress.ts'
 import { ProgressTracker } from '../streams/progress.ts'
 import { type ContentSource, readNextNonEmptyStreamChunk } from '../streams/source.ts'
-import type {
-  BucketDefaultRetention,
-  BucketDefaultServerSideEncryption,
-} from '../types/bucket.ts'
+import type { BucketDefaultRetention, BucketDefaultServerSideEncryption } from '../types/bucket.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
