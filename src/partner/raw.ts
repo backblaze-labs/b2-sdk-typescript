@@ -29,6 +29,7 @@ import type {
 import { validatePartnerAuthorizeResponseShape } from './auth-shape.ts'
 import {
   endpointAllowedSuffixes,
+  type MutationRequestOptions,
   nonRetryingMutationRequestOptions,
   type QueryParams,
   validatePartnerEndpointUrl,
@@ -631,7 +632,7 @@ export class PartnerRawClient {
     authToken: string,
     endpoint: string,
     body: unknown,
-    options?: PartnerRawRequestOptions,
+    options?: MutationRequestOptions,
   ): Promise<T> {
     const safeGroupsApiUrl = validatePartnerRequestGroupsApiUrl(
       this.transport,
@@ -647,6 +648,7 @@ export class PartnerRawClient {
       },
       body: JSON.stringify(body),
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.idempotent !== undefined ? { idempotent: options.idempotent } : {}),
       ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     return response.json<T>()

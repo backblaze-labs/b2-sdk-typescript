@@ -966,6 +966,7 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+          idempotent: false,
         }),
       ).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
@@ -987,6 +988,7 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
+          idempotent: false,
         }),
       ).rejects.toBeInstanceOf(B2Error)
       expect(innerTransport.send).toHaveBeenCalledTimes(1)
@@ -1326,6 +1328,7 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: 'https://groups.backblazeb2.com/partner/b2api/v3/b2_create_group_member',
+          idempotent: false,
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
       expect(onReauth).not.toHaveBeenCalled()
@@ -1350,6 +1353,7 @@ describe('RetryTransport', () => {
           ...baseRequest,
           method: 'POST',
           url: 'https://backup.backblazeb2.com/backup/api/backup/v1/bz_delete_computer',
+          idempotent: false,
         }),
       ).rejects.toThrow(ExpiredAuthTokenError)
       expect(onReauth).not.toHaveBeenCalled()
@@ -1578,6 +1582,7 @@ describe('RetryTransport', () => {
             ...baseRequest,
             method: 'POST',
             url: `https://groups.backblazeb2.com/partner/b2api/v3/${endpoint}`,
+            idempotent: false,
           }),
         ).rejects.toThrow(NetworkError)
         expect(innerTransport.send).toHaveBeenCalledTimes(1)

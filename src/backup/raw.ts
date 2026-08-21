@@ -2,6 +2,7 @@ import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
   endpointAllowedSuffixes,
+  type MutationRequestOptions,
   nonRetryingMutationRequestOptions,
   type QueryParams,
   validatePartnerEndpointUrl,
@@ -227,7 +228,7 @@ export class BackupRawClient {
     authToken: string,
     endpoint: string,
     body: unknown,
-    options?: BackupRawRequestOptions,
+    options?: MutationRequestOptions,
   ): Promise<T> {
     const response = await this.transport.send({
       url: b2Url(this.safeBackupApiUrl(backupApiUrl), { ...BACKUP_API_V1, endpoint }),
@@ -238,6 +239,7 @@ export class BackupRawClient {
       },
       body: JSON.stringify(body),
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.idempotent !== undefined ? { idempotent: options.idempotent } : {}),
       ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
     return response.json<T>()

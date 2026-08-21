@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   AccessDeniedError,
   B2PartnerAuthorizationError,
+  ExpiredAuthTokenError,
   InvalidAccountIdError,
   InvalidComputerIdError,
   OutOfRangeError,
@@ -255,6 +256,7 @@ describe('BackupRawClient', () => {
       Authorization: 'partner-token',
       'Content-Type': 'application/json',
     })
+    expect(request?.idempotent).toBe(false)
     expect(request?.retry).toEqual({ maxRetries: 0 })
     expect(request === undefined ? null : requestJsonBody(request)).toEqual({
       accountId: 'account-1',
@@ -310,6 +312,7 @@ describe('BackupRawClient', () => {
       ),
     ).rejects.toThrow()
     expect(responseFailureRequests).toHaveLength(1)
+    expect(responseFailureRequests[0]?.idempotent).toBe(false)
 
     const networkFailureRequests: HttpRequest[] = []
     const networkFailureGuard = new UrlGuard()
@@ -340,6 +343,40 @@ describe('BackupRawClient', () => {
       ),
     ).rejects.toThrow()
     expect(networkFailureRequests).toHaveLength(1)
+    expect(networkFailureRequests[0]?.idempotent).toBe(false)
+  })
+
+  it('does not reauthorize and replay delete POSTs on expired auth token', async () => {
+    const seenRequests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        seenRequests.push(request)
+        return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+      },
+    }
+    const onReauth = vi.fn().mockResolvedValue('fresh-token')
+    const raw = authorizedRawClient(
+      new RetryTransport({
+        transport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    )
+
+    await expect(
+      raw.deleteComputer('https://backup.backblazeb2.com/backup', partnerToken('partner-token'), {
+        accountId: accountId('account-1'),
+        computerId: computerId('computer-1'),
+      }),
+    ).rejects.toThrow(ExpiredAuthTokenError)
+
+    expect(onReauth).not.toHaveBeenCalled()
+    expect(seenRequests).toHaveLength(1)
+    expect(seenRequests[0]?.idempotent).toBe(false)
   })
 
   it('accepts a locked transport URL guard when explicit suffixes are omitted', async () => {

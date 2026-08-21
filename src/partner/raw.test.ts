@@ -878,6 +878,7 @@ describe('PartnerRawClient group management endpoints', () => {
       }),
     ).rejects.toThrow()
     expect(responseFailureRequests).toHaveLength(1)
+    expect(responseFailureRequests[0]?.idempotent).toBe(false)
 
     const networkFailureRequests: HttpRequest[] = []
     const networkFailureGuard = new UrlGuard()
@@ -905,6 +906,7 @@ describe('PartnerRawClient group management endpoints', () => {
       }),
     ).rejects.toThrow()
     expect(networkFailureRequests).toHaveLength(1)
+    expect(networkFailureRequests[0]?.idempotent).toBe(false)
   })
 
   it('does not retry mutation POSTs when the caller passes maxRetries', async () => {
@@ -937,6 +939,41 @@ describe('PartnerRawClient group management endpoints', () => {
 
     expect(seenRequests).toHaveLength(1)
     expect(seenRequests[0]?.retry?.maxRetries).toBe(0)
+    expect(seenRequests[0]?.idempotent).toBe(false)
+  })
+
+  it('does not reauthorize and replay mutation POSTs on expired auth token', async () => {
+    const seenRequests: HttpRequest[] = []
+    const urlGuard = new UrlGuard()
+    urlGuard.setAllowedSuffixes(['backblazeb2.com'])
+    const transport: UrlGuardedTransport = {
+      urlGuard,
+      async send(request) {
+        seenRequests.push(request)
+        return jsonErrorResponse(401, 'expired_auth_token', 'expired')
+      },
+    }
+    const onReauth = vi.fn().mockResolvedValue('fresh-token')
+    const raw = new PartnerRawClient({
+      transport: new RetryTransport({
+        transport,
+        onReauth,
+        retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+        sleepImpl: noSleep,
+      }),
+    })
+
+    await expect(
+      raw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberEmail: 'member@example.com',
+      }),
+    ).rejects.toThrow(ExpiredAuthTokenError)
+
+    expect(onReauth).not.toHaveBeenCalled()
+    expect(seenRequests).toHaveLength(1)
+    expect(seenRequests[0]?.idempotent).toBe(false)
   })
 })
 

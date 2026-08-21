@@ -29,6 +29,8 @@ export interface HttpRequest {
   readonly signal?: AbortSignal
   /** Optional per-request retry override. */
   readonly retry?: Partial<RetryOptions>
+  /** Whether this request may be replayed automatically. Set false for non-idempotent mutations. */
+  readonly idempotent?: boolean
 }
 
 /** Represents a parsed HTTP response from the B2 API. */
@@ -462,24 +464,8 @@ function isStartLargeFileEndpoint(url: string): boolean {
   return b2ApiEndpointName(url) === 'b2_start_large_file'
 }
 
-function isPartnerMutationEndpoint(url: string): boolean {
-  const endpoint = b2ApiEndpointName(url)
-  return (
-    endpoint === 'b2_create_group_member' ||
-    endpoint === 'b2_eject_group_member' ||
-    endpoint === 'b2_reserve_trial_create_account'
-  )
-}
-
-function isBackupMutationEndpoint(url: string): boolean {
-  return backupApiEndpointName(url) === 'bz_delete_computer'
-}
-
 function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
-  return (
-    request.method === 'POST' &&
-    (isPartnerMutationEndpoint(request.url) || isBackupMutationEndpoint(request.url))
-  )
+  return request.idempotent === false
 }
 
 function b2ApiEndpointName(url: string): string | undefined {
@@ -489,14 +475,6 @@ function b2ApiEndpointName(url: string): string | undefined {
   const apiRootIndex = segments.lastIndexOf('b2api')
   if (apiRootIndex === -1) return undefined
   return segments[apiRootIndex + 2]
-}
-
-function backupApiEndpointName(url: string): string | undefined {
-  const segments = new URL(url).pathname.split('/').filter((segment) => segment.length > 0)
-  const apiRootIndex = segments.lastIndexOf('api')
-  if (apiRootIndex === -1 || segments[apiRootIndex + 1] !== 'backup') return undefined
-  if (!/^v\d+$/.test(segments[apiRootIndex + 2] ?? '')) return undefined
-  return segments[apiRootIndex + 3]
 }
 
 function isReplayUnsafePostRequest(request: HttpRequest): boolean {
