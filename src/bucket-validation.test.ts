@@ -67,6 +67,15 @@ describe('bucket configuration validation', () => {
     expect(() => assertValidBucketInfo(bucketInfo)).not.toThrow()
   })
 
+  it('rejects non-object bucketInfo values', () => {
+    expectBucketConfigurationError(
+      () => assertValidBucketInfo(null as unknown as Record<string, string>),
+      'bucketInfo',
+      'invalid_bucket_info',
+      'bucketInfo must be an object',
+    )
+  })
+
   it('rejects bucketInfo keys outside the documented UTF-8 byte range', () => {
     expectBucketConfigurationError(
       () => assertValidBucketInfo({ '': 'value' }),
@@ -193,6 +202,15 @@ describe('bucket configuration validation', () => {
       'corsRules',
       'bad_request',
       'must be 6-63 characters',
+    )
+  })
+
+  it('rejects non-string CORS rule names', () => {
+    expectBucketConfigurationError(
+      () => assertValidCorsRules([validCorsRule({ corsRuleName: 42 as unknown as string })]),
+      'corsRules',
+      'bad_request',
+      'corsRules[0].corsRuleName must be a string',
     )
   })
 
