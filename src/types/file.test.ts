@@ -14,6 +14,7 @@ import type {
   BucketPaginateFileVersionsOptions,
   BucketPaginateFileVersionsWithDelimiterOptions,
 } from '../bucket.ts'
+import { HIDE_MARKER_CONTENT_TYPE as ROOT_HIDE_MARKER_CONTENT_TYPE } from '../index.ts'
 import type { RawClient } from '../raw/index.ts'
 import { EncryptionMode } from './encryption.ts'
 import {
@@ -24,10 +25,14 @@ import {
   type ListedConcreteFileVersion,
   type ListedFileVersion,
   type ListFileNamesMaybeDelimiterRequest,
+  type ListFileNamesRequest,
   type ListFileNamesResponse,
+  type ListFileNamesWithDelimiterRequest,
   type ListFileNamesWithDelimiterResponse,
   type ListFileVersionsMaybeDelimiterRequest,
+  type ListFileVersionsRequest,
   type ListFileVersionsResponse,
+  type ListFileVersionsWithDelimiterRequest,
   type ListFileVersionsWithDelimiterResponse,
 } from './file.ts'
 import type { AccountId, BucketId, FileId } from './ids.ts'
@@ -149,6 +154,8 @@ describe('file listing types', () => {
   })
 
   it('exposes dynamic delimiter overloads for list wrappers', () => {
+    expect(ROOT_HIDE_MARKER_CONTENT_TYPE).toBe(HIDE_MARKER_CONTENT_TYPE)
+
     expectTypeOf<Bucket['listFileNames']>().toMatchTypeOf<{
       (
         options: BucketListFileNamesWithDelimiterOptions,
@@ -201,5 +208,24 @@ describe('file listing types', () => {
         request: ListFileVersionsMaybeDelimiterRequest,
       ) => Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse>
     >()
+
+    expectTypeOf<
+      BucketListFileNamesOptions | BucketListFileNamesWithDelimiterOptions
+    >().toMatchTypeOf<BucketListFileNamesMaybeDelimiterOptions>()
+    expectTypeOf<
+      BucketListFileVersionsOptions | BucketListFileVersionsWithDelimiterOptions
+    >().toMatchTypeOf<BucketListFileVersionsMaybeDelimiterOptions>()
+    expectTypeOf<
+      BucketPaginateFileNamesOptions | BucketPaginateFileNamesWithDelimiterOptions
+    >().toMatchTypeOf<BucketPaginateFileNamesMaybeDelimiterOptions>()
+    expectTypeOf<
+      BucketPaginateFileVersionsOptions | BucketPaginateFileVersionsWithDelimiterOptions
+    >().toMatchTypeOf<BucketPaginateFileVersionsMaybeDelimiterOptions>()
+    expectTypeOf<
+      ListFileNamesRequest | ListFileNamesWithDelimiterRequest
+    >().toMatchTypeOf<ListFileNamesMaybeDelimiterRequest>()
+    expectTypeOf<
+      ListFileVersionsRequest | ListFileVersionsWithDelimiterRequest
+    >().toMatchTypeOf<ListFileVersionsMaybeDelimiterRequest>()
   })
 })

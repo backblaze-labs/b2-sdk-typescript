@@ -191,7 +191,7 @@ export interface ListFileNamesWithDelimiterRequest extends ListFileNamesBaseRequ
 /** Request parameters for callers that dynamically include a delimiter. */
 export interface ListFileNamesMaybeDelimiterRequest extends ListFileNamesBaseRequest {
   /** Optional delimiter for virtual folder grouping. */
-  readonly delimiter?: string
+  readonly delimiter?: string | undefined
 }
 
 /** Response from non-delimiter `b2_list_file_names` calls. */
@@ -245,7 +245,7 @@ export interface ListFileVersionsWithDelimiterRequest extends ListFileVersionsBa
 /** Request parameters for callers that dynamically include a delimiter. */
 export interface ListFileVersionsMaybeDelimiterRequest extends ListFileVersionsBaseRequest {
   /** Optional delimiter for virtual folder grouping. */
-  readonly delimiter?: string
+  readonly delimiter?: string | undefined
 }
 
 /** Response from non-delimiter `b2_list_file_versions` calls. */

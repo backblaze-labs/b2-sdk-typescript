@@ -164,7 +164,7 @@ export interface BucketListFileNamesWithDelimiterOptions extends BucketListFileN
 /** Options for callers that dynamically include a delimiter. */
 export interface BucketListFileNamesMaybeDelimiterOptions extends BucketListFileNamesBaseOptions {
   /** Optional delimiter for virtual directory grouping. */
-  delimiter?: string
+  delimiter?: string | undefined
 }
 
 /** Shared options for {@link Bucket.listFileVersions}. */
@@ -201,7 +201,7 @@ export interface BucketListFileVersionsWithDelimiterOptions
 export interface BucketListFileVersionsMaybeDelimiterOptions
   extends BucketListFileVersionsBaseOptions {
   /** Optional delimiter for virtual directory grouping. */
-  delimiter?: string
+  delimiter?: string | undefined
 }
 
 /** Options for non-delimiter {@link Bucket.paginateFileNames} iterators. */
@@ -225,7 +225,7 @@ export type BucketPaginateFileNamesMaybeDelimiterOptions = {
   /** Only yield files whose names start with this prefix. */
   prefix?: string
   /** Optional delimiter for virtual directory grouping. */
-  delimiter?: string
+  delimiter?: string | undefined
 } & PaginatorOptions
 
 /** Options for non-delimiter {@link Bucket.paginateFileVersions} iterators. */
@@ -249,7 +249,7 @@ export type BucketPaginateFileVersionsMaybeDelimiterOptions = {
   /** Only yield versions whose names start with this prefix. */
   prefix?: string
   /** Optional delimiter for virtual directory grouping. */
-  delimiter?: string
+  delimiter?: string | undefined
 } & PaginatorOptions
 
 interface BucketDefaultRetentionSnapshot {
