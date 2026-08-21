@@ -2,7 +2,12 @@ import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type {
   CreateGroupMemberResponse,
   CreateGroupMemberResult,
+  PartnerApiInfo,
   PartnerAuthorizeResponse,
+  PartnerBackupApiInfo,
+  PartnerGroupMember,
+  PartnerGroupsApiInfo,
+  PartnerStorageApiInfo,
   ReserveTrialCreateAccountResponse,
   ReserveTrialCreateAccountResult,
 } from '../types/partner.ts'
@@ -26,6 +31,8 @@ export interface RedactedPartnerAuthorizeResponseJson
 /**
  * JSON-safe create-group-member result with the one-time application key
  * secret replaced by a placeholder string.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedCreateGroupMemberResultJson = Omit<
   CreateGroupMemberResult,
@@ -38,12 +45,16 @@ export type RedactedCreateGroupMemberResultJson = Omit<
 /**
  * JSON-safe create-group-member response with every one-time application key
  * secret replaced by a placeholder string.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedCreateGroupMemberResponseJson = readonly RedactedCreateGroupMemberResultJson[]
 
 /**
  * JSON-safe reserve-trial account result with the one-time application key
  * secret replaced by a placeholder string.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedReserveTrialCreateAccountResultJson = Omit<
   ReserveTrialCreateAccountResult,
@@ -56,11 +67,71 @@ export type RedactedReserveTrialCreateAccountResultJson = Omit<
 /**
  * JSON-safe reserve-trial account response with every one-time application key
  * secret replaced by a placeholder string.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedReserveTrialCreateAccountResponseJson =
   readonly RedactedReserveTrialCreateAccountResultJson[]
 
 const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+
+type Writable<T> = { -readonly [K in keyof T]: T[K] }
+
+function partnerGroupsApiInfoToRedactedJson(info: PartnerGroupsApiInfo): PartnerGroupsApiInfo {
+  return {
+    capabilities: [...info.capabilities],
+    groupsApiUrl: info.groupsApiUrl,
+    infoType: info.infoType,
+  }
+}
+
+function partnerBackupApiInfoToRedactedJson(info: PartnerBackupApiInfo): PartnerBackupApiInfo {
+  return {
+    capabilities: [...info.capabilities],
+    backupApiUrl: info.backupApiUrl,
+    infoType: info.infoType,
+  }
+}
+
+function partnerStorageApiInfoToRedactedJson(info: PartnerStorageApiInfo): PartnerStorageApiInfo {
+  return {
+    absoluteMinimumPartSize: info.absoluteMinimumPartSize,
+    apiUrl: info.apiUrl,
+    bucketId: info.bucketId,
+    bucketName: info.bucketName,
+    capabilities: [...info.capabilities],
+    downloadUrl: info.downloadUrl,
+    infoType: info.infoType,
+    namePrefix: info.namePrefix,
+    recommendedPartSize: info.recommendedPartSize,
+    s3ApiUrl: info.s3ApiUrl,
+  }
+}
+
+function partnerApiInfoToRedactedJson(apiInfo: PartnerApiInfo): PartnerApiInfo {
+  const redacted: Writable<PartnerApiInfo> = {}
+  if (apiInfo.storageApi !== undefined) {
+    redacted.storageApi = partnerStorageApiInfoToRedactedJson(apiInfo.storageApi)
+  }
+  if (apiInfo.groupsApi !== undefined) {
+    redacted.groupsApi = partnerGroupsApiInfoToRedactedJson(apiInfo.groupsApi)
+  }
+  if (apiInfo.backupApi !== undefined) {
+    redacted.backupApi = partnerBackupApiInfoToRedactedJson(apiInfo.backupApi)
+  }
+  return redacted
+}
+
+function partnerGroupMemberToRedactedJson(groupMember: PartnerGroupMember): PartnerGroupMember {
+  return {
+    accountId: groupMember.accountId,
+    email: groupMember.email,
+    groupId: groupMember.groupId,
+    groupName: groupMember.groupName,
+    region: groupMember.region,
+    s3Endpoint: groupMember.s3Endpoint,
+  }
+}
 
 // Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
 // honors own hooks. Install both shapes so SDK safe serialization is portable.
@@ -90,10 +161,21 @@ function installPortableJsonHook<T extends object>(target: T, toJson: () => unkn
 export function partnerAuthorizeResponseToRedactedJson(
   auth: PartnerAuthorizeResponse,
 ): RedactedPartnerAuthorizeResponseJson {
-  return {
-    ...auth,
+  const redacted: Writable<RedactedPartnerAuthorizeResponseJson> = {
+    accountId: auth.accountId,
     authorizationToken: PARTNER_TOKEN_REDACTED,
+    apiInfo: partnerApiInfoToRedactedJson(auth.apiInfo),
+    applicationKeyExpirationTimestamp: auth.applicationKeyExpirationTimestamp,
   }
+  if (auth.groupsApiUrl !== undefined) redacted.groupsApiUrl = auth.groupsApiUrl
+  if (auth.backupApiUrl !== undefined) redacted.backupApiUrl = auth.backupApiUrl
+  if (auth.groupsCapabilities !== undefined) {
+    redacted.groupsCapabilities = [...auth.groupsCapabilities]
+  }
+  if (auth.backupCapabilities !== undefined) {
+    redacted.backupCapabilities = [...auth.backupCapabilities]
+  }
+  return redacted
 }
 
 /**
@@ -102,13 +184,16 @@ export function partnerAuthorizeResponseToRedactedJson(
  * @param result - Create group member result to render safely.
  *
  * @returns A plain object with the application key secret replaced by a placeholder.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function createGroupMemberResultToRedactedJson(
   result: CreateGroupMemberResult,
 ): RedactedCreateGroupMemberResultJson {
   return {
-    ...result,
+    applicationKeyId: result.applicationKeyId,
     applicationKey: APPLICATION_KEY_REDACTED,
+    groupMember: partnerGroupMemberToRedactedJson(result.groupMember),
   }
 }
 
@@ -118,6 +203,8 @@ export function createGroupMemberResultToRedactedJson(
  * @param response - Create group member response to render safely.
  *
  * @returns A plain array with every application key secret replaced by a placeholder.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function createGroupMemberResponseToRedactedJson(
   response: CreateGroupMemberResponse,
@@ -131,13 +218,22 @@ export function createGroupMemberResponseToRedactedJson(
  * @param result - Reserve trial account result to render safely.
  *
  * @returns A plain object with the application key secret replaced by a placeholder.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function reserveTrialCreateAccountResultToRedactedJson(
   result: ReserveTrialCreateAccountResult,
 ): RedactedReserveTrialCreateAccountResultJson {
   return {
-    ...result,
+    accountId: result.accountId,
     applicationKey: APPLICATION_KEY_REDACTED,
+    applicationKeyId: result.applicationKeyId,
+    s3Endpoint: result.s3Endpoint,
+    startDate: result.startDate,
+    endDate: result.endDate,
+    email: result.email,
+    bucketName: result.bucketName,
+    bucketId: result.bucketId,
   }
 }
 
@@ -147,6 +243,8 @@ export function reserveTrialCreateAccountResultToRedactedJson(
  * @param response - Reserve trial account response to render safely.
  *
  * @returns A plain array with every application key secret replaced by a placeholder.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function reserveTrialCreateAccountResponseToRedactedJson(
   response: ReserveTrialCreateAccountResponse,

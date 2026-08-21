@@ -27,16 +27,25 @@ import { jsonErrorResponse, jsonResponse, recordingTransport } from '../test-uti
 import { Capability } from '../types/auth.ts'
 import type { PartnerToken } from '../types/ids.ts'
 import { accountId, applicationKeyId, bucketId, groupId, partnerToken } from '../types/ids.ts'
-import { type PartnerAuthorizeResponse, PartnerCapability, Region } from '../types/partner.ts'
+import {
+  type CreateGroupMemberResult,
+  type PartnerAuthorizeResponse,
+  PartnerCapability,
+  Region,
+  type ReserveTrialCreateAccountResult,
+} from '../types/partner.ts'
 import { partnerAuthorizeResponseForPersistence } from './auth-clone.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PartnerRawClient, validatePartnerAuthorizeResponseEndpoints } from './raw.ts'
 import {
   APPLICATION_KEY_REDACTED,
   createGroupMemberResponseToRedactedJson,
+  createGroupMemberResultToRedactedJson,
   PARTNER_TOKEN_REDACTED,
+  partnerAuthorizeResponseToRedactedJson,
   redactPartnerAuthorizeResponse,
   reserveTrialCreateAccountResponseToRedactedJson,
+  reserveTrialCreateAccountResultToRedactedJson,
 } from './redaction.ts'
 
 function apiEndpointName(request: HttpRequest): string {
@@ -164,6 +173,137 @@ async function makeSimulatorPartnerRawClient(options?: B2SimulatorOptions): Prom
 function noSleep(): Promise<void> {
   return Promise.resolve()
 }
+
+describe('Partner redaction projections', () => {
+  it('drops unknown secret-looking fields from Partner authorize projections', () => {
+    const auth = {
+      accountId: accountId('partner-account'),
+      authorizationToken: partnerToken('partner-token-secret'),
+      apiInfo: {
+        groupsApi: {
+          groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+          capabilities: [PartnerCapability.All],
+          infoType: 'groupsApi',
+          backupApplicationKey: 'nested-groups-backup-key-secret',
+          rawResponse: { applicationKey: 'nested-groups-raw-key-secret' },
+        },
+        backupApi: {
+          backupApiUrl: 'https://backup.backblazeb2.com/backup',
+          capabilities: [PartnerCapability.All],
+          infoType: 'backupApi',
+          authorizationToken: 'nested-backup-token-secret',
+          rawResponse: { applicationKey: 'nested-backup-raw-key-secret' },
+        },
+      },
+      groupsApiUrl: 'https://groups.backblazeb2.com/partner',
+      backupApiUrl: 'https://backup.backblazeb2.com/backup',
+      groupsCapabilities: [PartnerCapability.All],
+      backupCapabilities: [PartnerCapability.All],
+      applicationKeyExpirationTimestamp: null,
+      applicationKey: 'top-level-application-key-secret',
+      backupApplicationKey: 'top-level-backup-key-secret',
+      rawResponse: { applicationKey: 'top-level-raw-key-secret' },
+    } as unknown as PartnerAuthorizeResponse
+
+    const redacted = partnerAuthorizeResponseToRedactedJson(auth)
+    const serialized = JSON.stringify(redacted)
+    const groupsApi = redacted.apiInfo.groupsApi
+    const backupApi = redacted.apiInfo.backupApi
+    if (groupsApi === undefined || backupApi === undefined) {
+      throw new Error('expected redacted Partner and Backup API info')
+    }
+
+    expect(redacted.authorizationToken).toBe(PARTNER_TOKEN_REDACTED)
+    expect(Object.hasOwn(redacted, 'applicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted, 'backupApplicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted, 'rawResponse')).toBe(false)
+    expect(Object.hasOwn(redacted.apiInfo, 'rawResponse')).toBe(false)
+    expect(Object.hasOwn(groupsApi, 'backupApplicationKey')).toBe(false)
+    expect(Object.hasOwn(groupsApi, 'rawResponse')).toBe(false)
+    expect(Object.hasOwn(backupApi, 'authorizationToken')).toBe(false)
+    expect(Object.hasOwn(backupApi, 'rawResponse')).toBe(false)
+    expect(serialized).not.toContain('partner-token-secret')
+    expect(serialized).not.toContain('top-level-application-key-secret')
+    expect(serialized).not.toContain('top-level-backup-key-secret')
+    expect(serialized).not.toContain('top-level-raw-key-secret')
+    expect(serialized).not.toContain('nested-groups-backup-key-secret')
+    expect(serialized).not.toContain('nested-groups-raw-key-secret')
+    expect(serialized).not.toContain('nested-backup-token-secret')
+    expect(serialized).not.toContain('nested-backup-raw-key-secret')
+  })
+
+  it('drops unknown secret-looking fields from create-group-member projections', () => {
+    const result = {
+      applicationKeyId: applicationKeyId('application-key-id'),
+      applicationKey: 'group-member-application-key-secret',
+      groupMember: {
+        accountId: accountId('member-account'),
+        email: 'member@example.com',
+        groupId: groupId('254'),
+        groupName: 'Example Group',
+        region: Region.UsWest,
+        s3Endpoint: 's3.us-west-004.backblazeb2.com',
+        applicationKey: 'nested-member-application-key-secret',
+        backupApplicationKey: 'nested-member-backup-key-secret',
+        rawResponse: { applicationKey: 'nested-member-raw-key-secret' },
+      },
+      authorizationToken: 'group-member-token-secret',
+      backupApplicationKey: 'group-member-backup-key-secret',
+      rawResponse: { applicationKey: 'group-member-raw-key-secret' },
+    } as unknown as CreateGroupMemberResult
+
+    const redacted = createGroupMemberResultToRedactedJson(result)
+    const [redactedFromResponse] = createGroupMemberResponseToRedactedJson([result])
+    const serialized = JSON.stringify(redacted)
+
+    expect(redactedFromResponse).toEqual(redacted)
+    expect(redacted.applicationKey).toBe(APPLICATION_KEY_REDACTED)
+    expect(Object.hasOwn(redacted, 'authorizationToken')).toBe(false)
+    expect(Object.hasOwn(redacted, 'backupApplicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted, 'rawResponse')).toBe(false)
+    expect(Object.hasOwn(redacted.groupMember, 'applicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted.groupMember, 'backupApplicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted.groupMember, 'rawResponse')).toBe(false)
+    expect(serialized).not.toContain('group-member-application-key-secret')
+    expect(serialized).not.toContain('group-member-token-secret')
+    expect(serialized).not.toContain('group-member-backup-key-secret')
+    expect(serialized).not.toContain('group-member-raw-key-secret')
+    expect(serialized).not.toContain('nested-member-application-key-secret')
+    expect(serialized).not.toContain('nested-member-backup-key-secret')
+    expect(serialized).not.toContain('nested-member-raw-key-secret')
+  })
+
+  it('drops unknown secret-looking fields from reserve-trial projections', () => {
+    const result = {
+      accountId: accountId('trial-account'),
+      applicationKey: 'trial-application-key-secret',
+      applicationKeyId: applicationKeyId('trial-key-id'),
+      s3Endpoint: 's3.us-west-004.backblazeb2.com',
+      startDate: '2026-08-21',
+      endDate: '2026-08-28',
+      email: 'trial@example.com',
+      bucketName: 'trial-bucket',
+      bucketId: bucketId('trial-bucket-id'),
+      authorizationToken: 'trial-token-secret',
+      backupApplicationKey: 'trial-backup-key-secret',
+      rawResponse: { applicationKey: 'trial-raw-key-secret' },
+    } as unknown as ReserveTrialCreateAccountResult
+
+    const redacted = reserveTrialCreateAccountResultToRedactedJson(result)
+    const [redactedFromResponse] = reserveTrialCreateAccountResponseToRedactedJson([result])
+    const serialized = JSON.stringify(redacted)
+
+    expect(redactedFromResponse).toEqual(redacted)
+    expect(redacted.applicationKey).toBe(APPLICATION_KEY_REDACTED)
+    expect(Object.hasOwn(redacted, 'authorizationToken')).toBe(false)
+    expect(Object.hasOwn(redacted, 'backupApplicationKey')).toBe(false)
+    expect(Object.hasOwn(redacted, 'rawResponse')).toBe(false)
+    expect(serialized).not.toContain('trial-application-key-secret')
+    expect(serialized).not.toContain('trial-token-secret')
+    expect(serialized).not.toContain('trial-backup-key-secret')
+    expect(serialized).not.toContain('trial-raw-key-secret')
+  })
+})
 
 describe('PartnerRawClient group management endpoints', () => {
   const groupsApiUrl = 'https://groups.backblazeb2.com/partner'
