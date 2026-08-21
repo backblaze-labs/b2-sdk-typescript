@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { B2BucketConfigurationError } from './errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
 import { RawClient } from './raw/index.ts'
+import { recordingTransport } from './test-utils/index.ts'
+import { BucketType, CorsOperation } from './types/bucket.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
 import { bucketId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
@@ -15,6 +18,93 @@ function jsonResponse(value: unknown): HttpResponse {
     arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
   }
 }
+
+describe('RawClient bucket configuration validation', () => {
+  it('passes valid bucketInfo and CORS rules through bucket create/update', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        return jsonResponse({})
+      },
+    }
+    const raw = new RawClient({ transport })
+    const bucketInfo: Record<string, string> = {}
+    for (let i = 0; i < 12; i++) bucketInfo[`key ${i}`] = 'value'
+    const corsRules = [
+      {
+        allowedHeaders: ['authorization'],
+        allowedOperations: [CorsOperation.B2DownloadFileByName],
+        allowedOrigins: ['https://example.com'],
+        corsRuleName: 'rule-1',
+        exposeHeaders: ['x-bz-content-sha1'],
+        maxAgeSeconds: 3600,
+      },
+    ]
+
+    await raw.createBucket('https://api.example.test', 'auth', {
+      accountId: 'account' as never,
+      bucketInfo,
+      bucketName: 'valid-bucket',
+      bucketType: BucketType.AllPrivate,
+      corsRules,
+    })
+    await raw.updateBucket('https://api.example.test', 'auth', {
+      accountId: 'account' as never,
+      bucketId: bucketId('bucket'),
+      bucketInfo,
+      corsRules,
+    })
+
+    expect(requests).toHaveLength(2)
+    expect(JSON.parse(requests[0]?.body as string)).toMatchObject({
+      bucketInfo,
+      corsRules,
+    })
+    expect(JSON.parse(requests[1]?.body as string)).toMatchObject({
+      bucketInfo,
+      corsRules,
+    })
+  })
+
+  it('rejects invalid bucket configuration before transport', async () => {
+    const { seenRequests, transport } = recordingTransport()
+    const raw = new RawClient({ transport })
+
+    await expect(
+      raw.createBucket('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        bucketInfo: { 'b2-system': 'value' },
+        bucketName: 'invalid-bucket',
+        bucketType: BucketType.AllPrivate,
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid_bucket_info',
+      field: 'bucketInfo',
+      name: 'B2BucketConfigurationError',
+      status: 400,
+    })
+
+    await expect(
+      raw.updateBucket('https://api.example.test', 'auth', {
+        accountId: 'account' as never,
+        bucketId: bucketId('bucket'),
+        corsRules: [
+          {
+            allowedHeaders: null,
+            allowedOperations: ['s3_post'] as never,
+            allowedOrigins: ['https://example.com'],
+            corsRuleName: 'rule-1',
+            exposeHeaders: null,
+            maxAgeSeconds: 3600,
+          },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(B2BucketConfigurationError)
+
+    expect(seenRequests).toEqual([])
+  })
+})
 
 describe('RawClient list request controls', () => {
   it('normalizes the deprecated createKey bucketId alias to bucketIds', async () => {

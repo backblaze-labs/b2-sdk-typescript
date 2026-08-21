@@ -15,6 +15,11 @@
  */
 
 import {
+  assertValidBucketInfo as assertValidClientBucketInfo,
+  assertValidCorsRules as assertValidClientCorsRules,
+} from '../bucket-validation.ts'
+import { B2BucketConfigurationError } from '../errors/index.ts'
+import {
   BUCKET_NAME_MAX,
   BUCKET_NAME_MIN,
   BUCKET_NAME_RESERVED_PREFIX,
@@ -25,9 +30,22 @@ import {
   isB2BucketNameIpv4Address,
 } from '../internal/b2-naming.ts'
 import { Capability } from '../types/auth.ts'
-import { BucketRetentionMode, BucketType, CorsOperation } from '../types/bucket.ts'
+import { BucketRetentionMode, BucketType, CorsOperation, type CorsRule } from '../types/bucket.ts'
 import { EventType } from '../types/notifications.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
+
+export {
+  BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_RESERVED_PREFIX,
+  BUCKET_INFO_VALUES_MAX_BYTES,
+  CORS_RULE_MAX_BYTES,
+  CORS_RULE_NAME_MAX_LENGTH,
+  CORS_RULE_NAME_MIN_LENGTH,
+  CORS_RULE_NAME_PATTERN,
+  CORS_RULE_NAME_RESERVED_PREFIX,
+  CORS_RULES_MAX_COUNT,
+} from '../types/bucket.ts'
 
 /** Shape returned by validation functions when input is rejected. */
 export interface ValidationError {
@@ -259,13 +277,6 @@ export function validateFileInfo(info: Record<string, string>): ValidationError 
   return null
 }
 
-/** Per-bucket bucketInfo total max keys. */
-export const BUCKET_INFO_MAX_KEYS = 10
-/** Per-key bucketInfo value byte cap. */
-export const BUCKET_INFO_VALUE_MAX = 2048
-/** Allowed key character set for bucketInfo. */
-const BUCKET_INFO_KEY_REGEX = /^[a-zA-Z0-9_-]+$/
-
 /**
  * Validates a `bucketInfo` record against B2's per-bucket metadata rules.
  *
@@ -273,36 +284,13 @@ const BUCKET_INFO_KEY_REGEX = /^[a-zA-Z0-9_-]+$/
  *
  * @returns A `{ code, message }` pair on failure, or `null` when valid.
  *
- * @see https://www.backblaze.com/apidocs/b2-create-bucket
+ * @see https://www.backblaze.com/docs/cloud-storage-buckets
  */
-export function validateBucketInfo(info: Record<string, string>): ValidationError | null {
-  const entries = Object.entries(info)
-  if (entries.length > BUCKET_INFO_MAX_KEYS) {
-    return {
-      code: 'invalid_bucket_info',
-      message: `bucketInfo cannot have more than ${BUCKET_INFO_MAX_KEYS} keys (got ${entries.length})`,
-    }
-  }
-  for (const [key, value] of entries) {
-    if (!BUCKET_INFO_KEY_REGEX.test(key)) {
-      return {
-        code: 'invalid_bucket_info',
-        message: `bucketInfo key "${key}" must match ^[a-zA-Z0-9_-]+$`,
-      }
-    }
-    if (typeof value !== 'string') {
-      return {
-        code: 'invalid_bucket_info',
-        message: `bucketInfo value for "${key}" must be a string`,
-      }
-    }
-    const valueBytes = utf8Encoder.encode(value).byteLength
-    if (valueBytes > BUCKET_INFO_VALUE_MAX) {
-      return {
-        code: 'invalid_bucket_info',
-        message: `bucketInfo value for "${key}" exceeds ${BUCKET_INFO_VALUE_MAX} bytes`,
-      }
-    }
+export function validateBucketInfo(info: unknown): ValidationError | null {
+  try {
+    assertValidClientBucketInfo(info as Record<string, string>)
+  } catch (err) {
+    return bucketConfigurationValidationError(err)
   }
   return null
 }
@@ -569,6 +557,12 @@ const KNOWN_CORS_OPERATIONS = new Set<string>(Object.values(CorsOperation))
  * @see https://www.backblaze.com/docs/cloud-storage-cross-origin-resource-sharing-rules
  */
 export function validateCorsRules(rules: unknown): ValidationError | null {
+  try {
+    assertValidClientCorsRules(rules as readonly CorsRule[])
+  } catch (err) {
+    return bucketConfigurationValidationError(err)
+  }
+
   if (!Array.isArray(rules)) {
     return { code: 'bad_request', message: 'corsRules must be an array' }
   }
@@ -630,6 +624,13 @@ export function validateCorsRules(rules: unknown): ValidationError | null {
   }
 
   return null
+}
+
+function bucketConfigurationValidationError(err: unknown): ValidationError {
+  if (err instanceof B2BucketConfigurationError) {
+    return { code: err.code, message: err.message }
+  }
+  throw err
 }
 
 const LIFECYCLE_RULE_FIELDS = new Set([

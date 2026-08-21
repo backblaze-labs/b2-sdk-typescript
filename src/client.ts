@@ -229,9 +229,19 @@ export class B2Client {
     bucketName: string
     /** Access level: `"allPrivate"` or `"allPublic"`. */
     bucketType: BucketType
-    /** Custom key-value metadata stored with the bucket. */
+    /**
+     * Custom key-value metadata stored with the bucket. Keys must be 1-50
+     * UTF-8 bytes, must not start with `b2-`, and all values together must be
+     * at most 10,000 UTF-8 bytes. There is no bucketInfo pair-count cap.
+     */
     bucketInfo?: Record<string, string>
-    /** CORS rules for browser-based access. */
+    /**
+     * CORS rules for browser-based access. A bucket may have at most 100
+     * rules; rule names must be unique, 6-63 characters, match
+     * `[A-Za-z0-9-]`, and not start with `b2-`. Each rule must be less than
+     * 1,000 UTF-8 bytes across its name, origins, operations, allowed headers,
+     * and exposed headers.
+     */
     corsRules?: CorsRule[]
     /** Default server-side encryption for new files. */
     defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting

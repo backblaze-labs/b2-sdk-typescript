@@ -9,8 +9,8 @@ import {
 import { EventType } from '../types/notifications.ts'
 import { missingCapabilitiesFor } from './capabilities.ts'
 import {
-  BUCKET_INFO_MAX_KEYS,
-  BUCKET_INFO_VALUE_MAX,
+  BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_VALUES_MAX_BYTES,
   DOWNLOAD_AUTH_DURATION_MAX_SECONDS,
   DOWNLOAD_AUTH_DURATION_MIN_SECONDS,
   FILE_INFO_TOTAL_MAX,
@@ -145,19 +145,23 @@ describe('validateBucketInfo', () => {
   it('returns null for a small valid record', () => {
     expect(validateBucketInfo({ env: 'prod' })).toBeNull()
   })
-  it(`rejects more than ${BUCKET_INFO_MAX_KEYS} keys`, () => {
+  it('does not enforce a bucketInfo pair-count cap', () => {
     const big: Record<string, string> = {}
-    for (let i = 0; i <= BUCKET_INFO_MAX_KEYS; i++) big[`k${i}`] = 'v'
-    expect(validateBucketInfo(big)?.code).toBe('invalid_bucket_info')
+    for (let i = 0; i < 60; i++) big[`key ${i}`] = 'v'
+    expect(validateBucketInfo(big)).toBeNull()
   })
-  it('rejects a key with disallowed characters', () => {
-    expect(validateBucketInfo({ 'bad key': 'v' })?.code).toBe('invalid_bucket_info')
+  it(`rejects keys over ${BUCKET_INFO_KEY_MAX_BYTES} UTF-8 bytes`, () => {
+    const longKey = 'é'.repeat(Math.floor(BUCKET_INFO_KEY_MAX_BYTES / 2) + 1)
+    expect(validateBucketInfo({ [longKey]: 'v' })?.code).toBe('invalid_bucket_info')
+  })
+  it('rejects keys with the reserved b2- prefix', () => {
+    expect(validateBucketInfo({ 'b2-key': 'v' })?.code).toBe('invalid_bucket_info')
   })
   it('rejects a non-string value', () => {
     expect(validateBucketInfo({ k: 5 as unknown as string })?.code).toBe('invalid_bucket_info')
   })
-  it(`rejects a value over ${BUCKET_INFO_VALUE_MAX} bytes`, () => {
-    const long = 'a'.repeat(BUCKET_INFO_VALUE_MAX + 1)
+  it(`rejects aggregate values over ${BUCKET_INFO_VALUES_MAX_BYTES} bytes`, () => {
+    const long = 'a'.repeat(BUCKET_INFO_VALUES_MAX_BYTES + 1)
     expect(validateBucketInfo({ k: long })?.code).toBe('invalid_bucket_info')
   })
 })

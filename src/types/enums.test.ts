@@ -109,11 +109,10 @@ describe('const-object enums', () => {
       'b2_download_file_by_id',
       'b2_upload_file',
       'b2_upload_part',
-      's3_delete',
       's3_get',
-      's3_head',
-      's3_post',
       's3_put',
+      's3_head',
+      's3_delete',
     ])
   })
 
