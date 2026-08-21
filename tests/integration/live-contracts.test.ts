@@ -224,7 +224,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
   })
 
   afterAll(async () => {
-    if (bucket === undefined) return
+    if (!bucket) return
     await deleteBucketIfPresent(bucket)
   })
 
