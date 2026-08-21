@@ -171,8 +171,6 @@ export interface BucketInfo {
   readonly options: readonly string[]
   /** Monotonically increasing revision number, incremented on each bucket update. */
   readonly revision: number
-  /** Default retention policy for newly uploaded files. */
-  readonly defaultRetention: BucketRetentionPolicy
   /** Cross-region replication configuration for this bucket. */
   readonly replicationConfiguration: ReplicationConfiguration
 }

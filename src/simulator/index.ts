@@ -14,7 +14,12 @@ import { encodeFileName } from '../raw/encoding.ts'
 import { type B2ApiVersion, b2Url, isB2ApiVersion } from '../raw/url.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { Capability } from '../types/auth.ts'
-import { type BucketInfo, BucketRetentionMode, type BucketType } from '../types/bucket.ts'
+import {
+  type BucketInfo,
+  BucketRetentionMode,
+  type BucketRetentionPolicy,
+  type BucketType,
+} from '../types/bucket.ts'
 import { DownloadClientUnauthorizedToReadMarker, DownloadHeaderName } from '../types/download.ts'
 import {
   EncryptionAlgorithm,
@@ -953,10 +958,15 @@ async function uploadServerSideEncryption(
   return await storedServerSideEncryption(fallback)
 }
 
+function bucketDefaultRetention(info: BucketInfo): BucketRetentionPolicy | undefined {
+  return info.fileLockConfiguration.value?.defaultRetention
+}
+
 function defaultFileRetention(
-  policy: BucketInfo['defaultRetention'],
+  policy: BucketRetentionPolicy | undefined,
   uploadTimestamp: number,
 ): FileRetentionValue | null {
+  if (policy === undefined) return null
   if (policy.mode === BucketRetentionMode.None || policy.period === null) return null
   const days = policy.period.unit === 'days' ? policy.period.duration : policy.period.duration * 365
   const retainUntilTimestamp = uploadTimestamp + days * MS_PER_DAY
@@ -3365,7 +3375,7 @@ export class B2Simulator {
     bucketInfo?: Record<string, string>
     corsRules?: BucketInfo['corsRules']
     defaultServerSideEncryption?: BucketInfo['defaultServerSideEncryption']
-    defaultRetention?: BucketInfo['defaultRetention']
+    defaultRetention?: BucketRetentionPolicy
     fileLockEnabled?: boolean
     lifecycleRules?: BucketInfo['lifecycleRules']
     replicationConfiguration?: BucketInfo['replicationConfiguration']
@@ -3423,7 +3433,6 @@ export class B2Simulator {
       lifecycleRules: req.lifecycleRules ?? [],
       options: [],
       revision: 1,
-      defaultRetention,
       replicationConfiguration:
         req.replicationConfiguration === undefined
           ? { asReplicationSource: null, asReplicationDestination: null }
@@ -3532,12 +3541,11 @@ export class B2Simulator {
         : {}),
       ...(req['defaultRetention'] !== undefined
         ? {
-            defaultRetention: req['defaultRetention'] as BucketInfo['defaultRetention'],
             fileLockConfiguration: {
               isClientAuthorizedToRead: true,
               value: {
                 isFileLockEnabled: objectLockEnabled,
-                defaultRetention: req['defaultRetention'] as BucketInfo['defaultRetention'],
+                defaultRetention: req['defaultRetention'] as BucketRetentionPolicy,
               },
             },
           }
@@ -3548,7 +3556,10 @@ export class B2Simulator {
               isClientAuthorizedToRead: true,
               value: {
                 isFileLockEnabled: objectLockEnabled,
-                defaultRetention: bucket.info.defaultRetention,
+                defaultRetention: bucketDefaultRetention(bucket.info) ?? {
+                  mode: BucketRetentionMode.None,
+                  period: null,
+                },
               },
             },
           }
@@ -3929,7 +3940,8 @@ export class B2Simulator {
       contentType: req.contentType,
       fileInfo: req.fileInfo ?? {},
       fileRetention:
-        req.fileRetention ?? defaultFileRetention(bucket.info.defaultRetention, uploadTimestamp),
+        req.fileRetention ??
+        defaultFileRetention(bucketDefaultRetention(bucket.info), uploadTimestamp),
       legalHold: req.legalHold ?? null,
       ...this.replicationStatusMetadataFor(replicationStatus),
       serverSideEncryption,

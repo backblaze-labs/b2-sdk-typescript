@@ -1162,13 +1162,12 @@ export class Bucket {
    * Returns the current default Object Lock retention policy for new
    * uploads to this bucket, refetched from B2.
    *
-   * @returns The default {@link BucketRetentionPolicy} (which may be
-   *   `{ mode: 'none', period: null }` when Object Lock is enabled on the
-   *   bucket but no default is set).
+   * @returns The default {@link BucketRetentionPolicy}, or `undefined` if
+   *   the file lock configuration is not readable.
    */
-  async getDefaultRetention(): Promise<BucketRetentionPolicy> {
+  async getDefaultRetention(): Promise<BucketRetentionPolicy | undefined> {
     const fresh = await this.refresh()
-    return fresh.defaultRetention
+    return bucketDefaultRetentionSnapshot(fresh).retention
   }
 
   /**
