@@ -55,7 +55,7 @@ const subsetRejectionCandidateCapabilities = [
 const keyNamePrefix = 'sdk-it-key-'
 const bucketNamePrefix = 'sdk-it-key-bucket-'
 const namePrefix = `keys/${runLabel()}/`
-const keyDurationSeconds = 60 * 60
+const keyDurationSeconds = 5 * 60
 
 let client: B2Client
 let scopedBucketId: BucketId
