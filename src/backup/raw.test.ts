@@ -44,6 +44,30 @@ function requestJsonBody(request: HttpRequest): unknown {
   return JSON.parse(request.body) as unknown
 }
 
+function apiEndpointName(request: HttpRequest): string {
+  return new URL(request.url).pathname.split('/').at(-1) ?? ''
+}
+
+function apiVersionSegment(request: HttpRequest): string {
+  return new URL(request.url).pathname.split('/').at(-2) ?? ''
+}
+
+function backupEndpointTransport(responses: Readonly<Record<string, unknown>>): {
+  readonly transport: HttpTransport
+  readonly seenRequests: HttpRequest[]
+} {
+  const seenRequests: HttpRequest[] = []
+  return {
+    transport: {
+      async send(request) {
+        seenRequests.push(request)
+        return jsonResponse(responses[apiEndpointName(request)] ?? {})
+      },
+    },
+    seenRequests,
+  }
+}
+
 function authorizedRawClient(
   transport: HttpTransport,
   suffixes: readonly string[] = ['backblazeb2.com', 'backblaze.com'],
@@ -102,6 +126,35 @@ async function makeSimulatorBackupRawClient(): Promise<{
 }
 
 describe('BackupRawClient', () => {
+  it('pins Computer Backup methods to v1 endpoints', async () => {
+    const { transport, seenRequests } = backupEndpointTransport({
+      bz_list_computers: { nextComputerId: null, computers: [] },
+      bz_delete_computer: [],
+    })
+    const raw = authorizedRawClient(transport)
+
+    await raw.listComputers(
+      'https://backup.backblazeb2.com/backup',
+      partnerToken('partner-token'),
+      { accountId: accountId('account-1') },
+    )
+    await raw.deleteComputer(
+      'https://backup.backblazeb2.com/backup',
+      partnerToken('partner-token'),
+      {
+        accountId: accountId('account-1'),
+        computerId: computerId('computer-1'),
+      },
+    )
+
+    expect(
+      seenRequests.map((request) => [apiEndpointName(request), apiVersionSegment(request)]),
+    ).toEqual([
+      ['bz_list_computers', 'v1'],
+      ['bz_delete_computer', 'v1'],
+    ])
+  })
+
   it('builds bz_list_computers GET requests under the backup API path', async () => {
     const controller = new AbortController()
     const { transport, seenRequests } = okTransport({

@@ -41,7 +41,15 @@ import {
   redactReserveTrialCreateAccountResponse,
 } from './redaction.ts'
 
-const PARTNER_API_V3: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v3' }
+const PARTNER_API_PREFIX = 'b2api'
+const PARTNER_AUTHORIZE_API: B2EndpointUrlOptions = {
+  prefix: PARTNER_API_PREFIX,
+  version: 'v3',
+}
+const PARTNER_GROUPS_API: B2EndpointUrlOptions = {
+  prefix: PARTNER_API_PREFIX,
+  version: 'v4',
+}
 const DEFAULT_PARTNER_REALM_URL = 'https://api.backblazeb2.com'
 const PRODUCTION_HOST_SUFFIX = 'backblazeb2.com'
 const PRODUCTION_ENDPOINT_HOST_SUFFIX = 'backblaze.com'
@@ -324,6 +332,14 @@ function reserveTrialCreateAccountRequestBody(
   }))
 }
 
+function partnerAuthorizeUrl(realmUrl: string): string {
+  return b2Url(realmUrl, { ...PARTNER_AUTHORIZE_API, endpoint: 'b2_authorize_account' })
+}
+
+function partnerGroupsEndpointUrl(groupsApiUrl: string, endpoint: string): string {
+  return b2Url(groupsApiUrl, { ...PARTNER_GROUPS_API, endpoint })
+}
+
 /**
  * Low-level client for Partner API authorization and endpoint bindings.
  */
@@ -382,7 +398,7 @@ export class PartnerRawClient {
     assertSecureRealmUrl(realmUrl)
     assertVerifiedPartnerAuthorizeRealm(realmUrl, this.allowCustomAuthorizeRealm)
     const response = await this.transport.send({
-      url: b2Url(realmUrl, { ...PARTNER_API_V3, endpoint: 'b2_authorize_account' }),
+      url: partnerAuthorizeUrl(realmUrl),
       method: 'GET',
       headers: {
         Authorization: `Basic ${btoa(`${masterKeyId}:${masterKey}`)}`,
@@ -606,7 +622,7 @@ export class PartnerRawClient {
       groupsApiUrl,
     )
     const response = await this.transport.send({
-      url: withQueryString(b2Url(safeGroupsApiUrl, { ...PARTNER_API_V3, endpoint }), query),
+      url: withQueryString(partnerGroupsEndpointUrl(safeGroupsApiUrl, endpoint), query),
       method: 'GET',
       headers: {
         Authorization: authToken,
@@ -641,7 +657,7 @@ export class PartnerRawClient {
     )
     const requestOptions = nonRetryingMutationRequestOptions(options)
     const response = await this.transport.send({
-      url: b2Url(safeGroupsApiUrl, { ...PARTNER_API_V3, endpoint }),
+      url: partnerGroupsEndpointUrl(safeGroupsApiUrl, endpoint),
       method: 'POST',
       headers: {
         Authorization: authToken,
