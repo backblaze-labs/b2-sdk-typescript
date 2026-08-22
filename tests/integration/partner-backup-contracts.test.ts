@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { BackupClient } from '../../src/backup/index.ts'
-import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
+import type { HttpRequest, HttpResponse, UrlGuardedTransport } from '../../src/http/transport.ts'
 import { FetchTransport } from '../../src/http/transport.ts'
 import { PartnerClient } from '../../src/partner/index.ts'
 
@@ -41,13 +41,16 @@ const skip = !masterKeyId || !masterKey
  * version is the segment before it (query strings are dropped by `URL`).
  */
 function recordingFetchTransport(): {
-  transport: HttpTransport
+  transport: UrlGuardedTransport
   versionOf: (endpoint: string) => string | undefined
 } {
   const inner = new FetchTransport()
   const versions = new Map<string, string>()
   return {
     transport: {
+      // Forward the inner guard so authorize() can lock the SSRF allow-list;
+      // dropping it would run this smoke with a permissive guard.
+      urlGuard: inner.urlGuard,
       async send(request: HttpRequest): Promise<HttpResponse> {
         const segments = new URL(request.url).pathname.split('/').filter((s) => s.length > 0)
         const endpoint = segments.at(-1)
