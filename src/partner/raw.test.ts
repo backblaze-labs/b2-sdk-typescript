@@ -1363,7 +1363,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       expect(authBody.authorizationToken).toBeUndefined()
 
       const reserveResponse = await transport.send({
-        url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+        url: 'http://localhost:0/partner/b2api/v4/b2_reserve_trial_create_account',
         method: 'POST',
         headers: {
           Authorization: authBody.authorizationToken ?? '',
@@ -1408,7 +1408,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(authBody.authorizationToken).toBeUndefined()
 
     const reserveResponse = await transport.send({
-      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      url: 'http://localhost:0/partner/b2api/v4/b2_reserve_trial_create_account',
       method: 'POST',
       headers: {
         Authorization: authBody.authorizationToken ?? '',
