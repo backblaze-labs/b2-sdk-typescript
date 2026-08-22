@@ -18,7 +18,7 @@ import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 const keyManagementKeyId = env('B2_KEY_MANAGEMENT_APPLICATION_KEY_ID')
 const keyManagementAppKey = env('B2_KEY_MANAGEMENT_APPLICATION_KEY')
 const explicitBucketId = env('B2_KEY_MANAGEMENT_BUCKET_ID')
-const requireCredentials = process.env.B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS === '1'
+const requireCredentials = env('B2_KEY_MANAGEMENT_REQUIRE_CREDENTIALS') === '1'
 
 const hasPartialKeyManagementCredentials =
   (keyManagementKeyId === undefined) !== (keyManagementAppKey === undefined)
