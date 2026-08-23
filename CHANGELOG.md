@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
+
 ### Added
 
 - **B2Simulator v4 route and GET/query compatibility.** The public simulator now accepts canonical `/b2api/v4` JSON routes while continuing to support `/b2api/v3`, rejects unsupported future version segments explicitly, and parses documented GET query forms for supported storage read/list and copy endpoints while preserving POST JSON compatibility. Closes #111.
