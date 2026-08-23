@@ -62,7 +62,7 @@ import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
-import { isPartnerQueryEndpoint, PartnerSimulator } from './partner.ts'
+import { PartnerSimulator } from './partner.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = ['b2 sdk typescript', 'simulator upload authorization', 'v1'].join(
   ':',
@@ -101,12 +101,26 @@ const SIMULATOR_MASTER_CAPABILITIES: readonly Capability[] = [
   Capability.ShareFiles,
 ]
 
-function apiPathParts(path: string): { endpoint: string; version: B2ApiVersion } {
+type SimulatorJsonApiVersion = 'v3' | 'v4'
+
+interface ApiPathParts {
+  readonly endpoint: string
+  readonly version: SimulatorJsonApiVersion
+  readonly unsupportedVersion?: B2ApiVersion
+}
+
+function apiPathParts(path: string): ApiPathParts {
   const segments = path.split('/').filter((segment) => segment.length > 0)
   const candidate = segments.at(-2)
+  const endpoint = segments.at(-1) ?? ''
+  const isB2ApiPath = segments.at(-3) === 'b2api'
+  if (candidate !== undefined && isB2ApiVersion(candidate)) {
+    if (candidate === 'v3' || candidate === 'v4') return { endpoint, version: candidate }
+    if (isB2ApiPath) return { endpoint, version: 'v3', unsupportedVersion: candidate }
+  }
   return {
-    endpoint: segments.at(-1) ?? '',
-    version: candidate !== undefined && isB2ApiVersion(candidate) ? candidate : 'v3',
+    endpoint,
+    version: 'v3',
   }
 }
 
@@ -777,62 +791,166 @@ function fileNames(...names: readonly (string | undefined)[]): readonly string[]
   return present.length > 0 ? present : undefined
 }
 
-function queryParamsBody(params: URLSearchParams): Record<string, string> | null {
-  const body = Object.create(null) as Record<string, string>
-  let hasParams = false
+function queryParamsBody(
+  params: URLSearchParams,
+  endpoint: string,
+): Record<string, string | number> {
+  const metadata = jsonEndpointMetadata(endpoint)
+  const queryFields = new Set(metadata?.queryFields ?? [])
+  const numericFields = new Set(metadata?.numericQueryFields ?? [])
+  const body = Object.create(null) as Record<string, string | number>
   for (const [key, value] of params) {
+    if (!queryFields.has(key)) continue
     if (body[key] !== undefined) continue
-    body[key] = value
-    hasParams = true
+    body[key] = queryParamValue(value, numericFields.has(key))
   }
-  return hasParams ? body : null
+  return body
 }
 
-const JSON_GET_ENDPOINTS = new Set<string>([
-  'b2_authorize_account',
-  'b2_list_groups',
-  'b2_list_group_members',
-  'bz_list_computers',
-])
+function queryParamValue(value: string, numeric: boolean): string | number {
+  if (!numeric || !/^-?\d+$/.test(value)) return value
+  const numericValue = Number(value)
+  return Number.isSafeInteger(numericValue) ? numericValue : value
+}
 
-const JSON_POST_ENDPOINTS = new Set<string>([
-  'b2_create_group_member',
-  'b2_eject_group_member',
-  'b2_reserve_trial_create_account',
-  'bz_delete_computer',
-  'b2_create_bucket',
-  'b2_list_buckets',
-  'b2_delete_bucket',
-  'b2_update_bucket',
-  'b2_get_upload_url',
-  'b2_list_file_names',
-  'b2_list_file_versions',
-  'b2_get_file_info',
-  'b2_hide_file',
-  'b2_delete_file_version',
-  'b2_copy_file',
-  'b2_start_large_file',
-  'b2_get_upload_part_url',
-  'b2_finish_large_file',
-  'b2_cancel_large_file',
-  'b2_list_unfinished_large_files',
-  'b2_list_parts',
-  'b2_copy_part',
-  'b2_get_download_authorization',
-  'b2_create_key',
-  'b2_list_keys',
-  'b2_delete_key',
-  'b2_update_file_retention',
-  'b2_update_file_legal_hold',
-  'b2_get_bucket_notification_rules',
-  'b2_set_bucket_notification_rules',
-])
+type JsonEndpointMethod = 'GET' | 'POST'
+
+interface JsonEndpointMetadata {
+  readonly methods: readonly JsonEndpointMethod[]
+  readonly queryFields?: readonly string[]
+  readonly numericQueryFields?: readonly string[]
+}
+
+const JSON_ENDPOINTS = {
+  b2_authorize_account: { methods: ['GET'] },
+  b2_list_groups: {
+    methods: ['GET'],
+    queryFields: ['adminAccountId', 'groupName', 'startGroupId', 'maxGroupCount'],
+    numericQueryFields: ['maxGroupCount'],
+  },
+  b2_list_group_members: {
+    methods: ['GET'],
+    queryFields: ['adminAccountId', 'groupId', 'startEmail', 'maxMemberCount'],
+    numericQueryFields: ['maxMemberCount'],
+  },
+  bz_list_computers: {
+    methods: ['GET'],
+    queryFields: ['accountId', 'startComputerId', 'maxComputerCount'],
+    numericQueryFields: ['maxComputerCount'],
+  },
+  b2_get_upload_url: {
+    methods: ['GET', 'POST'],
+    queryFields: ['bucketId'],
+  },
+  b2_list_file_names: {
+    methods: ['GET', 'POST'],
+    queryFields: ['bucketId', 'delimiter', 'maxFileCount', 'prefix', 'startFileName'],
+    numericQueryFields: ['maxFileCount'],
+  },
+  b2_list_file_versions: {
+    methods: ['GET', 'POST'],
+    queryFields: [
+      'bucketId',
+      'delimiter',
+      'maxFileCount',
+      'prefix',
+      'startFileName',
+      'startFileId',
+    ],
+    numericQueryFields: ['maxFileCount'],
+  },
+  b2_get_file_info: {
+    methods: ['GET', 'POST'],
+    queryFields: ['fileId'],
+  },
+  b2_copy_file: {
+    methods: ['GET', 'POST'],
+    queryFields: [
+      'sourceFileId',
+      'fileName',
+      'destinationBucketId',
+      'range',
+      'metadataDirective',
+      'contentType',
+    ],
+  },
+  b2_get_upload_part_url: {
+    methods: ['GET', 'POST'],
+    queryFields: ['fileId'],
+  },
+  b2_list_unfinished_large_files: {
+    methods: ['GET', 'POST'],
+    queryFields: ['bucketId', 'namePrefix', 'startFileId', 'maxFileCount'],
+    numericQueryFields: ['maxFileCount'],
+  },
+  b2_list_parts: {
+    methods: ['GET', 'POST'],
+    queryFields: ['fileId', 'startPartNumber', 'maxPartCount'],
+    numericQueryFields: ['startPartNumber', 'maxPartCount'],
+  },
+  b2_copy_part: {
+    methods: ['GET', 'POST'],
+    queryFields: ['sourceFileId', 'largeFileId', 'partNumber', 'range'],
+    numericQueryFields: ['partNumber'],
+  },
+  b2_get_download_authorization: {
+    methods: ['GET', 'POST'],
+    queryFields: [
+      'bucketId',
+      'fileNamePrefix',
+      'validDurationInSeconds',
+      'b2ContentDisposition',
+      'b2ContentLanguage',
+      'b2ContentEncoding',
+      'b2ContentType',
+      'b2CacheControl',
+      'b2Expires',
+    ],
+    numericQueryFields: ['validDurationInSeconds'],
+  },
+  b2_list_keys: {
+    methods: ['GET', 'POST'],
+    queryFields: ['accountId', 'maxKeyCount', 'startApplicationKeyId'],
+    numericQueryFields: ['maxKeyCount'],
+  },
+  b2_get_bucket_notification_rules: {
+    methods: ['GET', 'POST'],
+    queryFields: ['bucketId'],
+  },
+  b2_create_group_member: { methods: ['POST'] },
+  b2_eject_group_member: { methods: ['POST'] },
+  b2_reserve_trial_create_account: { methods: ['POST'] },
+  bz_delete_computer: { methods: ['POST'] },
+  b2_create_bucket: { methods: ['POST'] },
+  b2_list_buckets: { methods: ['POST'] },
+  b2_delete_bucket: { methods: ['POST'] },
+  b2_update_bucket: { methods: ['POST'] },
+  b2_hide_file: { methods: ['POST'] },
+  b2_delete_file_version: { methods: ['POST'] },
+  b2_start_large_file: { methods: ['POST'] },
+  b2_finish_large_file: { methods: ['POST'] },
+  b2_cancel_large_file: { methods: ['POST'] },
+  b2_create_key: { methods: ['POST'] },
+  b2_delete_key: { methods: ['POST'] },
+  b2_update_file_retention: { methods: ['POST'] },
+  b2_update_file_legal_hold: { methods: ['POST'] },
+  b2_set_bucket_notification_rules: { methods: ['POST'] },
+} as const satisfies Record<string, JsonEndpointMetadata>
+
+function jsonEndpointMetadata(endpoint: string): JsonEndpointMetadata | undefined {
+  return JSON_ENDPOINTS[endpoint as keyof typeof JSON_ENDPOINTS]
+}
 
 function jsonEndpointAllowsMethod(method: string, endpoint: string): boolean {
+  const metadata = jsonEndpointMetadata(endpoint)
+  if (metadata === undefined) return true
   const normalizedMethod = method.toUpperCase()
-  if (JSON_GET_ENDPOINTS.has(endpoint)) return normalizedMethod === 'GET'
-  if (JSON_POST_ENDPOINTS.has(endpoint)) return normalizedMethod === 'POST'
-  return true
+  if (normalizedMethod !== 'GET' && normalizedMethod !== 'POST') return false
+  return metadata.methods.includes(normalizedMethod)
+}
+
+function isJsonQueryEndpoint(endpoint: string): boolean {
+  return jsonEndpointMetadata(endpoint)?.queryFields !== undefined
 }
 
 function notificationRulePrefixes(body: unknown): readonly string[] | undefined {
@@ -2638,7 +2756,14 @@ export class B2Simulator {
     headers: Record<string, string>,
     body: unknown,
   ): Promise<SimulatorJsonResponse> {
-    const { endpoint, version } = apiPathParts(path)
+    const { endpoint, version, unsupportedVersion } = apiPathParts(path)
+    if (unsupportedVersion !== undefined) {
+      return this.error(
+        400,
+        'unsupported_api_version',
+        `B2 API version ${unsupportedVersion} is not supported by the simulator; use v4 or v3`,
+      )
+    }
     if (!jsonEndpointAllowsMethod(method, endpoint)) {
       return this.error(
         405,
@@ -5371,6 +5496,7 @@ class SimulatorTransport implements HttpTransport {
             : await this.sim.handleUpload(url, headers, uploadBody.data)
       }
     } else {
+      const requestPath = apiPathParts(parsedUrl.pathname)
       let body: unknown = null
       if (request.body) {
         const text =
@@ -5382,9 +5508,9 @@ class SimulatorTransport implements HttpTransport {
         }
       } else if (
         request.method.toUpperCase() === 'GET' &&
-        isPartnerQueryEndpoint(apiPathParts(parsedUrl.pathname).endpoint)
+        isJsonQueryEndpoint(requestPath.endpoint)
       ) {
-        body = queryParamsBody(parsedUrl.searchParams)
+        body = queryParamsBody(parsedUrl.searchParams, requestPath.endpoint)
       }
       result = await this.sim.handleRequest(
         request.method,

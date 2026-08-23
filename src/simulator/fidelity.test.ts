@@ -66,6 +66,317 @@ function expectConcreteListEntry(
   }
 }
 
+function b2JsonApiUrl(
+  version: string,
+  endpoint: string,
+  query?: Record<string, string | number>,
+): string {
+  const url = new URL(`http://localhost:0/b2api/${version}/${endpoint}`)
+  if (query !== undefined) {
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, String(value))
+    }
+  }
+  return url.toString()
+}
+
+async function expectJsonResponse<T>(response: HttpResponse, status = 200): Promise<T> {
+  expect(response.status).toBe(status)
+  return await response.json<T>()
+}
+
+async function makeWireContractFixture() {
+  const { client, sim } = makeClient({ sim: { strictAuth: true } })
+  await client.authorize()
+  const bucket = await client.createBucket({
+    bucketName: 'wire-query-shapes',
+    bucketType: BucketType.AllPrivate,
+  })
+  const authToken = client.accountInfo.getAuthToken()
+  const apiUrl = client.accountInfo.getApiUrl()
+  const uploaded = await bucket.upload({
+    fileName: 'query/visible.txt',
+    source: new BufferSource(new Uint8Array([1, 2, 3, 4])),
+  })
+  const large = await client.raw.startLargeFile(apiUrl, authToken, {
+    bucketId: bucket.id,
+    fileName: 'query/large.bin',
+    contentType: 'application/octet-stream',
+  })
+  const key = await client.createKey({
+    capabilities: [Capability.ListBuckets],
+    keyName: 'wire-query-key',
+  })
+  return { client, sim, bucket, authToken, apiUrl, uploaded, large, key }
+}
+
+async function getWireQuery<T>(
+  sim: B2Simulator,
+  authToken: string,
+  endpoint: string,
+  query: Record<string, string | number>,
+  version = 'v4',
+): Promise<T> {
+  const response = await sim.transport().send({
+    method: 'GET',
+    url: b2JsonApiUrl(version, endpoint, query),
+    headers: { Authorization: authToken },
+  })
+  return await expectJsonResponse<T>(response)
+}
+
+// ---------------------------------------------------------------------------
+// Wire contract
+// ---------------------------------------------------------------------------
+
+describe('B2Simulator wire contract: API version and request shape', () => {
+  it('accepts v4 as the canonical JSON route and v3 as a supported route', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'wire-route-alias',
+      bucketType: BucketType.AllPrivate,
+    })
+    const body = {
+      accountId: client.accountInfo.getAccountId(),
+      bucketId: bucket.id,
+    }
+
+    for (const version of ['v4', 'v3'] as const) {
+      const response = await sim.transport().send({
+        method: 'POST',
+        url: b2JsonApiUrl(version, 'b2_list_buckets'),
+        headers: {
+          Authorization: client.accountInfo.getAuthToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      const listed = await expectJsonResponse<{ buckets: readonly { bucketId: string }[] }>(
+        response,
+      )
+      expect(listed.buckets.map((candidate) => candidate.bucketId)).toEqual([bucket.id])
+    }
+
+    const getResponse = await sim.transport().send({
+      method: 'GET',
+      url: b2JsonApiUrl('v4', 'b2_list_buckets', body),
+      headers: { Authorization: client.accountInfo.getAuthToken() },
+    })
+
+    await expectJsonResponse(getResponse, 405)
+  })
+
+  it('rejects unsupported JSON API version segments explicitly', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const response = await sim.transport().send({
+      method: 'POST',
+      url: b2JsonApiUrl('v5', 'b2_list_buckets'),
+      headers: {
+        Authorization: client.accountInfo.getAuthToken(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ accountId: client.accountInfo.getAccountId() }),
+    })
+
+    await expectJsonResponse(response, 400).then((body) =>
+      expect(body).toMatchObject({ code: 'unsupported_api_version' }),
+    )
+  })
+
+  it('returns a structured JSON error for empty GET query requests', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const response = await sim.transport().send({
+      method: 'GET',
+      url: b2JsonApiUrl('v4', 'b2_get_upload_url'),
+      headers: { Authorization: client.accountInfo.getAuthToken() },
+    })
+
+    await expectJsonResponse(response, 400).then((body) =>
+      expect(body).toMatchObject({ code: 'bad_bucket_id' }),
+    )
+  })
+
+  it('accepts b2_get_upload_url as a v4 GET query request', async () => {
+    const { sim, bucket, authToken } = await makeWireContractFixture()
+    const uploadUrl = await getWireQuery<{ bucketId: string; uploadUrl: string }>(
+      sim,
+      authToken,
+      'b2_get_upload_url',
+      { bucketId: bucket.id },
+    )
+    expect(uploadUrl.bucketId).toBe(bucket.id)
+    expect(uploadUrl.uploadUrl).toContain('b2_upload_file')
+  })
+
+  it('accepts b2_get_file_info as a v4 GET query request', async () => {
+    const { sim, authToken, uploaded } = await makeWireContractFixture()
+    const fileInfo = await getWireQuery<{ fileId: string; fileName: string }>(
+      sim,
+      authToken,
+      'b2_get_file_info',
+      { fileId: uploaded.fileId },
+    )
+    expect(fileInfo).toMatchObject({ fileId: uploaded.fileId, fileName: uploaded.fileName })
+  })
+
+  it('accepts b2_list_file_names as v4 and v3 GET query requests', async () => {
+    const { sim, bucket, authToken } = await makeWireContractFixture()
+    const names = await getWireQuery<{ files: readonly { fileName: string }[] }>(
+      sim,
+      authToken,
+      'b2_list_file_names',
+      { bucketId: bucket.id, prefix: 'query/', maxFileCount: 1 },
+    )
+    expect(names.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+
+    const v3Names = await getWireQuery<{ files: readonly { fileName: string }[] }>(
+      sim,
+      authToken,
+      'b2_list_file_names',
+      { bucketId: bucket.id, prefix: 'query/', maxFileCount: 1 },
+      'v3',
+    )
+    expect(v3Names.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+  })
+
+  it('accepts b2_list_file_versions as a v4 GET query request', async () => {
+    const { sim, bucket, authToken } = await makeWireContractFixture()
+    const versions = await getWireQuery<{ files: readonly { fileName: string }[] }>(
+      sim,
+      authToken,
+      'b2_list_file_versions',
+      { bucketId: bucket.id, prefix: 'query/', maxFileCount: 10 },
+    )
+    expect(versions.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+  })
+
+  it('accepts b2_get_upload_part_url as a v4 GET query request', async () => {
+    const { sim, authToken, large } = await makeWireContractFixture()
+    const uploadPartUrl = await getWireQuery<{ fileId: string; uploadUrl: string }>(
+      sim,
+      authToken,
+      'b2_get_upload_part_url',
+      { fileId: large.fileId },
+    )
+    expect(uploadPartUrl.fileId).toBe(large.fileId)
+    expect(uploadPartUrl.uploadUrl).toContain('b2_upload_part')
+  })
+
+  it('accepts b2_list_unfinished_large_files as a v4 GET query request', async () => {
+    const { sim, bucket, authToken, large } = await makeWireContractFixture()
+    const unfinished = await getWireQuery<{
+      files: readonly { fileId: string; fileName: string }[]
+    }>(sim, authToken, 'b2_list_unfinished_large_files', {
+      bucketId: bucket.id,
+      namePrefix: 'query/',
+      maxFileCount: 1,
+    })
+    expect(unfinished.files).toHaveLength(1)
+    expect(unfinished.files[0]).toMatchObject({ fileId: large.fileId, fileName: large.fileName })
+  })
+
+  it('accepts b2_list_parts as a v4 GET query request', async () => {
+    const { sim, authToken, large } = await makeWireContractFixture()
+    const parts = await getWireQuery<{ parts: readonly unknown[] }>(
+      sim,
+      authToken,
+      'b2_list_parts',
+      {
+        fileId: large.fileId,
+        startPartNumber: 1,
+        maxPartCount: 1,
+      },
+    )
+    expect(parts.parts).toEqual([])
+  })
+
+  it('accepts b2_get_download_authorization as a v4 GET query request', async () => {
+    const { sim, bucket, authToken } = await makeWireContractFixture()
+    const downloadAuth = await getWireQuery<{ bucketId: string; authorizationToken: string }>(
+      sim,
+      authToken,
+      'b2_get_download_authorization',
+      {
+        bucketId: bucket.id,
+        fileNamePrefix: 'query/',
+        validDurationInSeconds: 60,
+      },
+    )
+    expect(downloadAuth.bucketId).toBe(bucket.id)
+    expect(downloadAuth.authorizationToken).toBeTruthy()
+  })
+
+  it('accepts b2_list_keys as a v4 GET query request', async () => {
+    const { client, sim, authToken, key } = await makeWireContractFixture()
+    const keys = await getWireQuery<{ keys: readonly { applicationKeyId: string }[] }>(
+      sim,
+      authToken,
+      'b2_list_keys',
+      { accountId: client.accountInfo.getAccountId(), maxKeyCount: 1 },
+    )
+    expect(keys.keys).toHaveLength(1)
+    expect(keys.keys[0]).toMatchObject({ applicationKeyId: key.applicationKeyId })
+  })
+
+  it('accepts b2_get_bucket_notification_rules as a v4 GET query request', async () => {
+    const { sim, bucket, authToken } = await makeWireContractFixture()
+    const rules = await getWireQuery<{
+      bucketId: string
+      eventNotificationRules: readonly unknown[]
+    }>(sim, authToken, 'b2_get_bucket_notification_rules', { bucketId: bucket.id })
+    expect(rules).toEqual({ bucketId: bucket.id, eventNotificationRules: [] })
+  })
+
+  it('accepts b2_copy_file as a v4 GET query request', async () => {
+    const { sim, authToken, uploaded } = await makeWireContractFixture()
+    const copied = await getWireQuery<{ fileName: string }>(sim, authToken, 'b2_copy_file', {
+      sourceFileId: uploaded.fileId,
+      fileName: 'query/copied.txt',
+    })
+    expect(copied.fileName).toBe('query/copied.txt')
+  })
+
+  it('accepts b2_copy_part as a v4 GET query request', async () => {
+    const { client, sim, authToken, apiUrl, uploaded, large } = await makeWireContractFixture()
+    const copiedPart = await getWireQuery<{ fileId: string; partNumber: number }>(
+      sim,
+      authToken,
+      'b2_copy_part',
+      {
+        sourceFileId: uploaded.fileId,
+        largeFileId: large.fileId,
+        partNumber: 1,
+      },
+    )
+    expect(copiedPart).toMatchObject({ fileId: large.fileId, partNumber: 1 })
+
+    const listed = await client.raw.listParts(apiUrl, authToken, { fileId: large.fileId })
+    expect(listed.parts.map((part) => part.partNumber)).toEqual([1])
+  })
+
+  it.each(['0x10', '1e3', '0o17', '0b101', ' 5 '])(
+    'rejects non-canonical numeric query value %s',
+    async (maxFileCount) => {
+      const { sim, bucket, authToken } = await makeWireContractFixture()
+      const response = await sim.transport().send({
+        method: 'GET',
+        url: b2JsonApiUrl('v4', 'b2_list_file_names', {
+          bucketId: bucket.id,
+          maxFileCount,
+        }),
+        headers: { Authorization: authToken },
+      })
+
+      await expectJsonResponse(response, 400).then((body) =>
+        expect(body).toMatchObject({ code: 'bad_request' }),
+      )
+    },
+  )
+})
+
 // ---------------------------------------------------------------------------
 // Input validation
 // ---------------------------------------------------------------------------
