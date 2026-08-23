@@ -536,8 +536,19 @@ export async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]):
 
   for (const bucket of staleBuckets) {
     const start = performance.now()
+    const lockState = fileLockBucketState(bucket)
+    if (lockState === 'unreadable') {
+      skippedCount += 1
+      console.warn(
+        `[b2 integration setup] delete stale bucket ${bucket.name}: skipped after ${Math.round(
+          performance.now() - start,
+        )}ms (file lock configuration unreadable; grant readBucketRetentions to classify cleanup path)`,
+      )
+      continue
+    }
+
     try {
-      if (isFileLockEnabledBucket(bucket)) {
+      if (lockState === 'enabled') {
         await deleteObjectLockBucketIfPresent(bucket)
       } else {
         await deleteBucketIfPresent(bucket)
@@ -559,9 +570,13 @@ export async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]):
   logSetup(`stale bucket sweep: deleted ${deletedCount}, skipped ${skippedCount}`)
 }
 
-function isFileLockEnabledBucket(bucket: Bucket): boolean {
+type FileLockBucketState = 'disabled' | 'enabled' | 'unreadable'
+
+function fileLockBucketState(bucket: Bucket): FileLockBucketState {
   const info = (bucket as { readonly info?: Bucket['info'] }).info
-  return info?.fileLockConfiguration?.value?.isFileLockEnabled === true
+  const configuration = info?.fileLockConfiguration
+  if (configuration?.value === null) return 'unreadable'
+  return configuration?.value?.isFileLockEnabled === true ? 'enabled' : 'disabled'
 }
 
 export async function uploadRawPart(

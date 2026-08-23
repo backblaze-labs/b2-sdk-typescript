@@ -103,6 +103,52 @@ describe('B2 integration cleanup safety', () => {
     })
   })
 
+  it('skips stale buckets when file-lock configuration is unreadable', async () => {
+    let cleanupCalls = 0
+    const fakeBucket = {
+      id: 'bucket-unreadable-lock',
+      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      info: {
+        fileLockConfiguration: {
+          isClientAuthorizedToRead: false,
+          value: null,
+        },
+      },
+      paginateUnfinishedLargeFiles() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      paginateFileNames() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      paginateFileVersions() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      async listFileVersions() {
+        cleanupCalls += 1
+        return { files: [], nextFileName: null, nextFileId: null }
+      },
+      async deleteFileVersion() {
+        cleanupCalls += 1
+      },
+      async updateFileLegalHold() {
+        cleanupCalls += 1
+      },
+      async updateFileRetention() {
+        cleanupCalls += 1
+      },
+      async delete() {
+        cleanupCalls += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(cleanupCalls).toBe(0)
+  })
+
   it('uses Object Lock cleanup for stale file-lock buckets with compliance retention', async () => {
     const calls = {
       deleteBucket: 0,
