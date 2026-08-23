@@ -215,19 +215,10 @@ async function deleteComplianceRetainedFileVersionForCleanup(
   bucket: Bucket,
   fileName: string,
   fileId: Parameters<Bucket['deleteFileVersion']>[1],
-  retainUntilTimestamp: number | null,
+  retainUntilTimestamp: number,
   deleted: Set<string>,
   cleanupErrors: unknown[],
 ): Promise<void> {
-  if (retainUntilTimestamp === null) {
-    cleanupErrors.push(
-      new Error(
-        `delete compliance file version failed bucket=${bucket.id} bucketName=${bucket.name} fileName=${fileName} fileId=${fileId}: missing retainUntilTimestamp`,
-      ),
-    )
-    return
-  }
-
   const waitMs = Math.max(0, retainUntilTimestamp - Date.now() + complianceCleanupClockSkewMs)
   if (waitMs > complianceCleanupMaxWaitMs) {
     cleanupErrors.push(
