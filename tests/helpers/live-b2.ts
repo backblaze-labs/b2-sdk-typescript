@@ -24,7 +24,7 @@ export const complianceCleanupMaxWaitMs = 30 * 1000
 export const complianceCleanupRetryBudgetMs = 30 * 1000
 export const complianceCleanupRetryDelayMs = 1000
 
-const complianceProtectedErrorCode = 'file_lock_compliance_protected'
+const complianceProtectedErrorCodes = ['access_denied', 'file_lock_compliance_protected']
 
 const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
 
@@ -237,7 +237,7 @@ async function deleteComplianceRetainedFileVersionForCleanup(
       return
     } catch (err) {
       const now = Date.now()
-      if (!hasB2ErrorCode(err, complianceProtectedErrorCode) || now >= deadline) {
+      if (!hasAnyB2ErrorCode(err, complianceProtectedErrorCodes) || now >= deadline) {
         cleanupErrors.push(
           new Error(
             `delete compliance file version failed bucket=${bucket.id} bucketName=${bucket.name} fileName=${fileName} fileId=${fileId} retainUntilTimestamp=${retainUntilTimestamp} now=${now} error=${safeErrorSummary(err)}`,
@@ -435,6 +435,10 @@ export function safeErrorSummary(err: unknown): string {
   if (fields.length > 0) return fields.join(' ')
   if (err instanceof Error) return err.name
   return 'object'
+}
+
+function hasAnyB2ErrorCode(err: unknown, codes: readonly string[]): boolean {
+  return codes.some((code) => hasB2ErrorCode(err, code))
 }
 
 export function logSetup(message: string): void {
