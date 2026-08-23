@@ -48,6 +48,7 @@ const requiredCapabilities: readonly Capability[] = [
   Capability.ListBuckets,
   Capability.WriteBuckets,
   Capability.DeleteBuckets,
+  Capability.ReadBucketRetentions,
   Capability.ListFiles,
   Capability.ReadFiles,
   Capability.WriteFiles,
