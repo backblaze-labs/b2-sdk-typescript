@@ -5,7 +5,7 @@ import { BadBucketIdError } from '../../src/errors/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import type { Capability as CapabilityValue } from '../../src/types/auth.ts'
 import type { LargeFileId } from '../../src/types/ids.ts'
-import { LegalHoldValue } from '../../src/types/lock.ts'
+import { type FileRetentionValue, LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { deleteFileVersionOnce, hasB2ErrorCode } from './b2-cleanup.ts'
 
@@ -19,6 +19,12 @@ export const setupStepTimeoutMs = 60 * 1000
 export const cleanupAttempts = 3
 export const cleanupRetryDelayMs = 250
 export const directFetchTimeoutMs = 30 * 1000
+export const complianceCleanupClockSkewMs = 2 * 1000
+export const complianceCleanupMaxWaitMs = 30 * 1000
+export const complianceCleanupRetryBudgetMs = 30 * 1000
+export const complianceCleanupRetryDelayMs = 1000
+
+const complianceProtectedErrorCodes = ['access_denied', 'file_lock_compliance_protected']
 
 const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
 
@@ -92,6 +98,18 @@ export async function emptyObjectLockBucket(bucket: Bucket): Promise<void> {
   await retryCleanupPhase('delete Object Lock file versions', bucket, cleanupErrors, async () => {
     for await (const file of bucket.paginateFileVersions()) {
       await clearLegalHoldForDelete(bucket, file.fileName, file.fileId, cleanupErrors)
+      const complianceRetainUntilTimestamp = complianceRetainUntilTimestampForCleanup(file)
+      if (complianceRetainUntilTimestamp !== null) {
+        await deleteComplianceRetainedFileVersionForCleanup(
+          bucket,
+          file.fileName,
+          file.fileId,
+          complianceRetainUntilTimestamp,
+          deleted,
+          cleanupErrors,
+        )
+        continue
+      }
       await clearRetentionForDelete(bucket, file.fileName, file.fileId, cleanupErrors)
       await deleteFileVersionForCleanup(
         bucket,
@@ -179,6 +197,64 @@ async function clearRetentionForDelete(
     ),
   )
   if (!cleared.ok) cleanupErrors.push(cleared.err)
+}
+
+function complianceRetainUntilTimestampForCleanup(file: unknown): number | null {
+  const retention = (
+    file as {
+      readonly fileRetention?: {
+        readonly value?: FileRetentionValue | null
+      }
+    }
+  ).fileRetention?.value
+  if (retention?.mode !== RetentionMode.Compliance) return null
+  return retention.retainUntilTimestamp
+}
+
+async function deleteComplianceRetainedFileVersionForCleanup(
+  bucket: Bucket,
+  fileName: string,
+  fileId: Parameters<Bucket['deleteFileVersion']>[1],
+  retainUntilTimestamp: number,
+  deleted: Set<string>,
+  cleanupErrors: unknown[],
+): Promise<void> {
+  const waitMs = Math.max(0, retainUntilTimestamp - Date.now() + complianceCleanupClockSkewMs)
+  if (waitMs > complianceCleanupMaxWaitMs) {
+    cleanupErrors.push(
+      new Error(
+        `delete compliance file version would wait ${waitMs}ms bucket=${bucket.id} bucketName=${bucket.name} fileName=${fileName} fileId=${fileId} retainUntilTimestamp=${retainUntilTimestamp} now=${Date.now()}`,
+      ),
+    )
+    return
+  }
+  if (waitMs > 0) await delay(waitMs)
+
+  const deadline = Date.now() + complianceCleanupRetryBudgetMs
+  for (;;) {
+    try {
+      await deleteFileVersionOnce(bucket, fileName, fileId, deleted)
+      return
+    } catch (err) {
+      const now = Date.now()
+      if (!hasAnyB2ErrorCode(err, complianceProtectedErrorCodes) || now >= deadline) {
+        cleanupErrors.push(
+          new Error(
+            `delete compliance file version failed bucket=${bucket.id} bucketName=${bucket.name} fileName=${fileName} fileId=${fileId} retainUntilTimestamp=${retainUntilTimestamp} now=${now} error=${safeErrorSummary(err)}`,
+          ),
+        )
+        return
+      }
+      logCleanupFailure(
+        `delete compliance file version still protected retainUntilTimestamp=${retainUntilTimestamp} now=${now}`,
+        bucket,
+        fileName,
+        fileId,
+        err,
+      )
+      await delay(complianceCleanupRetryDelayMs)
+    }
+  }
 }
 
 async function deleteFileVersionForCleanup(
@@ -361,6 +437,10 @@ export function safeErrorSummary(err: unknown): string {
   return 'object'
 }
 
+function hasAnyB2ErrorCode(err: unknown, codes: readonly string[]): boolean {
+  return codes.some((code) => hasB2ErrorCode(err, code))
+}
+
 export function logSetup(message: string): void {
   console.info(`[b2 integration setup] ${message}`)
 }
@@ -460,8 +540,23 @@ export async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]):
 
   for (const bucket of staleBuckets) {
     const start = performance.now()
+    const lockState = fileLockBucketState(bucket)
+    if (lockState === 'unreadable') {
+      skippedCount += 1
+      console.warn(
+        `[b2 integration setup] delete stale bucket ${bucket.name}: skipped after ${Math.round(
+          performance.now() - start,
+        )}ms (file lock configuration unreadable; grant readBucketRetentions to classify cleanup path)`,
+      )
+      continue
+    }
+
     try {
-      await deleteBucketIfPresent(bucket)
+      if (lockState === 'enabled') {
+        await deleteObjectLockBucketIfPresent(bucket)
+      } else {
+        await deleteBucketIfPresent(bucket)
+      }
       deletedCount += 1
       logSetup(
         `delete stale bucket ${bucket.name}: ok (${Math.round(performance.now() - start)}ms)`,
@@ -477,6 +572,15 @@ export async function sweepStaleIntegrationBuckets(existing: readonly Bucket[]):
   }
 
   logSetup(`stale bucket sweep: deleted ${deletedCount}, skipped ${skippedCount}`)
+}
+
+type FileLockBucketState = 'disabled' | 'enabled' | 'unreadable'
+
+function fileLockBucketState(bucket: Bucket): FileLockBucketState {
+  const info = (bucket as { readonly info?: Bucket['info'] }).info
+  const configuration = info?.fileLockConfiguration
+  if (configuration?.value === null) return 'unreadable'
+  return configuration?.value?.isFileLockEnabled === true ? 'enabled' : 'disabled'
 }
 
 export async function uploadRawPart(

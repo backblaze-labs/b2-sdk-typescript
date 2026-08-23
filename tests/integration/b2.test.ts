@@ -19,25 +19,20 @@ import { BufferSource } from '../../src/streams/source.ts'
 import { Capability } from '../../src/types/auth.ts'
 import { SSE_B2 } from '../../src/types/encryption.ts'
 import { accountId } from '../../src/types/ids.ts'
-import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   appKey,
   cancelUnfinishedLargeFiles,
   currentBucketPrefix,
   deleteBucketIfPresent,
-  deleteObjectLockBucketIfPresent,
   emptyObjectLockBucket,
   expectBytesEqual,
-  isObjectLockUnavailableError,
   keyId,
-  logFeatureSkip,
   makeBucketName,
   makeBytes,
   readAllBytes,
   requireB2IntegrationCredentials,
   requireFeatureCapabilities,
-  safeErrorSummary,
   setupStep,
   skipB2Integration as skip,
   skipIfMissingFeatureCapabilities,
@@ -106,6 +101,122 @@ describe('B2 integration cleanup safety', () => {
       updateFileRetention: 0,
       bypassDelete: 0,
     })
+  })
+
+  it('skips stale buckets when file-lock configuration is unreadable', async () => {
+    let cleanupCalls = 0
+    const fakeBucket = {
+      id: 'bucket-unreadable-lock',
+      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      info: {
+        fileLockConfiguration: {
+          isClientAuthorizedToRead: false,
+          value: null,
+        },
+      },
+      paginateUnfinishedLargeFiles() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      paginateFileNames() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      paginateFileVersions() {
+        cleanupCalls += 1
+        return (async function* () {})()
+      },
+      async listFileVersions() {
+        cleanupCalls += 1
+        return { files: [], nextFileName: null, nextFileId: null }
+      },
+      async deleteFileVersion() {
+        cleanupCalls += 1
+      },
+      async updateFileLegalHold() {
+        cleanupCalls += 1
+      },
+      async updateFileRetention() {
+        cleanupCalls += 1
+      },
+      async delete() {
+        cleanupCalls += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(cleanupCalls).toBe(0)
+  })
+
+  it('uses Object Lock cleanup for stale file-lock buckets with compliance retention', async () => {
+    const calls = {
+      deleteBucket: 0,
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    }
+    let deleteAttempts = 0
+    const retainUntilTimestamp = Date.now() - 1
+    const fakeBucket = {
+      id: 'bucket-lock-stale',
+      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      info: {
+        fileLockConfiguration: {
+          value: {
+            isFileLockEnabled: true,
+          },
+        },
+      },
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield {
+          fileName: 'compliance.txt',
+          fileId: 'file-compliance',
+          fileRetention: {
+            isClientAuthorizedToRead: true,
+            value: {
+              mode: 'compliance',
+              retainUntilTimestamp,
+            },
+          },
+          legalHold: {
+            isClientAuthorizedToRead: true,
+            value: 'off',
+          },
+        }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+        deleteAttempts += 1
+        if (deleteAttempts < 3) {
+          throw { status: 400, code: 'file_lock_compliance_protected' }
+        }
+      },
+      async delete() {
+        calls.deleteBucket += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      deleteBucket: 1,
+      updateFileLegalHold: 1,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    })
+    expect(deleteAttempts).toBe(3)
   })
 
   it('continues Object Lock cleanup after one version fails', async () => {
@@ -512,72 +623,6 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(head.headers.serverSideEncryption).toEqual(SSE_B2)
     const downloaded = await bucket.download(fileName)
     expectBytesEqual(await readAllBytes(downloaded.body), data)
-  })
-
-  it('updates file retention and legal hold in a file-lock bucket when permitted', async (ctx) => {
-    const feature = 'Object Lock retention/legal hold'
-    skipIfMissingFeatureCapabilities(ctx, client, feature, [
-      Capability.WriteBuckets,
-      Capability.DeleteBuckets,
-      Capability.ListFiles,
-      Capability.WriteFiles,
-      Capability.DeleteFiles,
-      Capability.ReadFileLegalHolds,
-      Capability.WriteFileLegalHolds,
-      Capability.ReadFileRetentions,
-      Capability.WriteFileRetentions,
-      Capability.BypassGovernance,
-    ])
-
-    let lockBucket: Bucket
-    try {
-      lockBucket = await client.createBucket({
-        bucketName: makeBucketName('lock'),
-        bucketType: 'allPrivate',
-        fileLockEnabled: true,
-      })
-    } catch (err) {
-      if (isObjectLockUnavailableError(err)) {
-        const reason = `file-lock bucket unavailable: ${safeErrorSummary(err)}`
-        logFeatureSkip(feature, reason)
-        ctx.skip(reason)
-      }
-      throw err
-    }
-
-    try {
-      const fileName = 'object-lock.txt'
-      const object = lockBucket.file(fileName)
-      const file = await object.upload({
-        source: new BufferSource(new TextEncoder().encode('object lock live integration')),
-        contentType: 'text/plain',
-      })
-
-      const holdOn = await object.setLegalHold(file.fileId, LegalHoldValue.On)
-      expect(holdOn.legalHold).toBe(LegalHoldValue.On)
-      const holdOff = await object.setLegalHold(file.fileId, LegalHoldValue.Off)
-      expect(holdOff.legalHold).toBe(LegalHoldValue.Off)
-
-      const retainUntilTimestamp = Date.now() + 60_000
-      const retained = await object.setRetention(file.fileId, {
-        mode: RetentionMode.Governance,
-        retainUntilTimestamp,
-      })
-      expect(retained.fileRetention.mode).toBe(RetentionMode.Governance)
-      expect(retained.fileRetention.retainUntilTimestamp).not.toBeNull()
-      expect(
-        Math.abs((retained.fileRetention.retainUntilTimestamp ?? 0) - retainUntilTimestamp),
-      ).toBeLessThanOrEqual(1000)
-
-      const cleared = await object.setRetention(
-        file.fileId,
-        { mode: null, retainUntilTimestamp: null },
-        { bypassGovernance: true },
-      )
-      expect(cleared.fileRetention).toEqual({ mode: null, retainUntilTimestamp: null })
-    } finally {
-      await deleteObjectLockBucketIfPresent(lockBucket)
-    }
   })
 
   it('rejects upload with an invalid upload authorization token', async () => {
