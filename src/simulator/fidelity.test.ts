@@ -66,6 +66,182 @@ function expectConcreteListEntry(
   }
 }
 
+function b2JsonApiUrl(
+  version: 'v3' | 'v4',
+  endpoint: string,
+  query?: Record<string, string | number>,
+): string {
+  const url = new URL(`http://localhost:0/b2api/${version}/${endpoint}`)
+  if (query !== undefined) {
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, String(value))
+    }
+  }
+  return url.toString()
+}
+
+async function expectJsonResponse<T>(response: HttpResponse, status = 200): Promise<T> {
+  expect(response.status).toBe(status)
+  return await response.json<T>()
+}
+
+// ---------------------------------------------------------------------------
+// Wire contract
+// ---------------------------------------------------------------------------
+
+describe('B2Simulator wire contract: API version and request shape', () => {
+  it('uses v4 as the canonical JSON route while keeping v3 as a transition alias', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'wire-route-alias',
+      bucketType: BucketType.AllPrivate,
+    })
+    const body = {
+      accountId: client.accountInfo.getAccountId(),
+      bucketId: bucket.id,
+    }
+
+    for (const version of ['v4', 'v3'] as const) {
+      const response = await sim.transport().send({
+        method: 'POST',
+        url: b2JsonApiUrl(version, 'b2_list_buckets'),
+        headers: {
+          Authorization: client.accountInfo.getAuthToken(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+      const listed = await expectJsonResponse<{ buckets: readonly { bucketId: string }[] }>(
+        response,
+      )
+      expect(listed.buckets.map((candidate) => candidate.bucketId)).toEqual([bucket.id])
+    }
+
+    const getResponse = await sim.transport().send({
+      method: 'GET',
+      url: b2JsonApiUrl('v4', 'b2_list_buckets', body),
+      headers: { Authorization: client.accountInfo.getAuthToken() },
+    })
+
+    await expectJsonResponse(getResponse, 405)
+  })
+
+  it('accepts documented v4 GET query forms for read/list JSON endpoints', async () => {
+    const { client, sim } = makeClient({ sim: { strictAuth: true } })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'wire-query-shapes',
+      bucketType: BucketType.AllPrivate,
+    })
+    const authToken = client.accountInfo.getAuthToken()
+    const apiUrl = client.accountInfo.getApiUrl()
+    const transport = sim.transport()
+    const uploaded = await bucket.upload({
+      fileName: 'query/visible.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+    const large = await client.raw.startLargeFile(apiUrl, authToken, {
+      bucketId: bucket.id,
+      fileName: 'query/large.bin',
+      contentType: 'application/octet-stream',
+    })
+    const key = await client.createKey({
+      capabilities: [Capability.ListBuckets],
+      keyName: 'wire-query-key',
+    })
+
+    async function getQuery<T>(
+      endpoint: string,
+      query: Record<string, string | number>,
+      version: 'v3' | 'v4' = 'v4',
+    ): Promise<T> {
+      const response = await transport.send({
+        method: 'GET',
+        url: b2JsonApiUrl(version, endpoint, query),
+        headers: { Authorization: authToken },
+      })
+      return await expectJsonResponse<T>(response)
+    }
+
+    const uploadUrl = await getQuery<{ bucketId: string; uploadUrl: string }>('b2_get_upload_url', {
+      bucketId: bucket.id,
+    })
+    expect(uploadUrl.bucketId).toBe(bucket.id)
+    expect(uploadUrl.uploadUrl).toContain('b2_upload_file')
+
+    const fileInfo = await getQuery<{ fileId: string; fileName: string }>('b2_get_file_info', {
+      fileId: uploaded.fileId,
+    })
+    expect(fileInfo).toMatchObject({ fileId: uploaded.fileId, fileName: uploaded.fileName })
+
+    const names = await getQuery<{ files: readonly { fileName: string }[] }>('b2_list_file_names', {
+      bucketId: bucket.id,
+      prefix: 'query/',
+      maxFileCount: 1,
+    })
+    expect(names.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+
+    const v3Names = await getQuery<{ files: readonly { fileName: string }[] }>(
+      'b2_list_file_names',
+      { bucketId: bucket.id, prefix: 'query/', maxFileCount: 1 },
+      'v3',
+    )
+    expect(v3Names.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+
+    const versions = await getQuery<{ files: readonly { fileName: string }[] }>(
+      'b2_list_file_versions',
+      { bucketId: bucket.id, prefix: 'query/', maxFileCount: 10 },
+    )
+    expect(versions.files.map((file) => file.fileName)).toEqual(['query/visible.txt'])
+
+    const uploadPartUrl = await getQuery<{ fileId: string; uploadUrl: string }>(
+      'b2_get_upload_part_url',
+      { fileId: large.fileId },
+    )
+    expect(uploadPartUrl.fileId).toBe(large.fileId)
+    expect(uploadPartUrl.uploadUrl).toContain('b2_upload_part')
+
+    const unfinished = await getQuery<{ files: readonly { fileId: string; fileName: string }[] }>(
+      'b2_list_unfinished_large_files',
+      { bucketId: bucket.id, namePrefix: 'query/', maxFileCount: 1 },
+    )
+    expect(unfinished.files).toHaveLength(1)
+    expect(unfinished.files[0]).toMatchObject({ fileId: large.fileId, fileName: large.fileName })
+
+    const parts = await getQuery<{ parts: readonly unknown[] }>('b2_list_parts', {
+      fileId: large.fileId,
+      startPartNumber: 1,
+      maxPartCount: 1,
+    })
+    expect(parts.parts).toEqual([])
+
+    const downloadAuth = await getQuery<{ bucketId: string; authorizationToken: string }>(
+      'b2_get_download_authorization',
+      {
+        bucketId: bucket.id,
+        fileNamePrefix: 'query/',
+        validDurationInSeconds: 60,
+      },
+    )
+    expect(downloadAuth.bucketId).toBe(bucket.id)
+    expect(downloadAuth.authorizationToken).toBeTruthy()
+
+    const keys = await getQuery<{ keys: readonly { applicationKeyId: string }[] }>('b2_list_keys', {
+      accountId: client.accountInfo.getAccountId(),
+      maxKeyCount: 1,
+    })
+    expect(keys.keys).toHaveLength(1)
+    expect(keys.keys[0]).toMatchObject({ applicationKeyId: key.applicationKeyId })
+
+    const rules = await getQuery<{
+      bucketId: string
+      eventNotificationRules: readonly unknown[]
+    }>('b2_get_bucket_notification_rules', { bucketId: bucket.id })
+    expect(rules).toEqual({ bucketId: bucket.id, eventNotificationRules: [] })
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Input validation
 // ---------------------------------------------------------------------------

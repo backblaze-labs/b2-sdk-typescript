@@ -777,12 +777,17 @@ function fileNames(...names: readonly (string | undefined)[]): readonly string[]
   return present.length > 0 ? present : undefined
 }
 
-function queryParamsBody(params: URLSearchParams): Record<string, string> | null {
-  const body = Object.create(null) as Record<string, string>
+function queryParamsBody(
+  params: URLSearchParams,
+  endpoint: string,
+): Record<string, string | number> | null {
+  const numericFields = JSON_QUERY_NUMBER_FIELDS.get(endpoint)
+  const body = Object.create(null) as Record<string, string | number>
   let hasParams = false
   for (const [key, value] of params) {
     if (body[key] !== undefined) continue
-    body[key] = value
+    const numericValue = numericFields?.has(key) === true ? Number(value) : Number.NaN
+    body[key] = Number.isSafeInteger(numericValue) && value.trim() !== '' ? numericValue : value
     hasParams = true
   }
   return hasParams ? body : null
@@ -795,6 +800,28 @@ const JSON_GET_ENDPOINTS = new Set<string>([
   'bz_list_computers',
 ])
 
+const JSON_GET_OR_POST_ENDPOINTS = new Set<string>([
+  'b2_get_upload_url',
+  'b2_list_file_names',
+  'b2_list_file_versions',
+  'b2_get_file_info',
+  'b2_get_upload_part_url',
+  'b2_list_unfinished_large_files',
+  'b2_list_parts',
+  'b2_get_download_authorization',
+  'b2_list_keys',
+  'b2_get_bucket_notification_rules',
+])
+
+const JSON_QUERY_NUMBER_FIELDS = new Map<string, ReadonlySet<string>>([
+  ['b2_list_file_names', new Set(['maxFileCount'])],
+  ['b2_list_file_versions', new Set(['maxFileCount'])],
+  ['b2_list_unfinished_large_files', new Set(['maxFileCount'])],
+  ['b2_list_parts', new Set(['maxPartCount', 'startPartNumber'])],
+  ['b2_get_download_authorization', new Set(['validDurationInSeconds'])],
+  ['b2_list_keys', new Set(['maxKeyCount'])],
+])
+
 const JSON_POST_ENDPOINTS = new Set<string>([
   'b2_create_group_member',
   'b2_eject_group_member',
@@ -804,35 +831,32 @@ const JSON_POST_ENDPOINTS = new Set<string>([
   'b2_list_buckets',
   'b2_delete_bucket',
   'b2_update_bucket',
-  'b2_get_upload_url',
-  'b2_list_file_names',
-  'b2_list_file_versions',
-  'b2_get_file_info',
   'b2_hide_file',
   'b2_delete_file_version',
   'b2_copy_file',
   'b2_start_large_file',
-  'b2_get_upload_part_url',
   'b2_finish_large_file',
   'b2_cancel_large_file',
-  'b2_list_unfinished_large_files',
-  'b2_list_parts',
   'b2_copy_part',
-  'b2_get_download_authorization',
   'b2_create_key',
-  'b2_list_keys',
   'b2_delete_key',
   'b2_update_file_retention',
   'b2_update_file_legal_hold',
-  'b2_get_bucket_notification_rules',
   'b2_set_bucket_notification_rules',
 ])
 
 function jsonEndpointAllowsMethod(method: string, endpoint: string): boolean {
   const normalizedMethod = method.toUpperCase()
   if (JSON_GET_ENDPOINTS.has(endpoint)) return normalizedMethod === 'GET'
+  if (JSON_GET_OR_POST_ENDPOINTS.has(endpoint)) {
+    return normalizedMethod === 'GET' || normalizedMethod === 'POST'
+  }
   if (JSON_POST_ENDPOINTS.has(endpoint)) return normalizedMethod === 'POST'
   return true
+}
+
+function isJsonQueryEndpoint(endpoint: string): boolean {
+  return JSON_GET_OR_POST_ENDPOINTS.has(endpoint) || isPartnerQueryEndpoint(endpoint)
 }
 
 function notificationRulePrefixes(body: unknown): readonly string[] | undefined {
@@ -5371,6 +5395,7 @@ class SimulatorTransport implements HttpTransport {
             : await this.sim.handleUpload(url, headers, uploadBody.data)
       }
     } else {
+      const requestPath = apiPathParts(parsedUrl.pathname)
       let body: unknown = null
       if (request.body) {
         const text =
@@ -5382,9 +5407,9 @@ class SimulatorTransport implements HttpTransport {
         }
       } else if (
         request.method.toUpperCase() === 'GET' &&
-        isPartnerQueryEndpoint(apiPathParts(parsedUrl.pathname).endpoint)
+        isJsonQueryEndpoint(requestPath.endpoint)
       ) {
-        body = queryParamsBody(parsedUrl.searchParams)
+        body = queryParamsBody(parsedUrl.searchParams, requestPath.endpoint)
       }
       result = await this.sim.handleRequest(
         request.method,
