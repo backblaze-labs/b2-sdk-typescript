@@ -66,8 +66,12 @@ export const BUCKET_INFO_KEY_MAX_BYTES = 50
 export const BUCKET_INFO_VALUES_MAX_BYTES = 10_000
 /** Reserved bucketInfo key prefix used by Backblaze. */
 export const BUCKET_INFO_RESERVED_PREFIX = 'b2-'
-/** BucketInfo keys must match this regular-expression source. */
-export const BUCKET_INFO_KEY_PATTERN = '^[A-Za-z0-9_-]+$'
+/**
+ * BucketInfo keys must match this regular-expression source. B2 accepts
+ * letters, digits, and these characters: `. _ ~ ! # $ % ^ & * ' | + -` plus the
+ * backtick.
+ */
+export const BUCKET_INFO_KEY_PATTERN = "^[A-Za-z0-9._`~!#$%^&*'|+-]+$"
 
 /** Rule that automatically hides or deletes files after a specified number of days. */
 export interface LifecycleRule {
@@ -318,7 +322,8 @@ export interface CreateBucketRequest {
    * Optional user-defined key-value metadata.
    * Keys must be 1-50 UTF-8 bytes and must not start with `b2-`; the aggregate
    * UTF-8 byte length of all values must be at most 10,000 bytes. Keys must
-   * match `[A-Za-z0-9_-]`. BucketInfo has no documented pair-count cap.
+   * match {@link BUCKET_INFO_KEY_PATTERN}. BucketInfo has no documented
+   * pair-count cap.
    */
   readonly bucketInfo?: Record<string, string>
   /**
@@ -355,7 +360,8 @@ export interface UpdateBucketRequest {
    * Updated user-defined key-value metadata. Replaces all existing metadata.
    * Keys must be 1-50 UTF-8 bytes and must not start with `b2-`; the aggregate
    * UTF-8 byte length of all values must be at most 10,000 bytes. Keys must
-   * match `[A-Za-z0-9_-]`. BucketInfo has no documented pair-count cap.
+   * match {@link BUCKET_INFO_KEY_PATTERN}. BucketInfo has no documented
+   * pair-count cap.
    */
   readonly bucketInfo?: Record<string, string>
   /**

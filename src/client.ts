@@ -232,8 +232,8 @@ export class B2Client {
     /**
      * Custom key-value metadata stored with the bucket. Keys must be 1-50
      * UTF-8 bytes, must not start with `b2-`, and all values together must be
-     * at most 10,000 UTF-8 bytes. Keys must match `[A-Za-z0-9_-]`. There is
-     * no bucketInfo pair-count cap.
+     * at most 10,000 UTF-8 bytes. Keys must match
+     * {@link BUCKET_INFO_KEY_PATTERN}. There is no bucketInfo pair-count cap.
      */
     bucketInfo?: Record<string, string>
     /**

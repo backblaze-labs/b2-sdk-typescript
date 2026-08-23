@@ -8,6 +8,7 @@ import {
 import { B2BucketConfigurationError } from './errors/index.ts'
 import {
   BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_VALUES_MAX_BYTES,
   CORS_MAX_AGE_SECONDS_MAX,
   CORS_RULE_MAX_BYTES,
@@ -107,15 +108,24 @@ describe('bucket configuration validation', () => {
       () => assertValidBucketInfo({ 'bad/key': 'value' }),
       'bucketInfo',
       'invalid_bucket_info',
-      'must match ^[A-Za-z0-9_-]+$',
+      `must match ${BUCKET_INFO_KEY_PATTERN}`,
     )
 
     expectBucketConfigurationError(
       () => assertValidBucketInfo({ 'bad\nkey': 'value' }),
       'bucketInfo',
       'invalid_bucket_info',
-      'must match ^[A-Za-z0-9_-]+$',
+      `must match ${BUCKET_INFO_KEY_PATTERN}`,
     )
+  })
+
+  it('accepts bucketInfo keys using B2 documented special characters', () => {
+    expect(() =>
+      assertValidBucketInfo({
+        'dotted.key_name-1': 'value',
+        "sym~!#$%^&*'|+`": 'value',
+      }),
+    ).not.toThrow()
   })
 
   it('rejects non-string bucketInfo values', () => {
