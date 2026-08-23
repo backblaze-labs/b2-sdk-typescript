@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **B2Simulator v4 route and GET/query compatibility.** The public simulator now accepts canonical `/b2api/v4` JSON routes while continuing to support `/b2api/v3`, rejects unsupported future version segments explicitly, and parses documented GET query forms for supported storage read/list and copy endpoints while preserving POST JSON compatibility. Closes #111.
 - **Partner redaction helpers are public.** The `@backblaze-labs/b2-sdk/partner` subpath now exports `PARTNER_TOKEN_REDACTED`, `APPLICATION_KEY_REDACTED`, and the pure `*ToRedactedJson` projection helpers and JSON result types for secret-scrubbed Partner authorization, group-member creation, and B2 Reserve trial-account responses. Closes #225.
 
 ### Changed
