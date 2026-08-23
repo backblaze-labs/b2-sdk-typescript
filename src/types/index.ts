@@ -34,6 +34,7 @@ export type {
   BucketResponseType,
   BucketRetentionPolicy,
   BucketTypesFilter,
+  CorsAllowedOperation,
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,
@@ -46,10 +47,24 @@ export type {
   UpdateBucketRequest,
 } from './bucket.ts'
 // `BucketType`, `KnownBucketResponseType`, `BucketRetentionMode`, and
-// `CorsOperation` are forwarded as both type and value.
+// `CorsOperation` are forwarded as both type and value. BucketInfo/CORS limits
+// are value exports.
 export {
+  BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
+  BUCKET_INFO_RESERVED_PREFIX,
+  BUCKET_INFO_VALUES_MAX_BYTES,
   BucketRetentionMode,
   BucketType,
+  CORS_ALLOWED_OPERATIONS,
+  CORS_MAX_AGE_SECONDS_MAX,
+  CORS_RULE_MAX_BYTES,
+  CORS_RULE_NAME_MAX_LENGTH,
+  CORS_RULE_NAME_MIN_LENGTH,
+  CORS_RULE_NAME_PATTERN,
+  CORS_RULE_NAME_RESERVED_PREFIX,
+  CORS_RULES_MAX_COUNT,
   CorsOperation,
   KnownBucketResponseType,
 } from './bucket.ts'

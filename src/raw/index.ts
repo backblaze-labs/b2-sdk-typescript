@@ -13,6 +13,7 @@
  */
 
 import { assertSecureRealmUrl } from '../auth/realms.ts'
+import { assertValidBucketConfiguration } from '../bucket-validation.ts'
 import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
@@ -78,6 +79,28 @@ import type { UploadFileHeaders, UploadPartHeaders, UploadPartResponse } from '.
 import { normalizeFileVersionListSha1, normalizeFileVersionSha1 } from '../util/normalize.ts'
 import { buildFileInfoHeaders, encodeFileName } from './encoding.ts'
 import { type B2EndpointUrlOptions, b2Url } from './url.ts'
+
+export {
+  assertValidBucketConfiguration,
+  assertValidBucketInfo,
+  assertValidCorsRules,
+} from '../bucket-validation.ts'
+export {
+  BUCKET_INFO_KEY_MAX_BYTES,
+  BUCKET_INFO_KEY_MIN_BYTES,
+  BUCKET_INFO_KEY_PATTERN,
+  BUCKET_INFO_RESERVED_PREFIX,
+  BUCKET_INFO_VALUES_MAX_BYTES,
+  CORS_ALLOWED_OPERATIONS,
+  CORS_MAX_AGE_SECONDS_MAX,
+  CORS_RULE_MAX_BYTES,
+  CORS_RULE_NAME_MAX_LENGTH,
+  CORS_RULE_NAME_MIN_LENGTH,
+  CORS_RULE_NAME_PATTERN,
+  CORS_RULE_NAME_RESERVED_PREFIX,
+  CORS_RULES_MAX_COUNT,
+  CorsOperation,
+} from '../types/bucket.ts'
 
 const B2_NATIVE_API: B2EndpointUrlOptions = { prefix: 'b2api', version: 'v4' }
 
@@ -340,6 +363,7 @@ export class RawClient {
     authToken: string,
     request: CreateBucketRequest,
   ): Promise<BucketInfo> {
+    assertValidBucketConfiguration(request)
     return this.postJson<BucketInfo>(apiUrl, authToken, 'b2_create_bucket', request)
   }
 
@@ -388,6 +412,7 @@ export class RawClient {
     authToken: string,
     request: UpdateBucketRequest,
   ): Promise<BucketInfo> {
+    assertValidBucketConfiguration(request)
     return this.postJson<BucketInfo>(apiUrl, authToken, 'b2_update_bucket', request)
   }
 

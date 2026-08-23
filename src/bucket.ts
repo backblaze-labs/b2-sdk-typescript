@@ -1166,9 +1166,20 @@ export class Bucket {
   async update(options: {
     /** Change the bucket access level. */
     bucketType?: BucketType
-    /** Replace custom bucket metadata. */
+    /**
+     * Replace custom bucket metadata. Keys must be 1-50 UTF-8 bytes, must not
+     * start with `b2-`, and all values together must be at most 10,000 UTF-8
+     * bytes. Keys must match {@link BUCKET_INFO_KEY_PATTERN}. There is no
+     * bucketInfo pair-count cap.
+     */
     bucketInfo?: Record<string, string>
-    /** Replace CORS rules. */
+    /**
+     * Replace CORS rules. A bucket may have at most 100 rules; rule names must
+     * be unique, 6-63 characters, match `[A-Za-z0-9-]`, and not start with
+     * `b2-`. Each rule must be less than 1,000 UTF-8 bytes across its name,
+     * origins, operations, allowed headers, and exposed headers.
+     * `maxAgeSeconds` must be at most 86,400.
+     */
     corsRules?: CorsRule[]
     /** Change default server-side encryption. */
     defaultServerSideEncryption?: BucketDefaultServerSideEncryptionSetting
@@ -1181,13 +1192,30 @@ export class Bucket {
     /** Optimistic locking: only update if the bucket revision matches. */
     ifRevisionIs?: number
   }): Promise<BucketInfo> {
+    const {
+      bucketInfo,
+      bucketType,
+      corsRules,
+      defaultRetention,
+      defaultServerSideEncryption,
+      ifRevisionIs,
+      lifecycleRules,
+      replicationConfiguration,
+    } = options
     return this.client.raw.updateBucket(
       this.client.accountInfo.getApiUrl(),
       this.client.accountInfo.getAuthToken(),
       {
+        ...(bucketType !== undefined ? { bucketType } : {}),
+        ...(bucketInfo !== undefined ? { bucketInfo } : {}),
+        ...(corsRules !== undefined ? { corsRules } : {}),
+        ...(defaultServerSideEncryption !== undefined ? { defaultServerSideEncryption } : {}),
+        ...(defaultRetention !== undefined ? { defaultRetention } : {}),
+        ...(lifecycleRules !== undefined ? { lifecycleRules } : {}),
+        ...(replicationConfiguration !== undefined ? { replicationConfiguration } : {}),
+        ...(ifRevisionIs !== undefined ? { ifRevisionIs } : {}),
         accountId: accountId(this.client.accountInfo.getAccountId()),
         bucketId: this.id,
-        ...options,
       },
     )
   }
