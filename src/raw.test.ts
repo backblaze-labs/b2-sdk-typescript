@@ -5,8 +5,9 @@ import { RawClient } from './raw/index.ts'
 import { recordingTransport } from './test-utils/index.ts'
 import { BucketType, CORS_MAX_AGE_SECONDS_MAX, CorsOperation } from './types/bucket.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
-import { bucketId } from './types/ids.ts'
+import { bucketId, fileId } from './types/ids.ts'
 import type { CreateKeyRequest } from './types/key.ts'
+import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 
 function jsonResponse(value: unknown): HttpResponse {
   return {
@@ -145,6 +146,65 @@ describe('RawClient bucket configuration validation', () => {
 })
 
 describe('RawClient list request controls', () => {
+  it('uses v4 routes for file retention and legal hold updates', async () => {
+    const requests: HttpRequest[] = []
+    const transport: HttpTransport = {
+      async send(request) {
+        requests.push(request)
+        if (request.url.endsWith('/b2_update_file_retention')) {
+          return jsonResponse({
+            fileName: 'locked.txt',
+            fileId: 'file',
+            fileRetention: {
+              mode: RetentionMode.Governance,
+              retainUntilTimestamp: 123_456,
+            },
+          })
+        }
+        return jsonResponse({
+          fileName: 'locked.txt',
+          fileId: 'file',
+          legalHold: LegalHoldValue.On,
+        })
+      },
+    }
+    const raw = new RawClient({ transport })
+
+    await raw.updateFileRetention('https://api.example.test', 'auth', {
+      fileName: 'locked.txt',
+      fileId: fileId('file'),
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: 123_456,
+      },
+      bypassGovernance: true,
+    })
+    await raw.updateFileLegalHold('https://api.example.test', 'auth', {
+      fileName: 'locked.txt',
+      fileId: fileId('file'),
+      legalHold: LegalHoldValue.On,
+    })
+
+    expect(
+      requests.map((request) => ({
+        url: request.url,
+        method: request.method,
+        contentType: request.headers?.['Content-Type'],
+      })),
+    ).toEqual([
+      {
+        url: 'https://api.example.test/b2api/v4/b2_update_file_retention',
+        method: 'POST',
+        contentType: 'application/json',
+      },
+      {
+        url: 'https://api.example.test/b2api/v4/b2_update_file_legal_hold',
+        method: 'POST',
+        contentType: 'application/json',
+      },
+    ])
+  })
+
   it('normalizes the deprecated createKey bucketId alias to bucketIds', async () => {
     const requests: HttpRequest[] = []
     const transport: HttpTransport = {

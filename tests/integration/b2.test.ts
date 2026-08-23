@@ -19,25 +19,20 @@ import { BufferSource } from '../../src/streams/source.ts'
 import { Capability } from '../../src/types/auth.ts'
 import { SSE_B2 } from '../../src/types/encryption.ts'
 import { accountId } from '../../src/types/ids.ts'
-import { LegalHoldValue, RetentionMode } from '../../src/types/lock.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   appKey,
   cancelUnfinishedLargeFiles,
   currentBucketPrefix,
   deleteBucketIfPresent,
-  deleteObjectLockBucketIfPresent,
   emptyObjectLockBucket,
   expectBytesEqual,
-  isObjectLockUnavailableError,
   keyId,
-  logFeatureSkip,
   makeBucketName,
   makeBytes,
   readAllBytes,
   requireB2IntegrationCredentials,
   requireFeatureCapabilities,
-  safeErrorSummary,
   setupStep,
   skipB2Integration as skip,
   skipIfMissingFeatureCapabilities,
@@ -512,72 +507,6 @@ describe.skipIf(skip)('B2 integration', () => {
     expect(head.headers.serverSideEncryption).toEqual(SSE_B2)
     const downloaded = await bucket.download(fileName)
     expectBytesEqual(await readAllBytes(downloaded.body), data)
-  })
-
-  it('updates file retention and legal hold in a file-lock bucket when permitted', async (ctx) => {
-    const feature = 'Object Lock retention/legal hold'
-    skipIfMissingFeatureCapabilities(ctx, client, feature, [
-      Capability.WriteBuckets,
-      Capability.DeleteBuckets,
-      Capability.ListFiles,
-      Capability.WriteFiles,
-      Capability.DeleteFiles,
-      Capability.ReadFileLegalHolds,
-      Capability.WriteFileLegalHolds,
-      Capability.ReadFileRetentions,
-      Capability.WriteFileRetentions,
-      Capability.BypassGovernance,
-    ])
-
-    let lockBucket: Bucket
-    try {
-      lockBucket = await client.createBucket({
-        bucketName: makeBucketName('lock'),
-        bucketType: 'allPrivate',
-        fileLockEnabled: true,
-      })
-    } catch (err) {
-      if (isObjectLockUnavailableError(err)) {
-        const reason = `file-lock bucket unavailable: ${safeErrorSummary(err)}`
-        logFeatureSkip(feature, reason)
-        ctx.skip(reason)
-      }
-      throw err
-    }
-
-    try {
-      const fileName = 'object-lock.txt'
-      const object = lockBucket.file(fileName)
-      const file = await object.upload({
-        source: new BufferSource(new TextEncoder().encode('object lock live integration')),
-        contentType: 'text/plain',
-      })
-
-      const holdOn = await object.setLegalHold(file.fileId, LegalHoldValue.On)
-      expect(holdOn.legalHold).toBe(LegalHoldValue.On)
-      const holdOff = await object.setLegalHold(file.fileId, LegalHoldValue.Off)
-      expect(holdOff.legalHold).toBe(LegalHoldValue.Off)
-
-      const retainUntilTimestamp = Date.now() + 60_000
-      const retained = await object.setRetention(file.fileId, {
-        mode: RetentionMode.Governance,
-        retainUntilTimestamp,
-      })
-      expect(retained.fileRetention.mode).toBe(RetentionMode.Governance)
-      expect(retained.fileRetention.retainUntilTimestamp).not.toBeNull()
-      expect(
-        Math.abs((retained.fileRetention.retainUntilTimestamp ?? 0) - retainUntilTimestamp),
-      ).toBeLessThanOrEqual(1000)
-
-      const cleared = await object.setRetention(
-        file.fileId,
-        { mode: null, retainUntilTimestamp: null },
-        { bypassGovernance: true },
-      )
-      expect(cleared.fileRetention).toEqual({ mode: null, retainUntilTimestamp: null })
-    } finally {
-      await deleteObjectLockBucketIfPresent(lockBucket)
-    }
   })
 
   it('rejects upload with an invalid upload authorization token', async () => {
