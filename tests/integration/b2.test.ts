@@ -103,6 +103,76 @@ describe('B2 integration cleanup safety', () => {
     })
   })
 
+  it('uses Object Lock cleanup for stale file-lock buckets with compliance retention', async () => {
+    const calls = {
+      deleteBucket: 0,
+      updateFileLegalHold: 0,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    }
+    let deleteAttempts = 0
+    const retainUntilTimestamp = Date.now() - 1
+    const fakeBucket = {
+      id: 'bucket-lock-stale',
+      name: `${currentBucketPrefix}${Date.now() - staleBucketAgeMs - 1}`,
+      info: {
+        fileLockConfiguration: {
+          value: {
+            isFileLockEnabled: true,
+          },
+        },
+      },
+      async *paginateUnfinishedLargeFiles() {},
+      async *paginateFileVersions() {
+        yield {
+          fileName: 'compliance.txt',
+          fileId: 'file-compliance',
+          fileRetention: {
+            isClientAuthorizedToRead: true,
+            value: {
+              mode: 'compliance',
+              retainUntilTimestamp,
+            },
+          },
+          legalHold: {
+            isClientAuthorizedToRead: true,
+            value: 'off',
+          },
+        }
+      },
+      async updateFileLegalHold() {
+        calls.updateFileLegalHold += 1
+      },
+      async updateFileRetention() {
+        calls.updateFileRetention += 1
+      },
+      async deleteFileVersion(
+        _fileName: string,
+        _fileId: string,
+        options?: { bypassGovernance?: boolean },
+      ) {
+        if (options?.bypassGovernance === true) calls.bypassDelete += 1
+        deleteAttempts += 1
+        if (deleteAttempts < 3) {
+          throw { status: 400, code: 'file_lock_compliance_protected' }
+        }
+      },
+      async delete() {
+        calls.deleteBucket += 1
+      },
+    } as unknown as Bucket
+
+    await sweepStaleIntegrationBuckets([fakeBucket])
+
+    expect(calls).toEqual({
+      deleteBucket: 1,
+      updateFileLegalHold: 1,
+      updateFileRetention: 0,
+      bypassDelete: 0,
+    })
+    expect(deleteAttempts).toBe(3)
+  })
+
   it('continues Object Lock cleanup after one version fails', async () => {
     const deleted: string[] = []
     const fakeBucket = {
