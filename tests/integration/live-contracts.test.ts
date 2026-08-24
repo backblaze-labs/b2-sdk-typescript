@@ -56,12 +56,13 @@ function hasStatus(err: unknown, status: number): boolean {
 async function uploadRawPart(
   client: B2Client,
   largeFileId: LargeFileId,
+  fileName: string,
   partNumber: number,
   data: Uint8Array,
 ): Promise<UploadPartResponse> {
   const contentSha1 = await sha1Hex(data)
   const uploaded = await uploadPartWithFreshUrl(client.raw, client.accountInfo, largeFileId, {
-    fileName: largeFileId,
+    fileName,
     partNumber,
     data: data as BodyInit,
     contentLength: data.byteLength,
@@ -150,7 +151,7 @@ async function createRawMultipartFile(
     const uploadedParts: UploadPartResponse[] = []
     for (let i = 0; i < parts.length; i++) {
       uploadedParts.push(
-        await uploadRawPart(client, started.fileId, i + 1, parts[i] ?? new Uint8Array()),
+        await uploadRawPart(client, started.fileId, name, i + 1, parts[i] ?? new Uint8Array()),
       )
     }
     const partSha1s = uploadedParts.map((part) => part.contentSha1)
