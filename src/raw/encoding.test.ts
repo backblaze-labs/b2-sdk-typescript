@@ -174,6 +174,15 @@ describe('buildFileInfoHeaders', () => {
     })
   })
 
+  it('percent-encodes punctuation in file-info values', () => {
+    const result = buildFileInfoHeaders({
+      policy: 'max-age=60, stale-while-revalidate=30',
+    })
+    expect(result).toEqual({
+      'X-Bz-Info-policy': 'max-age%3D60%2C%20stale-while-revalidate%3D30',
+    })
+  })
+
   it('handles non-ASCII characters in both keys and values', () => {
     const result = buildFileInfoHeaders({ 名前: '太郎' })
     const encodedKey = encodeFileName('名前')

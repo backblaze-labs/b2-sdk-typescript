@@ -395,6 +395,101 @@ describe('RawClient upload URL request controls', () => {
     })
   })
 
+  it('percent-encodes B2 content file-info upload headers', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const contentDisposition =
+      'attachment; filename="100% report.txt"; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.txt'
+    const contentLanguage = 'en-US, fr-CA'
+    const expires = 'Wed, 21 Oct 2026 07:28:00 GMT'
+    const cacheControl = 'max-age=60, stale-while-revalidate=30'
+    const contentEncoding = 'identity, br'
+
+    await raw.uploadFile(
+      'https://upload.example.test/b2_upload_file',
+      {
+        authorization: 'upload-auth',
+        fileName: 'file.txt',
+        contentType: 'text/plain',
+        contentLength: 1,
+        contentSha1: 'none',
+        contentDisposition,
+        contentLanguage,
+        expires,
+        cacheControl,
+        contentEncoding,
+      },
+      new Uint8Array([1]),
+    )
+
+    expect(seenRequests[0]?.headers).toMatchObject({
+      'X-Bz-Info-b2-content-disposition':
+        'attachment%3B%20filename%3D%22100%25%20report.txt%22%3B%20filename%2A%3DUTF-8%27%27r%25C3%25A9sum%25C3%25A9.txt',
+      'X-Bz-Info-b2-content-language': 'en-US%2C%20fr-CA',
+      'X-Bz-Info-b2-expires': 'Wed%2C%2021%20Oct%202026%2007%3A28%3A00%20GMT',
+      'X-Bz-Info-b2-cache-control': 'max-age%3D60%2C%20stale-while-revalidate%3D30',
+      'X-Bz-Info-b2-content-encoding': 'identity%2C%20br',
+    })
+  })
+
+  it('rejects control bytes in upload header values before sending', async () => {
+    const invalidHeaderValues = [
+      ['authorization', { authorization: 'upload-auth\r\nX-Injected: 1' }],
+      ['contentType', { contentType: 'text/plain\r\nX-Injected: 1' }],
+      ['contentSha1', { contentSha1: 'none\r\nX-Injected: 1' }],
+      ['contentDisposition', { contentDisposition: 'attachment\r\nX-Injected: 1' }],
+      ['contentLanguage', { contentLanguage: 'en-US\nX-Injected: 1' }],
+      ['expires', { expires: 'Wed, 21 Oct 2026 07:28:00 GMT\u0000' }],
+      ['cacheControl', { cacheControl: 'max-age=60\u007F' }],
+      ['contentEncoding', { contentEncoding: 'identity\u001Fgzip' }],
+    ] as const
+
+    for (const [name, overrides] of invalidHeaderValues) {
+      const { raw, seenRequests } = makeUploadUrlRawClient()
+
+      await expect(
+        raw.uploadFile(
+          'https://upload.example.test/b2_upload_file',
+          {
+            authorization: 'upload-auth',
+            fileName: 'file.txt',
+            contentType: 'text/plain',
+            contentLength: 1,
+            contentSha1: 'none',
+            ...overrides,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow(`${name} must not contain HTTP control characters`)
+      expect(seenRequests).toHaveLength(0)
+    }
+  })
+
+  it('rejects control bytes in upload-part header values before sending', async () => {
+    const invalidHeaderValues = [
+      ['authorization', { authorization: 'part-auth\r\nX-Injected: 1' }],
+      ['contentSha1', { contentSha1: 'none\r\nX-Injected: 1' }],
+    ] as const
+
+    for (const [name, overrides] of invalidHeaderValues) {
+      const { raw, seenRequests } = makeUploadUrlRawClient()
+
+      await expect(
+        raw.uploadPart(
+          'https://upload.example.test/b2_upload_part',
+          {
+            authorization: 'part-auth',
+            partNumber: 1,
+            contentLength: 1,
+            contentSha1: 'none',
+            ...overrides,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow(`${name} must not contain HTTP control characters`)
+      expect(seenRequests).toHaveLength(0)
+    }
+  })
+
   it('accepts null custom upload timestamps for raw large-file starts', async () => {
     const { raw, seenRequests } = makeUploadUrlRawClient()
 
