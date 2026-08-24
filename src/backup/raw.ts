@@ -12,11 +12,33 @@ import { type B2EndpointUrlOptions, b2Url } from '../raw/url.ts'
 import type {
   DeleteComputerRequest,
   DeleteComputerResponse,
+  DeleteComputerResult,
   ListComputersRequest,
   ListComputersResponse,
 } from '../types/backup.ts'
 
 const BACKUP_API: B2EndpointUrlOptions = { prefix: 'api/backup', version: 'v1' }
+
+/**
+ * Normalizes the `bz_delete_computer` wire response to the array-shaped schema.
+ *
+ * The Backblaze apidocs response *schema* declares a JSON array, but the
+ * accompanying *example* shows a single bare object. This tolerates both: an
+ * array passes through unchanged, and a lone object is wrapped in a
+ * single-element array, so callers always receive a {@link DeleteComputerResponse}
+ * regardless of which shape live B2 returns.
+ *
+ * @param raw - The parsed `bz_delete_computer` JSON body.
+ *
+ * @returns The response as the canonical array shape.
+ *
+ * @throws TypeError When the body is neither an array nor an object.
+ */
+function normalizeDeleteComputerResponse(raw: unknown): DeleteComputerResponse {
+  if (Array.isArray(raw)) return raw as DeleteComputerResponse
+  if (raw !== null && typeof raw === 'object') return [raw as DeleteComputerResult]
+  throw new TypeError('bz_delete_computer returned an unexpected response body shape')
+}
 
 /** Configuration for constructing a {@link BackupRawClient}. */
 export interface BackupRawClientOptions {
@@ -163,7 +185,7 @@ export class BackupRawClient {
     request: DeleteComputerRequest,
     options?: BackupRawRequestOptions,
   ): Promise<DeleteComputerResponse> {
-    return this.postNonRetryingMutationJson<DeleteComputerResponse>(
+    const response = await this.postNonRetryingMutationJson<unknown>(
       backupApiUrl,
       authToken,
       'bz_delete_computer',
@@ -173,6 +195,7 @@ export class BackupRawClient {
       },
       options,
     )
+    return normalizeDeleteComputerResponse(response)
   }
 
   private safeBackupApiUrl(backupApiUrl: string): string {

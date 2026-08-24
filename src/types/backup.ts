@@ -82,8 +82,9 @@ export interface DeleteComputerResult {
 /**
  * Array-shaped wire response from `bz_delete_computer`.
  *
- * Historical Backup API examples showed a bare object, but the SDK models the
- * array-shaped schema and keeps the simulator aligned with that contract.
+ * The apidocs response schema declares an array while its example shows a bare
+ * object; the raw client normalizes both wire shapes to this array type, and
+ * the simulator emits the array shape.
  *
  * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
  */

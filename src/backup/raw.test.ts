@@ -317,6 +317,40 @@ describe('BackupRawClient', () => {
     })
   })
 
+  it('normalizes a bare-object bz_delete_computer response into an array', async () => {
+    const bareObject = {
+      computerId: computerId('computer-1'),
+      computerName: 'laptop',
+      lastFileUploadedTimestamp: 123,
+    }
+    const { transport } = okTransport(bareObject)
+    const raw = authorizedRawClient(transport)
+
+    const response = await raw.deleteComputer(
+      'https://backup.backblazeb2.com/backup',
+      partnerToken('partner-token'),
+      {
+        accountId: accountId('account-1'),
+        computerId: computerId('computer-1'),
+      },
+    )
+
+    expect(Array.isArray(response)).toBe(true)
+    expect(response).toEqual([bareObject])
+  })
+
+  it('rejects an unexpected bz_delete_computer response body shape', async () => {
+    const { transport } = okTransport(42)
+    const raw = authorizedRawClient(transport)
+
+    await expect(
+      raw.deleteComputer('https://backup.backblazeb2.com/backup', partnerToken('partner-token'), {
+        accountId: accountId('account-1'),
+        computerId: computerId('computer-1'),
+      }),
+    ).rejects.toThrow(/unexpected response body shape/)
+  })
+
   it('keeps delete retries disabled when the caller passes maxRetries', async () => {
     const retry = { maxRetries: 4, requestTimeoutMs: 1000 }
     const { transport, seenRequests } = okTransport([])
