@@ -57,6 +57,7 @@ import {
   RetentionMode,
 } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import type { PartnerCapability } from '../types/partner.ts'
 import type { ReplicationConfiguration, ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
@@ -1506,6 +1507,16 @@ export interface B2SimulatorOptions {
    * requiring an authorize call first.
    */
   partnerAuthorize?: boolean
+  /**
+   * Partner API suite capabilities granted by simulator-issued Partner
+   * authorization tokens. Defaults to `['all']`.
+   */
+  partnerGroupsCapabilities?: readonly PartnerCapability[]
+  /**
+   * Computer Backup API suite capabilities granted by simulator-issued
+   * Partner authorization tokens. Defaults to `['all']`.
+   */
+  partnerBackupCapabilities?: readonly PartnerCapability[]
   /**
    * Whether Partner API endpoints should accept issued Partner authorization
    * tokens. Defaults to `true`. Set to `false` to exercise documented

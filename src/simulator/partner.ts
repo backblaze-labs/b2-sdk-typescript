@@ -25,6 +25,10 @@ import {
   type ReserveTrialCreateAccountResult,
 } from '../types/partner.ts'
 import type { B2SimulatorOptions, SimulatorJsonResponse } from './index.ts'
+import {
+  missingPartnerCapabilitiesFor,
+  PARTNER_ENDPOINT_CAPABILITIES,
+} from './partner-capabilities.ts'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const PARTNER_REGIONS = new Set<string>(Object.values(Region))
@@ -92,7 +96,9 @@ function utcDayStartMs(ms: number): number {
 
 interface IssuedPartnerToken {
   readonly accountId: string
+  readonly backupCapabilities: readonly PartnerCapability[]
   readonly expiresAt: number
+  readonly groupsCapabilities: readonly PartnerCapability[]
 }
 
 interface AuthorizedPartnerRequest {
@@ -154,6 +160,12 @@ function compareStrings(left: string, right: string): number {
   return 0
 }
 
+function clonePartnerCapabilities(
+  capabilities: readonly PartnerCapability[],
+): readonly PartnerCapability[] {
+  return Object.freeze([...capabilities])
+}
+
 export interface PartnerStoredKey {
   readonly applicationKeyId: string
   readonly keyName: string
@@ -211,6 +223,8 @@ export class PartnerSimulator {
   private readonly apiEnabled: boolean
   private readonly accountHasValidPhone: boolean
   private readonly accountInGoodStanding: boolean
+  private readonly groupsCapabilities: readonly PartnerCapability[]
+  private readonly backupCapabilities: readonly PartnerCapability[]
 
   /**
    * Creates the Partner/Backup simulator facade.
@@ -227,6 +241,12 @@ export class PartnerSimulator {
     this.apiEnabled = options.partnerApiEnabled ?? true
     this.accountHasValidPhone = options.partnerAccountHasValidPhone ?? true
     this.accountInGoodStanding = options.partnerAccountInGoodStanding ?? true
+    this.groupsCapabilities = clonePartnerCapabilities(
+      options.partnerGroupsCapabilities ?? [PartnerCapability.All],
+    )
+    this.backupCapabilities = clonePartnerCapabilities(
+      options.partnerBackupCapabilities ?? [PartnerCapability.All],
+    )
   }
 
   /**
@@ -267,9 +287,13 @@ export class PartnerSimulator {
     }
 
     const tokenStr = this.host.genId('sim_partner_auth_token')
+    const groupsCapabilities = clonePartnerCapabilities(this.groupsCapabilities)
+    const backupCapabilities = clonePartnerCapabilities(this.backupCapabilities)
     this.issuedTokens.set(tokenStr, {
       accountId: this.host.accountId,
+      backupCapabilities,
       expiresAt: this.host.now() + this.host.authTokenTtlMs,
+      groupsCapabilities,
     })
     return {
       status: 200,
@@ -299,13 +323,13 @@ export class PartnerSimulator {
             s3ApiUrl: origin,
           },
           groupsApi: {
-            capabilities: [PartnerCapability.All],
+            capabilities: groupsCapabilities,
             groupsApiUrl: `${origin}/partner`,
             infoType: 'groupsApi',
           },
           backupApi: {
             backupApiUrl: `${origin}/backup`,
-            capabilities: [PartnerCapability.All],
+            capabilities: backupCapabilities,
             infoType: 'backupApi',
           },
         },
@@ -323,7 +347,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   reserveTrialCreateAccount(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken)
+    const auth = this.authorizeRequest('b2_reserve_trial_create_account', authToken)
     if ('status' in auth) return auth
     if (!Array.isArray(body)) {
       return this.host.error(400, 'bad_request', 'request body must be an array')
@@ -359,7 +383,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   createGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken, { checkPhone: false })
+    const auth = this.authorizeRequest('b2_create_group_member', authToken, { checkPhone: false })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const request = this.parseCreateGroupMemberRequest(record)
@@ -433,7 +457,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   ejectGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken)
+    const auth = this.authorizeRequest('b2_eject_group_member', authToken)
     if ('status' in auth) return auth
     const record = requestObject(body)
     const request = this.parseEjectGroupMemberRequest(record)
@@ -484,7 +508,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listGroups(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken, { checkPhone: false })
+    const auth = this.authorizeRequest('b2_list_groups', authToken, { checkPhone: false })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
@@ -540,7 +564,9 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listGroupMembers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken, { checkPhone: false })
+    const auth = this.authorizeRequest('b2_list_group_members', authToken, {
+      checkPhone: false,
+    })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const request = this.parseListGroupMembersRequest(record)
@@ -583,7 +609,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listComputers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken, { checkPhone: false })
+    const auth = this.authorizeRequest('bz_list_computers', authToken, { checkPhone: false })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
@@ -645,7 +671,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   deleteComputer(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest(authToken, { checkPhone: false })
+    const auth = this.authorizeRequest('bz_delete_computer', authToken, { checkPhone: false })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
@@ -665,6 +691,7 @@ export class PartnerSimulator {
   }
 
   private authorizeRequest(
+    endpoint: string,
     authToken: string | undefined,
     options: { readonly checkPhone?: boolean } = {},
   ): AuthorizedPartnerRequest | SimulatorJsonResponse {
@@ -702,7 +729,26 @@ export class PartnerSimulator {
     if (!this.accountInGoodStanding) {
       return this.host.error(403, 'access_denied', 'account is not in good standing')
     }
+    const capabilityError = this.authorizeEndpointCapabilities(endpoint, token)
+    if (capabilityError !== null) return capabilityError
     return { accountId: token.accountId }
+  }
+
+  private authorizeEndpointCapabilities(
+    endpoint: string,
+    token: IssuedPartnerToken,
+  ): SimulatorJsonResponse | null {
+    const requirement = PARTNER_ENDPOINT_CAPABILITIES[endpoint]
+    if (requirement === undefined) return null
+    const granted =
+      requirement.suite === 'groups' ? token.groupsCapabilities : token.backupCapabilities
+    const missing = missingPartnerCapabilitiesFor(endpoint, granted)
+    if (missing.length === 0) return null
+    return this.host.error(
+      401,
+      'unauthorized',
+      `Partner token lacks required capabilities: ${missing.join(', ')}`,
+    )
   }
 
   private authorizeAccount(
