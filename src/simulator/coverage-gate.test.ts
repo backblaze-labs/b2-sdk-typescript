@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { B2Client } from '../client.ts'
 import { sha1Hex } from '../streams/hash.ts'
 import { BufferSource } from '../streams/source.ts'
@@ -380,14 +380,22 @@ describe('B2Simulator coverage gate: upload parser edges', () => {
         {},
         new Uint8Array(0),
       ),
-    ).resolves.toMatchObject({ status: 400, body: { message: /required/ } })
+    ).resolves.toMatchObject({
+      status: 400,
+      body: { message: 'X-Bz-Part-Number header is required' },
+    })
     await expect(
       internals.handleUploadPart(
         'http://localhost:0/b2api/v4/b2_upload_part?fileId=large-id',
         { 'x-bz-part-number': 'abc' },
         new Uint8Array(0),
       ),
-    ).resolves.toMatchObject({ status: 400, body: { message: /must be an integer/ } })
+    ).resolves.toMatchObject({
+      status: 400,
+      body: {
+        message: 'X-Bz-Part-Number must be an integer between 1 and 10000; received abc',
+      },
+    })
   })
 
   it('fails closed when comparing malformed upload URLs', () => {
@@ -772,17 +780,24 @@ describe('B2Simulator coverage gate: download authorization edges', () => {
   })
 
   it('retries download authorization token generation after a collision', async () => {
+    const originalCryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'crypto')
+    if (originalCryptoDescriptor === undefined) {
+      throw new Error('global crypto must be available')
+    }
     const originalCrypto = globalThis.crypto
     let calls = 0
-    vi.stubGlobal('crypto', {
-      subtle: originalCrypto.subtle,
-      getRandomValues(bytes: Uint8Array) {
-        const fill = calls < 2 ? 1 : calls
-        calls += 1
-        bytes.fill(fill)
-        return bytes
-      },
-    } as Crypto)
+    Object.defineProperty(globalThis, 'crypto', {
+      configurable: true,
+      value: {
+        subtle: originalCrypto.subtle,
+        getRandomValues(bytes: Uint8Array) {
+          const fill = calls < 2 ? 1 : calls
+          calls += 1
+          bytes.fill(fill)
+          return bytes
+        },
+      } as Crypto,
+    })
     try {
       const { client, bucket } = await strictDownloadFixture()
       const apiUrl = client.accountInfo.getApiUrl()
@@ -801,7 +816,7 @@ describe('B2Simulator coverage gate: download authorization edges', () => {
       expect(second.authorizationToken).not.toBe(first.authorizationToken)
       expect(calls).toBe(4)
     } finally {
-      vi.stubGlobal('crypto', originalCrypto)
+      Object.defineProperty(globalThis, 'crypto', originalCryptoDescriptor)
     }
   })
 
@@ -892,7 +907,7 @@ describe('B2Simulator coverage gate: download authorization edges', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'ssec-download-redaction',
+      bucketName: 'sse-c-download-redaction',
       bucketType: BucketType.AllPrivate,
     })
     const key = await EncryptionKey.fromBytes(new Uint8Array(32).fill(3))
@@ -1105,7 +1120,7 @@ describe('B2Simulator coverage gate: copy and encryption edges', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'copy-part-ssec-mismatch',
+      bucketName: 'copy-part-sse-c-mismatch',
       bucketType: BucketType.AllPrivate,
     })
     const source = await bucket.upload({
