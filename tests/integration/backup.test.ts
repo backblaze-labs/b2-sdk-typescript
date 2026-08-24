@@ -9,9 +9,10 @@
  *
  * Optional target account override for read-safe listing:
  *   B2_INTEGRATION_BACKUP_ACCOUNT_ID
+ *   B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID (optional wrong-account negative probe)
  *
  * Destructive backup deletion is skipped unless explicitly enabled:
- *   B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER=1
+ *   B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP=1
  *   B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID
  *   B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID_ACK (must equal the configured computer ID)
  *   B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID (optional; defaults to the read target account)
@@ -30,7 +31,13 @@ import type { AccountId, ComputerId } from '../../src/types/ids.ts'
 import { accountId as accountIdOf, computerId as computerIdOf } from '../../src/types/ids.ts'
 import type { PartnerAuthorizeResponse } from '../../src/types/partner.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
-import { logFeatureSkip, safeErrorSummary, setupStep } from '../helpers/live-b2.ts'
+import {
+  directFetchTimeoutMs,
+  env,
+  safeErrorSummary,
+  setupStep,
+  skipFeature,
+} from '../helpers/live-b2.ts'
 
 const masterKeyId = process.env['B2_MASTER_KEY_ID'] ?? ''
 const masterKey = process.env['B2_MASTER_KEY'] ?? ''
@@ -38,12 +45,14 @@ const realm = env('B2_REALM')
 const skipMissingMasterKey = masterKeyId === '' || masterKey === ''
 const requirePartnerCredentials = process.env['B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS'] === '1'
 const configuredBackupAccountId = env('B2_INTEGRATION_BACKUP_ACCOUNT_ID')
-const allowDestructivePartner = process.env['B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER'] === '1'
+const unauthorizedBackupAccountId = env('B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID')
+const allowDestructiveBackup = process.env['B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP'] === '1'
 const disposableComputerId = env('B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID')
 const disposableComputerIdAck = env('B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID_ACK')
 const disposableAccountId = env('B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID')
 const backupFeature = 'Computer Backup API'
 const destructiveFeature = 'Computer Backup destructive deletion'
+const authorizationRejectionCodes = ['access_denied', 'unauthorized', 'invalid_account_id'] as const
 
 if (skipMissingMasterKey && requirePartnerCredentials) {
   throw new Error(
@@ -71,15 +80,18 @@ describe.skipIf(skipMissingMasterKey)('Computer Backup live endpoint integration
       )
     } catch (err) {
       if (isBackupAccessUnavailableError(err)) {
-        setupSkipReason = `Computer Backup account prerequisite unavailable: ${safeErrorSummary(err)}`
+        handleSetupUnavailable(
+          `Computer Backup account prerequisite unavailable: ${safeErrorSummary(err)}`,
+        )
         return
       }
       throw err
     }
 
     if (authorization.apiInfo.backupApi === undefined) {
-      setupSkipReason =
-        'authorize response omitted apiInfo.backupApi; Computer Backup API access is unavailable'
+      handleSetupUnavailable(
+        'authorize response omitted apiInfo.backupApi; Computer Backup API access is unavailable',
+      )
     }
   })
 
@@ -108,7 +120,21 @@ describe.skipIf(skipMissingMasterKey)('Computer Backup live endpoint integration
     expect(objectField(postProbe.body, 'code')).toBe('method_not_allowed')
   })
 
-  it.skipIf(!allowDestructivePartner)(
+  it('rejects wrong-account list and delete requests', async (ctx) => {
+    const liveBackup = requireAuthorizedBackup(ctx)
+    if (liveBackup === null) return
+
+    const wrongAccountId = wrongAccountIdFor(targetAccountId())
+    await expectAuthorizationRejection(() => listComputers(liveBackup, wrongAccountId, 1))
+    await expectAuthorizationRejection(() =>
+      liveBackup.deleteComputer({
+        accountId: wrongAccountId,
+        computerId: wrongAccountDeleteProbeComputerId(),
+      }),
+    )
+  })
+
+  it.skipIf(!allowDestructiveBackup)(
     'deletes a configured disposable computer as an array response',
     async (ctx) => {
       const liveBackup = requireAuthorizedBackup(ctx)
@@ -142,17 +168,17 @@ describe.skipIf(skipMissingMasterKey)('Computer Backup live endpoint integration
   )
 })
 
-function env(name: string): string | undefined {
-  const value = process.env[name]?.trim()
-  return value === undefined || value === '' ? undefined : value
-}
-
 function requireBackup(): BackupClient {
   if (backup === null) throw new Error('Backup client was not initialized')
   return backup
 }
 
-function requireAuthorization(): PartnerAuthorizeResponse {
+function handleSetupUnavailable(reason: string): void {
+  if (requirePartnerCredentials) throw new Error(reason)
+  setupSkipReason = reason
+}
+
+function refreshAuthorization(): PartnerAuthorizeResponse {
   const latestAuthorization = backup?.partnerAccountInfo.getAuth()
   if (latestAuthorization !== undefined && latestAuthorization !== null) {
     authorization = latestAuthorization
@@ -163,14 +189,57 @@ function requireAuthorization(): PartnerAuthorizeResponse {
 
 function requireAuthorizedBackup(ctx: TestContext): BackupClient | null {
   if (skipIfSetupUnavailable(ctx)) return null
-  requireAuthorization()
+  refreshAuthorization()
   return requireBackup()
 }
 
 function targetAccountId(): AccountId {
   return configuredBackupAccountId !== undefined
     ? accountIdOf(configuredBackupAccountId)
-    : requireAuthorization().accountId
+    : refreshAuthorization().accountId
+}
+
+function wrongAccountIdFor(authorizedAccountId: AccountId): AccountId {
+  const wrongAccountId = accountIdOf(unauthorizedBackupAccountId ?? 'b2-sdk-wrong-account-probe')
+  if (wrongAccountId === authorizedAccountId) {
+    throw new Error(
+      'B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID must not equal the target account',
+    )
+  }
+  return wrongAccountId
+}
+
+function wrongAccountDeleteProbeComputerId(): ComputerId {
+  if (
+    allowDestructiveBackup &&
+    disposableComputerId !== undefined &&
+    disposableComputerIdAck === disposableComputerId
+  ) {
+    return computerIdOf(disposableComputerId)
+  }
+  return computerIdOf('b2-sdk-wrong-account-delete-probe')
+}
+
+async function listComputers(
+  liveBackup: BackupClient,
+  accountId: AccountId,
+  pageSize: number,
+  startComputerId?: ComputerId,
+): Promise<ListComputersResponse> {
+  const auth = refreshAuthorization()
+  const backupApiUrl = auth.apiInfo.backupApi?.backupApiUrl
+  if (backupApiUrl === undefined) throw new Error('authorized Backup API URL is unavailable')
+
+  return liveBackup.raw.listComputers(
+    backupApiUrl,
+    auth.authorizationToken,
+    {
+      accountId,
+      ...(startComputerId !== undefined ? { startComputerId } : {}),
+      maxComputerCount: pageSize,
+    },
+    { retry: { maxRetries: 1 } },
+  )
 }
 
 async function listComputersOrSkip(
@@ -180,21 +249,8 @@ async function listComputersOrSkip(
   pageSize: number,
   startComputerId?: ComputerId,
 ): Promise<ListComputersResponse | null> {
-  const auth = requireAuthorization()
-  const backupApiUrl = auth.apiInfo.backupApi?.backupApiUrl
-  if (backupApiUrl === undefined) throw new Error('authorized Backup API URL is unavailable')
-
   try {
-    return await liveBackup.raw.listComputers(
-      backupApiUrl,
-      auth.authorizationToken,
-      {
-        accountId,
-        ...(startComputerId !== undefined ? { startComputerId } : {}),
-        maxComputerCount: pageSize,
-      },
-      { retry: { maxRetries: 1 } },
-    )
+    return await listComputers(liveBackup, accountId, pageSize, startComputerId)
   } catch (err) {
     if (isBackupReadPrerequisiteError(err)) {
       skipFeature(ctx, backupFeature, `list_computers unavailable: ${safeErrorSummary(err)}`)
@@ -208,11 +264,11 @@ async function postListComputers(accountId: AccountId): Promise<{
   readonly status: number
   readonly body: unknown
 }> {
-  const auth = requireAuthorization()
+  const auth = refreshAuthorization()
   const backupApiUrl = auth.apiInfo.backupApi?.backupApiUrl
   if (backupApiUrl === undefined) throw new Error('authorized Backup API URL is unavailable')
 
-  const response = await fetch(
+  const response = await fetchJsonWithDeadline(
     b2Url(backupApiUrl, {
       prefix: 'api/backup',
       version: 'v1',
@@ -227,7 +283,30 @@ async function postListComputers(accountId: AccountId): Promise<{
       body: JSON.stringify({ accountId }),
     },
   )
-  return { status: response.status, body: await safeJson(response) }
+  return response
+}
+
+async function fetchJsonWithDeadline(
+  url: string,
+  init: RequestInit,
+): Promise<{ readonly status: number; readonly body: unknown }> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => {
+    controller.abort(
+      new DOMException(`fetch timed out after ${directFetchTimeoutMs}ms`, 'TimeoutError'),
+    )
+  }, directFetchTimeoutMs)
+  let response: Response | undefined
+
+  try {
+    response = await fetch(url, { ...init, signal: controller.signal })
+    return { status: response.status, body: await safeJson(response) }
+  } finally {
+    clearTimeout(timeout)
+    if (response !== undefined && !response.bodyUsed) {
+      await response.body?.cancel().catch(() => {})
+    }
+  }
 }
 
 async function safeJson(response: Response): Promise<unknown> {
@@ -241,6 +320,19 @@ async function safeJson(response: Response): Promise<unknown> {
 function objectField(value: unknown, field: string): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
   return (value as Readonly<Record<string, unknown>>)[field]
+}
+
+async function expectAuthorizationRejection(operation: () => Promise<unknown>): Promise<void> {
+  let thrown: unknown
+  try {
+    await operation()
+  } catch (err) {
+    thrown = err
+  }
+
+  if (thrown === undefined) throw new Error('wrong-account Computer Backup request succeeded')
+  const matched = authorizationRejectionCodes.some((code) => hasB2ErrorCode(thrown, code))
+  expect(matched, `expected wrong-account rejection, got ${safeErrorSummary(thrown)}`).toBe(true)
 }
 
 async function findComputerOrSkip(
@@ -290,11 +382,6 @@ function skipIfSetupUnavailable(ctx: TestContext): boolean {
   if (setupSkipReason === null) return false
   skipFeature(ctx, backupFeature, setupSkipReason)
   return true
-}
-
-function skipFeature(ctx: TestContext, feature: string, reason: string): void {
-  logFeatureSkip(feature, reason)
-  ctx.skip(reason)
 }
 
 function isBackupAccessUnavailableError(err: unknown): boolean {

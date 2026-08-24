@@ -40,9 +40,10 @@ import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   cleanupAttempts,
   cleanupRetryDelayMs,
-  logFeatureSkip,
+  env,
   safeErrorSummary,
   setupStep,
+  skipFeature,
 } from '../helpers/live-b2.ts'
 
 const masterKeyId = process.env['B2_MASTER_KEY_ID'] ?? ''
@@ -255,11 +256,6 @@ describe('Partner live assertion redaction guards', () => {
     expect(reserveFailure).not.toContain(secret)
   })
 })
-
-function env(name: string): string | undefined {
-  const value = process.env[name]?.trim()
-  return value === undefined || value === '' ? undefined : value
-}
 
 function assertionFailureMessage(fn: () => void): string {
   let thrown: unknown
@@ -488,11 +484,6 @@ function skipIfSetupUnavailable(ctx: TestContext): boolean {
   if (setupSkipReason === null) return false
   skipFeature(ctx, partnerFeature, setupSkipReason)
   return true
-}
-
-function skipFeature(ctx: TestContext, feature: string, reason: string): void {
-  logFeatureSkip(feature, reason)
-  ctx.skip(reason)
 }
 
 async function cleanupCreatedMembers(livePartner: PartnerClient): Promise<void> {

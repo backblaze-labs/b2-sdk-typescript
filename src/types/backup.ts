@@ -65,8 +65,8 @@ export interface DeleteComputerRequest {
 /**
  * Single result element returned by `bz_delete_computer`.
  *
- * The `bz_delete_computer` wire response is pinned to a JSON array of these
- * objects by the live Computer Backup integration contract.
+ * The SDK models the `bz_delete_computer` wire response as a JSON array of
+ * these objects and keeps the simulator aligned with that array-shaped schema.
  *
  * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
  */

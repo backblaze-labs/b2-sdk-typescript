@@ -449,6 +449,16 @@ export function logFeatureSkip(feature: string, reason: string): void {
   console.warn(`[b2 integration] ${feature}: skipped (${reason})`)
 }
 
+export function env(name: string): string | undefined {
+  const value = process.env[name]?.trim()
+  return value === undefined || value === '' ? undefined : value
+}
+
+export function skipFeature(ctx: TestContext, feature: string, reason: string): void {
+  logFeatureSkip(feature, reason)
+  ctx.skip(reason)
+}
+
 export function requireFeatureCapabilities(
   client: B2Client,
   feature: string,
