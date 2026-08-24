@@ -28,6 +28,7 @@ cspell
 deno
 denoland
 elif
+GHSA
 miniforge
 mkfifo
 nodenext

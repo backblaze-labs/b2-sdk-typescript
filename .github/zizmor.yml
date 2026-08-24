@@ -1,4 +1,9 @@
 rules:
+  dangerous-triggers:
+    ignore:
+      # The dependency audit uses pull_request_target so PRs cannot edit the
+      # blocking gate. It does not check out or execute PR-controlled code.
+      - security.yml:3
   cache-poisoning:
     ignore:
       # The release workflow needs setup-node to publish through npm trusted

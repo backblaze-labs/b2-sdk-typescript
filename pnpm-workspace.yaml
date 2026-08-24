@@ -2,6 +2,7 @@ allowBuilds:
   '@biomejs/biome': true
   esbuild: true
 overrides:
+  brace-expansion: 5.0.9
   fast-uri: 3.1.5
   linkify-it: 5.0.2
   markdown-it: 14.2.0

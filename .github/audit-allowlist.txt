@@ -1,0 +1,4 @@
+# Accepted dependency advisories for `pnpm run audit:deps`.
+# Keep this list empty unless an advisory has an explicit, expiring risk acceptance.
+# Format:
+# GHSA-xxxx-xxxx-xxxx expires=2099-01-31 approver=@handle reason="not reachable"
