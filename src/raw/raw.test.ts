@@ -10,6 +10,7 @@ import {
 } from '../types/encryption.ts'
 import { accountId, bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { EventType } from '../types/notifications.ts'
+import { encodeFileName } from './encoding.ts'
 import { RawClient } from './index.ts'
 import { b2Url, isB2ApiVersion } from './url.ts'
 
@@ -392,6 +393,41 @@ describe('RawClient upload URL request controls', () => {
     )
     expect(JSON.parse(String(seenRequests[1]?.body))).toMatchObject({
       customUploadTimestamp: String(customUploadTimestamp),
+    })
+  })
+
+  it('percent-encodes B2 content file-info upload headers', async () => {
+    const { raw, seenRequests } = makeUploadUrlRawClient()
+    const contentDisposition =
+      'attachment; filename="100% report.txt"; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.txt'
+    const contentLanguage = 'en-US, fr-CA'
+    const expires = 'Wed, 21 Oct 2026 07:28:00 GMT'
+    const cacheControl = 'max-age=60, stale-while-revalidate=30'
+    const contentEncoding = 'br, gzip'
+
+    await raw.uploadFile(
+      'https://upload.example.test/b2_upload_file',
+      {
+        authorization: 'upload-auth',
+        fileName: 'file.txt',
+        contentType: 'text/plain',
+        contentLength: 1,
+        contentSha1: 'none',
+        contentDisposition,
+        contentLanguage,
+        expires,
+        cacheControl,
+        contentEncoding,
+      },
+      new Uint8Array([1]),
+    )
+
+    expect(seenRequests[0]?.headers).toMatchObject({
+      'X-Bz-Info-b2-content-disposition': encodeFileName(contentDisposition),
+      'X-Bz-Info-b2-content-language': encodeFileName(contentLanguage),
+      'X-Bz-Info-b2-expires': encodeFileName(expires),
+      'X-Bz-Info-b2-cache-control': encodeFileName(cacheControl),
+      'X-Bz-Info-b2-content-encoding': encodeFileName(contentEncoding),
     })
   })
 

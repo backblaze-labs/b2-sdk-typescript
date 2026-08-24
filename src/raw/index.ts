@@ -553,19 +553,19 @@ export class RawClient {
       reqHeaders['X-Bz-Custom-Upload-Timestamp'] = String(headers.customUploadTimestamp)
     }
     if (headers.contentDisposition) {
-      reqHeaders['X-Bz-Info-b2-content-disposition'] = headers.contentDisposition
+      reqHeaders['X-Bz-Info-b2-content-disposition'] = encodeFileName(headers.contentDisposition)
     }
     if (headers.contentLanguage) {
-      reqHeaders['X-Bz-Info-b2-content-language'] = headers.contentLanguage
+      reqHeaders['X-Bz-Info-b2-content-language'] = encodeFileName(headers.contentLanguage)
     }
     if (headers.expires) {
-      reqHeaders['X-Bz-Info-b2-expires'] = headers.expires
+      reqHeaders['X-Bz-Info-b2-expires'] = encodeFileName(headers.expires)
     }
     if (headers.cacheControl) {
-      reqHeaders['X-Bz-Info-b2-cache-control'] = headers.cacheControl
+      reqHeaders['X-Bz-Info-b2-cache-control'] = encodeFileName(headers.cacheControl)
     }
     if (headers.contentEncoding) {
-      reqHeaders['X-Bz-Info-b2-content-encoding'] = headers.contentEncoding
+      reqHeaders['X-Bz-Info-b2-content-encoding'] = encodeFileName(headers.contentEncoding)
     }
 
     applyEncryptionHeaders(reqHeaders, headers.serverSideEncryption)

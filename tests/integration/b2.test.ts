@@ -17,6 +17,7 @@ import { RawClient } from '../../src/raw/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
 import { Capability } from '../../src/types/auth.ts'
+import { DownloadHeaderName } from '../../src/types/download.ts'
 import { SSE_B2 } from '../../src/types/encryption.ts'
 import { accountId } from '../../src/types/ids.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
@@ -31,6 +32,7 @@ import {
   makeBucketName,
   makeBytes,
   readAllBytes,
+  readRequiredBody,
   requireB2IntegrationCredentials,
   requireFeatureCapabilities,
   setupStep,
@@ -358,6 +360,54 @@ describe.skipIf(skip)('B2 integration', () => {
           contentType: 'application/json',
         },
       ])
+    } finally {
+      await bucket.deleteFileVersion(fileName, uploaded.fileId).catch(() => {})
+    }
+  })
+
+  it('round-trips encoded B2 content file-info upload headers', async (ctx) => {
+    const feature = 'raw upload b2-content fileInfo encoding'
+    skipIfMissingFeatureCapabilities(ctx, client, feature, [
+      Capability.WriteFiles,
+      Capability.ReadFiles,
+    ])
+
+    const raw = client.raw
+    const apiUrl = client.accountInfo.getApiUrl()
+    const authToken = client.accountInfo.getAuthToken()
+    const fileName = `raw-b2-content-info-${Date.now()}.txt`
+    const data = new TextEncoder().encode('raw b2-content fileInfo encoding')
+    const contentDisposition =
+      'attachment; filename="100% report.txt"; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.txt'
+    const contentSha1 = await sha1Hex(data)
+    const uploadUrl = await raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
+
+    const uploaded = await raw.uploadFile(
+      uploadUrl.uploadUrl,
+      {
+        authorization: uploadUrl.authorizationToken,
+        fileName,
+        contentType: 'text/plain',
+        contentLength: data.byteLength,
+        contentSha1,
+        contentDisposition,
+      },
+      data,
+    )
+
+    try {
+      const info = await raw.getFileInfo(apiUrl, authToken, { fileId: uploaded.fileId })
+      expect(info.fileInfo).toMatchObject({
+        'b2-content-disposition': contentDisposition,
+      })
+
+      const downloaded = await raw.downloadFileById(
+        client.accountInfo.getDownloadUrl(),
+        authToken,
+        { fileId: uploaded.fileId },
+      )
+      expect(downloaded.headers.get(DownloadHeaderName.ContentDisposition)).toBe(contentDisposition)
+      expectBytesEqual(await readRequiredBody(downloaded.body), data)
     } finally {
       await bucket.deleteFileVersion(fileName, uploaded.fileId).catch(() => {})
     }
