@@ -545,6 +545,7 @@ describe.skipIf(skip)('B2 integration', () => {
           contentType: 'application/octet-stream',
           partSize,
           concurrency: 2,
+          retryResponseBodyFailures: true,
         }),
       )
       finished = true
@@ -606,6 +607,7 @@ describe.skipIf(skip)('B2 integration', () => {
           contentType: 'application/octet-stream',
           partSize,
           concurrency: 2,
+          retryResponseBodyFailures: true,
           resumeFileId: started.fileId,
           fileRetention,
           serverSideEncryption: SSE_B2,
@@ -643,6 +645,7 @@ describe.skipIf(skip)('B2 integration', () => {
       contentType: 'application/octet-stream',
       partSize,
       concurrency: 2,
+      retryResponseBodyFailures: true,
     })
     const writer = writable.getWriter()
     let finished = false

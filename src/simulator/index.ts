@@ -57,12 +57,14 @@ import {
   RetentionMode,
 } from '../types/lock.ts'
 import type { EventNotificationRule } from '../types/notifications.ts'
+import type { PartnerCapability } from '../types/partner.ts'
 import type { ReplicationConfiguration, ReplicationRule } from '../types/replication.ts'
 import { hexEncode, hmacSha256 } from '../util/crypto.ts'
 import { md5Base64, md5Base64Sync } from '../util/md5.ts'
 import { utf8Decoder, utf8Encoder } from '../util/text-codec.ts'
 import { toError } from '../util/to-error.ts'
 import { PartnerSimulator } from './partner.ts'
+import { PartnerEndpoint } from './partner-capabilities.ts'
 
 const UPLOAD_TOKEN_SIGNING_KEY = ['b2 sdk typescript', 'simulator upload authorization', 'v1'].join(
   ':',
@@ -823,17 +825,17 @@ interface JsonEndpointMetadata {
 
 const JSON_ENDPOINTS = {
   b2_authorize_account: { methods: ['GET'] },
-  b2_list_groups: {
+  [PartnerEndpoint.ListGroups]: {
     methods: ['GET'],
     queryFields: ['adminAccountId', 'groupName', 'startGroupId', 'maxGroupCount'],
     numericQueryFields: ['maxGroupCount'],
   },
-  b2_list_group_members: {
+  [PartnerEndpoint.ListGroupMembers]: {
     methods: ['GET'],
     queryFields: ['adminAccountId', 'groupId', 'startEmail', 'maxMemberCount'],
     numericQueryFields: ['maxMemberCount'],
   },
-  bz_list_computers: {
+  [PartnerEndpoint.ListComputers]: {
     methods: ['GET'],
     queryFields: ['accountId', 'startComputerId', 'maxComputerCount'],
     numericQueryFields: ['maxComputerCount'],
@@ -917,10 +919,10 @@ const JSON_ENDPOINTS = {
     methods: ['GET', 'POST'],
     queryFields: ['bucketId'],
   },
-  b2_create_group_member: { methods: ['POST'] },
-  b2_eject_group_member: { methods: ['POST'] },
-  b2_reserve_trial_create_account: { methods: ['POST'] },
-  bz_delete_computer: { methods: ['POST'] },
+  [PartnerEndpoint.CreateGroupMember]: { methods: ['POST'] },
+  [PartnerEndpoint.EjectGroupMember]: { methods: ['POST'] },
+  [PartnerEndpoint.ReserveTrialCreateAccount]: { methods: ['POST'] },
+  [PartnerEndpoint.DeleteComputer]: { methods: ['POST'] },
   b2_create_bucket: { methods: ['POST'] },
   b2_list_buckets: { methods: ['POST'] },
   b2_delete_bucket: { methods: ['POST'] },
@@ -1506,6 +1508,16 @@ export interface B2SimulatorOptions {
    * requiring an authorize call first.
    */
   partnerAuthorize?: boolean
+  /**
+   * Partner API suite capabilities granted by simulator-issued Partner
+   * authorization tokens. Defaults to `['all']`.
+   */
+  partnerGroupsCapabilities?: readonly PartnerCapability[]
+  /**
+   * Computer Backup API suite capabilities granted by simulator-issued
+   * Partner authorization tokens. Defaults to `['all']`.
+   */
+  partnerBackupCapabilities?: readonly PartnerCapability[]
   /**
    * Whether Partner API endpoints should accept issued Partner authorization
    * tokens. Defaults to `true`. Set to `false` to exercise documented
@@ -2790,19 +2802,19 @@ export class B2Simulator {
           return this.partner.authorize(headers['authorization'], origin)
         }
         return this.authorize(headers['authorization'], origin)
-      case 'b2_create_group_member':
+      case PartnerEndpoint.CreateGroupMember:
         return this.partner.createGroupMember(body, headers['authorization'])
-      case 'b2_eject_group_member':
+      case PartnerEndpoint.EjectGroupMember:
         return this.partner.ejectGroupMember(body, headers['authorization'])
-      case 'b2_list_groups':
+      case PartnerEndpoint.ListGroups:
         return this.partner.listGroups(body, headers['authorization'])
-      case 'b2_list_group_members':
+      case PartnerEndpoint.ListGroupMembers:
         return this.partner.listGroupMembers(body, headers['authorization'])
-      case 'b2_reserve_trial_create_account':
+      case PartnerEndpoint.ReserveTrialCreateAccount:
         return this.partner.reserveTrialCreateAccount(body, headers['authorization'])
-      case 'bz_list_computers':
+      case PartnerEndpoint.ListComputers:
         return this.partner.listComputers(body, headers['authorization'])
-      case 'bz_delete_computer':
+      case PartnerEndpoint.DeleteComputer:
         return this.partner.deleteComputer(body, headers['authorization'])
       case 'b2_create_bucket':
         return this.createBucket(

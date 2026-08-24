@@ -17,6 +17,7 @@ import { EncryptionKey } from '../../src/types/encryption.ts'
 import type { FileVersion } from '../../src/types/file.ts'
 import type { LargeFileId } from '../../src/types/ids.ts'
 import type { UploadPartResponse } from '../../src/types/upload.ts'
+import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   appKey,
@@ -55,27 +56,19 @@ function hasStatus(err: unknown, status: number): boolean {
 async function uploadRawPart(
   client: B2Client,
   largeFileId: LargeFileId,
+  fileName: string,
   partNumber: number,
   data: Uint8Array,
 ): Promise<UploadPartResponse> {
-  const uploadUrl = await client.raw.getUploadPartUrl(
-    client.accountInfo.getApiUrl(),
-    client.accountInfo.getAuthToken(),
-    { fileId: largeFileId },
-  )
-  expect(uploadUrl.fileId).toBe(largeFileId)
-
   const contentSha1 = await sha1Hex(data)
-  const uploaded = await client.raw.uploadPart(
-    uploadUrl.uploadUrl,
-    {
-      authorization: uploadUrl.authorizationToken,
-      partNumber,
-      contentLength: data.byteLength,
-      contentSha1,
-    },
-    data as BodyInit,
-  )
+  const uploaded = await uploadPartWithFreshUrl(client.raw, client.accountInfo, largeFileId, {
+    fileName,
+    partNumber,
+    data: data as BodyInit,
+    contentLength: data.byteLength,
+    contentSha1,
+    retryResponseBodyFailures: true,
+  })
 
   expect(uploaded.fileId).toBe(largeFileId)
   expect(uploaded.partNumber).toBe(partNumber)
@@ -158,7 +151,7 @@ async function createRawMultipartFile(
     const uploadedParts: UploadPartResponse[] = []
     for (let i = 0; i < parts.length; i++) {
       uploadedParts.push(
-        await uploadRawPart(client, started.fileId, i + 1, parts[i] ?? new Uint8Array()),
+        await uploadRawPart(client, started.fileId, name, i + 1, parts[i] ?? new Uint8Array()),
       )
     }
     const partSha1s = uploadedParts.map((part) => part.contentSha1)

@@ -9,8 +9,14 @@ import type {
   ListGroupsResponse,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
-import { Region } from '../types/partner.ts'
+import { PartnerCapability, Region } from '../types/partner.ts'
 import { B2Simulator, type B2SimulatorOptions } from './index.ts'
+import {
+  PARTNER_ENDPOINT_CAPABILITIES,
+  PARTNER_ENDPOINT_NAMES,
+  PartnerEndpoint,
+  type PartnerEndpointCapabilityRequirement,
+} from './partner-capabilities.ts'
 
 interface ErrorBody {
   readonly status: number
@@ -76,6 +82,83 @@ async function expectUnauthorized(
   const response = await result
   expect(response.status).toBe(403)
   expect(response.body.code).toBe('unauthorized')
+}
+
+async function expectPartnerCapabilityError(
+  result: Promise<{ readonly status: number; readonly body: ErrorBody }>,
+) {
+  const response = await result
+  expect(response.status).toBe(401)
+  expect(response.body).toMatchObject({
+    code: 'unauthorized',
+    message: expect.stringContaining(PartnerCapability.All),
+  })
+}
+
+function restrictedEndpointRequest(
+  endpoint: PartnerEndpoint,
+  auth: SimulatorPartnerAuth,
+): {
+  readonly url: string
+  readonly method?: 'GET' | 'HEAD' | 'POST'
+  readonly body?: unknown
+  readonly authorization: string
+} {
+  const partnerBaseUrl = `http://localhost:0/partner/b2api/v3/${endpoint}`
+  const backupBaseUrl = `http://localhost:0/api/backup/v1/${endpoint}`
+  switch (endpoint) {
+    case PartnerEndpoint.CreateGroupMember:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: {
+          adminAccountId: auth.accountId,
+          groupId: 'blocked-group',
+          memberEmail: 'blocked-member@example.com',
+        },
+      }
+    case PartnerEndpoint.EjectGroupMember:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: {
+          adminAccountId: auth.accountId,
+          groupId: 'blocked-group',
+          memberAccountId: 'blocked-member',
+        },
+      }
+    case PartnerEndpoint.ListGroups:
+      return {
+        url: `${partnerBaseUrl}?adminAccountId=${auth.accountId}`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.ListGroupMembers:
+      return {
+        url: `${partnerBaseUrl}?adminAccountId=${auth.accountId}&groupId=blocked-group`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.ReserveTrialCreateAccount:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: [{ email: 'blocked-trial@example.com', term: 7, storage: 1 }],
+      }
+    case PartnerEndpoint.ListComputers:
+      return {
+        url: `${backupBaseUrl}?accountId=${auth.accountId}`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.DeleteComputer:
+      return {
+        url: backupBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: { accountId: auth.accountId, computerId: 'blocked-computer' },
+      }
+  }
 }
 
 describe('B2Simulator partner endpoints', () => {
@@ -266,6 +349,202 @@ describe('B2Simulator partner endpoints', () => {
     expect(remainingMembersPage.body[0]?.groupMembers.map((member) => member.email)).toEqual([
       'z-member@example.com',
     ])
+  })
+
+  it('allows full Partner capabilities on every strict Partner and Backup endpoint', async () => {
+    const sim = new B2Simulator({
+      partnerAuthorize: true,
+      partnerGroupsCapabilities: [PartnerCapability.All],
+      partnerBackupCapabilities: [PartnerCapability.All],
+    })
+    const auth = await authorizePartner(sim)
+    const group = await firstGroup(sim, auth)
+
+    const reserved = await simulatorRequest<ReserveTrialCreateAccountResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: [{ email: 'full-cap-trial@example.com', term: 7, storage: 1 }],
+    })
+    expect(reserved.status).toBe(200)
+
+    const created = await simulatorRequest<CreateGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberEmail: 'full-cap-member@example.com',
+      },
+    })
+    expect(created.status).toBe(200)
+    const memberAccountId = created.body[0]?.groupMember.accountId
+    if (memberAccountId === undefined) throw new Error('expected full-cap member')
+
+    const members = await simulatorRequest<ListGroupMembersResponse>(sim, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_group_members?adminAccountId=${auth.accountId}&groupId=${group.groupId}`,
+      authorization: auth.authorizationToken,
+    })
+    expect(members.status).toBe(200)
+
+    const ejected = await simulatorRequest<EjectGroupMemberResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        adminAccountId: auth.accountId,
+        groupId: group.groupId,
+        memberAccountId,
+      },
+    })
+    expect(ejected.status).toBe(200)
+
+    const computers = await simulatorRequest<ListComputersResponse>(sim, {
+      url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=${auth.accountId}`,
+      authorization: auth.authorizationToken,
+    })
+    expect(computers.status).toBe(200)
+    const computerId = computers.body.computers[0]?.computerId
+    if (computerId === undefined) throw new Error('expected full-cap computer')
+
+    const deleted = await simulatorRequest<ListComputersResponse['computers']>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_delete_computer',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: {
+        accountId: auth.accountId,
+        computerId,
+      },
+    })
+    expect(deleted.status).toBe(200)
+  })
+
+  it('rejects strict groups calls when the Partner token lacks the required capability', async () => {
+    const sim = new B2Simulator({
+      partnerAuthorize: true,
+      partnerGroupsCapabilities: [],
+    })
+    const auth = await authorizePartner(sim)
+
+    await expectPartnerCapabilityError(
+      simulatorRequest<ErrorBody>(sim, {
+        url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${auth.accountId}`,
+        authorization: auth.authorizationToken,
+      }),
+    )
+  })
+
+  it('keeps strict Partner capability suites isolated', async () => {
+    const groupsOnly = new B2Simulator({
+      partnerAuthorize: true,
+      partnerBackupCapabilities: [],
+    })
+    const groupsAuth = await authorizePartner(groupsOnly)
+    const groups = await simulatorRequest<ListGroupsResponse>(groupsOnly, {
+      url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${groupsAuth.accountId}`,
+      authorization: groupsAuth.authorizationToken,
+    })
+    expect(groups.status).toBe(200)
+    await expectPartnerCapabilityError(
+      simulatorRequest<ErrorBody>(groupsOnly, {
+        url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=${groupsAuth.accountId}`,
+        authorization: groupsAuth.authorizationToken,
+      }),
+    )
+    await expectPartnerCapabilityError(
+      simulatorRequest<ErrorBody>(groupsOnly, {
+        url: 'http://localhost:0/api/backup/v1/bz_delete_computer',
+        method: 'POST',
+        authorization: groupsAuth.authorizationToken,
+        body: { accountId: groupsAuth.accountId, computerId: 'blocked-computer' },
+      }),
+    )
+
+    const backupOnly = new B2Simulator({
+      partnerAuthorize: true,
+      partnerGroupsCapabilities: [],
+    })
+    const backupAuth = await authorizePartner(backupOnly)
+    const computers = await simulatorRequest<ListComputersResponse>(backupOnly, {
+      url: `http://localhost:0/api/backup/v1/bz_list_computers?accountId=${backupAuth.accountId}`,
+      authorization: backupAuth.authorizationToken,
+    })
+    expect(computers.status).toBe(200)
+    const computerId = computers.body.computers[0]?.computerId
+    if (computerId === undefined) throw new Error('expected backup-only computer')
+    const deleted = await simulatorRequest<ListComputersResponse['computers']>(backupOnly, {
+      url: 'http://localhost:0/api/backup/v1/bz_delete_computer',
+      method: 'POST',
+      authorization: backupAuth.authorizationToken,
+      body: { accountId: backupAuth.accountId, computerId },
+    })
+    expect(deleted.status).toBe(200)
+    await expectPartnerCapabilityError(
+      simulatorRequest<ErrorBody>(backupOnly, {
+        url: `http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=${backupAuth.accountId}`,
+        authorization: backupAuth.authorizationToken,
+      }),
+    )
+  })
+
+  it('rejects empty-capability tokens after exported policy tamper attempts', async () => {
+    const mutableTable = PARTNER_ENDPOINT_CAPABILITIES as unknown as Record<
+      PartnerEndpoint,
+      PartnerEndpointCapabilityRequirement
+    >
+    for (const endpoint of PARTNER_ENDPOINT_NAMES) {
+      const requirement = mutableTable[endpoint]
+
+      try {
+        mutableTable[endpoint] = { suite: requirement.suite, capabilities: [] }
+      } catch {
+        // Frozen policy objects throw in strict runtimes; either way, assert below.
+      }
+      try {
+        ;(requirement.capabilities as PartnerCapability[]).length = 0
+      } catch {
+        // Frozen nested capability arrays throw in strict runtimes.
+      }
+
+      expect(mutableTable[endpoint]).toBe(requirement)
+      expect(requirement.capabilities).toEqual([PartnerCapability.All])
+    }
+
+    const sim = new B2Simulator({
+      partnerAuthorize: true,
+      partnerGroupsCapabilities: [],
+      partnerBackupCapabilities: [],
+    })
+    const auth = await authorizePartner(sim)
+    const checkedEndpoints = new Set<PartnerEndpoint>()
+    for (const endpoint of PARTNER_ENDPOINT_NAMES) {
+      checkedEndpoints.add(endpoint)
+      await expectPartnerCapabilityError(
+        simulatorRequest<ErrorBody>(sim, restrictedEndpointRequest(endpoint, auth)),
+      )
+    }
+
+    expect([...checkedEndpoints].sort()).toEqual([...PARTNER_ENDPOINT_NAMES].sort())
+  })
+
+  it('does not check Partner capabilities in permissive mode', async () => {
+    const sim = new B2Simulator({
+      partnerGroupsCapabilities: [],
+      partnerBackupCapabilities: [],
+    })
+
+    const groups = await simulatorRequest<ListGroupsResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_list_groups?adminAccountId=permissive-cap-admin',
+      authorization: 'arbitrary-partner-token',
+    })
+    expect(groups.status).toBe(200)
+
+    const computers = await simulatorRequest<ListComputersResponse>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=permissive-cap-backup',
+      authorization: 'arbitrary-partner-token',
+    })
+    expect(computers.status).toBe(200)
   })
 
   it('keeps simulator wire response application keys not redacted', async () => {
