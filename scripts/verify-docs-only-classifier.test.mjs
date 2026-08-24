@@ -30,9 +30,11 @@ function initRepo({ readme = true } = {}) {
   git(dir, 'config', 'user.name', 'CI')
 
   mkdirSync(join(dir, 'src/auth'), { recursive: true })
+  mkdirSync(join(dir, 'adr'), { recursive: true })
   mkdirSync(join(dir, 'docs'), { recursive: true })
   write(join(dir, 'src/auth/index.ts'), 'export const auth = true\n')
   write(join(dir, 'src/client.ts'), 'export const client = true\n')
+  write(join(dir, 'adr/001-architecture.md'), '# Architecture\n')
   write(join(dir, 'CONTRIBUTING.md'), '# Contributing\n')
   write(join(dir, 'docs/guide.md'), '# Guide\n')
   if (readme) {
@@ -78,6 +80,27 @@ test('classifies ordinary markdown docs as docs-only', (t) => {
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   write(join(dir, 'CONTRIBUTING.md'), '# Contributing\n\nMore docs.\n')
+  commit(dir)
+
+  assert.deepEqual(classify(dir, base), { code: 'false', docs: 'true' })
+})
+
+test('classifies adr markdown as docs-only', (t) => {
+  const { dir, base } = initRepo()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  write(join(dir, 'adr/001-architecture.md'), '# Architecture\n\nUpdated decision.\n')
+  commit(dir)
+
+  assert.deepEqual(classify(dir, base), { code: 'false', docs: 'true' })
+})
+
+test('classifies nested docs paths as docs-only', (t) => {
+  const { dir, base } = initRepo()
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+
+  mkdirSync(join(dir, 'docs/reference/buckets'), { recursive: true })
+  write(join(dir, 'docs/reference/buckets/list.md'), '# List buckets\n')
   commit(dir)
 
   assert.deepEqual(classify(dir, base), { code: 'false', docs: 'true' })

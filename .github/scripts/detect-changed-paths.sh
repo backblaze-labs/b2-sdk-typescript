@@ -31,15 +31,30 @@ if ! git diff --no-renames --name-only "$base_sha...$head_sha" > "$changed_files
   exit 0
 fi
 
+is_docs_path() {
+  local path="$1"
+
+  [[ "$path" == docs/* ]] && return 0
+  [[ "$path" == adr/*.md ]] && return 0
+  [[ "$path" == *.md ]] && return 0
+  return 1
+}
+
 code=false
 docs=false
 while IFS= read -r file; do
   [ -n "$file" ] || continue
   case "$file" in
-    README.md | CHANGELOG.md | RELEASE.md) code=true ;;
-    *.md | docs/*) docs=true ;;
-    *) code=true ;;
+    README.md | CHANGELOG.md | RELEASE.md)
+      code=true
+      continue
+      ;;
   esac
+  if is_docs_path "$file"; then
+    docs=true
+  else
+    code=true
+  fi
 done < "$changed_files"
 
 emit_outputs "$code" "$docs"
