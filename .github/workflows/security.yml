@@ -22,18 +22,24 @@ concurrency:
 jobs:
   dependency-audit:
     name: Dependency audit
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'pull_request_target' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout pull request audit target
+      - name: Download pull request dependency metadata
         if: ${{ github.event_name == 'pull_request_target' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          path: audit-target
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir audit-target
+          for path in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
+            gh api \
+              -H "Accept: application/vnd.github.raw" \
+              "repos/${HEAD_REPO}/contents/${path}?ref=${HEAD_SHA}" > "audit-target/${path}"
+          done
 
       - name: Checkout audit target
         if: ${{ github.event_name != 'pull_request_target' }}
@@ -92,7 +98,7 @@ jobs:
 
   github-actions:
     name: GitHub Actions security
-    if: ${{ github.event_name != 'pull_request_target' && github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' && github.event_name != 'pull_request_target' && github.event_name != 'schedule' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
