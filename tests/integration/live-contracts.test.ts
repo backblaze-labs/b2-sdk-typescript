@@ -15,7 +15,7 @@ import { BufferSource } from '../../src/streams/source.ts'
 import { DownloadHeaderName } from '../../src/types/download.ts'
 import { EncryptionKey } from '../../src/types/encryption.ts'
 import type { FileVersion } from '../../src/types/file.ts'
-import type { LargeFileId } from '../../src/types/ids.ts'
+import { accountId, type LargeFileId } from '../../src/types/ids.ts'
 import type { UploadPartResponse } from '../../src/types/upload.ts'
 import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
@@ -51,6 +51,21 @@ function hasStatus(err: unknown, status: number): boolean {
     'status' in err &&
     (err as { readonly status?: unknown }).status === status
   )
+}
+
+function expectPlainObject(value: unknown): asserts value is Record<string, unknown> {
+  expect(typeof value).toBe('object')
+  expect(value).not.toBeNull()
+  expect(Array.isArray(value)).toBe(false)
+}
+
+function expectReplicationConfigurationWrapper(value: unknown): void {
+  expectPlainObject(value)
+  expect(typeof value['isClientAuthorizedToRead']).toBe('boolean')
+  expect(Object.hasOwn(value, 'value')).toBe(true)
+  if (value['value'] !== null) {
+    expectPlainObject(value['value'])
+  }
 }
 
 async function uploadRawPart(
@@ -219,6 +234,72 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
   afterAll(async () => {
     if (!bucket) return
     await deleteBucketIfPresent(bucket)
+  })
+
+  describe('native API docs drift guardrails', () => {
+    it('returns a single file-version object from b2_copy_file', async () => {
+      const data = makeBytes(16 * 1024, 127)
+      const sourceName = fileName('copy-shape-source')
+      const destinationName = fileName('copy-shape-destination')
+      const source = await bucket.upload({
+        fileName: sourceName,
+        source: new BufferSource(data),
+        contentType: 'application/octet-stream',
+      })
+
+      const copied = await client.raw.copyFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          sourceFileId: source.fileId,
+          fileName: destinationName,
+        },
+      )
+
+      expectPlainObject(copied)
+      expect(copied.fileId).not.toBe(source.fileId)
+      expect(copied.fileName).toBe(destinationName)
+      expect(copied.bucketId).toBe(bucket.id)
+      expect(copied.action).toBe('copy')
+      expect(copied.contentLength).toBe(data.byteLength)
+    })
+
+    it('returns lifecycleRules arrays and replicationConfiguration wrappers', async () => {
+      const lifecycleRules = [
+        {
+          daysFromHidingToDeleting: 1,
+          daysFromUploadingToHiding: null,
+          fileNamePrefix: 'docs-drift/',
+        },
+      ]
+
+      const updated = await bucket.update({ lifecycleRules })
+      expect(Array.isArray(updated.lifecycleRules)).toBe(true)
+      expect(updated.lifecycleRules).toHaveLength(1)
+      expect(updated.lifecycleRules[0]).toMatchObject({
+        daysFromHidingToDeleting: 1,
+        fileNamePrefix: 'docs-drift/',
+      })
+      expectReplicationConfigurationWrapper(updated.replicationConfiguration)
+
+      const listed = await client.raw.listBuckets(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          accountId: accountId(client.accountInfo.getAccountId()),
+          bucketId: bucket.id,
+        },
+      )
+      const listedBucket = listed.buckets[0]
+      expect(listedBucket).toBeDefined()
+      expect(Array.isArray(listedBucket?.lifecycleRules)).toBe(true)
+      expect(listedBucket?.lifecycleRules).toHaveLength(1)
+      expect(listedBucket?.lifecycleRules[0]).toMatchObject({
+        daysFromHidingToDeleting: 1,
+        fileNamePrefix: 'docs-drift/',
+      })
+      expectReplicationConfigurationWrapper(listedBucket?.replicationConfiguration)
+    })
   })
 
   describe('multipart assembly and copy', () => {
