@@ -10,6 +10,25 @@ const SAFE_CHARS = new Set(
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@/".split(''),
 )
 
+const FILE_INFO_VALUE_SAFE_CHARS = new Set(
+  'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~'.split(''),
+)
+
+function encodeWithSafeChars(value: string, safeChars: ReadonlySet<string>): string {
+  const encoded: string[] = []
+  for (const char of value) {
+    if (safeChars.has(char)) {
+      encoded.push(char)
+    } else {
+      const bytes = utf8Encoder.encode(char)
+      for (const byte of bytes) {
+        encoded.push(`%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
+      }
+    }
+  }
+  return encoded.join('')
+}
+
 /**
  * Percent-encodes a file name using the B2-specific encoding rules.
  *
@@ -22,18 +41,22 @@ const SAFE_CHARS = new Set(
  * @returns The percent-encoded file name suitable for `X-Bz-File-Name` headers.
  */
 export function encodeFileName(name: string): string {
-  const encoded: string[] = []
-  for (const char of name) {
-    if (SAFE_CHARS.has(char)) {
-      encoded.push(char)
-    } else {
-      const bytes = utf8Encoder.encode(char)
-      for (const byte of bytes) {
-        encoded.push(`%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
-      }
-    }
-  }
-  return encoded.join('')
+  return encodeWithSafeChars(name, SAFE_CHARS)
+}
+
+/**
+ * Percent-encodes a file-info value using the stricter B2 metadata value rules.
+ *
+ * File-info values must be decoded by B2 before storage. Live B2 rejects comma
+ * and other RFC punctuation when left raw in these values, so only RFC 3986
+ * unreserved characters are passed through.
+ *
+ * @param value - The raw (unencoded) file-info value.
+ *
+ * @returns The percent-encoded value suitable for `X-Bz-Info-*` header values.
+ */
+function encodeFileInfoValue(value: string): string {
+  return encodeWithSafeChars(value, FILE_INFO_VALUE_SAFE_CHARS)
 }
 
 /**
@@ -53,8 +76,9 @@ export function decodeFileName(encoded: string): string {
 /**
  * Converts a file-info map into `X-Bz-Info-*` HTTP headers.
  *
- * Both keys and values are percent-encoded with {@link encodeFileName}
- * to satisfy B2 header requirements.
+ * Keys use B2 file-name encoding. Values use stricter B2 file-info value
+ * encoding so punctuation such as commas is percent-encoded before B2 decodes
+ * and validates stored metadata.
  *
  * @param fileInfo - Key/value pairs to attach as custom file info, or `undefined`.
  *
@@ -66,7 +90,7 @@ export function buildFileInfoHeaders(
   if (!fileInfo) return {}
   const headers: Record<string, string> = {}
   for (const [key, value] of Object.entries(fileInfo)) {
-    headers[`X-Bz-Info-${encodeFileName(key)}`] = encodeFileName(value)
+    headers[`X-Bz-Info-${encodeFileName(key)}`] = encodeFileInfoValue(value)
   }
   return headers
 }

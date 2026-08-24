@@ -423,11 +423,11 @@ describe('RawClient upload URL request controls', () => {
 
     expect(seenRequests[0]?.headers).toMatchObject({
       'X-Bz-Info-b2-content-disposition':
-        "attachment;%20filename=%22100%25%20report.txt%22;%20filename*=UTF-8''r%25C3%25A9sum%25C3%25A9.txt",
-      'X-Bz-Info-b2-content-language': 'en-US,%20fr-CA',
-      'X-Bz-Info-b2-expires': 'Wed,%2021%20Oct%202026%2007:28:00%20GMT',
-      'X-Bz-Info-b2-cache-control': 'max-age=60,%20stale-while-revalidate=30',
-      'X-Bz-Info-b2-content-encoding': 'identity,%20br',
+        'attachment%3B%20filename%3D%22100%25%20report.txt%22%3B%20filename%2A%3DUTF-8%27%27r%25C3%25A9sum%25C3%25A9.txt',
+      'X-Bz-Info-b2-content-language': 'en-US%2C%20fr-CA',
+      'X-Bz-Info-b2-expires': 'Wed%2C%2021%20Oct%202026%2007%3A28%3A00%20GMT',
+      'X-Bz-Info-b2-cache-control': 'max-age%3D60%2C%20stale-while-revalidate%3D30',
+      'X-Bz-Info-b2-content-encoding': 'identity%2C%20br',
     })
   })
 

@@ -381,7 +381,7 @@ describe.skipIf(skip)('B2 integration', () => {
     const contentLanguage = 'en-US, fr-CA'
     const expires = 'Wed, 21 Oct 2026 07:28:00 GMT'
     const cacheControl = 'max-age=60, stale-while-revalidate=30'
-    const contentEncoding = 'identity, br'
+    const contentEncoding = 'gzip, br'
     const contentSha1 = await sha1Hex(data)
     const uploadUrl = await raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
 
