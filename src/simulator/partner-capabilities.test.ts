@@ -68,7 +68,7 @@ describe('missingPartnerCapabilitiesFor', () => {
     ])
   })
 
-  it('returns an empty list when no Partner capability requirement exists', () => {
+  it('returns an empty list when no Partner capabilities are required', () => {
     expect(missingPartnerCapabilities([], [])).toEqual([])
   })
 })
