@@ -154,6 +154,7 @@
     "lint:docs": "eslint src/ --no-warn-ignored",
     "lint:docs:fix": "eslint src/ --fix --no-warn-ignored",
     "lint:spelling": "cspell --no-progress --gitignore \"src/**/*.ts\" \"examples/**/*.ts\" \"examples/**/*.md\" \"adr/**/*.md\" \"*.md\" \"CLAUDE.md\"",
+    "audit:deps": "node scripts/audit-dependencies.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
     "docs": "typedoc",

@@ -1,0 +1,4 @@
+# Accepted dependency advisories for `pnpm run audit:deps`.
+# Keep this list empty unless an advisory has an explicit risk acceptance.
+# Add one GitHub Security Advisory ID per line, for example:
+# GHSA-xxxx-xxxx-xxxx

@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: '27 9 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -15,6 +17,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    env:
+      PNPM_AUDIT_ALLOWLIST: .github/audit-allowlist.txt
+      PNPM_AUDIT_LEVEL: moderate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.18.0
+          cache: pnpm
+
+      - run: pnpm run audit:deps
+
   github-actions:
     name: GitHub Actions security
     if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
@@ -25,4 +47,3 @@ jobs:
           persist-credentials: false
 
       - uses: backblaze-labs/github-actions/actions/gha-security@7dedd1467663493ccb5b5ca6d3a2533d3604f7b0 # v0.1.0
-
