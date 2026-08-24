@@ -1,63 +1,74 @@
 import { describe, expect, it } from 'vitest'
 import { PartnerCapability } from '../types/partner.ts'
 import {
+  missingPartnerCapabilities,
   missingPartnerCapabilitiesFor,
   PARTNER_ENDPOINT_CAPABILITIES,
+  PARTNER_ENDPOINT_NAMES,
+  PartnerEndpoint,
 } from './partner-capabilities.ts'
 
 describe('PARTNER_ENDPOINT_CAPABILITIES', () => {
   it('covers every Partner and Computer Backup simulator endpoint', () => {
-    expect(Object.keys(PARTNER_ENDPOINT_CAPABILITIES).sort()).toEqual([
-      'b2_create_group_member',
-      'b2_eject_group_member',
-      'b2_list_group_members',
-      'b2_list_groups',
-      'b2_reserve_trial_create_account',
-      'bz_delete_computer',
-      'bz_list_computers',
-    ])
+    expect(Object.keys(PARTNER_ENDPOINT_CAPABILITIES).sort()).toEqual(
+      [...PARTNER_ENDPOINT_NAMES].sort(),
+    )
 
-    expect(PARTNER_ENDPOINT_CAPABILITIES['b2_create_group_member']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.CreateGroupMember]).toMatchObject({
       suite: 'groups',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['b2_eject_group_member']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.EjectGroupMember]).toMatchObject({
       suite: 'groups',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['b2_list_groups']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.ListGroups]).toMatchObject({
       suite: 'groups',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['b2_list_group_members']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.ListGroupMembers]).toMatchObject({
       suite: 'groups',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['b2_reserve_trial_create_account']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.ReserveTrialCreateAccount]).toMatchObject({
       suite: 'groups',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['bz_list_computers']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.ListComputers]).toMatchObject({
       suite: 'backup',
       capabilities: [PartnerCapability.All],
     })
-    expect(PARTNER_ENDPOINT_CAPABILITIES['bz_delete_computer']).toMatchObject({
+    expect(PARTNER_ENDPOINT_CAPABILITIES[PartnerEndpoint.DeleteComputer]).toMatchObject({
       suite: 'backup',
       capabilities: [PartnerCapability.All],
     })
+  })
+
+  it('freezes the exported table and nested capability arrays at runtime', () => {
+    expect(Object.isFrozen(PARTNER_ENDPOINT_CAPABILITIES)).toBe(true)
+    for (const endpoint of PARTNER_ENDPOINT_NAMES) {
+      const requirement = PARTNER_ENDPOINT_CAPABILITIES[endpoint]
+
+      expect(Object.isFrozen(requirement)).toBe(true)
+      expect(Object.isFrozen(requirement.capabilities)).toBe(true)
+    }
   })
 })
 
 describe('missingPartnerCapabilitiesFor', () => {
   it('returns an empty list when all required Partner capabilities are granted', () => {
-    expect(missingPartnerCapabilitiesFor('b2_list_groups', [PartnerCapability.All])).toEqual([])
+    expect(
+      missingPartnerCapabilitiesFor(PartnerEndpoint.ListGroups, [PartnerCapability.All]),
+    ).toEqual([])
   })
 
   it('returns the required Partner capabilities missing from the grant', () => {
-    expect(missingPartnerCapabilitiesFor('bz_list_computers', [])).toEqual([PartnerCapability.All])
+    expect(missingPartnerCapabilitiesFor(PartnerEndpoint.ListComputers, [])).toEqual([
+      PartnerCapability.All,
+    ])
   })
 
-  it('treats unknown endpoints as having no Partner capability requirement', () => {
-    expect(missingPartnerCapabilitiesFor('unknown_endpoint', [])).toEqual([])
+  it('returns an empty list when no Partner capability requirement exists', () => {
+    expect(missingPartnerCapabilities([], [])).toEqual([])
   })
 })

@@ -26,21 +26,15 @@ import {
 } from '../types/partner.ts'
 import type { B2SimulatorOptions, SimulatorJsonResponse } from './index.ts'
 import {
-  missingPartnerCapabilitiesFor,
-  PARTNER_ENDPOINT_CAPABILITIES,
+  missingPartnerCapabilities,
+  PARTNER_ENDPOINT_NAMES,
+  PartnerEndpoint,
+  partnerEndpointCapabilityRequirementFor,
 } from './partner-capabilities.ts'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const PARTNER_REGIONS = new Set<string>(Object.values(Region))
-const PARTNER_API_ENDPOINTS = new Set<string>([
-  'b2_create_group_member',
-  'b2_eject_group_member',
-  'b2_list_groups',
-  'b2_list_group_members',
-  'b2_reserve_trial_create_account',
-  'bz_list_computers',
-  'bz_delete_computer',
-])
+const PARTNER_API_ENDPOINTS = new Set<PartnerEndpoint>(PARTNER_ENDPOINT_NAMES)
 const DEFAULT_GROUP_COUNT = 3
 const MAX_GROUPS_PER_ADMIN = 500
 const DEFAULT_MAX_GROUP_COUNT = 100 // Default group page size.
@@ -64,14 +58,14 @@ const PARTNER_CREATED_STORAGE_KEY_CAPABILITIES = Object.freeze([
   Capability.DeleteFiles,
 ])
 
-function isPartnerApiEndpoint(endpoint: string): boolean {
-  return PARTNER_API_ENDPOINTS.has(endpoint)
+function isPartnerApiEndpoint(endpoint: string): endpoint is PartnerEndpoint {
+  return PARTNER_API_ENDPOINTS.has(endpoint as PartnerEndpoint)
 }
 
-const PARTNER_QUERY_ENDPOINTS = new Set<string>([
-  'b2_list_groups',
-  'b2_list_group_members',
-  'bz_list_computers',
+const PARTNER_QUERY_ENDPOINTS = new Set<PartnerEndpoint>([
+  PartnerEndpoint.ListGroups,
+  PartnerEndpoint.ListGroupMembers,
+  PartnerEndpoint.ListComputers,
 ])
 
 /**
@@ -82,7 +76,7 @@ const PARTNER_QUERY_ENDPOINTS = new Set<string>([
  * @returns `true` for Partner/Backup list endpoints that document GET query requests.
  */
 export function isPartnerQueryEndpoint(endpoint: string): boolean {
-  return PARTNER_QUERY_ENDPOINTS.has(endpoint)
+  return PARTNER_QUERY_ENDPOINTS.has(endpoint as PartnerEndpoint)
 }
 
 function utcDateString(ms: number): string {
@@ -287,13 +281,11 @@ export class PartnerSimulator {
     }
 
     const tokenStr = this.host.genId('sim_partner_auth_token')
-    const groupsCapabilities = clonePartnerCapabilities(this.groupsCapabilities)
-    const backupCapabilities = clonePartnerCapabilities(this.backupCapabilities)
     this.issuedTokens.set(tokenStr, {
       accountId: this.host.accountId,
-      backupCapabilities,
+      backupCapabilities: this.backupCapabilities,
       expiresAt: this.host.now() + this.host.authTokenTtlMs,
-      groupsCapabilities,
+      groupsCapabilities: this.groupsCapabilities,
     })
     return {
       status: 200,
@@ -323,13 +315,13 @@ export class PartnerSimulator {
             s3ApiUrl: origin,
           },
           groupsApi: {
-            capabilities: groupsCapabilities,
+            capabilities: this.groupsCapabilities,
             groupsApiUrl: `${origin}/partner`,
             infoType: 'groupsApi',
           },
           backupApi: {
             backupApiUrl: `${origin}/backup`,
-            capabilities: backupCapabilities,
+            capabilities: this.backupCapabilities,
             infoType: 'backupApi',
           },
         },
@@ -347,7 +339,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   reserveTrialCreateAccount(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('b2_reserve_trial_create_account', authToken)
+    const auth = this.authorizeRequest(PartnerEndpoint.ReserveTrialCreateAccount, authToken)
     if ('status' in auth) return auth
     if (!Array.isArray(body)) {
       return this.host.error(400, 'bad_request', 'request body must be an array')
@@ -383,7 +375,9 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   createGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('b2_create_group_member', authToken, { checkPhone: false })
+    const auth = this.authorizeRequest(PartnerEndpoint.CreateGroupMember, authToken, {
+      checkPhone: false,
+    })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const request = this.parseCreateGroupMemberRequest(record)
@@ -457,7 +451,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   ejectGroupMember(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('b2_eject_group_member', authToken)
+    const auth = this.authorizeRequest(PartnerEndpoint.EjectGroupMember, authToken)
     if ('status' in auth) return auth
     const record = requestObject(body)
     const request = this.parseEjectGroupMemberRequest(record)
@@ -508,7 +502,9 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listGroups(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('b2_list_groups', authToken, { checkPhone: false })
+    const auth = this.authorizeRequest(PartnerEndpoint.ListGroups, authToken, {
+      checkPhone: false,
+    })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const adminAccountId = this.requiredString(record, 'adminAccountId', 400, 'bad_request')
@@ -564,7 +560,7 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listGroupMembers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('b2_list_group_members', authToken, {
+    const auth = this.authorizeRequest(PartnerEndpoint.ListGroupMembers, authToken, {
       checkPhone: false,
     })
     if ('status' in auth) return auth
@@ -609,7 +605,9 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   listComputers(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('bz_list_computers', authToken, { checkPhone: false })
+    const auth = this.authorizeRequest(PartnerEndpoint.ListComputers, authToken, {
+      checkPhone: false,
+    })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
@@ -671,7 +669,9 @@ export class PartnerSimulator {
    * @returns Simulator JSON response.
    */
   deleteComputer(body: unknown, authToken?: string): SimulatorJsonResponse {
-    const auth = this.authorizeRequest('bz_delete_computer', authToken, { checkPhone: false })
+    const auth = this.authorizeRequest(PartnerEndpoint.DeleteComputer, authToken, {
+      checkPhone: false,
+    })
     if ('status' in auth) return auth
     const record = requestObject(body)
     const accountId = this.requiredString(record, 'accountId', 400, 'invalid_account_id')
@@ -691,7 +691,7 @@ export class PartnerSimulator {
   }
 
   private authorizeRequest(
-    endpoint: string,
+    endpoint: PartnerEndpoint,
     authToken: string | undefined,
     options: { readonly checkPhone?: boolean } = {},
   ): AuthorizedPartnerRequest | SimulatorJsonResponse {
@@ -735,14 +735,16 @@ export class PartnerSimulator {
   }
 
   private authorizeEndpointCapabilities(
-    endpoint: string,
+    endpoint: PartnerEndpoint,
     token: IssuedPartnerToken,
   ): SimulatorJsonResponse | null {
-    const requirement = PARTNER_ENDPOINT_CAPABILITIES[endpoint]
-    if (requirement === undefined) return null
+    const requirement = partnerEndpointCapabilityRequirementFor(endpoint)
+    if (requirement === null) {
+      return this.host.error(401, 'unauthorized', `no Partner capability policy for ${endpoint}`)
+    }
     const granted =
       requirement.suite === 'groups' ? token.groupsCapabilities : token.backupCapabilities
-    const missing = missingPartnerCapabilitiesFor(endpoint, granted)
+    const missing = missingPartnerCapabilities(requirement.capabilities, granted)
     if (missing.length === 0) return null
     return this.host.error(
       401,

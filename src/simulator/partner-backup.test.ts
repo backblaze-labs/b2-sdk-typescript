@@ -11,6 +11,12 @@ import type {
 } from '../types/partner.ts'
 import { PartnerCapability, Region } from '../types/partner.ts'
 import { B2Simulator, type B2SimulatorOptions } from './index.ts'
+import {
+  PARTNER_ENDPOINT_CAPABILITIES,
+  PARTNER_ENDPOINT_NAMES,
+  PartnerEndpoint,
+  type PartnerEndpointCapabilityRequirement,
+} from './partner-capabilities.ts'
 
 interface ErrorBody {
   readonly status: number
@@ -87,6 +93,72 @@ async function expectPartnerCapabilityError(
     code: 'unauthorized',
     message: expect.stringContaining(PartnerCapability.All),
   })
+}
+
+function restrictedEndpointRequest(
+  endpoint: PartnerEndpoint,
+  auth: SimulatorPartnerAuth,
+): {
+  readonly url: string
+  readonly method?: 'GET' | 'HEAD' | 'POST'
+  readonly body?: unknown
+  readonly authorization: string
+} {
+  const partnerBaseUrl = `http://localhost:0/partner/b2api/v3/${endpoint}`
+  const backupBaseUrl = `http://localhost:0/api/backup/v1/${endpoint}`
+  switch (endpoint) {
+    case PartnerEndpoint.CreateGroupMember:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: {
+          adminAccountId: auth.accountId,
+          groupId: 'blocked-group',
+          memberEmail: 'blocked-member@example.com',
+        },
+      }
+    case PartnerEndpoint.EjectGroupMember:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: {
+          adminAccountId: auth.accountId,
+          groupId: 'blocked-group',
+          memberAccountId: 'blocked-member',
+        },
+      }
+    case PartnerEndpoint.ListGroups:
+      return {
+        url: `${partnerBaseUrl}?adminAccountId=${auth.accountId}`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.ListGroupMembers:
+      return {
+        url: `${partnerBaseUrl}?adminAccountId=${auth.accountId}&groupId=blocked-group`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.ReserveTrialCreateAccount:
+      return {
+        url: partnerBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: [{ email: 'blocked-trial@example.com', term: 7, storage: 1 }],
+      }
+    case PartnerEndpoint.ListComputers:
+      return {
+        url: `${backupBaseUrl}?accountId=${auth.accountId}`,
+        authorization: auth.authorizationToken,
+      }
+    case PartnerEndpoint.DeleteComputer:
+      return {
+        url: backupBaseUrl,
+        method: 'POST',
+        authorization: auth.authorizationToken,
+        body: { accountId: auth.accountId, computerId: 'blocked-computer' },
+      }
+  }
 }
 
 describe('B2Simulator partner endpoints', () => {
@@ -414,6 +486,46 @@ describe('B2Simulator partner endpoints', () => {
         authorization: backupAuth.authorizationToken,
       }),
     )
+  })
+
+  it('rejects empty-capability tokens after exported policy tamper attempts', async () => {
+    const mutableTable = PARTNER_ENDPOINT_CAPABILITIES as unknown as Record<
+      PartnerEndpoint,
+      PartnerEndpointCapabilityRequirement
+    >
+    for (const endpoint of PARTNER_ENDPOINT_NAMES) {
+      const requirement = mutableTable[endpoint]
+
+      try {
+        mutableTable[endpoint] = { suite: requirement.suite, capabilities: [] }
+      } catch {
+        // Frozen policy objects throw in strict runtimes; either way, assert below.
+      }
+      try {
+        ;(requirement.capabilities as PartnerCapability[]).length = 0
+      } catch {
+        // Frozen nested capability arrays throw in strict runtimes.
+      }
+
+      expect(mutableTable[endpoint]).toBe(requirement)
+      expect(requirement.capabilities).toEqual([PartnerCapability.All])
+    }
+
+    const sim = new B2Simulator({
+      partnerAuthorize: true,
+      partnerGroupsCapabilities: [],
+      partnerBackupCapabilities: [],
+    })
+    const auth = await authorizePartner(sim)
+    const checkedEndpoints = new Set<PartnerEndpoint>()
+    for (const endpoint of PARTNER_ENDPOINT_NAMES) {
+      checkedEndpoints.add(endpoint)
+      await expectPartnerCapabilityError(
+        simulatorRequest<ErrorBody>(sim, restrictedEndpointRequest(endpoint, auth)),
+      )
+    }
+
+    expect([...checkedEndpoints].sort()).toEqual([...PARTNER_ENDPOINT_NAMES].sort())
   })
 
   it('does not check Partner capabilities in permissive mode', async () => {
