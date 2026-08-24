@@ -213,8 +213,8 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,47 +235,13 @@ jobs:
           test -f dist/raw/index.js
           test -f dist/errors/index.js
           test -f dist/simulator/index.js
-      # Regression test for the dual-format ESM + CJS resolution path. Packs
-      # the SDK, installs the tarball into an ephemeral consumer project, and
-      # confirms both `import` and `require` work. Catches missing `.d.cts`
-      # mirror files (the failure mode that broke type resolution for CJS
-      # consumers in early 0.1.0 builds), exports-map typos, and rollup
-      # `external` regressions that would land a `Cannot find module` in
-      # downstream node_modules.
+      # PR consumer-package smoke for issue #102. This is the single maintained
+      # pack/install path: it packs the SDK, installs the tarball with npm into
+      # an ephemeral consumer project, then imports/requires every public export
+      # probe (root B2Client plus subpaths). That catches missing package files,
+      # exports-map typos, and rollup `external` regressions without a second
+      # weaker pack/install job.
       - run: pnpm run verify:exports
-
-  consumer-smoke:
-    name: Pack and install consumer smoke
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.18.0
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - name: Pack SDK and import it from a clean npm consumer
-        run: |
-          set -euo pipefail
-          PACK_DIR=/tmp/b2-pack
-          CONSUMER_DIR="$(mktemp -d)"
-          rm -rf "$PACK_DIR"
-          mkdir -p "$PACK_DIR"
-          pnpm pack --pack-destination "$PACK_DIR"
-          printf '{"private":true,"type":"module"}\n' > "$CONSUMER_DIR/package.json"
-          cd "$CONSUMER_DIR"
-          npm install "$PACK_DIR"/*.tgz
-          node --input-type=module <<'SMOKE'
-          import { B2Client } from '@backblaze-labs/b2-sdk'
-          if (typeof B2Client !== 'function') {
-            throw new Error('B2Client export missing')
-          }
-          SMOKE
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
   # which runs the Node 22.18 + 24 matrix sequentially + the real-examples
