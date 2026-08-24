@@ -6,6 +6,7 @@ import type {
   ListComputersResponse,
   ListGroupMembersResponse,
   ListGroupsResponse,
+  PartnerB2Stats,
   ReserveTrialCreateAccountResponse,
 } from './index.ts'
 import { accountId, applicationKeyId, bucketId, computerId, groupId, Region } from './index.ts'
@@ -17,7 +18,7 @@ describe('partner and backup wire response shapes', () => {
     const group = groupId('254')
     const key = applicationKeyId('application-key-id')
     const bucket = bucketId('bucket-id')
-    const b2Stats = {
+    const b2Stats: PartnerB2Stats = {
       b2BytesStoredCount: '1024',
       b2FilesStoredCount: '3',
       b2StatsAsOfTimestamp: '2026-08-14T00:00:00Z',
@@ -82,8 +83,12 @@ describe('partner and backup wire response shapes', () => {
 
     expect(createGroupMember[0]?.groupMember.groupId).toBe(group)
     expect(ejectGroupMember.email).toBe('member@example.com')
+    expect(listGroups.groups[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
+    expect(listGroups.groups[0]?.b2Stats.b2FilesStoredCount).toBe('3')
     expect(listGroups.groups[0]?.b2Stats.bucketCount).toBe('1')
+    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe('3')
+    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.bucketCount).toBe('1')
     expect(reserveTrialCreateAccount[0]?.bucketId).toBe(bucket)
   })
 
