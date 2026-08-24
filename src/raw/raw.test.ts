@@ -10,7 +10,6 @@ import {
 } from '../types/encryption.ts'
 import { accountId, bucketId, fileId, largeFileId } from '../types/ids.ts'
 import { EventType } from '../types/notifications.ts'
-import { encodeFileName } from './encoding.ts'
 import { RawClient } from './index.ts'
 import { b2Url, isB2ApiVersion } from './url.ts'
 
@@ -403,7 +402,7 @@ describe('RawClient upload URL request controls', () => {
     const contentLanguage = 'en-US, fr-CA'
     const expires = 'Wed, 21 Oct 2026 07:28:00 GMT'
     const cacheControl = 'max-age=60, stale-while-revalidate=30'
-    const contentEncoding = 'br, gzip'
+    const contentEncoding = 'identity, br'
 
     await raw.uploadFile(
       'https://upload.example.test/b2_upload_file',
@@ -423,12 +422,45 @@ describe('RawClient upload URL request controls', () => {
     )
 
     expect(seenRequests[0]?.headers).toMatchObject({
-      'X-Bz-Info-b2-content-disposition': encodeFileName(contentDisposition),
-      'X-Bz-Info-b2-content-language': encodeFileName(contentLanguage),
-      'X-Bz-Info-b2-expires': encodeFileName(expires),
-      'X-Bz-Info-b2-cache-control': encodeFileName(cacheControl),
-      'X-Bz-Info-b2-content-encoding': encodeFileName(contentEncoding),
+      'X-Bz-Info-b2-content-disposition':
+        "attachment;%20filename=%22100%25%20report.txt%22;%20filename*=UTF-8''r%25C3%25A9sum%25C3%25A9.txt",
+      'X-Bz-Info-b2-content-language': 'en-US,%20fr-CA',
+      'X-Bz-Info-b2-expires': 'Wed,%2021%20Oct%202026%2007:28:00%20GMT',
+      'X-Bz-Info-b2-cache-control': 'max-age=60,%20stale-while-revalidate=30',
+      'X-Bz-Info-b2-content-encoding': 'identity,%20br',
     })
+  })
+
+  it('rejects control bytes in upload header values before sending', async () => {
+    const invalidHeaderValues = [
+      ['contentType', { contentType: 'text/plain\r\nX-Injected: 1' }],
+      ['contentSha1', { contentSha1: 'none\r\nX-Injected: 1' }],
+      ['b2-content-disposition', { contentDisposition: 'attachment\r\nX-Injected: 1' }],
+      ['b2-content-language', { contentLanguage: 'en-US\nX-Injected: 1' }],
+      ['b2-expires', { expires: 'Wed, 21 Oct 2026 07:28:00 GMT\u0000' }],
+      ['b2-cache-control', { cacheControl: 'max-age=60\u007F' }],
+      ['b2-content-encoding', { contentEncoding: 'identity\u001Fgzip' }],
+    ] as const
+
+    for (const [name, overrides] of invalidHeaderValues) {
+      const { raw, seenRequests } = makeUploadUrlRawClient()
+
+      await expect(
+        raw.uploadFile(
+          'https://upload.example.test/b2_upload_file',
+          {
+            authorization: 'upload-auth',
+            fileName: 'file.txt',
+            contentType: 'text/plain',
+            contentLength: 1,
+            contentSha1: 'none',
+            ...overrides,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow(`${name} must not contain HTTP control characters`)
+      expect(seenRequests).toHaveLength(0)
+    }
   })
 
   it('accepts null custom upload timestamps for raw large-file starts', async () => {

@@ -180,6 +180,30 @@ function assertCustomUploadTimestamp(value: unknown): asserts value is number {
   throw new TypeError('customUploadTimestamp must be a non-negative safe integer')
 }
 
+function assertSafeHttpHeaderValue(name: string, value: string): void {
+  if (hasHttpHeaderControlByte(value)) {
+    throw new TypeError(`${name} must not contain HTTP control characters`)
+  }
+}
+
+function hasHttpHeaderControlByte(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+function setB2ContentFileInfoHeader(
+  headers: Record<string, string>,
+  key: string,
+  value: string | undefined,
+): void {
+  if (!value) return
+  assertSafeHttpHeaderValue(key, value)
+  Object.assign(headers, buildFileInfoHeaders({ [key]: value }))
+}
+
 function assertRawCustomUploadTimestamp(
   value: unknown,
 ): asserts value is string | null | undefined {
@@ -536,6 +560,8 @@ export class RawClient {
     retry?: Partial<RetryOptions>,
   ): Promise<FileVersion> {
     const options = normalizeRawRequestOptions(optionsOrSignal, retry)
+    assertSafeHttpHeaderValue('contentType', headers.contentType)
+    assertSafeHttpHeaderValue('contentSha1', headers.contentSha1)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-File-Name': encodeFileName(headers.fileName),
@@ -552,21 +578,11 @@ export class RawClient {
       assertCustomUploadTimestamp(headers.customUploadTimestamp)
       reqHeaders['X-Bz-Custom-Upload-Timestamp'] = String(headers.customUploadTimestamp)
     }
-    if (headers.contentDisposition) {
-      reqHeaders['X-Bz-Info-b2-content-disposition'] = encodeFileName(headers.contentDisposition)
-    }
-    if (headers.contentLanguage) {
-      reqHeaders['X-Bz-Info-b2-content-language'] = encodeFileName(headers.contentLanguage)
-    }
-    if (headers.expires) {
-      reqHeaders['X-Bz-Info-b2-expires'] = encodeFileName(headers.expires)
-    }
-    if (headers.cacheControl) {
-      reqHeaders['X-Bz-Info-b2-cache-control'] = encodeFileName(headers.cacheControl)
-    }
-    if (headers.contentEncoding) {
-      reqHeaders['X-Bz-Info-b2-content-encoding'] = encodeFileName(headers.contentEncoding)
-    }
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-disposition', headers.contentDisposition)
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-language', headers.contentLanguage)
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-expires', headers.expires)
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-cache-control', headers.cacheControl)
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-encoding', headers.contentEncoding)
 
     applyEncryptionHeaders(reqHeaders, headers.serverSideEncryption)
     applyRetentionHeaders(reqHeaders, headers.fileRetention)

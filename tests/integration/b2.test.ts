@@ -32,7 +32,6 @@ import {
   makeBucketName,
   makeBytes,
   readAllBytes,
-  readRequiredBody,
   requireB2IntegrationCredentials,
   requireFeatureCapabilities,
   setupStep,
@@ -379,6 +378,10 @@ describe.skipIf(skip)('B2 integration', () => {
     const data = new TextEncoder().encode('raw b2-content fileInfo encoding')
     const contentDisposition =
       'attachment; filename="100% report.txt"; filename*=UTF-8\'\'r%C3%A9sum%C3%A9.txt'
+    const contentLanguage = 'en-US, fr-CA'
+    const expires = 'Wed, 21 Oct 2026 07:28:00 GMT'
+    const cacheControl = 'max-age=60, stale-while-revalidate=30'
+    const contentEncoding = 'identity, br'
     const contentSha1 = await sha1Hex(data)
     const uploadUrl = await raw.getUploadUrl(apiUrl, authToken, { bucketId: bucket.id })
 
@@ -391,6 +394,10 @@ describe.skipIf(skip)('B2 integration', () => {
         contentLength: data.byteLength,
         contentSha1,
         contentDisposition,
+        contentLanguage,
+        expires,
+        cacheControl,
+        contentEncoding,
       },
       data,
     )
@@ -399,15 +406,24 @@ describe.skipIf(skip)('B2 integration', () => {
       const info = await raw.getFileInfo(apiUrl, authToken, { fileId: uploaded.fileId })
       expect(info.fileInfo).toMatchObject({
         'b2-content-disposition': contentDisposition,
+        'b2-content-language': contentLanguage,
+        'b2-expires': expires,
+        'b2-cache-control': cacheControl,
+        'b2-content-encoding': contentEncoding,
       })
 
-      const downloaded = await raw.downloadFileById(
+      const head = await raw.downloadFileById(
         client.accountInfo.getDownloadUrl(),
         authToken,
-        { fileId: uploaded.fileId },
+        uploaded.fileId,
+        { method: 'HEAD' },
       )
-      expect(downloaded.headers.get(DownloadHeaderName.ContentDisposition)).toBe(contentDisposition)
-      expectBytesEqual(await readRequiredBody(downloaded.body), data)
+      expect(head.status).toBe(200)
+      expect(head.headers.get(DownloadHeaderName.ContentDisposition)).toBe(contentDisposition)
+      expect(head.headers.get(DownloadHeaderName.ContentLanguage)).toBe(contentLanguage)
+      expect(head.headers.get(DownloadHeaderName.Expires)).toBe(expires)
+      expect(head.headers.get(DownloadHeaderName.CacheControl)).toBe(cacheControl)
+      expect(head.headers.get(DownloadHeaderName.ContentEncoding)).toBe(contentEncoding)
     } finally {
       await bucket.deleteFileVersion(fileName, uploaded.fileId).catch(() => {})
     }
