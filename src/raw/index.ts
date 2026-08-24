@@ -197,10 +197,11 @@ function hasHttpHeaderControlByte(value: string): boolean {
 function setB2ContentFileInfoHeader(
   headers: Record<string, string>,
   key: string,
+  optionName: string,
   value: string | undefined,
 ): void {
   if (!value) return
-  assertSafeHttpHeaderValue(key, value)
+  assertSafeHttpHeaderValue(optionName, value)
   Object.assign(headers, buildFileInfoHeaders({ [key]: value }))
 }
 
@@ -560,6 +561,7 @@ export class RawClient {
     retry?: Partial<RetryOptions>,
   ): Promise<FileVersion> {
     const options = normalizeRawRequestOptions(optionsOrSignal, retry)
+    assertSafeHttpHeaderValue('authorization', headers.authorization)
     assertSafeHttpHeaderValue('contentType', headers.contentType)
     assertSafeHttpHeaderValue('contentSha1', headers.contentSha1)
     const reqHeaders: Record<string, string> = {
@@ -578,11 +580,26 @@ export class RawClient {
       assertCustomUploadTimestamp(headers.customUploadTimestamp)
       reqHeaders['X-Bz-Custom-Upload-Timestamp'] = String(headers.customUploadTimestamp)
     }
-    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-disposition', headers.contentDisposition)
-    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-language', headers.contentLanguage)
-    setB2ContentFileInfoHeader(reqHeaders, 'b2-expires', headers.expires)
-    setB2ContentFileInfoHeader(reqHeaders, 'b2-cache-control', headers.cacheControl)
-    setB2ContentFileInfoHeader(reqHeaders, 'b2-content-encoding', headers.contentEncoding)
+    setB2ContentFileInfoHeader(
+      reqHeaders,
+      'b2-content-disposition',
+      'contentDisposition',
+      headers.contentDisposition,
+    )
+    setB2ContentFileInfoHeader(
+      reqHeaders,
+      'b2-content-language',
+      'contentLanguage',
+      headers.contentLanguage,
+    )
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-expires', 'expires', headers.expires)
+    setB2ContentFileInfoHeader(reqHeaders, 'b2-cache-control', 'cacheControl', headers.cacheControl)
+    setB2ContentFileInfoHeader(
+      reqHeaders,
+      'b2-content-encoding',
+      'contentEncoding',
+      headers.contentEncoding,
+    )
 
     applyEncryptionHeaders(reqHeaders, headers.serverSideEncryption)
     applyRetentionHeaders(reqHeaders, headers.fileRetention)
@@ -960,6 +977,8 @@ export class RawClient {
     retry?: Partial<RetryOptions>,
   ): Promise<UploadPartResponse> {
     const options = normalizeRawRequestOptions(optionsOrSignal, retry)
+    assertSafeHttpHeaderValue('authorization', headers.authorization)
+    assertSafeHttpHeaderValue('contentSha1', headers.contentSha1)
     const reqHeaders: Record<string, string> = {
       Authorization: headers.authorization,
       'X-Bz-Part-Number': String(headers.partNumber),

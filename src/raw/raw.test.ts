@@ -433,13 +433,14 @@ describe('RawClient upload URL request controls', () => {
 
   it('rejects control bytes in upload header values before sending', async () => {
     const invalidHeaderValues = [
+      ['authorization', { authorization: 'upload-auth\r\nX-Injected: 1' }],
       ['contentType', { contentType: 'text/plain\r\nX-Injected: 1' }],
       ['contentSha1', { contentSha1: 'none\r\nX-Injected: 1' }],
-      ['b2-content-disposition', { contentDisposition: 'attachment\r\nX-Injected: 1' }],
-      ['b2-content-language', { contentLanguage: 'en-US\nX-Injected: 1' }],
-      ['b2-expires', { expires: 'Wed, 21 Oct 2026 07:28:00 GMT\u0000' }],
-      ['b2-cache-control', { cacheControl: 'max-age=60\u007F' }],
-      ['b2-content-encoding', { contentEncoding: 'identity\u001Fgzip' }],
+      ['contentDisposition', { contentDisposition: 'attachment\r\nX-Injected: 1' }],
+      ['contentLanguage', { contentLanguage: 'en-US\nX-Injected: 1' }],
+      ['expires', { expires: 'Wed, 21 Oct 2026 07:28:00 GMT\u0000' }],
+      ['cacheControl', { cacheControl: 'max-age=60\u007F' }],
+      ['contentEncoding', { contentEncoding: 'identity\u001Fgzip' }],
     ] as const
 
     for (const [name, overrides] of invalidHeaderValues) {
@@ -452,6 +453,32 @@ describe('RawClient upload URL request controls', () => {
             authorization: 'upload-auth',
             fileName: 'file.txt',
             contentType: 'text/plain',
+            contentLength: 1,
+            contentSha1: 'none',
+            ...overrides,
+          },
+          new Uint8Array([1]),
+        ),
+      ).rejects.toThrow(`${name} must not contain HTTP control characters`)
+      expect(seenRequests).toHaveLength(0)
+    }
+  })
+
+  it('rejects control bytes in upload-part header values before sending', async () => {
+    const invalidHeaderValues = [
+      ['authorization', { authorization: 'part-auth\r\nX-Injected: 1' }],
+      ['contentSha1', { contentSha1: 'none\r\nX-Injected: 1' }],
+    ] as const
+
+    for (const [name, overrides] of invalidHeaderValues) {
+      const { raw, seenRequests } = makeUploadUrlRawClient()
+
+      await expect(
+        raw.uploadPart(
+          'https://upload.example.test/b2_upload_part',
+          {
+            authorization: 'part-auth',
+            partNumber: 1,
             contentLength: 1,
             contentSha1: 'none',
             ...overrides,
