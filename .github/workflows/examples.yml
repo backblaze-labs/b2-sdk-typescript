@@ -36,8 +36,8 @@ jobs:
         uses: ./.github/actions/detect-changes
         with:
           event-name: ${{ github.event_name }}
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          head-sha: ${{ github.event.pull_request.head.sha }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   typecheck-node:
     name: Typecheck (Node ${{ matrix.node-version }})

@@ -44,12 +44,6 @@ code=false
 docs=false
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  case "$file" in
-    README.md | CHANGELOG.md | RELEASE.md)
-      code=true
-      continue
-      ;;
-  esac
   if is_docs_path "$file"; then
     docs=true
   else

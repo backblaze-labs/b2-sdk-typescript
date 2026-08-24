@@ -106,14 +106,14 @@ test('classifies nested docs paths as docs-only', (t) => {
   assert.deepEqual(classify(dir, base), { code: 'false', docs: 'true' })
 })
 
-test('treats package metadata markdown as code-changing', (t) => {
+test('classifies package metadata markdown as docs-only', (t) => {
   const { dir, base } = initRepo()
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   write(join(dir, 'README.md'), '# package\n\nnpm install typo-package\n')
   commit(dir)
 
-  assert.deepEqual(classify(dir, base), { code: 'true', docs: 'false' })
+  assert.deepEqual(classify(dir, base), { code: 'false', docs: 'true' })
 })
 
 test('treats source-to-docs renames as code-changing', (t) => {
@@ -133,7 +133,7 @@ test('treats source-to-root-markdown renames as code-changing', (t) => {
   git(dir, 'mv', 'src/client.ts', 'README.md')
   commit(dir)
 
-  assert.deepEqual(classify(dir, base), { code: 'true', docs: 'false' })
+  assert.deepEqual(classify(dir, base), { code: 'true', docs: 'true' })
 })
 
 test('falls back to code-changing on diff failures', (t) => {
