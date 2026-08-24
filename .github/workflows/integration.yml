@@ -47,41 +47,21 @@ permissions:
 jobs:
   changes:
     name: Detect changes
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changed-files.outputs.code }}
-      docs: ${{ steps.changed-files.outputs.docs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
       - id: changed-files
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "docs=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          git diff --name-only \
-            "${{ github.event.pull_request.base.sha }}" \
-            "${{ github.event.pull_request.head.sha }}" \
-            > changed-files.txt
-
-          code=false
-          docs=false
-          while IFS= read -r file; do
-            [ -n "$file" ] || continue
-            case "$file" in
-              *.md|docs/*) docs=true ;;
-              *) code=true ;;
-            esac
-          done < changed-files.txt
-
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/detect-changes
+        with:
+          event-name: ${{ github.event_name }}
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
 
   integration:
     name: Integration (Node ${{ matrix.node-version }})
@@ -243,3 +223,58 @@ jobs:
             exit 1
           fi
           npx tsx tests/real-examples/runner.ts
+
+  integration-result:
+    name: Integration result
+    needs: [changes, integration, backup-live-contracts, key-lifecycle, real-examples]
+    if: ${{ always() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        env:
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          RUN_REAL_B2: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+          RUN_MAIN_ONLY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BACKUP_LIVE_CONTRACTS_RESULT: ${{ needs.backup-live-contracts.result }}
+          KEY_LIFECYCLE_RESULT: ${{ needs.key-lifecycle.result }}
+          REAL_EXAMPLES_RESULT: ${{ needs.real-examples.result }}
+        run: |
+          set -euo pipefail
+
+          failed=false
+          require_success() {
+            if [ "$2" != "success" ]; then
+              echo "::error::$1 concluded '$2'; expected success."
+              failed=true
+            fi
+          }
+          require_skipped() {
+            if [ "$2" != "skipped" ]; then
+              echo "::error::$1 concluded '$2'; expected skipped."
+              failed=true
+            fi
+          }
+
+          require_success changes "$CHANGES_RESULT"
+
+          if [ "$CODE_CHANGED" = "true" ] && [ "$RUN_REAL_B2" = "true" ]; then
+            require_success integration "$INTEGRATION_RESULT"
+            require_success real-examples "$REAL_EXAMPLES_RESULT"
+          else
+            require_skipped integration "$INTEGRATION_RESULT"
+            require_skipped real-examples "$REAL_EXAMPLES_RESULT"
+          fi
+
+          if [ "$CODE_CHANGED" = "true" ] && [ "$RUN_MAIN_ONLY" = "true" ]; then
+            require_success backup-live-contracts "$BACKUP_LIVE_CONTRACTS_RESULT"
+            require_success key-lifecycle "$KEY_LIFECYCLE_RESULT"
+          else
+            require_skipped backup-live-contracts "$BACKUP_LIVE_CONTRACTS_RESULT"
+            require_skipped key-lifecycle "$KEY_LIFECYCLE_RESULT"
+          fi
+
+          if [ "$failed" = "true" ]; then
+            exit 1
+          fi

@@ -1,0 +1,34 @@
+name: Detect changes
+description: Classify pull request changes as code or docs-only.
+
+inputs:
+  event-name:
+    description: GitHub event name.
+    required: true
+  base-sha:
+    description: Pull request base SHA.
+    required: false
+    default: ''
+  head-sha:
+    description: Pull request head SHA.
+    required: false
+    default: ''
+
+outputs:
+  code:
+    description: Whether non-doc or release-metadata files changed.
+    value: ${{ steps.changed-files.outputs.code }}
+  docs:
+    description: Whether docs-only files changed.
+    value: ${{ steps.changed-files.outputs.docs }}
+
+runs:
+  using: composite
+  steps:
+    - id: changed-files
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event-name }}
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/detect-changed-paths.sh"
