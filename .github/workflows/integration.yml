@@ -45,12 +45,51 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changed-files.outputs.code }}
+      docs: ${{ steps.changed-files.outputs.docs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changed-files
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            > changed-files.txt
+
+          code=false
+          docs=false
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            case "$file" in
+              *.md|docs/*) docs=true ;;
+              *) code=true ;;
+            esac
+          done < changed-files.txt
+
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+
   integration:
     name: Integration (Node ${{ matrix.node-version }})
+    needs: changes
     runs-on: ubuntu-latest
     # Fork PRs can't access secrets; skip rather than fail loudly. Same-repo
     # PRs and pushes to main do run.
-    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       # Run matrix entries one at a time. The integration tests share a single
@@ -84,10 +123,11 @@ jobs:
 
   backup-live-contracts:
     name: Computer Backup live contracts (Node ${{ matrix.node-version }})
+    needs: changes
     runs-on: ubuntu-latest
     # The Master Application Key can administer the full account, so expose it
     # only to trusted code checked out from main.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -123,11 +163,12 @@ jobs:
 
   key-lifecycle:
     name: Application-key lifecycle (Node ${{ matrix.node-version }})
+    needs: changes
     runs-on: ubuntu-latest
     # Key-management secrets can create/list/delete account keys, so make them
     # available only to trusted code checked out from main. Pull-request
     # code and manually-dispatched non-main refs must never receive them.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -162,13 +203,13 @@ jobs:
 
   real-examples:
     name: Run examples against real B2 (Node ${{ matrix.node-version }})
+    needs: [changes, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # Run after the integration suite passes so a wire-format break shows up
     # as an integration failure (sharp signal) rather than a confusing
     # example-script failure.
-    needs: integration
-    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
     strategy:
       fail-fast: false
       # Same reason as the integration job: real-examples uses a separate

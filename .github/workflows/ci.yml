@@ -14,8 +14,47 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changed-files.outputs.code }}
+      docs: ${{ steps.changed-files.outputs.docs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changed-files
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --name-only \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            > changed-files.txt
+
+          code=false
+          docs=false
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            case "$file" in
+              *.md|docs/*) docs=true ;;
+              *) code=true ;;
+            esac
+          done < changed-files.txt
+
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "docs=$docs" >> "$GITHUB_OUTPUT"
+
   lint:
     name: Lint
+    needs: changes
     if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
@@ -29,24 +68,33 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+        if: ${{ needs.changes.outputs.code == 'true' }}
       - run: pnpm lint:docs
+        if: ${{ needs.changes.outputs.code == 'true' }}
       - run: pnpm lint:spelling
+        if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
       - run: pnpm typecheck
+        if: ${{ needs.changes.outputs.code == 'true' }}
       - run: pnpm run docs
+        if: ${{ needs.changes.outputs.code == 'true' }}
       # Build before metadata verification so the version-only package metadata
       # guard inspects the real emitted dist artifacts in PR CI.
       - run: pnpm run build
+        if: ${{ needs.changes.outputs.code == 'true' }}
       # Cross-file metadata consistency check: package name, version, tarball
       # name in RELEASE.md, README h1 + install snippets, CHANGELOG entry, and
       # generated version-only dist metadata.
       - run: pnpm run verify:metadata
+        if: ${{ needs.changes.outputs.code == 'true' }}
       # Release workflow trust-boundary checks: artifact build isolation,
       # pinned package-type analysis, npm integrity comparison, and gh repo context.
       - run: pnpm run verify:release
+        if: ${{ needs.changes.outputs.code == 'true' }}
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -84,7 +132,8 @@ jobs:
 
   test-slow:
     name: Test slow (multipart)
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     # Slow tier is CPU/wall-clock-bound, not OS-specific. Multipart tests
     # exercise the simulator's SHA-1 path which behaves identically across
     # Linux/macOS/Windows. Run on Linux only (cheapest runner minutes) and
@@ -110,7 +159,8 @@ jobs:
 
   test-bun:
     name: Test (Bun)
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,7 +182,8 @@ jobs:
 
   coverage:
     name: Coverage
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -180,7 +231,8 @@ jobs:
 
   test-browser:
     name: Test (Browser - ${{ matrix.browser }})
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -213,7 +265,8 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
