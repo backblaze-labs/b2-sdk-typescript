@@ -12,67 +12,13 @@ import type {
 import { accountId, applicationKeyId, bucketId, computerId, groupId, Region } from './index.ts'
 
 describe('partner and backup wire response shapes', () => {
-  it('captures live-confirmed Partner B2 stats counters as strings', () => {
-    const liveStringStats = {
-      b2BytesStoredCount: '0',
-      b2FilesStoredCount: '0',
-      b2StatsAsOfTimestamp: null,
-      bucketCount: '0',
-    } satisfies PartnerB2Stats
-    const listGroups = {
-      accountId: accountId('admin-account'),
-      groups: [
-        {
-          accountStandingDetails: { state: 'active' },
-          b2Stats: liveStringStats,
-          groupId: groupId('254'),
-          groupName: 'Example Group',
-          groupProducts: ['STORAGE'],
-          groupStats: {
-            createdTimestamp: '2026-08-14T00:00:00Z',
-            groupStatsAsOfTimestamp: '2026-08-14T00:00:00Z',
-            memberCount: 1,
-          },
-        },
-      ],
-      nextGroupId: null,
-    } satisfies ListGroupsResponse
-    const listGroupMembers = [
-      {
-        groupId: groupId('254'),
-        groupMembers: [
-          {
-            accountId: accountId('member-account'),
-            b2Stats: liveStringStats,
-            email: 'member@example.com',
-            groupId: groupId('254'),
-            groupName: 'Example Group',
-            region: Region.UsWest,
-            s3Endpoint: 's3.us-west-004.backblazeb2.com',
-          },
-        ],
-        groupName: 'Example Group',
-        nextEmail: null,
-      },
-    ] satisfies ListGroupMembersResponse
-
-    const groupStats = listGroups.groups[0]?.b2Stats
-    const memberStats = listGroupMembers[0]?.groupMembers[0]?.b2Stats
-    expect(typeof groupStats?.b2BytesStoredCount).toBe('string')
-    expect(typeof groupStats?.b2FilesStoredCount).toBe('string')
-    expect(typeof groupStats?.bucketCount).toBe('string')
-    expect(typeof memberStats?.b2BytesStoredCount).toBe('string')
-    expect(typeof memberStats?.b2FilesStoredCount).toBe('string')
-    expect(typeof memberStats?.bucketCount).toBe('string')
-  })
-
   it('models successful Partner API response shapes', () => {
     const adminAccountId = accountId('admin-account')
     const memberAccountId = accountId('member-account')
     const group = groupId('254')
     const key = applicationKeyId('application-key-id')
     const bucket = bucketId('bucket-id')
-    const b2Stats = {
+    const b2Stats: PartnerB2Stats = {
       b2BytesStoredCount: '1024',
       b2FilesStoredCount: '3',
       b2StatsAsOfTimestamp: '2026-08-14T00:00:00Z',
@@ -137,8 +83,12 @@ describe('partner and backup wire response shapes', () => {
 
     expect(createGroupMember[0]?.groupMember.groupId).toBe(group)
     expect(ejectGroupMember.email).toBe('member@example.com')
+    expect(listGroups.groups[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
+    expect(listGroups.groups[0]?.b2Stats.b2FilesStoredCount).toBe('3')
     expect(listGroups.groups[0]?.b2Stats.bucketCount).toBe('1')
+    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe('3')
+    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.bucketCount).toBe('1')
     expect(reserveTrialCreateAccount[0]?.bucketId).toBe(bucket)
   })
 
