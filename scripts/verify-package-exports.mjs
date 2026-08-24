@@ -207,10 +207,22 @@ try {
   // CJS resolution against scoped tarballs can take a different code path
   // than what end-users see. npm produces a flat node_modules that mirrors
   // the npm registry layout, which is the worst-case we want to test.
-  const install = spawnSync('npm', ['install', '--silent', '--no-save', packedTarball], {
-    cwd: scratch,
-    encoding: 'utf8',
-  })
+  const install = spawnSync(
+    'npm',
+    [
+      'install',
+      '--silent',
+      '--no-save',
+      '--no-audit',
+      '--no-fund',
+      '--prefer-offline',
+      packedTarball,
+    ],
+    {
+      cwd: scratch,
+      encoding: 'utf8',
+    },
+  )
   if (install.status !== 0) {
     fail(`npm install of packed tarball failed:\n${install.stderr || install.stdout}`)
     process.exit(1)

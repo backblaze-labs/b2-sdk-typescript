@@ -215,6 +215,7 @@ jobs:
     name: Build
     if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -235,13 +236,12 @@ jobs:
           test -f dist/raw/index.js
           test -f dist/errors/index.js
           test -f dist/simulator/index.js
-      # Regression test for the dual-format ESM + CJS resolution path. Packs
-      # the SDK, installs the tarball into an ephemeral consumer project, and
-      # confirms both `import` and `require` work. Catches missing `.d.cts`
-      # mirror files (the failure mode that broke type resolution for CJS
-      # consumers in early 0.1.0 builds), exports-map typos, and rollup
-      # `external` regressions that would land a `Cannot find module` in
-      # downstream node_modules.
+      # CI consumer-package smoke for issue #102. This is the single maintained
+      # pack/install path: it packs the SDK, installs the tarball with npm into
+      # an ephemeral consumer project, then imports/requires every public export
+      # probe (root B2Client plus subpaths). That catches missing package files,
+      # exports-map typos, and rollup `external` regressions without a second
+      # weaker pack/install job.
       - run: pnpm run verify:exports
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
