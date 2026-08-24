@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  pull_request_target:
+    branches: [main]
   schedule:
     - cron: '27 9 * * 1'
   workflow_dispatch:
@@ -20,11 +22,27 @@ concurrency:
 jobs:
   dependency-audit:
     name: Dependency audit
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'pull_request_target' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Download pull request dependency metadata
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          mkdir audit-target
+          for path in package.json pnpm-lock.yaml pnpm-workspace.yaml; do
+            gh api \
+              -H "Accept: application/vnd.github.raw" \
+              "repos/${HEAD_REPO}/contents/${path}?ref=${HEAD_SHA}" > "audit-target/${path}"
+          done
+
       - name: Checkout audit target
+        if: ${{ github.event_name != 'pull_request_target' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -71,7 +89,7 @@ jobs:
 
       - name: Check dependency file changes
         id: dependency-changes
-        if: ${{ steps.audit-policy.outputs.available == 'true' && github.event_name == 'pull_request' }}
+        if: ${{ steps.audit-policy.outputs.available == 'true' && github.event_name == 'pull_request_target' }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -87,17 +105,17 @@ jobs:
       - name: Run dependency audit
         id: dependency-audit
         if: ${{ steps.audit-policy.outputs.available == 'true' }}
-        continue-on-error: ${{ github.event_name == 'pull_request' && steps.dependency-changes.outputs.blocking != 'true' }}
+        continue-on-error: ${{ github.event_name == 'pull_request_target' && steps.dependency-changes.outputs.blocking != 'true' }}
         working-directory: audit-policy
         run: node scripts/audit-dependencies.mjs ../audit-target
 
       - name: Report non-blocking dependency audit failure
-        if: ${{ steps.audit-policy.outputs.available == 'true' && github.event_name == 'pull_request' && steps.dependency-audit.outcome == 'failure' && steps.dependency-changes.outputs.blocking != 'true' }}
+        if: ${{ steps.audit-policy.outputs.available == 'true' && github.event_name == 'pull_request_target' && steps.dependency-audit.outcome == 'failure' && steps.dependency-changes.outputs.blocking != 'true' }}
         run: echo "::warning::Dependency audit found a moderate-or-higher advisory in the existing dependency graph. Scheduled and post-merge audits remain blocking."
 
   github-actions:
     name: GitHub Actions security
-    if: ${{ github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    if: ${{ github.event_name != 'schedule' && github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
