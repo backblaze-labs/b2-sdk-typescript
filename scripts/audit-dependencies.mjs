@@ -114,8 +114,8 @@ function readAllowlist(path) {
 }
 
 function parseAllowlistLine(rawLine, lineNumber) {
-  const line = rawLine.replace(/#.*$/, '').trim()
-  if (line === '') return undefined
+  const line = rawLine.trim()
+  if (line === '' || line.startsWith('#')) return undefined
 
   const match = allowlistEntry.exec(line)
   if (!match?.groups) {

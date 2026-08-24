@@ -38,8 +38,12 @@ async function writeFixture(options = {}) {
     await writeFile(trustedAllowlist, options.trustedAllowlist)
   }
 
-  await writeFile(join(bin, 'pnpm'), fakePnpmScript)
-  await chmod(join(bin, 'pnpm'), 0o755)
+  await writeFile(join(bin, 'pnpm.js'), fakePnpmScript)
+  await writeFile(join(bin, 'pnpm'), fakePnpmShScript)
+  await writeFile(join(bin, 'pnpm.cmd'), fakePnpmCmdScript)
+  if (process.platform !== 'win32') {
+    await chmod(join(bin, 'pnpm'), 0o755)
+  }
 
   return {
     bin,
@@ -91,7 +95,7 @@ test('fails when a known vulnerable dependency is not allowlisted', async () => 
 
 test('suppresses an advisory only when trusted policy allowlists it', async () => {
   const fixture = await writeFixture({
-    trustedAllowlist: `${knownGhsa} expires=2999-01-01 approver=@security reason="fixture risk accepted"\n`,
+    trustedAllowlist: `${knownGhsa} expires=2999-01-01 approver=@security reason="fixture #47 risk accepted"\n`,
   })
 
   const result = runAudit(fixture)
@@ -153,8 +157,16 @@ test('fails closed when pnpm cannot be spawned', async () => {
   const result = runAudit(fixture, { path: emptyPath })
 
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /spawn(?:Sync)? pnpm ENOENT|not found/)
+  assert.match(result.stderr, /spawn(?:Sync)? pnpm ENOENT|not found|not recognized/)
 })
+
+const fakePnpmShScript = `#!/bin/sh
+exec node "$0.js" "$@"
+`
+
+const fakePnpmCmdScript = `@echo off
+node "%~dp0pnpm.js" %*
+`
 
 const fakePnpmScript = `#!/usr/bin/env node
 const fs = require('node:fs')
