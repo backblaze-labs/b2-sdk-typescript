@@ -63,15 +63,14 @@ export default defineConfig({
       // CI gate: drop below these and the coverage job fails. Adjust upward
       // as coverage improves; never adjust downward to paper over a real drop.
       //
-      // Re-baselined after including shipped `src/**/index.ts` modules in the
-      // denominator. vitest 4 / @vitest/coverage-v8 4 measured
-      // 95.83/90.42/97.9/97.62 for statements/branches/functions/lines.
-      // Pinned just below those corrected-denominator values.
+      // Shipped index modules, including src/simulator/index.ts, are included
+      // in the denominator. Keep this gate aligned with the documented project
+      // policy; add targeted tests instead of lowering it for denominator moves.
       thresholds: {
-        statements: 95,
-        lines: 97,
+        statements: 97,
+        lines: 98,
         functions: 97,
-        branches: 90,
+        branches: 91,
       },
     },
   },
