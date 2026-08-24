@@ -49,7 +49,6 @@ export default defineConfig({
       exclude: [
         'src/**/*.test.ts',
         'src/**/*.slow.test.ts',
-        'src/**/index.ts',
         'src/types/**',
         'src/version.ts',
         'src/auth/account-info.ts',
@@ -64,11 +63,9 @@ export default defineConfig({
       // CI gate: drop below these and the coverage job fails. Adjust upward
       // as coverage improves; never adjust downward to paper over a real drop.
       //
-      // Re-baselined for vitest 4 / @vitest/coverage-v8 4, whose AST-aware v8
-      // remapping reports ~1-2 pts lower than vitest 3 on identical code:
-      // vitest 3 measured 99.36/93.94/98.4/99.36, vitest 4 measures
-      // 97.82/91.64/97.6/98.83 for the same tests. The delta is a measurement
-      // change, not lost coverage. Pinned just below the vitest-4 values.
+      // Shipped index modules, including src/simulator/index.ts, are included
+      // in the denominator. Keep this gate aligned with the documented project
+      // policy; add targeted tests instead of lowering it for denominator moves.
       thresholds: {
         statements: 97,
         lines: 98,
