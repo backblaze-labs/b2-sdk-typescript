@@ -11,9 +11,7 @@ on:
 
 permissions:
   contents: read
-  # The dependency audit job lists PR files to decide whether advisory drift
-  # should be blocking for the pull request path.
-  pull-requests: read
+  pull-requests: read # lists PR files so unchanged dependency drift stays advisory
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
