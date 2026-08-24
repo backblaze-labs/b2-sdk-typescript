@@ -124,7 +124,9 @@ describe.skipIf(skipMissingMasterKey)('Computer Backup live endpoint integration
     const liveBackup = requireAuthorizedBackup(ctx)
     if (liveBackup === null) return
 
-    const wrongAccountId = wrongAccountIdFor(targetAccountId())
+    const wrongAccountId = requireUnauthorizedAccountId(ctx, targetAccountId())
+    if (wrongAccountId === null) return
+
     await expectAuthorizationRejection(() => listComputers(liveBackup, wrongAccountId, 1))
     await expectAuthorizationRejection(() =>
       liveBackup.deleteComputer({
@@ -199,8 +201,19 @@ function targetAccountId(): AccountId {
     : refreshAuthorization().accountId
 }
 
-function wrongAccountIdFor(authorizedAccountId: AccountId): AccountId {
-  const wrongAccountId = accountIdOf(unauthorizedBackupAccountId ?? 'b2-sdk-wrong-account-probe')
+function requireUnauthorizedAccountId(
+  ctx: TestContext,
+  authorizedAccountId: AccountId,
+): AccountId | null {
+  if (unauthorizedBackupAccountId === undefined) {
+    const reason =
+      'B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID is required for wrong-account authorization coverage'
+    if (requirePartnerCredentials) throw new Error(reason)
+    skipFeature(ctx, backupFeature, reason)
+    return null
+  }
+
+  const wrongAccountId = accountIdOf(unauthorizedBackupAccountId)
   if (wrongAccountId === authorizedAccountId) {
     throw new Error(
       'B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID must not equal the target account',

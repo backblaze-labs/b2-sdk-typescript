@@ -87,7 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     # The Master Application Key can administer the full account, so expose it
     # only to trusted code checked out from main.
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       max-parallel: 1
