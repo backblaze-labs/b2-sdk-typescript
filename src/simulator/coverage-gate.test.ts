@@ -6,6 +6,7 @@ import { makeClient } from '../test-utils/index.ts'
 import { Capability } from '../types/auth.ts'
 import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
 import { EncryptionKey, type EncryptionSetting } from '../types/encryption.ts'
+import { accountId, applicationKeyId, bucketId, fileId } from '../types/ids.ts'
 import { B2Simulator } from './index.ts'
 
 type TokenInternals = {
@@ -222,7 +223,15 @@ describe('B2Simulator coverage gate: bucket configuration edges', () => {
       },
     })
 
-    const updated = await bucket.update({ fileLockEnabled: true })
+    const updated = await client.raw.updateBucket(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        accountId: accountId(client.accountInfo.getAccountId()),
+        bucketId: bucket.id,
+        fileLockEnabled: true,
+      },
+    )
 
     expect(updated.fileLockConfiguration.value?.defaultRetention).toEqual({
       mode: BucketRetentionMode.Governance,
@@ -766,13 +775,14 @@ describe('B2Simulator coverage gate: download authorization edges', () => {
     const originalCrypto = globalThis.crypto
     let calls = 0
     vi.stubGlobal('crypto', {
+      subtle: originalCrypto.subtle,
       getRandomValues(bytes: Uint8Array) {
         const fill = calls < 2 ? 1 : calls
         calls += 1
         bytes.fill(fill)
         return bytes
       },
-    })
+    } as Crypto)
     try {
       const { client, bucket } = await strictDownloadFixture()
       const apiUrl = client.accountInfo.getApiUrl()
@@ -954,7 +964,7 @@ describe('B2Simulator coverage gate: hook dispatch edges', () => {
       replicationConfiguration: {
         asReplicationDestination: null,
         asReplicationSource: {
-          sourceApplicationKeyId: 'source-key-id',
+          sourceApplicationKeyId: applicationKeyId('source-key-id'),
           replicationRules: [
             {
               destinationBucketId: destination.id,
@@ -1082,7 +1092,7 @@ describe('B2Simulator coverage gate: copy and encryption edges', () => {
     await expect(
       client.raw.copyPart(client.accountInfo.getApiUrl(), client.accountInfo.getAuthToken(), {
         sourceFileId: source.fileId,
-        largeFileId: large.fileId,
+        largeFileId: fileId(large.fileId),
         partNumber: 1,
       }),
     ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
@@ -1128,7 +1138,7 @@ describe('B2Simulator coverage gate: copy and encryption edges', () => {
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        largeFileId: large.fileId,
+        largeFileId: fileId(large.fileId),
         partNumber: 1,
         destinationServerSideEncryption: supplied,
       }),
@@ -1401,14 +1411,14 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
 
     await expect(
       client.raw.copyFile(apiUrl, authToken, {
-        sourceFileId: 'missing-file',
+        sourceFileId: fileId('missing-file'),
         fileName: 'copy.txt',
       }),
     ).rejects.toMatchObject({ status: 404, code: 'file_not_present' })
     await expect(
       client.raw.copyFile(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        destinationBucketId: 'missing-bucket',
+        destinationBucketId: bucketId('missing-bucket'),
         fileName: 'copy.txt',
       }),
     ).rejects.toMatchObject({ status: 400, code: 'bad_bucket_id' })
@@ -1481,7 +1491,7 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
 
     await expect(
       client.raw.startLargeFile(apiUrl, authToken, {
-        bucketId: 'missing-bucket',
+        bucketId: bucketId('missing-bucket'),
         fileName: 'missing.bin',
         contentType: 'application/octet-stream',
       }),
@@ -1511,28 +1521,28 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        largeFileId: 'missing-large',
+        largeFileId: fileId('missing-large'),
         partNumber: 1,
       }),
     ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        largeFileId: first.fileId,
+        largeFileId: fileId(first.fileId),
         partNumber: 0,
       }),
     ).rejects.toMatchObject({ status: 400, code: 'bad_request' })
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
-        sourceFileId: 'missing-file',
-        largeFileId: first.fileId,
+        sourceFileId: fileId('missing-file'),
+        largeFileId: fileId(first.fileId),
         partNumber: 1,
       }),
     ).rejects.toMatchObject({ status: 404, code: 'file_not_present' })
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        largeFileId: first.fileId,
+        largeFileId: fileId(first.fileId),
         partNumber: 1,
         range: 'bytes=bad',
       }),
@@ -1540,7 +1550,7 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
     await expect(
       client.raw.copyPart(apiUrl, authToken, {
         sourceFileId: source.fileId,
-        largeFileId: first.fileId,
+        largeFileId: fileId(first.fileId),
         partNumber: 1,
         range: 'bytes=99-100',
       }),
@@ -1548,14 +1558,14 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
 
     const part = await client.raw.copyPart(apiUrl, authToken, {
       sourceFileId: source.fileId,
-      largeFileId: first.fileId,
+      largeFileId: fileId(first.fileId),
       partNumber: 1,
       range: 'bytes=0-1',
     })
     expect(part.contentLength).toBe(2)
     await client.raw.copyPart(apiUrl, authToken, {
       sourceFileId: source.fileId,
-      largeFileId: first.fileId,
+      largeFileId: fileId(first.fileId),
       partNumber: 2,
       range: 'bytes=2-3',
     })
@@ -1590,7 +1600,7 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
       keyName: 'list-edge-key',
     })
     const scoped = await authorizeWithKey(sim, writeKey)
-    await scoped.raw.getUploadUrl(
+    const upload = await scoped.raw.getUploadUrl(
       scoped.accountInfo.getApiUrl(),
       scoped.accountInfo.getAuthToken(),
       {
@@ -1602,13 +1612,26 @@ describe('B2Simulator coverage gate: JSON endpoint edges', () => {
       client.accountInfo.getApiUrl(),
       client.accountInfo.getAuthToken(),
       {
-        accountId: client.accountInfo.getAccountId(),
+        accountId: accountId(client.accountInfo.getAccountId()),
         maxKeyCount: 1,
       },
     )
     expect(keys.nextApplicationKeyId).toBeTruthy()
 
     await client.deleteKey(writeKey.applicationKeyId)
+    await expect(
+      scoped.raw.uploadFile(
+        upload.uploadUrl,
+        {
+          authorization: upload.authorizationToken,
+          fileName: 'after-delete.txt',
+          contentType: 'text/plain',
+          contentLength: 1,
+          contentSha1: 'do_not_verify',
+        },
+        new Uint8Array([1]) as BodyInit,
+      ),
+    ).rejects.toMatchObject({ status: 401, code: 'bad_auth_token' })
     expect(sim.invalidateUploadToken('not-a-real-token')).toBe(false)
   })
 
