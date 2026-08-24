@@ -17,6 +17,7 @@ import { EncryptionKey } from '../../src/types/encryption.ts'
 import type { FileVersion } from '../../src/types/file.ts'
 import type { LargeFileId } from '../../src/types/ids.ts'
 import type { UploadPartResponse } from '../../src/types/upload.ts'
+import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   appKey,
@@ -58,24 +59,15 @@ async function uploadRawPart(
   partNumber: number,
   data: Uint8Array,
 ): Promise<UploadPartResponse> {
-  const uploadUrl = await client.raw.getUploadPartUrl(
-    client.accountInfo.getApiUrl(),
-    client.accountInfo.getAuthToken(),
-    { fileId: largeFileId },
-  )
-  expect(uploadUrl.fileId).toBe(largeFileId)
-
   const contentSha1 = await sha1Hex(data)
-  const uploaded = await client.raw.uploadPart(
-    uploadUrl.uploadUrl,
-    {
-      authorization: uploadUrl.authorizationToken,
-      partNumber,
-      contentLength: data.byteLength,
-      contentSha1,
-    },
-    data as BodyInit,
-  )
+  const uploaded = await uploadPartWithFreshUrl(client.raw, client.accountInfo, largeFileId, {
+    fileName: largeFileId,
+    partNumber,
+    data: data as BodyInit,
+    contentLength: data.byteLength,
+    contentSha1,
+    retryResponseBodyFailures: true,
+  })
 
   expect(uploaded.fileId).toBe(largeFileId)
   expect(uploaded.partNumber).toBe(partNumber)
