@@ -18,6 +18,7 @@ pnpm lint            # Biome: lint + format check
 pnpm lint:fix        # Biome: auto-fix
 pnpm lint:docs       # ESLint JSDoc/TSDoc strict checks
 pnpm lint:spelling   # CSpell: comments + docs (config: cspell.config.yaml, dict: .cspell/project-words.txt)
+pnpm run audit:deps  # Dependency advisory audit (moderate+), with expiring GHSA allowlist
 pnpm typecheck       # tsc --noEmit (strict + exactOptionalPropertyTypes)
 pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs
