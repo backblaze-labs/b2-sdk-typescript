@@ -29,6 +29,10 @@ export interface GetUploadUrlResponse {
 /**
  * Headers required when uploading a file via `b2_upload_file`.
  * Sent as HTTP headers on the upload POST request.
+ *
+ * Pass `contentDisposition`, `contentLanguage`, `expires`, `cacheControl`, and
+ * `contentEncoding` as raw (unencoded) download-header values. The SDK
+ * percent-encodes them as B2 file-info metadata when uploading.
  */
 export interface UploadFileHeaders {
   /** Authorization token from `b2_get_upload_url`. */
