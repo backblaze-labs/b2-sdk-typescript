@@ -10,6 +10,9 @@ name: Integration (real B2)
 # Optional dedicated credentials for the trusted application-key lifecycle job:
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY
+# Optional Master Application Key credentials for Partner / Computer Backup coverage:
+#   B2_MASTER_KEY_ID
+#   B2_MASTER_KEY
 # Optional if the key-management credential cannot list or create buckets:
 #   B2_KEY_MANAGEMENT_BUCKET_ID
 # When configured, the key-management credential should be a dedicated contract key with
@@ -71,6 +74,13 @@ jobs:
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_MASTER_KEY_ID: ${{ secrets.B2_MASTER_KEY_ID }}
+          B2_MASTER_KEY: ${{ secrets.B2_MASTER_KEY }}
+          B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER: ${{ vars.B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER }}
+          B2_INTEGRATION_BACKUP_ACCOUNT_ID: ${{ vars.B2_INTEGRATION_BACKUP_ACCOUNT_ID }}
+          B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID: ${{ vars.B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID }}
+          B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID: ${{ vars.B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID }}
+          B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID_ACK: ${{ vars.B2_INTEGRATION_BACKUP_DISPOSABLE_COMPUTER_ID_ACK }}
           B2_INTEGRATION_REQUIRE_CREDENTIALS: '1'
         run: |
           if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then
