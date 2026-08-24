@@ -21,9 +21,28 @@ permissions:
 # isomorphism somewhere.
 
 jobs:
+  changes:
+    name: Detect changes
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changed-files.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: changed-files
+        uses: ./.github/actions/detect-changes
+        with:
+          event-name: ${{ github.event_name }}
+          base-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+
   typecheck-node:
     name: Typecheck (Node ${{ matrix.node-version }})
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -44,7 +63,8 @@ jobs:
 
   typecheck-bun:
     name: Typecheck (Bun)
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -66,7 +86,8 @@ jobs:
 
   smoke-examples:
     name: Smoke-run examples (B2Simulator)
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -132,7 +153,8 @@ jobs:
 
   typecheck-deno:
     name: Typecheck (Deno)
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,3 +190,52 @@ jobs:
             node-backup-cli/worker.ts \
             node-plugin-template/index.ts \
             node-plugin-template/storage.ts
+
+  examples-result:
+    name: Examples result
+    needs: [changes, typecheck-node, typecheck-bun, smoke-examples, typecheck-deno]
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        env:
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          TYPECHECK_NODE_RESULT: ${{ needs.typecheck-node.result }}
+          TYPECHECK_BUN_RESULT: ${{ needs.typecheck-bun.result }}
+          SMOKE_EXAMPLES_RESULT: ${{ needs.smoke-examples.result }}
+          TYPECHECK_DENO_RESULT: ${{ needs.typecheck-deno.result }}
+        run: |
+          set -euo pipefail
+
+          failed=false
+          require_success() {
+            if [ "$2" != "success" ]; then
+              echo "::error::$1 concluded '$2'; expected success."
+              failed=true
+            fi
+          }
+          require_skipped() {
+            if [ "$2" != "skipped" ]; then
+              echo "::error::$1 concluded '$2'; expected skipped."
+              failed=true
+            fi
+          }
+
+          require_success changes "$CHANGES_RESULT"
+
+          if [ "$CODE_CHANGED" = "true" ]; then
+            require_success typecheck-node "$TYPECHECK_NODE_RESULT"
+            require_success typecheck-bun "$TYPECHECK_BUN_RESULT"
+            require_success smoke-examples "$SMOKE_EXAMPLES_RESULT"
+            require_success typecheck-deno "$TYPECHECK_DENO_RESULT"
+          else
+            require_skipped typecheck-node "$TYPECHECK_NODE_RESULT"
+            require_skipped typecheck-bun "$TYPECHECK_BUN_RESULT"
+            require_skipped smoke-examples "$SMOKE_EXAMPLES_RESULT"
+            require_skipped typecheck-deno "$TYPECHECK_DENO_RESULT"
+          fi
+
+          if [ "$failed" = "true" ]; then
+            exit 1
+          fi
