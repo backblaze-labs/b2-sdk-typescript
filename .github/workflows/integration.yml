@@ -47,7 +47,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changed-files.outputs.code }}
@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     # Fork PRs can't access secrets; skip rather than fail loudly. Same-repo
     # PRs and pushes to main do run.
-    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]')
     strategy:
       fail-fast: false
       # Run matrix entries one at a time. The integration tests share a single
@@ -148,7 +148,7 @@ jobs:
     # Key-management secrets can create/list/delete account keys, so make them
     # available only to trusted code checked out from main. Pull-request
     # code and manually-dispatched non-main refs must never receive them.
-    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -189,7 +189,7 @@ jobs:
     # Run after the integration suite passes so a wire-format break shows up
     # as an integration failure (sharp signal) rather than a confusing
     # example-script failure.
-    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.event.pull_request.user.login != 'dependabot[bot]'
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]')
     strategy:
       fail-fast: false
       # Same reason as the integration job: real-examples uses a separate
@@ -227,7 +227,7 @@ jobs:
   integration-result:
     name: Integration result
     needs: [changes, integration, backup-live-contracts, key-lifecycle, real-examples]
-    if: ${{ always() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check job results

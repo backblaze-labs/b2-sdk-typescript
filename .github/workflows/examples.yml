@@ -23,7 +23,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changed-files.outputs.code }}
@@ -42,7 +42,7 @@ jobs:
   typecheck-node:
     name: Typecheck (Node ${{ matrix.node-version }})
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -64,7 +64,7 @@ jobs:
   typecheck-bun:
     name: Typecheck (Bun)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,7 +87,7 @@ jobs:
   smoke-examples:
     name: Smoke-run examples (B2Simulator)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -154,7 +154,7 @@ jobs:
   typecheck-deno:
     name: Typecheck (Deno)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -194,7 +194,7 @@ jobs:
   examples-result:
     name: Examples result
     needs: [changes, typecheck-node, typecheck-bun, smoke-examples, typecheck-deno]
-    if: ${{ always() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check job results

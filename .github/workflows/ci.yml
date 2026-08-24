@@ -16,7 +16,7 @@ permissions:
 jobs:
   changes:
     name: Detect changes
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changed-files.outputs.code }}
@@ -36,7 +36,7 @@ jobs:
   lint:
     name: Lint
     needs: changes
-    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,7 +77,7 @@ jobs:
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -116,7 +116,7 @@ jobs:
   test-slow:
     name: Test slow (multipart)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     # Slow tier is CPU/wall-clock-bound, not OS-specific. Multipart tests
     # exercise the simulator's SHA-1 path which behaves identically across
     # Linux/macOS/Windows. Run on Linux only (cheapest runner minutes) and
@@ -143,7 +143,7 @@ jobs:
   test-bun:
     name: Test (Bun)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -166,7 +166,7 @@ jobs:
   coverage:
     name: Coverage
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -215,7 +215,7 @@ jobs:
   test-browser:
     name: Test (Browser - ${{ matrix.browser }})
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -249,7 +249,7 @@ jobs:
   build:
     name: Build
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -283,7 +283,7 @@ jobs:
   ci-result:
     name: CI result
     needs: [changes, lint, test-fast, test-slow, test-bun, coverage, test-browser, build]
-    if: ${{ always() && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
