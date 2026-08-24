@@ -213,6 +213,7 @@ jobs:
 
   build:
     name: Build
+    if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -235,7 +236,7 @@ jobs:
           test -f dist/raw/index.js
           test -f dist/errors/index.js
           test -f dist/simulator/index.js
-      # PR consumer-package smoke for issue #102. This is the single maintained
+      # CI consumer-package smoke for issue #102. This is the single maintained
       # pack/install path: it packs the SDK, installs the tarball with npm into
       # an ephemeral consumer project, then imports/requires every public export
       # probe (root B2Client plus subpaths). That catches missing package files,
