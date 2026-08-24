@@ -1047,4 +1047,19 @@ describe('B2Simulator backup endpoints', () => {
     expect(result.status).toBe(400)
     expect(result.body.code).toBe('out_of_range')
   })
+
+  it('rejects POST for GET-only backup computer listing', async () => {
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const auth = await authorizePartner(sim)
+
+    const result = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/api/backup/v1/bz_list_computers',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { accountId: auth.accountId },
+    })
+
+    expect(result.status).toBe(405)
+    expect(result.body.code).toBe('method_not_allowed')
+  })
 })

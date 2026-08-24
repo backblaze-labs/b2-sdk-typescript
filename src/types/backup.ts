@@ -65,7 +65,8 @@ export interface DeleteComputerRequest {
 /**
  * Single result element returned by `bz_delete_computer`.
  *
- * The `bz_delete_computer` wire response is a JSON array of these objects.
+ * The SDK models the `bz_delete_computer` wire response as a JSON array of
+ * these objects and keeps the simulator aligned with that array-shaped schema.
  *
  * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
  */
@@ -80,6 +81,10 @@ export interface DeleteComputerResult {
 
 /**
  * Array-shaped wire response from `bz_delete_computer`.
+ *
+ * The apidocs response schema declares an array while its example shows a bare
+ * object; the raw client normalizes both wire shapes to this array type, and
+ * the simulator emits the array shape.
  *
  * @experimental Computer Backup API surface; shape may change as the Backup API docs evolve.
  */
