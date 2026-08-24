@@ -227,20 +227,21 @@ export interface ListGroupsRequest {
 /**
  * B2 storage statistics returned for partner groups and group members.
  *
- * The Partner API currently returns count fields as JSON strings even though
- * they are numeric-looking values. The SDK preserves those decimal strings
- * instead of normalizing them to numbers.
+ * Live `b2_list_groups` and `b2_list_group_members` responses return these
+ * count fields as quoted decimal strings, despite Partner docs listing them as
+ * integers. The SDK preserves the wire shape instead of normalizing them to
+ * numbers.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerB2Stats {
-  /** Total bytes stored as a decimal string. */
+  /** Total bytes stored as a quoted decimal string. */
   readonly b2BytesStoredCount: string
-  /** Total files stored as a decimal string. */
+  /** Total files stored as a quoted decimal string. */
   readonly b2FilesStoredCount: string
   /** ISO 8601 UTC date-time string for the daily B2 statistics snapshot, or null if unavailable. */
   readonly b2StatsAsOfTimestamp: string | null
-  /** Total bucket count as a decimal string. */
+  /** Total bucket count as a quoted decimal string. */
   readonly bucketCount: string
 }
 
