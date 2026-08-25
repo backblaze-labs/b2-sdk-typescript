@@ -100,7 +100,7 @@ async function withTemporaryBucket<T>(
   label: string,
   fn: (temporaryBucket: Bucket) => Promise<T>,
 ): Promise<T> {
-  const temporaryBucketName = makeBucketName(`docs-drift-${label}`)
+  const temporaryBucketName = makeBucketName(`dd-${label}`)
   const temporaryBucket = await setupStep(`create bucket ${temporaryBucketName}`, () =>
     client.createBucket({
       bucketName: temporaryBucketName,
@@ -325,7 +325,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     })
 
     it('returns lifecycleRules as an array from b2_update_bucket', async () => {
-      await withTemporaryBucket(client, 'lifecycle-update', async (temporaryBucket) => {
+      await withTemporaryBucket(client, 'lcu', async (temporaryBucket) => {
         const updated = await temporaryBucket.update({ lifecycleRules: docsDriftLifecycleRules() })
 
         expect(Array.isArray(updated.lifecycleRules)).toBe(true)
@@ -338,7 +338,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     })
 
     it('returns lifecycleRules as an array from b2_list_buckets', async () => {
-      await withTemporaryBucket(client, 'lifecycle-list', async (temporaryBucket) => {
+      await withTemporaryBucket(client, 'lcl', async (temporaryBucket) => {
         await temporaryBucket.update({ lifecycleRules: docsDriftLifecycleRules() })
 
         const listedBucket = await listSingleBucket(client, temporaryBucket)
@@ -352,7 +352,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     })
 
     it('returns replicationConfiguration wrapper from b2_update_bucket', async () => {
-      await withTemporaryBucket(client, 'replication-update', async (temporaryBucket) => {
+      await withTemporaryBucket(client, 'rpu', async (temporaryBucket) => {
         const updated = await temporaryBucket.update({
           bucketInfo: { docsDrift: 'replication-update' },
         })
@@ -362,7 +362,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     })
 
     it('returns replicationConfiguration wrapper from b2_list_buckets', async () => {
-      await withTemporaryBucket(client, 'replication-list', async (temporaryBucket) => {
+      await withTemporaryBucket(client, 'rpl', async (temporaryBucket) => {
         const listedBucket = await listSingleBucket(client, temporaryBucket)
 
         expectReplicationConfigurationWrapper(listedBucket.replicationConfiguration)
