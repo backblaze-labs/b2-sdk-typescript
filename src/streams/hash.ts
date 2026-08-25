@@ -1,5 +1,5 @@
 import { arrayBufferFor } from '../util/bytes.ts'
-import { hexEncode } from '../util/crypto.ts'
+import { hexEncode, sha256Hex as utilSha256Hex } from '../util/crypto.ts'
 
 /** Internal wrapper around a Node.js Hash instance. */
 type NodeHasher = { update(data: Uint8Array): void; digest(encoding: string): string }
@@ -470,16 +470,5 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
  * @returns The lowercase hex-encoded SHA-256 digest of the input.
  */
 export async function sha256Hex(data: Uint8Array): Promise<string> {
-  const factory = await getNodeCreateHash()
-  if (factory) {
-    const h = factory('sha256')
-    h.update(data)
-    return h.digest('hex')
-  }
-  // Copy subarray and SharedArrayBuffer-backed views so WebCrypto hashes
-  // exactly `data`'s visible bytes with a plain ArrayBuffer.
-  /* v8 ignore start -- WebCrypto fallback, only reachable when node:crypto is unavailable */
-  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBufferFor(data))
-  return hexEncode(new Uint8Array(hashBuffer))
-  /* v8 ignore stop */
+  return utilSha256Hex(data)
 }

@@ -68,8 +68,11 @@ export const BucketKeyOption = {
   S3: 's3',
 } as const
 
-/** Option flag returned on bucket and application key metadata. */
-export type BucketKeyOption = (typeof BucketKeyOption)[keyof typeof BucketKeyOption]
+/** Documented option flag returned on bucket and application key metadata. */
+export type KnownBucketKeyOption = (typeof BucketKeyOption)[keyof typeof BucketKeyOption]
+
+/** Option flag returned on bucket and application key metadata, open to future B2-added strings. */
+export type BucketKeyOption = KnownBucketKeyOption | (string & {})
 
 /** Minimum UTF-8 byte length for each bucketInfo key. */
 export const BUCKET_INFO_KEY_MIN_BYTES = 1

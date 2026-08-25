@@ -42,7 +42,13 @@ export interface SseB2Setting {
 export interface SseCKeyMaterial {
   /** Encryption algorithm. Always `'AES256'`. */
   readonly algorithm: EncryptionAlgorithm
-  /** Base64-encoded 256-bit encryption key provided by the customer. */
+  /**
+   * Base64-encoded 256-bit encryption key provided by the customer.
+   *
+   * This is secret key material. Native B2 SSE-C requests send it as an
+   * HTTP request header, so custom transports and middleware must redact
+   * request headers before logging them.
+   */
   readonly customerKey: string
   /** Base64-encoded MD5 digest of the customer-provided key, used for integrity verification. */
   readonly customerKeyMd5: string

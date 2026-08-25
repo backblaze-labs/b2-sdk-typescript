@@ -294,12 +294,65 @@ describe('ProgressTracker', () => {
       tracker.addBytes(20)
       tracker.completePart()
 
-      expect(listener).toHaveBeenCalledTimes(2)
+      expect(listener).toHaveBeenCalledTimes(3)
+      expect(listener).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ bytesTransferred: 30, partsCompleted: 0 }),
+      )
       expect(listener).toHaveBeenLastCalledWith(
         expect.objectContaining({ bytesTransferred: 30, partsCompleted: 1 }),
       )
       vi.advanceTimersByTime(100)
+      expect(listener).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
+  })
+
+  it('captures listener errors from delayed coalesced progress', () => {
+    vi.useFakeTimers()
+    const err = new Error('listener failed')
+    const listener = vi.fn((event) => {
+      if (event.bytesTransferred === 30) throw err
+    })
+    let now = 1000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    try {
+      const tracker = new ProgressTracker(listener, 100, null, { minIntervalMs: 100 })
+
+      tracker.addBytes(10)
+      now = 1050
+      tracker.addBytes(20)
+
+      now = 1100
+      expect(() => vi.advanceTimersByTime(50)).not.toThrow()
       expect(listener).toHaveBeenCalledTimes(2)
+      expect(() => tracker.addBytes(1)).toThrow(err)
+    } finally {
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
+  })
+
+  it('dispose clears pending coalesced progress', () => {
+    vi.useFakeTimers()
+    const listener = vi.fn()
+    let now = 1000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    try {
+      const tracker = new ProgressTracker(listener, 100, null, { minIntervalMs: 100 })
+
+      tracker.addBytes(10)
+      now = 1050
+      tracker.addBytes(20)
+      tracker.dispose()
+
+      now = 1100
+      vi.advanceTimersByTime(50)
+      expect(listener).toHaveBeenCalledTimes(1)
     } finally {
       vi.restoreAllMocks()
       vi.useRealTimers()

@@ -300,6 +300,59 @@ describe('LocalFolder', () => {
     )
   })
 
+  it.skipIf(isWindows)('skips followed symlinks that resolve outside the root', async () => {
+    const outsideDir = await mkdtemp(join(tmpdir(), 'localfolder-outside-'))
+    try {
+      await mkdir(join(outsideDir, 'payload-dir'))
+      await writeFile(join(outsideDir, 'payload-dir', 'secret.txt'), 'secret')
+      await writeFile(join(outsideDir, 'secret.txt'), 'secret')
+      await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+      await symlink(join(outsideDir, 'secret.txt'), join(tmpDir, 'file-link.txt'), 'file')
+      await symlink(join(outsideDir, 'payload-dir'), join(tmpDir, 'dir-link'), 'dir')
+      const skips: string[] = []
+
+      const folder = new LocalFolder(tmpDir)
+      const entries = await collect<LocalSyncPath>(
+        folder.scan({
+          localSymlinks: 'follow',
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['keep.txt'])
+      expect(skips.sort()).toEqual(['local-symlink:dir-link', 'local-symlink:file-link.txt'])
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('deduplicates repeated followed directory targets', async () => {
+    await mkdir(join(tmpDir, 'target-dir'))
+    await writeFile(join(tmpDir, 'target-dir', 'nested.txt'), 'nested')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'link-a'), 'dir')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'link-b'), 'dir')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    const paths = entries.map((entry) => entry.relativePath)
+    const symlinkPaths = paths.filter((path) => path.startsWith('link-'))
+    expect(paths).toContain('target-dir/nested.txt')
+    expect(symlinkPaths).toHaveLength(1)
+    expect(skips).toHaveLength(1)
+    expect(skips[0]).toMatch(/^local-symlink-loop:link-[ab]$/)
+  })
+
   it.skipIf(isWindows)('skips followed symlinks that would loop through an ancestor', async () => {
     await mkdir(join(tmpDir, 'dir'))
     await writeFile(join(tmpDir, 'dir', 'file.txt'), 'content')

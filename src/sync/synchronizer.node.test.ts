@@ -230,6 +230,36 @@ describe('synchronize large local files', () => {
 })
 
 describe('synchronize download safety', () => {
+  it.skipIf(isWindows)('skips local destination symlinks before delete-mode actions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-download-symlink-skip-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const targetPath = join(destRoot, 'target.txt')
+      const linkPath = join(destRoot, 'linked.txt')
+      await writeFile(targetPath, 'keep')
+      await symlink(targetPath, linkPath, 'file')
+
+      const bucket = makeMockDownloadBucket()
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('target.txt', 4)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'delete', localSymlinks: 'follow' },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(false)
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'skip', reason: 'local-symlink', path: 'linked.txt' }),
+      )
+      expect(bucket.downloadById).not.toHaveBeenCalled()
+      expect(await realpath(linkPath)).toBe(await realpath(targetPath))
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('keeps the existing destination when the response body errors mid-stream', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-fail-'))
     try {
@@ -1271,6 +1301,49 @@ describe('synchronize upload safety', () => {
       expect(events.some((event) => event.type === 'error')).toBe(false)
       expect(bucket.upload).toHaveBeenCalledTimes(1)
       expect(uploaded).toBe('content')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('uploads followed child symlinks from a local source', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-follow-symlink-'))
+    try {
+      const sourceRoot = join(root, 'source')
+      await mkdir(sourceRoot)
+      await mkdir(join(sourceRoot, 'target-dir'))
+      await writeFile(join(sourceRoot, 'target-dir', 'nested.txt'), 'nested')
+      await writeFile(join(sourceRoot, 'target.txt'), 'content')
+      await symlink(join(sourceRoot, 'target.txt'), join(sourceRoot, 'linked.txt'), 'file')
+      await symlink(join(sourceRoot, 'target-dir'), join(sourceRoot, 'linked-dir'), 'dir')
+
+      const uploaded = new Map<string, string>()
+      const bucket = {
+        upload: vi
+          .fn()
+          .mockImplementation(async (options: { fileName: string; source: FileSourceLike }) => {
+            uploaded.set(
+              options.fileName,
+              new TextDecoder().decode(await options.source.toArrayBuffer()),
+            )
+          }),
+      } as unknown as Bucket
+
+      const config: SynchronizerUpConfig = {
+        source: new LocalFolder(sourceRoot),
+        dest: makeB2MemoryFolder([]),
+        options: { compareMode: 'size', keepMode: 'no-delete', localSymlinks: 'follow' },
+        bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(false)
+      expect(bucket.upload).toHaveBeenCalledTimes(4)
+      expect(uploaded.get('linked-dir/nested.txt')).toBe('nested')
+      expect(uploaded.get('linked.txt')).toBe('content')
+      expect(uploaded.get('target-dir/nested.txt')).toBe('nested')
+      expect(uploaded.get('target.txt')).toBe('content')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

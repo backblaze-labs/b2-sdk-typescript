@@ -18,6 +18,7 @@ import {
   EventType,
   FileAction,
   groupId,
+  type KnownBucketKeyOption,
   KnownBucketResponseType,
   LegalHoldValue,
   MetadataDirective,
@@ -217,12 +218,22 @@ describe('enum value typing (compile-time)', () => {
 
   it('BucketKeyOption.S3 is assignable to bucket and key option arrays', () => {
     const v: BucketKeyOption = BucketKeyOption.S3
+    const known: KnownBucketKeyOption = BucketKeyOption.S3
     const bucketOptions: BucketInfo['options'] = [BucketKeyOption.S3]
     const keyOptions: ApplicationKey['options'] = [BucketKeyOption.S3]
 
     expect(v).toBe('s3')
+    expect(known).toBe('s3')
     expect(bucketOptions).toEqual(['s3'])
     expect(keyOptions).toEqual(['s3'])
+  })
+
+  it('bucket and key option arrays accept future B2 option strings', () => {
+    const bucketOptions: BucketInfo['options'] = ['future-option']
+    const keyOptions: ApplicationKey['options'] = ['future-option']
+
+    expect(bucketOptions).toEqual(['future-option'])
+    expect(keyOptions).toEqual(['future-option'])
   })
 
   it('response-only and list-only bucket types use separate contracts', () => {

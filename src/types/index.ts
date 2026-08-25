@@ -38,6 +38,7 @@ export type {
   CorsRule,
   CreateBucketRequest,
   DeleteBucketRequest,
+  KnownBucketKeyOption,
   LifecycleRule,
   ListBucketsRequest,
   ListBucketsResponse,

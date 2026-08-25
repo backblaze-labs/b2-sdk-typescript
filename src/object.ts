@@ -99,6 +99,12 @@ export interface DownloadCallOptions {
    * will NOT emit a `completePart()` event.
    */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * The final completion callback is always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
 }
 
 /**
@@ -106,7 +112,10 @@ export interface DownloadCallOptions {
  * Same shape as {@link DownloadCallOptions} minus `method` (always
  * HEAD) and `onProgress` (no body to track).
  */
-export type HeadCallOptions = Omit<DownloadCallOptions, 'method' | 'onProgress'>
+export type HeadCallOptions = Omit<
+  DownloadCallOptions,
+  'method' | 'onProgress' | 'progressIntervalMillis'
+>
 
 /**
  * Handle to a specific file (by name) within a B2 bucket.

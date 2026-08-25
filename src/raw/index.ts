@@ -1465,7 +1465,11 @@ function applyEncryptionHeaders(
   }
 }
 
-/** SSE-C decryption parameters supplied to downloads of files uploaded with customer-managed keys. */
+/**
+ * SSE-C decryption parameters supplied to downloads of files uploaded with customer-managed keys.
+ * `customerKey` is secret key material sent as a request header; custom transports must redact
+ * request headers before logging them.
+ */
 export type SseCDownloadKey = SseCKeyMaterial
 
 /**

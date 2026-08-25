@@ -50,6 +50,8 @@ export class ProgressTracker {
   private lastEmitTime: number | null = null
   /** Timer scheduled for a coalesced byte-only emission. */
   private pendingEmitTimer: ReturnType<typeof setTimeout> | undefined
+  /** Listener error captured from a detached timer callback. */
+  private listenerError: unknown
 
   /**
    * Creates a new ProgressTracker.
@@ -73,21 +75,23 @@ export class ProgressTracker {
    * @param count - The number of additional bytes that were transferred.
    */
   addBytes(count: number): void {
+    this.throwPendingListenerError()
     this.bytesTransferred += count
     this.emitThrottled()
   }
 
   /** Record that a multipart part has completed and notify the listener. */
   completePart(): void {
+    this.throwPendingListenerError()
+    this.flushPendingEmit()
     this.partsCompleted++
     this.emitNow()
   }
 
-  /** Emit the current progress snapshot immediately if one is pending. */
-  flush(): void {
-    if (this.pendingEmitTimer !== undefined) {
-      this.emitNow()
-    }
+  /** Cancel any pending coalesced progress emission. */
+  dispose(): void {
+    this.clearPendingEmit()
+    this.listenerError = undefined
   }
 
   private emitThrottled(): void {
@@ -108,9 +112,19 @@ export class ProgressTracker {
     const delay = Math.max(0, this.minIntervalMs - (now - this.lastEmitTime))
     this.pendingEmitTimer = setTimeout(() => {
       this.pendingEmitTimer = undefined
-      this.emitNow()
+      try {
+        this.emitNow()
+      } catch (err) {
+        this.listenerError = err
+      }
     }, delay)
     ;(this.pendingEmitTimer as { unref?: () => void }).unref?.()
+  }
+
+  private flushPendingEmit(): void {
+    if (this.pendingEmitTimer !== undefined) {
+      this.emitNow()
+    }
   }
 
   private clearPendingEmit(): void {
@@ -123,6 +137,13 @@ export class ProgressTracker {
     this.clearPendingEmit()
     this.lastEmitTime = now
     this.emit()
+  }
+
+  private throwPendingListenerError(): void {
+    if (this.listenerError === undefined) return
+    const err = this.listenerError
+    this.listenerError = undefined
+    throw err
   }
 
   /** Emit the current progress snapshot to the listener, if one is registered. */

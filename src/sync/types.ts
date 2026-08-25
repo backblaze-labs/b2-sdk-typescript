@@ -102,7 +102,9 @@ export interface SyncScanOptions extends SyncFilterOptions {
   readonly maxScanEntries?: number
   /**
    * How the built-in local scanner handles child symlinks. Defaults to `'skip'`.
-   * Symlinked roots are still followed because the configured root is the scan boundary.
+   * `'follow'` only follows targets that resolve inside the configured root and skips repeated
+   * followed directory identities. Symlinked roots are still followed because the configured root
+   * is the scan boundary.
    */
   readonly localSymlinks?: LocalSymlinkPolicy
 }
@@ -335,6 +337,8 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly maxScanEntries?: number
   /**
    * How built-in local scans handle child symlinks. Defaults to `'skip'`.
+   * `'follow'` only follows targets that resolve inside the local root; B2-to-local syncs still
+   * skip child symlinks during destination scans so download/delete actions never target them.
    * Symlinked roots are controlled separately by the sync root safety checks.
    */
   readonly localSymlinks?: LocalSymlinkPolicy

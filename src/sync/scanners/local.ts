@@ -42,6 +42,7 @@ type LocalNodeDeps = {
   relative(from: string, to: string): string
   realpath(path: string): Promise<string>
   resolve(...paths: string[]): string
+  isAbsolute(path: string): boolean
   sep: string
 }
 
@@ -78,22 +79,27 @@ export class LocalFolder implements SyncFolder {
     validateSyncFilters(options)
     const nodeDeps = await loadLocalNodeDeps()
     const root = nodeDeps.resolve(this.root)
+    let scanRoot = root
     const collected: LocalSyncPath[] = []
     const activeDirectoryIds = new Set<string>()
+    const followedDirectoryIds = new Set<string>()
     try {
-      const rootStats = await nodeDeps.stat(root)
+      scanRoot = await nodeDeps.realpath(root)
+      const rootStats = await nodeDeps.stat(scanRoot)
       if (rootStats.isDirectory()) activeDirectoryIds.add(localNodeIdentity(rootStats))
     } catch {
       // Root read errors are reported by walk(), preserving the existing diagnostic shape.
     }
     await this.walk(
-      root,
-      root,
+      scanRoot,
+      scanRoot,
+      '',
       collected,
       options,
       scanEntryLimit(options),
       nodeDeps,
       activeDirectoryIds,
+      followedDirectoryIds,
     )
     collected.sort((a, b) => compareSyncRelativePaths(a.relativePath, b.relativePath))
     for (const entry of collected) {
@@ -106,32 +112,31 @@ export class LocalFolder implements SyncFolder {
    * Recursively collects files from {@link dir} into {@link out}.
    * @param root - Resolved scan root used for relative path calculation.
    * @param dir - Absolute path of the directory to scan.
+   * @param dirRel - Sync-relative path represented by {@link dir}.
    * @param out - Accumulator array that receives discovered file entries.
    * @param options - Optional scan controls.
    * @param maxScanEntries - Maximum number of entries to retain before failing.
    * @param nodeDeps - Lazy-loaded Node filesystem and path helpers.
    * @param activeDirectoryIds - Directory identities in the current recursion stack.
+   * @param followedDirectoryIds - Followed symlink directory identities already traversed.
    */
   private async walk(
     root: string,
     dir: string,
+    dirRel: string,
     out: LocalSyncPath[],
     options: SyncScanOptions,
     maxScanEntries: number,
     nodeDeps: LocalNodeDeps,
     activeDirectoryIds: Set<string>,
+    followedDirectoryIds: Set<string>,
   ): Promise<void> {
     throwIfScanAborted(options)
     let entries: LocalDirent[]
     try {
       entries = await nodeDeps.readdir(dir, { withFileTypes: true })
     } catch (err) {
-      const error = this.emitScanError(
-        options,
-        relativePathFromRoot(root, dir, nodeDeps),
-        'directory',
-        err,
-      )
+      const error = this.emitScanError(options, dirRel, 'directory', err)
       if (dir === root) throw error
       return
     }
@@ -139,7 +144,7 @@ export class LocalFolder implements SyncFolder {
     for (const entry of entries) {
       throwIfScanAborted(options)
       const fullPath = nodeDeps.join(dir, entry.name)
-      const rel = relativePathFromRoot(root, fullPath, nodeDeps)
+      const rel = joinSyncRelativePath(dirRel, entry.name)
       if (
         isDownloadStagingDirectorySegment(rel) &&
         entry.isDirectory() &&
@@ -181,10 +186,11 @@ export class LocalFolder implements SyncFolder {
             maxScanEntries,
             nodeDeps,
             activeDirectoryIds,
+            followedDirectoryIds,
           )
         }
       } else if (entry.isFile()) {
-        await this.collectFile(root, fullPath, rel, out, options, maxScanEntries, nodeDeps)
+        await this.collectFile(fullPath, rel, out, options, maxScanEntries, nodeDeps)
       } else if (entry.isSymbolicLink()) {
         await this.handleSymlink(
           root,
@@ -195,6 +201,7 @@ export class LocalFolder implements SyncFolder {
           maxScanEntries,
           nodeDeps,
           activeDirectoryIds,
+          followedDirectoryIds,
         )
       }
     }
@@ -209,6 +216,7 @@ export class LocalFolder implements SyncFolder {
     maxScanEntries: number,
     nodeDeps: LocalNodeDeps,
     activeDirectoryIds: Set<string>,
+    followedDirectoryIds: Set<string>,
     knownStats?: LocalStats,
   ): Promise<void> {
     let stats = knownStats
@@ -239,14 +247,23 @@ export class LocalFolder implements SyncFolder {
 
     activeDirectoryIds.add(identity)
     try {
-      await this.walk(root, dir, out, options, maxScanEntries, nodeDeps, activeDirectoryIds)
+      await this.walk(
+        root,
+        dir,
+        rel,
+        out,
+        options,
+        maxScanEntries,
+        nodeDeps,
+        activeDirectoryIds,
+        followedDirectoryIds,
+      )
     } finally {
       activeDirectoryIds.delete(identity)
     }
   }
 
   private async collectFile(
-    root: string,
     fullPath: string,
     rel: string,
     out: LocalSyncPath[],
@@ -274,7 +291,7 @@ export class LocalFolder implements SyncFolder {
         /* v8 ignore stop */
       } catch (err) {
         /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
-        this.emitScanError(options, relativePathFromRoot(root, fullPath, nodeDeps), 'file', err)
+        this.emitScanError(options, rel, 'file', err)
         return
       }
     }
@@ -303,8 +320,9 @@ export class LocalFolder implements SyncFolder {
     maxScanEntries: number,
     nodeDeps: LocalNodeDeps,
     activeDirectoryIds: Set<string>,
+    followedDirectoryIds: Set<string>,
   ): Promise<void> {
-    if ((options.localSymlinks ?? 'skip') === 'skip') {
+    if ((options.localSymlinks ?? 'skip') === 'skip' || options.requireLocalSafePaths === true) {
       emitScannerSkip(options, {
         type: 'skip',
         path: rel,
@@ -315,25 +333,51 @@ export class LocalFolder implements SyncFolder {
       return
     }
 
+    let targetPath: string
     let targetStats: LocalStats
     try {
-      targetStats = await nodeDeps.stat(fullPath)
+      targetPath = await nodeDeps.realpath(fullPath)
+      targetStats = await nodeDeps.stat(targetPath)
     } catch (err) {
       this.emitScanError(options, rel, 'file', err)
       return
     }
 
+    if (!isPathInsideRoot(root, targetPath, nodeDeps)) {
+      emitScannerSkip(options, {
+        type: 'skip',
+        path: rel,
+        size: 0,
+        reason: 'local-symlink',
+        message: `Skipped local path ${JSON.stringify(rel)}: symlink target is outside the sync root`,
+      })
+      return
+    }
+
     if (targetStats.isDirectory()) {
       if (directoryMayContainSyncPaths(rel, options)) {
+        const identity = localNodeIdentity(targetStats)
+        if (followedDirectoryIds.has(identity)) {
+          emitScannerSkip(options, {
+            type: 'skip',
+            path: rel,
+            size: 0,
+            reason: 'local-symlink-loop',
+            message: `Skipped local path ${JSON.stringify(rel)}: symlink target was already visited`,
+          })
+          return
+        }
+        followedDirectoryIds.add(identity)
         await this.walkDirectory(
           root,
-          fullPath,
+          targetPath,
           rel,
           out,
           options,
           maxScanEntries,
           nodeDeps,
           activeDirectoryIds,
+          followedDirectoryIds,
           targetStats,
         )
       }
@@ -341,23 +385,7 @@ export class LocalFolder implements SyncFolder {
     }
 
     if (targetStats.isFile()) {
-      let targetPath: string
-      try {
-        targetPath = await nodeDeps.realpath(fullPath)
-      } catch (err) {
-        this.emitScanError(options, rel, 'file', err)
-        return
-      }
-      await this.collectFile(
-        root,
-        targetPath,
-        rel,
-        out,
-        options,
-        maxScanEntries,
-        nodeDeps,
-        targetStats,
-      )
+      await this.collectFile(targetPath, rel, out, options, maxScanEntries, nodeDeps, targetStats)
       return
     }
 
@@ -397,6 +425,7 @@ async function loadLocalNodeDeps(): Promise<LocalNodeDeps> {
     relative: path.relative,
     realpath: fsPromises.realpath,
     resolve: path.resolve,
+    isAbsolute: path.isAbsolute,
     sep: path.sep,
   }
 }
@@ -482,8 +511,16 @@ function normalizePathSegments(segments: readonly string[], separator: '/' | '\\
   return out.join(separator)
 }
 
-function relativePathFromRoot(root: string, path: string, nodeDeps: LocalNodeDeps): string {
-  return nodeDeps.relative(root, path).split(nodeDeps.sep).join('/')
+function joinSyncRelativePath(parent: string, child: string): string {
+  return parent === '' ? child : `${parent}/${child}`
+}
+
+function isPathInsideRoot(root: string, path: string, nodeDeps: LocalNodeDeps): boolean {
+  const rel = nodeDeps.relative(root, path)
+  return (
+    rel === '' ||
+    (!rel.startsWith(`..${nodeDeps.sep}`) && rel !== '..' && !nodeDeps.isAbsolute(rel))
+  )
 }
 
 function localNodeIdentity(stats: LocalStats): string {
