@@ -125,7 +125,7 @@ export {
   type RawRequestOptions,
   type SseCDownloadKey,
 } from './raw/index.ts'
-export { IncrementalSha1, sha1Hex } from './streams/hash.ts'
+export { IncrementalSha1, IncrementalSha256, sha1Hex, sha256Hex } from './streams/hash.ts'
 export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
 export type { ContentSource, FileSourcePath } from './streams/source.ts'
 export {
@@ -147,6 +147,7 @@ export {
   BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_RESERVED_PREFIX,
   BUCKET_INFO_VALUES_MAX_BYTES,
+  BucketKeyOption,
   BucketRetentionMode,
   BucketType,
   CORS_ALLOWED_OPERATIONS,

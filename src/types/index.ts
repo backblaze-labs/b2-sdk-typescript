@@ -55,6 +55,7 @@ export {
   BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_RESERVED_PREFIX,
   BUCKET_INFO_VALUES_MAX_BYTES,
+  BucketKeyOption,
   BucketRetentionMode,
   BucketType,
   CORS_ALLOWED_OPERATIONS,
@@ -88,6 +89,7 @@ export type {
   PublicEncryptionSetting,
   SseB2Setting,
   SseCCustomerSetting,
+  SseCKeyMaterial,
   SseCPublicSetting,
 } from './encryption.ts'
 // `EncryptionAlgorithm` and `EncryptionMode` are forwarded as both type and value.

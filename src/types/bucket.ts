@@ -58,6 +58,19 @@ export type BucketListType = BucketResponseType
  */
 export type BucketTypesFilter = readonly ['all'] | readonly BucketListType[]
 
+/**
+ * Named constants for option flags returned on buckets and application keys.
+ *
+ * B2 currently documents only the S3-compatible API option.
+ */
+export const BucketKeyOption = {
+  /** Enables the S3-compatible API surface for the bucket or key. */
+  S3: 's3',
+} as const
+
+/** Option flag returned on bucket and application key metadata. */
+export type BucketKeyOption = (typeof BucketKeyOption)[keyof typeof BucketKeyOption]
+
 /** Minimum UTF-8 byte length for each bucketInfo key. */
 export const BUCKET_INFO_KEY_MIN_BYTES = 1
 /** Maximum UTF-8 byte length for each bucketInfo key. */
@@ -300,8 +313,8 @@ export interface BucketInfo {
   }
   /** Lifecycle rules configured on this bucket. */
   readonly lifecycleRules: readonly LifecycleRule[]
-  /** Set of options enabled on this bucket (e.g., `'s3'`). */
-  readonly options: readonly string[]
+  /** Set of options enabled on this bucket (e.g., {@link BucketKeyOption.S3}). */
+  readonly options: readonly BucketKeyOption[]
   /** Monotonically increasing revision number, incremented on each bucket update. */
   readonly revision: number
   /** Cross-region replication configuration, filtered by caller authorization. */

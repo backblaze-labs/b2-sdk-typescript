@@ -233,6 +233,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
+    ...(options.localSymlinks !== undefined ? { localSymlinks: options.localSymlinks } : {}),
     ...(direction === 'b2-to-local' ? { requireLocalSafePaths: true } : {}),
     onError: (event) => {
       scanHadError = true

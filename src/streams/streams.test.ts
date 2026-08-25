@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EncryptionKey } from '../types/encryption.ts'
 import { readStreamChunkWithSignal } from './collect.ts'
-import { IncrementalSha1, sha1Hex } from './hash.ts'
+import { IncrementalSha1, IncrementalSha256, sha1Hex, sha256Hex } from './hash.ts'
 import { ProgressTracker } from './progress.ts'
 import {
   BlobSource,
@@ -16,6 +16,8 @@ import {
 // Well-known SHA-1 digests for verification.
 const SHA1_EMPTY = 'da39a3ee5e6b4b0d3255bfef95601890afd80709'
 const SHA1_HELLO = 'aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d'
+const SHA256_EMPTY = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+const SHA256_HELLO = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
 
 // ---------------------------------------------------------------------------
 // collect.ts
@@ -136,6 +138,44 @@ describe('sha1Hex', () => {
   })
 })
 
+describe('IncrementalSha256', () => {
+  it('produces the correct digest after a single update', async () => {
+    const sha = new IncrementalSha256()
+    await sha.update(new TextEncoder().encode('hello'))
+    expect(await sha.digest()).toBe(SHA256_HELLO)
+  })
+
+  it('produces the correct digest after multiple updates', async () => {
+    const sha = new IncrementalSha256()
+    await sha.update(new TextEncoder().encode('hel'))
+    await sha.update(new TextEncoder().encode('lo'))
+    expect(await sha.digest()).toBe(SHA256_HELLO)
+  })
+
+  it('tracks bytesProcessed correctly', async () => {
+    const sha = new IncrementalSha256()
+    expect(sha.bytesProcessed).toBe(0)
+
+    await sha.update(new Uint8Array(8))
+    expect(sha.bytesProcessed).toBe(8)
+
+    await sha.update(new Uint8Array(4))
+    expect(sha.bytesProcessed).toBe(12)
+  })
+})
+
+describe('sha256Hex', () => {
+  it('returns the correct SHA-256 for an empty buffer', async () => {
+    const result = await sha256Hex(new Uint8Array(0))
+    expect(result).toBe(SHA256_EMPTY)
+  })
+
+  it('returns the correct SHA-256 for "hello"', async () => {
+    const result = await sha256Hex(new TextEncoder().encode('hello'))
+    expect(result).toBe(SHA256_HELLO)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // progress.ts
 // ---------------------------------------------------------------------------
@@ -151,7 +191,7 @@ describe('ProgressTracker', () => {
 
   it('addBytes accumulates and emits progress events', () => {
     const listener = vi.fn()
-    const tracker = new ProgressTracker(listener, 500, null)
+    const tracker = new ProgressTracker(listener, 500, null, { minIntervalMs: 0 })
 
     tracker.addBytes(100)
     expect(listener).toHaveBeenCalledTimes(1)
@@ -197,7 +237,7 @@ describe('ProgressTracker', () => {
     let now = 1000
     vi.spyOn(Date, 'now').mockImplementation(() => now)
 
-    const tracker = new ProgressTracker(listener, null, null)
+    const tracker = new ProgressTracker(listener, null, null, { minIntervalMs: 0 })
 
     now = 1050
     tracker.addBytes(1)
@@ -208,6 +248,62 @@ describe('ProgressTracker', () => {
     expect(listener).toHaveBeenCalledWith(expect.objectContaining({ elapsedMs: 200 }))
 
     vi.restoreAllMocks()
+  })
+
+  it('coalesces byte-only progress events within the minimum interval', () => {
+    vi.useFakeTimers()
+    const listener = vi.fn()
+    let now = 1000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    try {
+      const tracker = new ProgressTracker(listener, 100, null, { minIntervalMs: 100 })
+
+      tracker.addBytes(10)
+      expect(listener).toHaveBeenCalledTimes(1)
+
+      now = 1050
+      tracker.addBytes(20)
+      tracker.addBytes(5)
+      expect(listener).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(49)
+      expect(listener).toHaveBeenCalledTimes(1)
+
+      now = 1100
+      vi.advanceTimersByTime(1)
+      expect(listener).toHaveBeenCalledTimes(2)
+      expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ bytesTransferred: 35 }))
+    } finally {
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
+  })
+
+  it('completePart flushes pending byte progress immediately', () => {
+    vi.useFakeTimers()
+    const listener = vi.fn()
+    let now = 1000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+
+    try {
+      const tracker = new ProgressTracker(listener, 100, 1, { minIntervalMs: 100 })
+
+      tracker.addBytes(10)
+      now = 1050
+      tracker.addBytes(20)
+      tracker.completePart()
+
+      expect(listener).toHaveBeenCalledTimes(2)
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({ bytesTransferred: 30, partsCompleted: 1 }),
+      )
+      vi.advanceTimersByTime(100)
+      expect(listener).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
   })
 
   it('passes totalBytes and totalParts through to events', () => {
@@ -913,6 +1009,17 @@ describe('EncryptionKey', () => {
     const key = EncryptionKey.fromBase64('precomputed-key', 'precomputed-md5')
     expect(key.customerKey).toBe('precomputed-key')
     expect(key.customerKeyMd5).toBe('precomputed-md5')
+  })
+
+  it('generate creates a random 256-bit SSE-C key', async () => {
+    const first = await EncryptionKey.generate()
+    const second = await EncryptionKey.generate()
+
+    expect(first.mode).toBe('SSE-C')
+    expect(first.algorithm).toBe('AES256')
+    expect(first.customerKey).toHaveLength(44)
+    expect(first.customerKeyMd5).toBeTruthy()
+    expect(first.customerKey).not.toBe(second.customerKey)
   })
 
   it('toJSON redacts the customer key and MD5', async () => {
