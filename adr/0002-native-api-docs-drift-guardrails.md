@@ -1,8 +1,8 @@
 # ADR 0002: Native API docs drift guardrails
 
-Status: Accepted for guardrails; live/API-schema validation pending
+Status: Accepted
 
-Date: 2026-08-24
+Date: 2026-08-25
 
 Issue: [#108](https://github.com/backblaze-labs/b2-sdk-typescript/issues/108)
 
@@ -10,8 +10,8 @@ Issue: [#108](https://github.com/backblaze-labs/b2-sdk-typescript/issues/108)
 
 The SDK drift audit found generated Backblaze native API documentation shapes that
 conflict with the SDK's current wire model. This ADR records guardrails for those
-candidate docs-generation issues; it does **not** record completed live API or
-authoritative schema validation.
+candidate docs-generation issues and the live API evidence for each tracked
+shape.
 
 - `b2_copy_file` is rendered as returning an array, while the SDK expects one
   copied file-version object.
@@ -23,16 +23,13 @@ authoritative schema validation.
   update requests, and `{ isClientAuthorizedToRead, value }` for bucket
   responses.
 
-The native API docs repository named in the issue,
-`backblaze-labs/b2-native-api-docs`, was rechecked with
-`gh repo view backblaze-labs/b2-native-api-docs` on 2026-08-24 and still did not
-resolve for the authenticated user. The findings therefore remain tracked here
-until they can be moved or reported upstream.
-
-The local PR validation run did not set `B2_APPLICATION_KEY_ID` or
-`B2_APPLICATION_KEY`, so the live-contract tests were skipped. Issue #108 should
-remain open until a credentialed live run or authoritative Backblaze schema
-result is recorded for each tracked shape.
+On 2026-08-25, after an earlier 2026-08-24 `gh repo view` check, the native API
+docs repository named in the issue, `backblaze-labs/b2-native-api-docs`, was
+checked again with both `gh repo view backblaze-labs/b2-native-api-docs` and
+`gh search repos "b2 native api docs owner:backblaze-labs"`; it still did not
+resolve for the authenticated user, and no matching repository was found. The
+findings remain tracked here, and upstream handoff remains blocked until that
+repository is accessible.
 
 ## Decision
 
@@ -40,7 +37,7 @@ Do not change SDK types from generated native API docs alone. Keep the SDK's
 current contracts unless they are contradicted by live API validation or a more
 authoritative Backblaze source schema.
 
-Add pending-validation guardrails for the three tracked shapes in the gated live
+Keep live integration guardrails for the three tracked shapes in the gated live
 integration suite:
 
 - `tests/integration/live-contracts.test.ts` asserts that live `b2_copy_file`
@@ -52,8 +49,21 @@ integration suite:
   the direct `ReplicationConfiguration` object documented by the Backblaze Cloud
   Replication native API guide.
 
-Validation source and result for all three shapes: pending. Run the following
-with live credentials before closing issue #108:
+Validation source and result for all three shapes: confirmed by the same-repo
+`Integration (real B2)` pull request workflow for PR
+[#271](https://github.com/backblaze-labs/b2-sdk-typescript/pull/271), run
+[#32792497383](https://github.com/backblaze-labs/b2-sdk-typescript/actions/runs/32792497383).
+Both credentialed matrix jobs passed:
+
+- [Node 22.18.0](https://github.com/backblaze-labs/b2-sdk-typescript/actions/runs/32792497383/job/97636785069)
+  passed all five `native API docs drift guardrails` tests, including
+  `b2_copy_file`, both `lifecycleRules` checks, and both
+  `replicationConfiguration` checks.
+- [Node 24](https://github.com/backblaze-labs/b2-sdk-typescript/actions/runs/32792497383/job/97636785154)
+  passed the same live guardrail tests.
+
+Run the following with live credentials when revalidating future native API docs
+drift:
 
 ```sh
 B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... \
@@ -63,7 +73,7 @@ B2_APPLICATION_KEY_ID=... B2_APPLICATION_KEY=... \
 ## Resolved questions
 
 1. Generated docs are not sufficient evidence for a breaking SDK type change.
-2. Live contract tests are the pending-validation and regression guard for
+2. Live contract tests are the recorded validation and regression guard for
    docs-generation drift when B2 credentials are available; they skip normally
    without credentials.
 3. The SDK should preserve the intentional request/response distinction for
