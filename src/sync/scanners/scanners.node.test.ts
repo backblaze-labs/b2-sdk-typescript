@@ -300,6 +300,29 @@ describe('LocalFolder', () => {
     )
   })
 
+  it.skipIf(isWindows)('reports followed symlink target failures as symlink errors', async () => {
+    await symlink(join(tmpDir, 'missing.txt'), join(tmpDir, 'broken-link.txt'), 'file')
+    const errors: unknown[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onError(event) {
+          errors.push(event)
+        },
+      }),
+    )
+
+    expect(entries).toEqual([])
+    expect(errors[0]).toMatchObject({
+      type: 'error',
+      path: 'broken-link.txt',
+      message: 'failed to scan local symlink: ENOENT',
+    })
+    expect(JSON.stringify(errors[0])).not.toContain(tmpDir)
+  })
+
   it.skipIf(isWindows)('skips followed symlinks that resolve outside the root', async () => {
     const outsideDir = await mkdtemp(join(tmpdir(), 'localfolder-outside-'))
     try {

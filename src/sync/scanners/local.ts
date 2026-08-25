@@ -343,7 +343,7 @@ export class LocalFolder implements SyncFolder {
       targetPath = await nodeDeps.realpath(fullPath)
       targetStats = await nodeDeps.stat(targetPath)
     } catch (err) {
-      this.emitScanError(options, rel, 'file', err)
+      this.emitScanError(options, rel, 'symlink', err)
       return
     }
 
@@ -405,7 +405,7 @@ export class LocalFolder implements SyncFolder {
   private emitScanError(
     options: SyncScanOptions,
     path: string,
-    kind: 'directory' | 'file',
+    kind: 'directory' | 'file' | 'symlink',
     err: unknown,
   ): Error {
     const event: SyncErrorEvent = {
