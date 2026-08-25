@@ -369,6 +369,7 @@ function instrumentProgress(
   let released = false
 
   function releaseReader(): void {
+    /* v8 ignore next -- the wrapper releases exactly once from mutually exclusive stream paths */
     if (released) return
     released = true
     reader.releaseLock()

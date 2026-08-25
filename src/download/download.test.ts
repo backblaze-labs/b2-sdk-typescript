@@ -650,6 +650,108 @@ describe('extractDownloadHeaders (via downloadById)', () => {
     ])
   })
 
+  it('uses fallback metadata values when B2 identity headers are absent', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return byteResponse(200, new TextEncoder().encode('x'), {
+          [DownloadHeaderName.ContentType]: 'text/plain',
+        })
+      },
+    } as unknown as RawClient
+    const progress: number[] = []
+
+    const result = await downloadById(raw, mockAccountInfo(), {
+      fileId: 'missing_headers' as FileId,
+      progressIntervalMillis: 0,
+      onProgress: (event) => {
+        progress.push(event.bytesTransferred)
+      },
+    })
+
+    await expect(readStream(result.body)).resolves.toEqual(new TextEncoder().encode('x'))
+    expect(result.headers.contentLength).toBe(0)
+    expect(result.headers.fileId).toBe('')
+    expect(result.headers.fileName).toBe('')
+    expect(result.headers.uploadTimestamp).toBe(0)
+    expect(progress).toContain(1)
+  })
+
+  it('records malformed SSE-C and unauthorized-to-read metadata markers', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          ...byteResponse(200, new Uint8Array(0), {
+            [DownloadHeaderName.ContentLength]: '0',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'bad_sse_c_header',
+            [DownloadHeaderName.FileName]: encodeFileName('bad-sse-c.txt'),
+            [DownloadHeaderName.UploadTimestamp]: '1',
+            [DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm]: 'AES512',
+            [DownloadHeaderName.ServerSideEncryptionCustomerKeyMd5]: 'md5',
+            [DownloadHeaderName.FileRetentionRetainUntilTimestamp]: '9'.repeat(400),
+            [DownloadHeaderName.ClientUnauthorizedToRead]: `${DownloadClientUnauthorizedToReadMarker.FileLegalHold}, X-Bz-Unknown-Secret`,
+          }),
+          body: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'bad_sse_c_header' as FileId,
+    })
+
+    expect(result.headers.serverSideEncryption).toBeUndefined()
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: { mode: null, retainUntilTimestamp: null },
+    })
+    expect(result.headers.legalHold).toEqual({ isClientAuthorizedToRead: false, value: null })
+    expect(result.headers.clientUnauthorizedToRead).toEqual([
+      DownloadClientUnauthorizedToReadMarker.FileLegalHold,
+    ])
+    expect(result.headers.headerParseIssues).toEqual([
+      {
+        headerName: DownloadHeaderName.ClientUnauthorizedToRead,
+        value: 'X-Bz-Unknown-Secret',
+      },
+      {
+        headerName: DownloadHeaderName.ServerSideEncryptionCustomerAlgorithm,
+        value: 'AES512',
+      },
+      {
+        headerName: DownloadHeaderName.FileRetentionRetainUntilTimestamp,
+        value: '9'.repeat(400),
+      },
+    ])
+  })
+
+  it('accepts retention mode without a retain-until timestamp', async () => {
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          ...byteResponse(200, new Uint8Array(0), {
+            [DownloadHeaderName.ContentLength]: '0',
+            [DownloadHeaderName.ContentSha1]: 'none',
+            [DownloadHeaderName.FileId]: 'retention_mode_only',
+            [DownloadHeaderName.FileName]: encodeFileName('retention-mode-only.txt'),
+            [DownloadHeaderName.UploadTimestamp]: '1',
+            [DownloadHeaderName.FileRetentionMode]: RetentionMode.Compliance,
+          }),
+          body: null,
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await headById(raw, mockAccountInfo(), {
+      fileId: 'retention_mode_only' as FileId,
+    })
+
+    expect(result.headers.fileRetention).toEqual({
+      isClientAuthorizedToRead: true,
+      value: { mode: RetentionMode.Compliance, retainUntilTimestamp: null },
+    })
+  })
+
   it('round-trips simulator SSE-B2 and Object Lock download headers', async () => {
     const { client: simClient } = makeClient()
     await simClient.authorize()

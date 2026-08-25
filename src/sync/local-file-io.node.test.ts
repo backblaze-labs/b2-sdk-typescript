@@ -14,10 +14,12 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import * as nodePath from 'node:path'
 import { basename, dirname, join, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import {
+  createDownloadStagingDirectory,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
   isManagedDownloadStagingRoot,
@@ -690,6 +692,45 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('treats non-file staging markers as unmanaged', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-marker-dir-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const entryDirectory = join(managedDirectory, 'entry.download')
+      await mkdir(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), { recursive: true })
+      await mkdir(join(entryDirectory, DOWNLOAD_STAGING_MARKER_NAME), { recursive: true })
+
+      await expect(isManagedDownloadStagingRoot(managedDirectory)).resolves.toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats non-directory staging candidates as unmanaged', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-marker-file-'))
+    try {
+      const candidate = join(root, 'candidate')
+      await writeFile(candidate, 'not a directory')
+
+      await expect(isManagedDownloadStagingRoot(candidate)).resolves.toBe(false)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('propagates staging mkdir errors other than an existing directory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-stage-mkdir-'))
+    try {
+      const missingRoot = join(root, 'missing', 'root')
+
+      await expect(
+        createDownloadStagingDirectory(missingRoot, nodePath, () => 'uuid', stat),
+      ).rejects.toThrow()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isWindows)('publishes nested destinations when fd anchoring is disabled', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-no-anchor-'))
     try {
@@ -922,6 +963,36 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it('keeps entries with non-file nested markers during cleanup', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-marker-dir-'))
+    try {
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const directory = join(managedDirectory, 'marker-directory.download')
+      const payload = join(directory, 'payload.bin')
+      await mkdir(join(directory, DOWNLOAD_STAGING_MARKER_NAME), { recursive: true })
+      await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+      await writeFile(payload, 'not managed')
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      await utimes(payload, old, old)
+      await utimes(directory, old, old)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        {
+          expectedBytes: 3,
+          idleTimeoutMillis: 1000,
+        },
+      )
+
+      await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
+      await expect(readFile(payload, 'utf8')).resolves.toBe('not managed')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isWindows)('sanitizes staging cleanup warning entry names and paths', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-warning-'))
     const originalEmitWarning = process.emitWarning
@@ -966,6 +1037,57 @@ describe('writeLocalStreamInsideRoot', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it.skipIf(isWindows)(
+    'reports plural staging cleanup warnings with truncated entry names',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-plural-warning-'))
+      const originalEmitWarning = process.emitWarning
+      const warnings: string[] = []
+      const longName = `${'x'.repeat(96)}.download`
+      try {
+        process.emitWarning = ((warning: string | Error) => {
+          warnings.push(warning instanceof Error ? warning.message : warning)
+        }) as typeof process.emitWarning
+
+        const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+        const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+        for (const name of [longName, 'second-warning.download']) {
+          const directory = join(managedDirectory, name)
+          const marker = join(directory, DOWNLOAD_STAGING_MARKER_NAME)
+          const payload = join(directory, 'payload.bin')
+          await mkdir(directory, { recursive: true, mode: 0o700 })
+          await writeFile(marker, '')
+          await writeFile(payload, 'stale')
+          await utimes(marker, old, old)
+          await utimes(payload, old, old)
+          await utimes(directory, old, old)
+          await chmod(directory, 0o500)
+        }
+
+        await writeLocalStreamInsideRoot(
+          root,
+          'file.txt',
+          streamFromBytes(textEncoder.encode('abc')),
+          {
+            expectedBytes: 3,
+            idleTimeoutMillis: 1000,
+          },
+        )
+
+        expect(warnings.join(' ')).toContain('entries')
+        expect(warnings.join(' ')).toContain(`${'x'.repeat(80)}...`)
+      } finally {
+        process.emitWarning = originalEmitWarning
+        await chmod(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME, longName), 0o700).catch(() => {})
+        await chmod(
+          join(root, DOWNLOAD_STAGING_DIRECTORY_NAME, 'second-warning.download'),
+          0o700,
+        ).catch(() => {})
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
 })
 
 describe('deleteLocalFileInsideRoot', () => {

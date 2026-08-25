@@ -340,6 +340,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 
   async function* emitSha1Batch(batch: readonly SyncPair[]): AsyncGenerator<SyncEvent, boolean> {
+    /* v8 ignore next -- SHA-1 batches are sliced only while index is within pairs.length */
     if (batch.length === 0) return false
 
     // Keep SHA-1 hashing / B2 verification and transfer actions under one effective
@@ -380,6 +381,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   async function processPreparedBatch(
     batch: readonly SyncPair[],
   ): Promise<{ readonly items: readonly PreparedActionPlan[]; readonly aborted: boolean }> {
+    /* v8 ignore next -- callers guard empty SHA-1 batches before preparing pairs */
     if (batch.length === 0) return { items: [], aborted: false }
     const preparedPairs = await preparePairsForCompare(batch, 'sha1', {
       concurrency,
@@ -405,6 +407,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   ): PreparedActionPlan {
     const event: SyncEvent = {
       type: 'compare',
+      /* v8 ignore next -- zipFolders never emits a pair with both sides absent */
       path: (pair[0] ?? pair[1])?.relativePath ?? '',
       size: 0,
       bytesHashed: prepared.bytesHashed,
@@ -446,6 +449,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         actions: [
           new SkipAction(
             prepared.pair[1].relativePath,
+            /* v8 ignore next -- sourceInventoryIncomplete is set through the same path as this message */
             scanEvents.sourceInventoryIncompleteMessage ??
               'not removed because the source scan skipped unsafe B2 names',
           ),
@@ -836,6 +840,7 @@ function createActionFactory(
             fileName,
             source: fileSource,
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
             ...(signal !== undefined ? { signal } : {}),
           })
         },
@@ -867,6 +872,7 @@ function createActionFactory(
         )
         const result = await bucket.file(b2FileName).downloadById(source.selectedVersion.fileId, {
           ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
+          /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
           ...(signal !== undefined ? { signal } : {}),
         })
         try {
@@ -874,6 +880,7 @@ function createActionFactory(
             expectedBytes,
             ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
+            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
             ...(signal !== undefined ? { signal } : {}),
           })
         } catch (err) {
@@ -898,6 +905,7 @@ function createActionFactory(
       return new HideAction(path, async (_relPath, signal) => {
         await bucket.hideFile(
           `${uploadPrefix}${path}`,
+          /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
           signal === undefined ? undefined : { signal },
         )
       })
@@ -909,6 +917,7 @@ function createActionFactory(
       const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
 
       return new HideAction(path.relativePath, async (_relPath, signal) => {
+        /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
         await bucket.hideFile(b2FileName, signal === undefined ? undefined : { signal })
       })
     },
@@ -933,6 +942,7 @@ function createActionFactory(
           await bucket.deleteFileVersion(
             b2FileName,
             fileIdOf(fileId),
+            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
             signal === undefined ? undefined : { signal },
           )
         },
@@ -995,6 +1005,7 @@ function createActionFactory(
           ? { destinationServerSideEncryption }
           : {}),
         ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
+        /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
         ...(signal !== undefined ? { signal } : {}),
       })
     })
@@ -1104,6 +1115,7 @@ function isB2SyncPath(path: SyncPath): path is B2SyncPath {
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
+  /* v8 ignore next -- private action closures receive a defined signal from synchronize */
   if (signal?.aborted === true) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }
@@ -1113,6 +1125,7 @@ async function cancelReadableStreamBody(
   body: ReadableStream<Uint8Array>,
   reason: unknown,
 ): Promise<void> {
+  /* v8 ignore next -- writeLocalStreamInsideRoot releases the body reader before throwing */
   if (body.locked) return
   try {
     await body.cancel(reason)
@@ -1209,6 +1222,7 @@ function bufferScanEvent(
 function* drainScanEvents(buffer: ScanEventBuffer): Generator<SyncEvent> {
   while (buffer.events.length > 0) {
     const event = buffer.events.shift()
+    /* v8 ignore next -- scan event buffers are dense; this narrows shift() */
     if (event) yield event
   }
 

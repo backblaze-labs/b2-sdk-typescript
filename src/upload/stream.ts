@@ -288,6 +288,7 @@ export function createWriteStream(
   async function waitForInflightPartsToSettle(
     timeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
   ): Promise<void> {
+    /* v8 ignore next -- only called after a large file exists, which requires at least one part */
     if (inflight.length === 0) return
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
@@ -298,16 +299,19 @@ export function createWriteStream(
         }),
       ])
     } finally {
+      /* v8 ignore next -- setTimeout is assigned synchronously when the race promise is built */
       if (timeout !== undefined) clearTimeout(timeout)
     }
   }
 
   async function dispatchPart(): Promise<void> {
+    /* v8 ignore next -- callers guard on pendingBytes before dispatching the final part */
     if (pending.length === 0) return
     await acquirePartSlot()
     let data: Uint8Array
     if (pending.length === 1) {
       const head = pending[0]
+      /* v8 ignore next -- pending is never sparse; this narrows noUncheckedIndexedAccess */
       if (!head) {
         sem.release()
         return
@@ -480,6 +484,7 @@ function carveExact(chunks: Uint8Array[], size: number): Uint8Array {
   let written = 0
   while (written < size && chunks.length > 0) {
     const head = chunks[0]
+    /* v8 ignore next -- chunks is never sparse; this narrows noUncheckedIndexedAccess */
     if (!head) break
     const need = size - written
     if (head.byteLength <= need) {
@@ -499,6 +504,7 @@ function waitForAbort(signal: AbortSignal): {
   readonly promise: Promise<unknown>
   dispose(): void
 } {
+  /* v8 ignore next -- callers check abort before entering the start/close wait race */
   if (signal.aborted) {
     return {
       promise: Promise.resolve(abortReason(signal)),
@@ -515,6 +521,7 @@ function waitForAbort(signal: AbortSignal): {
   return {
     promise,
     dispose() {
+      /* v8 ignore next -- listener is assigned synchronously with promise construction */
       if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
     },
   }

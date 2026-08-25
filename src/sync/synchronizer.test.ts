@@ -14,6 +14,7 @@ import {
 } from './local-file-io.ts'
 import { compareSyncRelativePaths } from './path-order.ts'
 import { B2Folder } from './scanners/b2.ts'
+import { LocalFolder } from './scanners/local.ts'
 import type {
   B2SyncFolder,
   SynchronizerConfig,
@@ -467,6 +468,32 @@ describe('synchronize', () => {
 
       const events = await collectEvents(config)
       expect(events.map((event) => event.path)).toEqual(['docs/keep.txt', 'docs/keep.txt'])
+    })
+
+    it('passes maxScanEntries through to both scanners', async () => {
+      const seenLimits: Array<number | undefined> = []
+      const limitedFolder = (type: 'local' | 'b2'): SyncFolder => ({
+        type,
+        appliesScanSorting: true,
+        async *scan(options: SyncScanOptions = {}) {
+          seenLimits.push(options.maxScanEntries)
+          yield* [] as SyncPath[]
+        },
+      })
+      const config: SynchronizerUpConfig = {
+        source: { ...limitedFolder('local'), type: 'local', root: '/tmp' },
+        dest: { ...limitedFolder('b2'), type: 'b2' },
+        options: {
+          compareMode: 'modtime',
+          keepMode: 'no-delete',
+          maxScanEntries: 7,
+        },
+        bucket: makeMockBucket() as unknown as Bucket,
+        prefix: '',
+      }
+
+      await expect(collectEvents(config)).resolves.toEqual([])
+      expect(seenLimits).toEqual([7, 7])
     })
 
     it('blocks excluded output from scanners that claim to apply filters', async () => {
@@ -2319,6 +2346,89 @@ describe('synchronize', () => {
         const events = await collectEvents(config)
         expect(events.some((event) => event.type === 'download-done')).toBe(false)
         expect(events.some((event) => event.type === 'error')).toBe(true)
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('reports a missing local destination root before downloading', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-missing-root-parent-'))
+      const root = join(parent, 'missing-root')
+      try {
+        const data = new Uint8Array([9, 8, 7])
+        const mockBucket = makeMockBucket({ 'fid_nested/remote.txt': data })
+        const sourceFile = makeB2SyncPath('nested/remote.txt', 2000, data.byteLength)
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: new LocalFolder(root),
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: '',
+            message: expect.stringContaining('failed to scan local directory: ENOENT'),
+          }),
+        )
+        expect(mockBucket.downloadById).not.toHaveBeenCalled()
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('rejects a local destination root that is a file', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const parent = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-file-root-'))
+      const root = join(parent, 'root-file')
+      try {
+        await writeFile(root, 'not a directory')
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+          dest: new LocalFolder(root),
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: makeMockBucket() as unknown as Bucket,
+        }
+
+        await expect(collectEvents(config)).rejects.toThrow('Local sync root is not a directory')
+      } finally {
+        await rm(parent, { recursive: true, force: true })
+      }
+    })
+
+    it.skipIf(!isNode)('reports invalid B2 content lengths before downloading', async () => {
+      const { tmpdir } = await import('node:os')
+      const { mkdtemp, rm } = await import('node:fs/promises')
+      const { join } = await import('node:path')
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-invalid-length-'))
+      try {
+        const mockBucket = makeMockBucket()
+        const sourceFile = makeB2SyncPath('negative-length.txt', 2000, -1)
+        const config: SynchronizerDownConfig = {
+          source: { ...makeMemoryFolder([sourceFile], 'b2'), type: 'b2' },
+          dest: { ...makeMemoryFolder([], 'local'), type: 'local', root },
+          options: { compareMode: 'modtime', keepMode: 'no-delete' },
+          bucket: mockBucket as unknown as Bucket,
+        }
+
+        const events = await collectEvents(config)
+
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'error',
+            path: 'negative-length.txt',
+            message: 'B2 contentLength must be a non-negative safe integer',
+          }),
+        )
+        expect(mockBucket.downloadById).not.toHaveBeenCalled()
       } finally {
         await rm(root, { recursive: true, force: true })
       }
@@ -5873,6 +5983,45 @@ describe('synchronize', () => {
       const events = await collectEvents(config)
       const deletes = events.filter((e) => e.type === 'delete-local')
       expect(deletes).toHaveLength(1)
+    })
+  })
+
+  describe('B2 source inventory skips', () => {
+    it('keeps B2-to-B2 orphan removal blocked after skipped source names', async () => {
+      const source: SyncFolder = {
+        type: 'b2',
+        appliesScanSorting: true,
+        async *scan(options: SyncScanOptions = {}) {
+          options.onSkip?.({
+            type: 'skip',
+            path: 'unsafe:name.txt',
+            size: 0,
+            reason: 'unsafe-name',
+            message: 'unsafe B2 name',
+          })
+          yield* [] as SyncPath[]
+        },
+      }
+      const orphan = makeB2SyncPath('orphan.txt', 1000, 1)
+      const mockBucket = makeMockBucket()
+      const config = {
+        source,
+        dest: { ...makeMemoryFolder([orphan], 'b2'), type: 'b2' },
+        options: { compareMode: 'modtime', keepMode: 'delete' },
+        bucket: mockBucket as unknown as Bucket,
+      } satisfies SynchronizerConfig & { readonly bucket: Bucket }
+
+      const events = await collectEvents(config)
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'skip',
+          path: 'orphan.txt',
+          message: 'not removed because the source scan skipped unsafe B2 names',
+        }),
+      )
+      expect(mockBucket.deleteFileVersion).not.toHaveBeenCalled()
+      expect(mockBucket.hideFile).not.toHaveBeenCalled()
     })
   })
 

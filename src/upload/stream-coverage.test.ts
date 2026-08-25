@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AccountInfo } from '../auth/account-info.ts'
 import type { Bucket } from '../bucket.ts'
 import { B2Client } from '../client.ts'
 import { FinishLargeFileResponseBodyError } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { deferred, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
+import type { FileVersion } from '../types/file.ts'
+import type { BucketId, LargeFileId } from '../types/ids.ts'
+import { createWriteStream } from './stream.ts'
 
 /**
  * Branch-coverage tests for `createWriteStream` in `upload/stream.ts`. The
@@ -402,6 +407,81 @@ describe('createWriteStream branch coverage', () => {
     expect(seenRetry.get('finish')).toEqual(expect.objectContaining(retry))
   })
 
+  it('omits retry options when createWriteStream is called directly without retry', async () => {
+    const progress: number[] = []
+    const accountInfo = makeDirectStreamAccountInfo()
+    const fileVersion = makeDirectStreamFileVersion('direct-no-retry.bin', 3)
+    const raw = {
+      startLargeFile: vi.fn(async (_apiUrl, _authToken, _request, options) => {
+        expect(options).toEqual({ signal: expect.any(AbortSignal) })
+        return { fileId: 'large-direct-no-retry' as LargeFileId }
+      }),
+      getUploadPartUrl: vi.fn(async (_apiUrl, _authToken, _request, options) => {
+        expect(options).toEqual({ signal: expect.any(AbortSignal), retry: { maxRetries: 0 } })
+        return { uploadUrl: 'https://upload.example.test/part', authorizationToken: 'part-token' }
+      }),
+      uploadPart: vi.fn(async (_uploadUrl, request, _body, options) => {
+        expect(options).toEqual({ signal: expect.any(AbortSignal) })
+        return { contentSha1: request.contentSha1 }
+      }),
+      finishLargeFile: vi.fn(async (_apiUrl, _authToken, request, options) => {
+        expect(request.partSha1Array).toHaveLength(2)
+        expect(options).toEqual({ signal: expect.any(AbortSignal) })
+        return fileVersion
+      }),
+    } as unknown as RawClient
+
+    const { writable, done } = createWriteStream(raw, accountInfo, {
+      bucketId: 'bucket-direct' as BucketId,
+      fileName: 'direct-no-retry.bin',
+      partSize: 2,
+      concurrency: 1,
+      progressIntervalMillis: 0,
+      onProgress: (event) => {
+        progress.push(event.bytesTransferred)
+      },
+    })
+    const writer = writable.getWriter()
+    await writer.write(new Uint8Array([1, 2]))
+    await writer.write(new Uint8Array([3]))
+    await writer.close()
+
+    await expect(done).resolves.toBe(fileVersion)
+    expect(raw.startLargeFile).toHaveBeenCalledTimes(1)
+    expect(raw.getUploadPartUrl).toHaveBeenCalledTimes(2)
+    expect(raw.uploadPart).toHaveBeenCalledTimes(2)
+    expect(raw.finishLargeFile).toHaveBeenCalledTimes(1)
+    expect(progress.at(-1)).toBe(3)
+  })
+
+  it('surfaces startLargeFile failures before the stream abort signal is tripped', async () => {
+    const startError = new Error('start failed before abort')
+    const accountInfo = makeDirectStreamAccountInfo()
+    const raw = {
+      startLargeFile: vi.fn(async () => {
+        throw startError
+      }),
+      getUploadPartUrl: vi.fn(),
+      uploadPart: vi.fn(),
+      finishLargeFile: vi.fn(),
+      cancelLargeFile: vi.fn(),
+    } as unknown as RawClient
+
+    const { writable, done } = createWriteStream(raw, accountInfo, {
+      bucketId: 'bucket-start-fail' as BucketId,
+      fileName: 'start-fail.bin',
+      partSize: 2,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(new Uint8Array([1, 2]))
+
+    await expect(writer.close()).rejects.toBe(startError)
+    await expect(done).rejects.toBe(startError)
+    expect(raw.getUploadPartUrl).not.toHaveBeenCalled()
+    expect(raw.cancelLargeFile).not.toHaveBeenCalled()
+  })
+
   it('passes abort signal to stalled finish and uses independent cleanup signal', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
@@ -504,6 +584,25 @@ describe('createWriteStream branch coverage', () => {
     await writer.abort(new Error('stop in-flight part'))
     expect(observedSignal?.aborted).toBe(true)
     await expect(done).rejects.toThrow('stop in-flight part')
+  })
+
+  it('passes cleanup callbacks when aborting a started write stream', async () => {
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
+    const onCleanupFailure = vi.fn()
+    const { writable, done } = bucket.file('abort-with-cleanup-callback.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      onCleanupFailure,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    await writer.abort(new Error('abort with cleanup callback'))
+
+    await expect(done).rejects.toThrow('abort with cleanup callback')
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(onCleanupFailure).not.toHaveBeenCalled()
   })
 
   it('waits for in-flight write-stream parts before cancelling on abort', async () => {
@@ -962,4 +1061,24 @@ function rejectOnAbort<T>(signal: AbortSignal | undefined, message: string): Pro
     }
     signal?.addEventListener('abort', rejectWithAbort, { once: true })
   })
+}
+
+function makeDirectStreamAccountInfo(): AccountInfo {
+  return {
+    getApiUrl: () => 'https://api.example.test',
+    getAuthToken: () => 'auth-token',
+    getAbsoluteMinimumPartSize: () => 1,
+    getRecommendedPartSize: () => 2,
+    checkoutPartUploadUrl: () => null,
+    returnPartUploadUrl: vi.fn(),
+    evictPartUploadUrl: vi.fn(),
+  } as unknown as AccountInfo
+}
+
+function makeDirectStreamFileVersion(fileName: string, contentLength: number): FileVersion {
+  return {
+    fileName,
+    contentLength,
+    fileId: 'finished-direct-stream',
+  } as unknown as FileVersion
 }

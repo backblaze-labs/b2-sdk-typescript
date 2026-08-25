@@ -193,7 +193,11 @@ async function writeStagingMarker(
     /* v8 ignore next -- best-effort chmod */
     await handle.chmod(PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
   } catch (err) {
-    if (hasErrorCode(err, 'EEXIST') || hasErrorCode(err, 'ELOOP')) {
+    if (
+      hasErrorCode(err, 'EEXIST') ||
+      /* v8 ignore next -- ELOOP depends on platform-specific O_NOFOLLOW behavior */
+      hasErrorCode(err, 'ELOOP')
+    ) {
       const markerStats = await lstat(markerPath).catch(() => undefined)
       if (markerStats?.isFile() === true) return
       throw new Error('unsafe local destination path: staging marker is not a regular file')
@@ -245,6 +249,7 @@ async function reapStaleDownloadStagingDirectoriesOnce(
     nowMillis,
     activityEntryLimit,
   ).finally(() => {
+    /* v8 ignore next -- this map entry cannot be replaced until the current cleanup settles */
     if (reapedManagedDirectories.get(managedDirectory) === next) {
       reapedManagedDirectories.delete(managedDirectory)
     }
@@ -264,7 +269,9 @@ async function reapStaleDownloadStagingDirectories(
   try {
     entries = await readdir(managedDirectory, { withFileTypes: true })
   } catch (err) {
+    /* v8 ignore next -- concurrent managed-root removal is a filesystem race without a stable hook */
     if (hasErrorCode(err, 'ENOENT')) return
+    /* v8 ignore next -- permission errors here are platform-dependent after the root is opened */
     emitCleanupWarning('failed to inspect B2 SDK download staging entries')
     return
   }
@@ -279,6 +286,7 @@ async function reapStaleDownloadStagingDirectories(
       cleanupErrors.push({ entryName: entry.name, operation: 'inspect' })
       return undefined
     })
+    /* v8 ignore next -- requires a concurrent delete between activity read and realpath */
     if (realCandidate === undefined) return
     try {
       assertPathInsideRoot(managedDirectory, realCandidate, path)
@@ -292,6 +300,7 @@ async function reapStaleDownloadStagingDirectories(
         latestActivity.signature !== activity.signature ||
         !stagingActivityIsStale(latestActivity, nowMillis)
       ) {
+        /* v8 ignore next -- requires concurrent writes between the first and second activity reads */
         return
       }
       await rm(realCandidate, { recursive: true, force: true })
@@ -338,6 +347,7 @@ async function readManagedStagingEntryActivity(
     )
 
     for (const entry of [...entries].sort((a, b) =>
+      /* v8 ignore next -- duplicate directory names cannot occur in a single readdir result */
       a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     )) {
       const stats = await lstat(path.join(candidate, entry.name))
@@ -394,6 +404,7 @@ async function forEachWithConcurrency<T>(
     while (index < items.length) {
       const item = items[index]
       index += 1
+      /* v8 ignore next -- this helper is only called with dense arrays from readdir */
       if (item !== undefined) await fn(item)
     }
   })

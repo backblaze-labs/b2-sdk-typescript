@@ -50,6 +50,7 @@ export class ReauthCoalescer<T> {
     return raceWithAbort(inflight.promise, signal).finally(() => {
       inflight.waiters -= 1
       if (inflight.waiters === 0 && !inflight.settled && !inflight.controller.signal.aborted) {
+        /* v8 ignore next -- waiters can only leave an unsettled refresh by aborting their signal */
         inflight.controller.abort(signal?.aborted === true ? abortReason(signal) : undefined)
       }
     })
@@ -59,6 +60,7 @@ export class ReauthCoalescer<T> {
     const controller = new AbortController()
     const promise = raceWithAbort(this.#refresh(controller.signal), controller.signal).finally(
       () => {
+        /* v8 ignore next -- defensive: callers cannot start a replacement while this is current */
         if (this.#inflight?.controller !== controller) return
         this.#inflight.settled = true
         this.#inflight = null
