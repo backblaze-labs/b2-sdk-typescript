@@ -99,6 +99,12 @@ export interface UploadLargeFileOptions extends UploadRetryOptions, CleanupFailu
   readonly concurrency?: number
   /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * Part-completion progress callbacks are always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
   /** Signal to abort the upload. Triggers cancellation of the large file. */
   readonly signal?: AbortSignal
   /**
@@ -293,6 +299,7 @@ export async function uploadLargeFile(
   let largeFileId: LargeFileId | undefined
   let preUploaded: ReadonlyMap<number, string> = new Map()
   let createdLargeFile = false
+  let tracker: ProgressTracker | undefined
   const abortScope = createAbortScope(options.signal)
   const startFreshLargeFile = async (): Promise<void> => {
     if (abortScope.signal.aborted && !options.source.canSlice) {
@@ -368,7 +375,12 @@ export async function uploadLargeFile(
     }
 
     const partSha1s: string[] = new Array(parts.length)
-    const tracker = new ProgressTracker(options.onProgress, totalSize, parts.length)
+    const uploadTracker = new ProgressTracker(options.onProgress, totalSize, parts.length, {
+      ...(options.progressIntervalMillis !== undefined
+        ? { minIntervalMs: options.progressIntervalMillis }
+        : {}),
+    })
+    tracker = uploadTracker
     const sem = new Semaphore(concurrency)
 
     // Non-sliceable sources can't be read in parallel — there's only one
@@ -384,7 +396,7 @@ export async function uploadLargeFile(
         activeLargeFileId,
         parts,
         partSha1s,
-        tracker,
+        uploadTracker,
         abortScope.signal,
       )
       return await finishLargeFileWithAbortReconciliation(raw, accountInfo, {
@@ -423,8 +435,8 @@ export async function uploadLargeFile(
             contentSha1: serverSha1,
           })
           partSha1s[part.partNumber - 1] = serverSha1
-          tracker.addBytes(data.byteLength)
-          tracker.completePart()
+          uploadTracker.addBytes(data.byteLength)
+          uploadTracker.completePart()
           return
         }
 
@@ -446,8 +458,8 @@ export async function uploadLargeFile(
         })
 
         partSha1s[part.partNumber - 1] = result.contentSha1
-        tracker.addBytes(data.byteLength)
-        tracker.completePart()
+        uploadTracker.addBytes(data.byteLength)
+        uploadTracker.completePart()
       } catch (err) {
         abortScope.abort(err)
         throw err
@@ -480,6 +492,7 @@ export async function uploadLargeFile(
       createdLargeFile,
     )
   } finally {
+    tracker?.dispose()
     abortScope.dispose()
   }
 }

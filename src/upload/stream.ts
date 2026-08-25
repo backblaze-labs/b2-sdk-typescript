@@ -52,6 +52,12 @@ export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFai
   readonly concurrency?: number
   /** Callback invoked with upload progress events. `totalBytes` is `null` (size unknown). */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * Part-completion progress callbacks are always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
   /** Aborts the upload and cancels the unfinished large file. */
   readonly signal?: AbortSignal
 }
@@ -94,7 +100,11 @@ export function createWriteStream(
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
-  const tracker = new ProgressTracker(options.onProgress, null, null)
+  const tracker = new ProgressTracker(options.onProgress, null, null, {
+    ...(options.progressIntervalMillis !== undefined
+      ? { minIntervalMs: options.progressIntervalMillis }
+      : {}),
+  })
   const sem = new Semaphore(concurrency)
   const abortScope = createAbortScope(options.signal)
 
@@ -203,6 +213,7 @@ export function createWriteStream(
   function markErrored(err: unknown): Error {
     const error = toError(err)
     errored = error
+    tracker.dispose()
     abortScope.abort(error)
     return error
   }
@@ -375,11 +386,13 @@ export function createWriteStream(
           signal: abortScope.signal,
           ...(options.retry !== undefined ? { retry: options.retry } : {}),
         })
+        tracker.dispose()
         abortScope.dispose()
         resolveDone(result)
       } catch (err) {
         const closeError = toError(err)
         if (errored === null) errored = closeError
+        tracker.dispose()
         abortScope.abort(errored)
         const observedError = errored
         const fileIdToCancel = largeFileId
@@ -432,6 +445,7 @@ export function createWriteStream(
           cleanupWriteStreamOptions(options),
         )
       }
+      tracker.dispose()
       abortScope.dispose()
       rejectDone(abortError)
     },

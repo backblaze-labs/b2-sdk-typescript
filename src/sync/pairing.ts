@@ -173,6 +173,7 @@ function frozenScanOptions(
     ...(options.requireLocalSafePaths !== undefined
       ? { requireLocalSafePaths: options.requireLocalSafePaths }
       : {}),
+    ...(options.localSymlinks !== undefined ? { localSymlinks: options.localSymlinks } : {}),
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
   })
 }

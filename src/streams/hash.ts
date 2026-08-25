@@ -1,11 +1,14 @@
 import { arrayBufferFor } from '../util/bytes.ts'
-import { hexEncode } from '../util/crypto.ts'
+import { hexEncode, sha256Hex as utilSha256Hex } from '../util/crypto.ts'
 
 /** Internal wrapper around a Node.js Hash instance. */
 type NodeHasher = { update(data: Uint8Array): void; digest(encoding: string): string }
 
 /** Factory that creates a NodeHasher for a given algorithm name. */
 type NodeHashFactory = (algorithm: string) => NodeHasher
+
+/** Shared interface for dependency-free streaming hash fallbacks. */
+type JsHasher = { update(data: Uint8Array): void; digest(): string }
 
 let nodeCreateHash: NodeHashFactory | null | undefined
 
@@ -42,25 +45,20 @@ async function getNodeCreateHash(): Promise<NodeHashFactory | null> {
   return nodeCreateHash
 }
 
-/**
- * Incrementally computes SHA-1 hashes over streaming data.
- * Uses Node.js `crypto` when available, falling back to a dependency-free
- * incremental JavaScript implementation.
- */
-export class IncrementalSha1 {
+class IncrementalHash {
   /** Total bytes fed into the hash so far. */
   private totalLength = 0
   /** Node.js hash instance, or null if using the JavaScript fallback. */
   private nodeHash: NodeHasher | null = null
-  /** Streaming JavaScript fallback used when Node crypto is unavailable. */
-  private jsHash = new JsSha1Hasher()
   /** Resolves once the crypto backend has been loaded. */
   private initPromise: Promise<void>
 
-  /** Creates a new IncrementalSha1 and lazily initializes the crypto backend. */
-  constructor() {
+  constructor(
+    private readonly algorithm: 'sha1' | 'sha256',
+    private readonly jsHash: JsHasher,
+  ) {
     this.initPromise = getNodeCreateHash().then((factory) => {
-      if (factory) this.nodeHash = factory('sha1')
+      if (factory) this.nodeHash = factory(this.algorithm)
     })
   }
 
@@ -82,8 +80,8 @@ export class IncrementalSha1 {
   }
 
   /**
-   * Finalize the hash and return the hex-encoded SHA-1 digest.
-   * @returns The lowercase hex-encoded SHA-1 digest of all data fed so far.
+   * Finalize the hash and return the hex-encoded digest.
+   * @returns The lowercase hex-encoded digest of all data fed so far.
    */
   async digest(): Promise<string> {
     await this.initPromise
@@ -102,6 +100,30 @@ export class IncrementalSha1 {
    */
   get bytesProcessed(): number {
     return this.totalLength
+  }
+}
+
+/**
+ * Incrementally computes SHA-1 hashes over streaming data.
+ * Uses Node.js `crypto` when available, falling back to a dependency-free
+ * incremental JavaScript implementation.
+ */
+export class IncrementalSha1 extends IncrementalHash {
+  /** Creates a new IncrementalSha1 and lazily initializes the crypto backend. */
+  constructor() {
+    super('sha1', new JsSha1Hasher())
+  }
+}
+
+/**
+ * Incrementally computes SHA-256 hashes over streaming data.
+ * Uses Node.js `crypto` when available, falling back to a dependency-free
+ * incremental JavaScript implementation.
+ */
+export class IncrementalSha256 extends IncrementalHash {
+  /** Creates a new IncrementalSha256 and lazily initializes the crypto backend. */
+  constructor() {
+    super('sha256', new JsSha256Hasher())
   }
 }
 
@@ -246,6 +268,178 @@ function rotateLeft(value: number, bits: number): number {
 function wordToHex(word: number): string {
   return word.toString(16).padStart(8, '0')
 }
+
+const SHA256_INITIAL_STATE = [
+  0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+] as const
+
+const SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+] as const
+
+class JsSha256Hasher {
+  private h0: number = SHA256_INITIAL_STATE[0]
+  private h1: number = SHA256_INITIAL_STATE[1]
+  private h2: number = SHA256_INITIAL_STATE[2]
+  private h3: number = SHA256_INITIAL_STATE[3]
+  private h4: number = SHA256_INITIAL_STATE[4]
+  private h5: number = SHA256_INITIAL_STATE[5]
+  private h6: number = SHA256_INITIAL_STATE[6]
+  private h7: number = SHA256_INITIAL_STATE[7]
+  private readonly block = new Uint8Array(64)
+  private blockLength = 0
+  private bytesProcessed = 0
+  private digested = false
+  private readonly words = new Uint32Array(64)
+
+  update(data: Uint8Array): void {
+    if (this.digested) throw new Error('SHA-256 digest has already been finalized')
+    this.bytesProcessed += data.byteLength
+
+    let offset = 0
+    if (this.blockLength > 0) {
+      const toCopy = Math.min(64 - this.blockLength, data.byteLength)
+      this.block.set(data.subarray(0, toCopy), this.blockLength)
+      this.blockLength += toCopy
+      offset = toCopy
+      if (this.blockLength === 64) {
+        this.processBlock(this.block, 0)
+        this.blockLength = 0
+      }
+    }
+
+    while (offset + 64 <= data.byteLength) {
+      this.processBlock(data, offset)
+      offset += 64
+    }
+
+    if (offset < data.byteLength) {
+      this.block.set(data.subarray(offset), 0)
+      this.blockLength = data.byteLength - offset
+    }
+  }
+
+  digest(): string {
+    if (this.digested) throw new Error('SHA-256 digest has already been finalized')
+    this.digested = true
+
+    const bitLengthHigh = Math.floor(this.bytesProcessed / 0x20000000)
+    const bitLengthLow = (this.bytesProcessed << 3) >>> 0
+
+    this.block[this.blockLength] = 0x80
+    this.blockLength++
+
+    if (this.blockLength > 56) {
+      this.block.fill(0, this.blockLength, 64)
+      this.processBlock(this.block, 0)
+      this.blockLength = 0
+    }
+
+    this.block.fill(0, this.blockLength, 56)
+    writeUint32(this.block, 56, bitLengthHigh)
+    writeUint32(this.block, 60, bitLengthLow)
+    this.processBlock(this.block, 0)
+
+    return [this.h0, this.h1, this.h2, this.h3, this.h4, this.h5, this.h6, this.h7]
+      .map(wordToHex)
+      .join('')
+  }
+
+  private processBlock(block: Uint8Array, offset: number): void {
+    const words = this.words
+    for (let i = 0; i < 16; i++) {
+      const j = offset + i * 4
+      words[i] =
+        ((block[j] ?? 0) << 24) |
+        ((block[j + 1] ?? 0) << 16) |
+        ((block[j + 2] ?? 0) << 8) |
+        (block[j + 3] ?? 0)
+    }
+
+    for (let i = 16; i < 64; i++) {
+      words[i] =
+        (smallSigma1(words[i - 2] ?? 0) +
+          (words[i - 7] ?? 0) +
+          smallSigma0(words[i - 15] ?? 0) +
+          (words[i - 16] ?? 0)) >>>
+        0
+    }
+
+    let a = this.h0
+    let b = this.h1
+    let c = this.h2
+    let d = this.h3
+    let e = this.h4
+    let f = this.h5
+    let g = this.h6
+    let h = this.h7
+
+    for (let i = 0; i < 64; i++) {
+      const t1 =
+        (h + bigSigma1(e) + sha256Choose(e, f, g) + (SHA256_K[i] ?? 0) + (words[i] ?? 0)) >>> 0
+      const t2 = (bigSigma0(a) + sha256Majority(a, b, c)) >>> 0
+      h = g
+      g = f
+      f = e
+      e = (d + t1) >>> 0
+      d = c
+      c = b
+      b = a
+      a = (t1 + t2) >>> 0
+    }
+
+    this.h0 = (this.h0 + a) >>> 0
+    this.h1 = (this.h1 + b) >>> 0
+    this.h2 = (this.h2 + c) >>> 0
+    this.h3 = (this.h3 + d) >>> 0
+    this.h4 = (this.h4 + e) >>> 0
+    this.h5 = (this.h5 + f) >>> 0
+    this.h6 = (this.h6 + g) >>> 0
+    this.h7 = (this.h7 + h) >>> 0
+  }
+}
+
+function writeUint32(block: Uint8Array, offset: number, value: number): void {
+  block[offset] = (value >>> 24) & 0xff
+  block[offset + 1] = (value >>> 16) & 0xff
+  block[offset + 2] = (value >>> 8) & 0xff
+  block[offset + 3] = value & 0xff
+}
+
+function rotateRight(value: number, bits: number): number {
+  return ((value >>> bits) | (value << (32 - bits))) >>> 0
+}
+
+function smallSigma0(value: number): number {
+  return rotateRight(value, 7) ^ rotateRight(value, 18) ^ (value >>> 3)
+}
+
+function smallSigma1(value: number): number {
+  return rotateRight(value, 17) ^ rotateRight(value, 19) ^ (value >>> 10)
+}
+
+function bigSigma0(value: number): number {
+  return rotateRight(value, 2) ^ rotateRight(value, 13) ^ rotateRight(value, 22)
+}
+
+function bigSigma1(value: number): number {
+  return rotateRight(value, 6) ^ rotateRight(value, 11) ^ rotateRight(value, 25)
+}
+
+function sha256Choose(x: number, y: number, z: number): number {
+  return (x & y) ^ (~x & z)
+}
+
+function sha256Majority(x: number, y: number, z: number): number {
+  return (x & y) ^ (x & z) ^ (y & z)
+}
 /* v8 ignore stop */
 
 /**
@@ -267,4 +461,14 @@ export async function sha1Hex(data: Uint8Array): Promise<string> {
   const hashBuffer = await crypto.subtle.digest('SHA-1', arrayBufferFor(data))
   return hexEncode(new Uint8Array(hashBuffer))
   /* v8 ignore stop */
+}
+
+/**
+ * Compute the SHA-256 hex digest of a complete byte array in one shot.
+ * @param data - The byte array to hash.
+ *
+ * @returns The lowercase hex-encoded SHA-256 digest of the input.
+ */
+export async function sha256Hex(data: Uint8Array): Promise<string> {
+  return utilSha256Hex(data)
 }

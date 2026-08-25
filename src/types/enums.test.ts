@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { ListBucketsRequest } from './bucket.ts'
 import type { CorsRule } from './index.ts'
 import {
+  type ApplicationKey,
+  type BucketInfo,
+  BucketKeyOption,
   type BucketResponseType,
   BucketRetentionMode,
   BucketType,
@@ -15,6 +18,7 @@ import {
   EventType,
   FileAction,
   groupId,
+  type KnownBucketKeyOption,
   KnownBucketResponseType,
   LegalHoldValue,
   MetadataDirective,
@@ -65,6 +69,10 @@ describe('const-object enums', () => {
 
   it('BucketRetentionMode covers every BucketRetentionMode value', () => {
     expectEnumMatches(BucketRetentionMode, ['compliance', 'governance', 'none'])
+  })
+
+  it('BucketKeyOption covers every bucket/key option value', () => {
+    expectEnumMatches(BucketKeyOption, ['s3'])
   })
 
   it('RetentionMode covers every RetentionMode value', () => {
@@ -206,6 +214,26 @@ describe('enum value typing (compile-time)', () => {
   it('BucketResponseType accepts future B2 bucket type strings', () => {
     const v: BucketResponseType = 'futureBucketType'
     expect(v).toBe('futureBucketType')
+  })
+
+  it('BucketKeyOption.S3 is assignable to bucket and key option arrays', () => {
+    const v: BucketKeyOption = BucketKeyOption.S3
+    const known: KnownBucketKeyOption = BucketKeyOption.S3
+    const bucketOptions: BucketInfo['options'] = [BucketKeyOption.S3]
+    const keyOptions: ApplicationKey['options'] = [BucketKeyOption.S3]
+
+    expect(v).toBe('s3')
+    expect(known).toBe('s3')
+    expect(bucketOptions).toEqual(['s3'])
+    expect(keyOptions).toEqual(['s3'])
+  })
+
+  it('bucket and key option arrays accept future B2 option strings', () => {
+    const bucketOptions: BucketInfo['options'] = ['future-option']
+    const keyOptions: ApplicationKey['options'] = ['future-option']
+
+    expect(bucketOptions).toEqual(['future-option'])
+    expect(keyOptions).toEqual(['future-option'])
   })
 
   it('response-only and list-only bucket types use separate contracts', () => {

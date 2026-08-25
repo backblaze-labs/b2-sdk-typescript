@@ -65,9 +65,9 @@ interface DownloadCommonOptions {
   /**
    * Callback invoked as bytes flow through the returned `body` stream.
    *
-   * Wraps the response body in a `TransformStream` that increments a
-   * `ProgressTracker` per chunk and emits a `partsCompleted: 1` event when
-   * the stream finishes. `totalBytes` is the response's `Content-Length`
+   * Wraps the response body so the SDK increments a `ProgressTracker` per
+   * chunk and emits a `partsCompleted: 1` event when the stream finishes.
+   * `totalBytes` is the response's `Content-Length`
    * header (or `null` if the server didn't send one — rare for B2).
    *
    * If the caller does not read the returned body to completion, the
@@ -75,6 +75,12 @@ interface DownloadCommonOptions {
    * progress is byte-driven, not request-driven.
    */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * The final completion callback is always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
 }
 
 /** Options for downloading a file by its unique ID. */
@@ -95,7 +101,10 @@ export interface DownloadByNameOptions extends DownloadCommonOptions {
  * Shared HEAD options. Mirrors {@link DownloadCommonOptions} but omits
  * `method` (always HEAD) and `onProgress` (no body to track).
  */
-type HeadCommonOptions = Omit<DownloadCommonOptions, 'method' | 'onProgress'>
+type HeadCommonOptions = Omit<
+  DownloadCommonOptions,
+  'method' | 'onProgress' | 'progressIntervalMillis'
+>
 
 /** Options for a HEAD-by-ID request. */
 export interface HeadByIdOptions extends HeadCommonOptions {
@@ -324,13 +333,17 @@ function prepareDownloadBody(
 ): ReadableStream<Uint8Array> {
   const shouldVerify = options.method !== 'HEAD' && options.range === undefined
   const verifiedBody = shouldVerify ? verifyDownloadStream(body, headers.contentSha1) : body
-  return instrumentProgress(verifiedBody, headers.contentLength, options.onProgress)
+  return instrumentProgress(
+    verifiedBody,
+    headers.contentLength,
+    options.onProgress,
+    options.progressIntervalMillis,
+  )
 }
 
 /**
- * Wraps a body stream with a `TransformStream` that increments a
- * {@link ProgressTracker} for each chunk and reports `partsCompleted: 1`
- * when the stream finishes.
+ * Wraps a body stream so the SDK increments a {@link ProgressTracker} for
+ * each chunk and reports `partsCompleted: 1` when the stream finishes.
  *
  * When `listener` is undefined the function short-circuits and returns
  * the original stream, so unobserved downloads pay no overhead.
@@ -338,6 +351,7 @@ function prepareDownloadBody(
  * @param body - The download response body to wrap.
  * @param totalBytes - Expected total bytes (response `Content-Length`).
  * @param listener - Caller-supplied progress callback, or undefined.
+ * @param progressIntervalMillis - Optional byte-progress throttle interval.
  *
  * @returns A stream that emits the same bytes and reports progress.
  */
@@ -345,19 +359,49 @@ function instrumentProgress(
   body: ReadableStream<Uint8Array>,
   totalBytes: number,
   listener: ProgressListener | undefined,
+  progressIntervalMillis: number | undefined,
 ): ReadableStream<Uint8Array> {
   if (listener === undefined) return body
-  const tracker = new ProgressTracker(listener, totalBytes, 1)
-  const transform = new TransformStream<Uint8Array, Uint8Array>({
-    transform(chunk, controller) {
-      tracker.addBytes(chunk.byteLength)
-      controller.enqueue(chunk)
+  const tracker = new ProgressTracker(listener, totalBytes, 1, {
+    ...(progressIntervalMillis !== undefined ? { minIntervalMs: progressIntervalMillis } : {}),
+  })
+  const reader = body.getReader()
+  let released = false
+
+  function releaseReader(): void {
+    if (released) return
+    released = true
+    reader.releaseLock()
+  }
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          tracker.completePart()
+          tracker.dispose()
+          releaseReader()
+          controller.close()
+          return
+        }
+        tracker.addBytes(value.byteLength)
+        controller.enqueue(value)
+      } catch (err) {
+        tracker.dispose()
+        releaseReader()
+        throw err
+      }
     },
-    flush() {
-      tracker.completePart()
+    async cancel(reason) {
+      tracker.dispose()
+      try {
+        await reader.cancel(reason)
+      } finally {
+        releaseReader()
+      }
     },
   })
-  return body.pipeThrough(transform)
 }
 
 /**

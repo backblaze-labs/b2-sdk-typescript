@@ -1,6 +1,8 @@
-import { access, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { access, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../../bucket.ts'
 import type { B2Client } from '../../client.ts'
@@ -40,6 +42,7 @@ const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
+const execFileAsync = promisify(execFile)
 const reservedTempName = makeReservedSyncTempFileName(
   'payload.bin',
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -253,6 +256,170 @@ describe('LocalFolder', () => {
     const entries = await collect<LocalSyncPath>(folder.scan())
 
     expect(entries.map((entry) => entry.relativePath)).toEqual(['file.txt'])
+  })
+
+  it.skipIf(isWindows)('skips child symlinks by default', async () => {
+    await mkdir(join(tmpDir, 'target-dir'))
+    await writeFile(join(tmpDir, 'target-dir', 'nested.txt'), 'nested')
+    await writeFile(join(tmpDir, 'target.txt'), 'target')
+    await symlink(join(tmpDir, 'target.txt'), join(tmpDir, 'file-link.txt'), 'file')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'dir-link'), 'dir')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual([
+      'target-dir/nested.txt',
+      'target.txt',
+    ])
+    expect(skips.sort()).toEqual(['local-symlink:dir-link', 'local-symlink:file-link.txt'])
+  })
+
+  it.skipIf(isWindows)('follows child symlinks when requested', async () => {
+    await mkdir(join(tmpDir, 'target-dir'))
+    await writeFile(join(tmpDir, 'target-dir', 'nested.txt'), 'nested')
+    await writeFile(join(tmpDir, 'target.txt'), 'target')
+    await symlink(join(tmpDir, 'target.txt'), join(tmpDir, 'file-link.txt'), 'file')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'dir-link'), 'dir')
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(folder.scan({ localSymlinks: 'follow' }))
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual([
+      'dir-link/nested.txt',
+      'file-link.txt',
+      'target-dir/nested.txt',
+      'target.txt',
+    ])
+    expect(entries.find((entry) => entry.relativePath === 'file-link.txt')?.absolutePath).toBe(
+      await realpath(join(tmpDir, 'target.txt')),
+    )
+  })
+
+  it.skipIf(isWindows)('reports followed symlink target failures as symlink errors', async () => {
+    await symlink(join(tmpDir, 'missing.txt'), join(tmpDir, 'broken-link.txt'), 'file')
+    const errors: unknown[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onError(event) {
+          errors.push(event)
+        },
+      }),
+    )
+
+    expect(entries).toEqual([])
+    expect(errors[0]).toMatchObject({
+      type: 'error',
+      path: 'broken-link.txt',
+      message: 'failed to scan local symlink: ENOENT',
+    })
+    expect(JSON.stringify(errors[0])).not.toContain(tmpDir)
+  })
+
+  it.skipIf(isWindows)('skips followed symlinks to non-file targets inside the root', async () => {
+    const fifoPath = join(tmpDir, 'pipe')
+    await execFileAsync('mkfifo', [fifoPath])
+    await symlink(fifoPath, join(tmpDir, 'pipe-link'), 'file')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}:${event.message}`)
+        },
+      }),
+    )
+
+    expect(entries).toEqual([])
+    expect(skips).toEqual([
+      'local-symlink:pipe-link:Skipped local path "pipe-link": symlink target is not a regular file or directory',
+    ])
+  })
+
+  it.skipIf(isWindows)('skips followed symlinks that resolve outside the root', async () => {
+    const outsideDir = await mkdtemp(join(tmpdir(), 'localfolder-outside-'))
+    try {
+      await mkdir(join(outsideDir, 'payload-dir'))
+      await writeFile(join(outsideDir, 'payload-dir', 'secret.txt'), 'secret')
+      await writeFile(join(outsideDir, 'secret.txt'), 'secret')
+      await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+      await symlink(join(outsideDir, 'secret.txt'), join(tmpDir, 'file-link.txt'), 'file')
+      await symlink(join(outsideDir, 'payload-dir'), join(tmpDir, 'dir-link'), 'dir')
+      const skips: string[] = []
+
+      const folder = new LocalFolder(tmpDir)
+      const entries = await collect<LocalSyncPath>(
+        folder.scan({
+          localSymlinks: 'follow',
+          onSkip(event) {
+            skips.push(`${event.reason}:${event.path}`)
+          },
+        }),
+      )
+
+      expect(entries.map((entry) => entry.relativePath)).toEqual(['keep.txt'])
+      expect(skips.sort()).toEqual(['local-symlink:dir-link', 'local-symlink:file-link.txt'])
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('deduplicates repeated followed directory targets', async () => {
+    await mkdir(join(tmpDir, 'target-dir'))
+    await writeFile(join(tmpDir, 'target-dir', 'nested.txt'), 'nested')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'link-a'), 'dir')
+    await symlink(join(tmpDir, 'target-dir'), join(tmpDir, 'link-b'), 'dir')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    const paths = entries.map((entry) => entry.relativePath)
+    const symlinkPaths = paths.filter((path) => path.startsWith('link-'))
+    expect(paths).toContain('target-dir/nested.txt')
+    expect(symlinkPaths).toHaveLength(1)
+    expect(skips).toHaveLength(1)
+    expect(skips[0]).toMatch(/^local-symlink-loop:link-[ab]$/)
+  })
+
+  it.skipIf(isWindows)('skips followed symlinks that would loop through an ancestor', async () => {
+    await mkdir(join(tmpDir, 'dir'))
+    await writeFile(join(tmpDir, 'dir', 'file.txt'), 'content')
+    await writeFile(join(tmpDir, 'keep.txt'), 'keep')
+    await symlink(tmpDir, join(tmpDir, 'dir', 'back'), 'dir')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}`)
+        },
+      }),
+    )
+
+    expect(entries.map((entry) => entry.relativePath)).toEqual(['dir/file.txt', 'keep.txt'])
+    expect(skips.sort()).toEqual(['local-symlink-loop:dir/back'])
   })
 
   it('binds relative roots at construction time', async () => {

@@ -6,7 +6,7 @@
 // the encryption type aliases live there; this re-export makes the
 // import path match the README and IDE-autocomplete expectations.
 export { EncryptionKey } from '../types/encryption.ts'
-export { IncrementalSha1, sha1Hex } from './hash.ts'
+export { IncrementalSha1, IncrementalSha256, sha1Hex, sha256Hex } from './hash.ts'
 export type { ProgressEvent, ProgressListener } from './progress.ts'
 export type { ContentSource, FileSourcePath } from './source.ts'
 export {

@@ -21,6 +21,9 @@ export type KeepMode = 'no-delete' | 'delete' | 'keep-days'
 /** Direction of a sync operation. */
 export type SyncDirection = 'local-to-b2' | 'b2-to-local' | 'b2-to-b2'
 
+/** Policy for child symlinks encountered by {@link LocalFolder} scans. */
+export type LocalSymlinkPolicy = 'skip' | 'follow'
+
 /**
  * Glob string or regular expression used to include or exclude sync paths.
  *
@@ -97,6 +100,13 @@ export interface SyncScanOptions extends SyncFilterOptions {
    * continuing toward unbounded heap growth. Defaults to the SDK scan limit.
    */
   readonly maxScanEntries?: number
+  /**
+   * How the built-in local scanner handles child symlinks. Defaults to `'skip'`.
+   * `'follow'` only follows targets that resolve inside the configured root and skips repeated
+   * followed directory identities. Symlinked roots are still followed because the configured root
+   * is the scan boundary.
+   */
+  readonly localSymlinks?: LocalSymlinkPolicy
 }
 
 /** Common metadata for a file discovered during a folder scan. */
@@ -206,6 +216,8 @@ export type SyncSkipReason =
   | 'path-too-long-for-regexp'
   | 'scan-skip-overflow'
   | 'stale-download-partial'
+  | 'local-symlink'
+  | 'local-symlink-loop'
 
 /**
  * Per-action progress event (transfer or metadata change). All
@@ -323,6 +335,13 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly downloadIdleTimeoutMillis?: number
   /** Maximum scanner entries retained before failing with a defined scan-limit error. */
   readonly maxScanEntries?: number
+  /**
+   * How built-in local scans handle child symlinks. Defaults to `'skip'`.
+   * `'follow'` only follows targets that resolve inside the local root; B2-to-local syncs still
+   * skip child symlinks during destination scans so download/delete actions never target them.
+   * Symlinked roots are controlled separately by the sync root safety checks.
+   */
+  readonly localSymlinks?: LocalSymlinkPolicy
   /** Optional provider for per-file encryption settings. */
   readonly encryptionProvider?: SyncEncryptionProvider
 }

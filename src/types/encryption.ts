@@ -38,16 +38,26 @@ export interface SseB2Setting {
   readonly algorithm: EncryptionAlgorithm
 }
 
-/** Server-side encryption using customer-provided keys (SSE-C). */
-export interface SseCCustomerSetting {
-  /** Encryption mode discriminator. Always `'SSE-C'`. */
-  readonly mode: 'SSE-C'
+/** Shared customer-provided SSE-C key material used by uploads and downloads. */
+export interface SseCKeyMaterial {
   /** Encryption algorithm. Always `'AES256'`. */
   readonly algorithm: EncryptionAlgorithm
-  /** Base64-encoded 256-bit encryption key provided by the customer. */
+  /**
+   * Base64-encoded 256-bit encryption key provided by the customer.
+   *
+   * This is secret key material. Native B2 SSE-C requests send it as an
+   * HTTP request header, so custom transports and middleware must redact
+   * request headers before logging them.
+   */
   readonly customerKey: string
   /** Base64-encoded MD5 digest of the customer-provided key, used for integrity verification. */
   readonly customerKeyMd5: string
+}
+
+/** Server-side encryption using customer-provided keys (SSE-C). */
+export interface SseCCustomerSetting extends SseCKeyMaterial {
+  /** Encryption mode discriminator. Always `'SSE-C'`. */
+  readonly mode: 'SSE-C'
 }
 
 /** Server-side encryption using customer-provided keys as returned by B2 responses. */
@@ -126,12 +136,6 @@ export const SSE_C_KEY_REDACTION = '[redacted SSE-C key]'
 
 const NODE_INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
 
-interface SseCKeyMaterial {
-  readonly algorithm: EncryptionAlgorithm
-  readonly customerKey: string
-  readonly customerKeyMd5: string
-}
-
 interface SseCKeyRedactionOptions {
   readonly label: string
   readonly mode?: 'SSE-C'
@@ -206,7 +210,7 @@ export function redactSseCKeyMaterial<T extends SseCKeyMaterial>(
  * `JSON.stringify`, `console.log`, and Node's `util.inspect`. Use {@link EncryptionKey.fromBytes}
  * to construct one from a raw 32-byte key; the MD5 digest is computed internally.
  */
-export class EncryptionKey {
+export class EncryptionKey implements SseCCustomerSetting {
   /** Encryption mode discriminant. Always `'SSE-C'` for this class. */
   readonly mode = 'SSE-C' as const
   /** Encryption algorithm. B2's S3-compatible API only supports AES-256. */
@@ -228,6 +232,17 @@ export class EncryptionKey {
   private constructor(customerKey: string, customerKeyMd5: string) {
     this.customerKey = customerKey
     this.customerKeyMd5 = customerKeyMd5
+  }
+
+  /**
+   * Generates a random 32-byte (256-bit) SSE-C key.
+   *
+   * @returns A safely-wrapped EncryptionKey ready for upload/download.
+   */
+  static async generate(): Promise<EncryptionKey> {
+    const rawKey = new Uint8Array(32)
+    getRandomValues(rawKey)
+    return EncryptionKey.fromBytes(rawKey)
   }
 
   /**
@@ -303,4 +318,16 @@ export class EncryptionKey {
   [NODE_INSPECT_CUSTOM](): string {
     return this.toString()
   }
+}
+
+function getRandomValues(bytes: Uint8Array): void {
+  const cryptoLike = globalThis.crypto as
+    | { getRandomValues<T extends Uint8Array>(array: T): T }
+    | undefined
+  if (cryptoLike !== undefined) {
+    cryptoLike.getRandomValues(bytes)
+    return
+  }
+
+  throw new Error('EncryptionKey.generate requires crypto.getRandomValues.')
 }

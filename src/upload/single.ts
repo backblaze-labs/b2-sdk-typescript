@@ -43,6 +43,12 @@ export interface UploadFileOptions extends UploadRetryOptions {
   readonly customUploadTimestamp?: number
   /** Callback invoked with upload progress updates. */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * Part-completion progress callbacks are always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
   /** Signal to abort the upload. */
   readonly signal?: AbortSignal
 }
@@ -85,52 +91,64 @@ export async function uploadSmallFile(
   // is created (rather than calling the listener directly) so consumers
   // see the same {bytesTransferred, totalBytes, partsCompleted,
   // totalParts, elapsedMs} shape they get from `uploadLargeFile`.
-  const tracker = new ProgressTracker(options.onProgress, data.byteLength, 1)
-
-  const result = await withFreshUploadUrlRetry({
-    fileName: options.fileName,
-    partNumber: null,
-    retry: options.retry,
-    signal: options.signal,
-    onUploadRetry: options.onUploadRetry,
-    retryResponseBodyFailures: resolveRetryResponseBodyFailures(options.retryResponseBodyFailures),
-    checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
-    fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
-    returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
-    evictEntry: (entry) => accountInfo.evictUploadUrl(options.bucketId, entry),
-    upload: (entry) =>
-      raw.uploadFile(
-        entry.uploadUrl,
-        {
-          authorization: entry.authorizationToken,
-          fileName: options.fileName,
-          contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
-          contentLength: data.byteLength,
-          contentSha1: sha1Hex,
-          ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
-          ...(options.serverSideEncryption !== undefined
-            ? { serverSideEncryption: options.serverSideEncryption }
-            : {}),
-          ...(options.fileRetention !== undefined ? { fileRetention: options.fileRetention } : {}),
-          ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
-          ...(options.lastModifiedMillis !== undefined
-            ? { lastModifiedMillis: options.lastModifiedMillis }
-            : {}),
-          ...(options.customUploadTimestamp !== undefined
-            ? { customUploadTimestamp: options.customUploadTimestamp }
-            : {}),
-        },
-        data,
-        {
-          ...(options.signal !== undefined ? { signal: options.signal } : {}),
-          ...(options.retry !== undefined ? { retry: options.retry } : {}),
-        },
-      ),
+  const tracker = new ProgressTracker(options.onProgress, data.byteLength, 1, {
+    ...(options.progressIntervalMillis !== undefined
+      ? { minIntervalMs: options.progressIntervalMillis }
+      : {}),
   })
 
-  tracker.addBytes(data.byteLength)
-  tracker.completePart()
-  return result
+  try {
+    const result = await withFreshUploadUrlRetry({
+      fileName: options.fileName,
+      partNumber: null,
+      retry: options.retry,
+      signal: options.signal,
+      onUploadRetry: options.onUploadRetry,
+      retryResponseBodyFailures: resolveRetryResponseBodyFailures(
+        options.retryResponseBodyFailures,
+      ),
+      checkout: () => accountInfo.checkoutUploadUrl(options.bucketId),
+      fetchFresh: () => fetchFreshUploadUrl(raw, accountInfo, options.bucketId, options.signal),
+      returnEntry: (entry) => accountInfo.returnUploadUrl(options.bucketId, entry),
+      evictEntry: (entry) => accountInfo.evictUploadUrl(options.bucketId, entry),
+      upload: (entry) =>
+        raw.uploadFile(
+          entry.uploadUrl,
+          {
+            authorization: entry.authorizationToken,
+            fileName: options.fileName,
+            contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+            contentLength: data.byteLength,
+            contentSha1: sha1Hex,
+            ...(options.fileInfo !== undefined ? { fileInfo: options.fileInfo } : {}),
+            ...(options.serverSideEncryption !== undefined
+              ? { serverSideEncryption: options.serverSideEncryption }
+              : {}),
+            ...(options.fileRetention !== undefined
+              ? { fileRetention: options.fileRetention }
+              : {}),
+            ...(options.legalHold !== undefined ? { legalHold: options.legalHold } : {}),
+            ...(options.lastModifiedMillis !== undefined
+              ? { lastModifiedMillis: options.lastModifiedMillis }
+              : {}),
+            ...(options.customUploadTimestamp !== undefined
+              ? { customUploadTimestamp: options.customUploadTimestamp }
+              : {}),
+          },
+          data,
+          {
+            ...(options.signal !== undefined ? { signal: options.signal } : {}),
+            ...(options.retry !== undefined ? { retry: options.retry } : {}),
+          },
+        ),
+    })
+
+    tracker.addBytes(data.byteLength)
+    tracker.completePart()
+    return result
+  } finally {
+    tracker.dispose()
+  }
 }
 
 async function readSmallFileSource(

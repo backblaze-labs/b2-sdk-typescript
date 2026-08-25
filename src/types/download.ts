@@ -1,4 +1,4 @@
-import type { SseB2Setting, SseCPublicSetting } from './encryption.ts'
+import type { SseB2Setting, SseCKeyMaterial, SseCPublicSetting } from './encryption.ts'
 import type { BucketId, FileId } from './ids.ts'
 import type { ReadableFileRetention, ReadableLegalHold } from './lock.ts'
 
@@ -74,14 +74,7 @@ export interface DownloadByIdRequest {
   /** Optional byte range to download (e.g., `'bytes=0-999'`). */
   readonly range?: string
   /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
-  readonly serverSideEncryption?: {
-    /** Encryption algorithm. Always `'AES256'`. */
-    readonly algorithm: 'AES256'
-    /** Base64-encoded customer-provided decryption key. */
-    readonly customerKey: string
-    /** Base64-encoded MD5 digest of the decryption key. */
-    readonly customerKeyMd5: string
-  }
+  readonly serverSideEncryption?: SseCKeyMaterial
   /** Override the Content-Disposition header in the download response. */
   readonly b2ContentDisposition?: string
   /** Override the Content-Language header in the download response. */
@@ -105,14 +98,7 @@ export interface DownloadByNameRequest {
   /** Optional byte range to download (e.g., `'bytes=0-999'`). */
   readonly range?: string
   /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
-  readonly serverSideEncryption?: {
-    /** Encryption algorithm. Always `'AES256'`. */
-    readonly algorithm: 'AES256'
-    /** Base64-encoded customer-provided decryption key. */
-    readonly customerKey: string
-    /** Base64-encoded MD5 digest of the decryption key. */
-    readonly customerKeyMd5: string
-  }
+  readonly serverSideEncryption?: SseCKeyMaterial
   /** Override the Content-Disposition header in the download response. */
   readonly b2ContentDisposition?: string
   /** Override the Content-Language header in the download response. */

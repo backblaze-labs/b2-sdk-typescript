@@ -39,6 +39,12 @@ export interface HighLevelUploadOptions extends UploadRetryOptions, CleanupFailu
   readonly concurrency?: number
   /** Callback invoked with upload progress events. */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * Part-completion progress callbacks are always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
   /** Abort signal for cancelling the upload. */
   readonly signal?: AbortSignal
   /** Enable bounded same-name multipart resume discovery. Ignored on the small-file path. */
@@ -94,6 +100,12 @@ export interface B2ObjectWriteStreamOptions extends UploadRetryOptions, CleanupF
   readonly concurrency?: number
   /** Callback invoked with upload progress events. */
   readonly onProgress?: ProgressListener
+  /**
+   * Minimum milliseconds between byte-only progress callbacks. Defaults to
+   * the SDK's 100 ms progress interval; set to 0 for per-chunk callbacks.
+   * Part-completion progress callbacks are always emitted immediately.
+   */
+  readonly progressIntervalMillis?: number
   /** Abort signal that cancels the upload and the unfinished large file. */
   readonly signal?: AbortSignal
 }

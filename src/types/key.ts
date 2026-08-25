@@ -1,4 +1,5 @@
 import type { Capability } from './auth.ts'
+import type { BucketKeyOption } from './bucket.ts'
 import type { AccountId, ApplicationKeyId, BucketId } from './ids.ts'
 
 /** Shared request parameters for creating an application key. */
@@ -73,7 +74,7 @@ export interface FullApplicationKey {
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */
-  readonly options: readonly string[]
+  readonly options: readonly BucketKeyOption[]
 }
 
 /**
@@ -102,7 +103,7 @@ export interface ApplicationKey {
   /** File name prefix this key is restricted to, or null if unrestricted. */
   readonly namePrefix: string | null
   /** Set of options enabled on this key. */
-  readonly options: readonly string[]
+  readonly options: readonly BucketKeyOption[]
 }
 
 /** Request parameters for the `b2_list_keys` API call. */

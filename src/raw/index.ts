@@ -91,6 +91,7 @@ export {
   BUCKET_INFO_KEY_PATTERN,
   BUCKET_INFO_RESERVED_PREFIX,
   BUCKET_INFO_VALUES_MAX_BYTES,
+  BucketKeyOption,
   CORS_ALLOWED_OPERATIONS,
   CORS_MAX_AGE_SECONDS_MAX,
   CORS_RULE_MAX_BYTES,
@@ -1401,7 +1402,12 @@ export class RawClient {
 
 // --- Header helpers ---
 
-import { EncryptionAlgorithm, EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
+import {
+  EncryptionAlgorithm,
+  EncryptionMode,
+  type EncryptionSetting,
+  type SseCKeyMaterial,
+} from '../types/encryption.ts'
 import type { FileRetentionValue, LegalHoldValue } from '../types/lock.ts'
 
 interface JsonBodySseCRequest {
@@ -1460,21 +1466,11 @@ function applyEncryptionHeaders(
 }
 
 /**
- * SSE-C decryption parameters supplied to downloads of files that were
- * uploaded with customer-managed keys.
+ * SSE-C decryption parameters supplied to downloads of files uploaded with customer-managed keys.
+ * `customerKey` is secret key material sent as a request header; custom transports must redact
+ * request headers before logging them.
  */
-export interface SseCDownloadKey {
-  /** Encryption algorithm. Always `EncryptionAlgorithm.Aes256` (`'AES256'`). */
-  readonly algorithm: EncryptionAlgorithm
-  /**
-   * Base64-encoded customer-provided decryption key. This value must be sent as
-   * an HTTP request header for SSE-C downloads, so custom transports should not
-   * log request headers without redacting them first.
-   */
-  readonly customerKey: string
-  /** Base64-encoded MD5 digest of the decryption key. */
-  readonly customerKeyMd5: string
-}
+export type SseCDownloadKey = SseCKeyMaterial
 
 /**
  * Options accepted by {@link RawClient.downloadFileById} and

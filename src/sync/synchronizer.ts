@@ -233,6 +233,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     ...(options.exclude !== undefined ? { exclude: options.exclude } : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
     ...(options.maxScanEntries !== undefined ? { maxScanEntries: options.maxScanEntries } : {}),
+    ...(options.localSymlinks !== undefined ? { localSymlinks: options.localSymlinks } : {}),
     ...(direction === 'b2-to-local' ? { requireLocalSafePaths: true } : {}),
     onError: (event) => {
       scanHadError = true
@@ -812,7 +813,13 @@ function createActionFactory(
           const targetPath =
             rootContext === undefined
               ? await resolveContainedLocalPath(root, source.relativePath, absPath)
-              : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
+              : config.options.localSymlinks === 'follow'
+                ? await resolveContainedLocalPath(
+                    rootContext.realPath,
+                    source.relativePath,
+                    absPath,
+                  )
+                : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
           throwIfAborted(signal)
           // FileSource avoids whole-file buffering and rejects path swaps on a
           // best-effort basis. On Windows, callers that need tamper-resistant
@@ -1285,21 +1292,37 @@ async function resolveContainedLocalPath(
     throw new Error('Local sync root required for filesystem mutation')
   }
 
+  const { realpath } = await import('node:fs/promises')
   const { isAbsolute, relative, resolve, sep } = await import('node:path')
   const safeRoot = resolve(root)
   const target =
     absolutePath === undefined ? resolve(safeRoot, relativePath) : resolve(absolutePath)
-  const pathFromRoot = relative(safeRoot, target)
-  const escapesRoot =
+  let containmentRoot = safeRoot
+  let pathFromRoot = relative(containmentRoot, target)
+  let escapesRoot =
     pathFromRoot === '..' || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot)
+
+  if (escapesRoot && absolutePath !== undefined) {
+    const realRoot = await realpath(safeRoot).catch(() => safeRoot)
+    const realPathFromRoot = relative(realRoot, target)
+    const escapesRealRoot =
+      realPathFromRoot === '..' ||
+      realPathFromRoot.startsWith(`..${sep}`) ||
+      isAbsolute(realPathFromRoot)
+    if (!escapesRealRoot) {
+      containmentRoot = realRoot
+      pathFromRoot = realPathFromRoot
+      escapesRoot = false
+    }
+  }
 
   /* v8 ignore next -- defense-in-depth after prior no-follow and symlink checks. */
   if (escapesRoot) {
     throw new Error(`Refusing to access path outside sync root: ${relativePath}`)
   }
 
-  await assertLocalRootHasNoSymlink(safeRoot, relativePath)
-  await assertPathHasNoSymlinkComponents(safeRoot, pathFromRoot, relativePath)
+  await assertLocalRootHasNoSymlink(containmentRoot, relativePath)
+  await assertPathHasNoSymlinkComponents(containmentRoot, pathFromRoot, relativePath)
 
   return target
 }

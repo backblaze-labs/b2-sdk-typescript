@@ -70,6 +70,7 @@ export type {
   CompareMode,
   KeepMode,
   LocalFileIdentity,
+  LocalSymlinkPolicy,
   LocalSyncPath,
   SyncActionEvent,
   SyncActionEventType,
