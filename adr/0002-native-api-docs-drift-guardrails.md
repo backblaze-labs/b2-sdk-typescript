@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Date: 2026-08-24
+Date: 2026-08-25
 
 Issue: [#108](https://github.com/backblaze-labs/b2-sdk-typescript/issues/108)
 
