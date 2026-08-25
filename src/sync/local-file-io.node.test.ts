@@ -526,6 +526,28 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   })
 
+  it.skipIf(isWindows)('rejects symlinked staging markers', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-marker-symlink-'))
+    try {
+      const realRoot = await realpath(root)
+      await expect(
+        createDownloadStagingDirectory(
+          realRoot,
+          nodePath,
+          () => 'marker-symlink',
+          stat,
+          async (directory) => {
+            if (basename(directory) === DOWNLOAD_STAGING_DIRECTORY_NAME) {
+              await symlink('outside-target', join(directory, DOWNLOAD_STAGING_MARKER_NAME))
+            }
+          },
+        ),
+      ).rejects.toThrow('unsafe local destination path: staging marker is not a regular file')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.skipIf(isWindows)('does not chmod a non-SDK staging name before rejecting it', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-user-root-'))
     try {

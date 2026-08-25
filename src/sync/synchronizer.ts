@@ -440,7 +440,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
       }
     }
     if (
-      sourceInventoryIncomplete(scanEvents) &&
+      scanEvents.sourceInventoryIncompleteMessage !== undefined &&
       prepared.pair[0] === null &&
       prepared.pair[1] !== null
     ) {
@@ -449,9 +449,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
         actions: [
           new SkipAction(
             prepared.pair[1].relativePath,
-            /* v8 ignore next -- sourceInventoryIncomplete is set through the same path as this message */
-            scanEvents.sourceInventoryIncompleteMessage ??
-              'not removed because the source scan skipped unsafe B2 names',
+            scanEvents.sourceInventoryIncompleteMessage,
           ),
         ],
       }
@@ -824,14 +822,14 @@ function createActionFactory(
                     absPath,
                   )
                 : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
-          throwIfAborted(signal)
+          throwIfAborted(actionSignal(signal))
           // FileSource avoids whole-file buffering and rejects path swaps on a
           // best-effort basis. On Windows, callers that need tamper-resistant
           // same-size rewrite detection should use compareMode: 'sha1' or an
           // independent digest because restored modification times can hide
           // local rewrites.
           const fileSource = await createValidatedUploadFileSource(source, targetPath)
-          throwIfAborted(signal)
+          throwIfAborted(actionSignal(signal))
           const serverSideEncryption = config.options.encryptionProvider?.getSettingForUpload(
             fileName,
             fileSource.size,
@@ -840,8 +838,7 @@ function createActionFactory(
             fileName,
             source: fileSource,
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-            ...(signal !== undefined ? { signal } : {}),
+            signal: actionSignal(signal),
           })
         },
       )
@@ -872,16 +869,14 @@ function createActionFactory(
         )
         const result = await bucket.file(b2FileName).downloadById(source.selectedVersion.fileId, {
           ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
-          /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-          ...(signal !== undefined ? { signal } : {}),
+          signal: actionSignal(signal),
         })
         try {
           await writeLocalStreamInsideRoot(root, relPath, result.body, {
             expectedBytes,
             ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
-            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-            ...(signal !== undefined ? { signal } : {}),
+            signal: actionSignal(signal),
           })
         } catch (err) {
           await cancelReadableStreamBody(result.body, err)
@@ -903,11 +898,7 @@ function createActionFactory(
       assertBucket(bucket, 'hide')
 
       return new HideAction(path, async (_relPath, signal) => {
-        await bucket.hideFile(
-          `${uploadPrefix}${path}`,
-          /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-          signal === undefined ? undefined : { signal },
-        )
+        await bucket.hideFile(`${uploadPrefix}${path}`, { signal: actionSignal(signal) })
       })
     },
 
@@ -917,8 +908,7 @@ function createActionFactory(
       const b2FileName = validateB2SyncPathInPrefix(uploadPrefix, path)
 
       return new HideAction(path.relativePath, async (_relPath, signal) => {
-        /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-        await bucket.hideFile(b2FileName, signal === undefined ? undefined : { signal })
+        await bucket.hideFile(b2FileName, { signal: actionSignal(signal) })
       })
     },
 
@@ -939,12 +929,9 @@ function createActionFactory(
         path.relativePath,
         path.selectedVersion.fileId as string,
         async (fileId, _fileName, signal) => {
-          await bucket.deleteFileVersion(
-            b2FileName,
-            fileIdOf(fileId),
-            /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-            signal === undefined ? undefined : { signal },
-          )
+          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
+            signal: actionSignal(signal),
+          })
         },
       )
     },
@@ -956,11 +943,11 @@ function createActionFactory(
         path.relativePath,
         path.absolutePath,
         async (absPath, signal) => {
-          signal?.throwIfAborted()
+          actionSignal(signal).throwIfAborted()
           if (absPath !== path.absolutePath) {
             throw new Error(`Refusing to delete outside sync root: ${path.relativePath}`)
           }
-          signal?.throwIfAborted()
+          actionSignal(signal).throwIfAborted()
           try {
             if (rootContext !== undefined) {
               await assertLocalRootContextCurrent(rootContext, path.relativePath, {
@@ -1005,8 +992,7 @@ function createActionFactory(
           ? { destinationServerSideEncryption }
           : {}),
         ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
-        /* v8 ignore next -- synchronize always executes actions with its internal abort signal */
-        ...(signal !== undefined ? { signal } : {}),
+        signal: actionSignal(signal),
       })
     })
   }
@@ -1114,9 +1100,12 @@ function isB2SyncPath(path: SyncPath): path is B2SyncPath {
   return 'selectedVersion' in path
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  /* v8 ignore next -- private action closures receive a defined signal from synchronize */
-  if (signal?.aborted === true) {
+function actionSignal(signal: AbortSignal | undefined): AbortSignal {
+  return signal as AbortSignal
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
     throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   }
 }
@@ -1221,9 +1210,7 @@ function bufferScanEvent(
 
 function* drainScanEvents(buffer: ScanEventBuffer): Generator<SyncEvent> {
   while (buffer.events.length > 0) {
-    const event = buffer.events.shift()
-    /* v8 ignore next -- scan event buffers are dense; this narrows shift() */
-    if (event) yield event
+    yield buffer.events.shift() as SyncEvent
   }
 
   if (buffer.dropped > 0) {
@@ -1240,10 +1227,6 @@ function* drainScanEvents(buffer: ScanEventBuffer): Generator<SyncEvent> {
 
 function scanHadFilesystemError(scanEvents: ScanEventBuffer): boolean {
   return scanEvents.fatalFilesystemErrorMessage !== undefined
-}
-
-function sourceInventoryIncomplete(scanEvents: ScanEventBuffer): boolean {
-  return scanEvents.sourceInventoryIncompleteMessage !== undefined
 }
 
 function scanFilesystemError(scanEvents: ScanEventBuffer): Error | undefined {

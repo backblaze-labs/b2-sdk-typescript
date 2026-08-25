@@ -587,6 +587,12 @@ describe('createWriteStream branch coverage', () => {
   })
 
   it('passes cleanup callbacks when aborting a started write stream', async () => {
+    const uploadPartStarted = deferred<void>()
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      uploadPartStarted.resolve(undefined)
+      return originalUploadPart(...args)
+    })
     const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile')
     const onCleanupFailure = vi.fn()
     const { writable, done } = bucket.file('abort-with-cleanup-callback.bin').createWriteStream({
@@ -596,7 +602,7 @@ describe('createWriteStream branch coverage', () => {
     })
     const writer = writable.getWriter()
     await writer.write(deterministicBytes(100_000))
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await uploadPartStarted.promise
 
     await writer.abort(new Error('abort with cleanup callback'))
 

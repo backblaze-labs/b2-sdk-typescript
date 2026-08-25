@@ -12,7 +12,7 @@ Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic (N
 pnpm build           # Vite library mode: ESM + CJS + DTS for all 12 export entries
 pnpm test            # Vitest: runs src/**/*.test.ts against the in-memory B2Simulator (Node)
 pnpm test:watch      # Vitest in watch mode
-pnpm test:coverage   # Vitest with v8 coverage (gates: 97% statements, 98% lines, 97% functions, 91% branches)
+pnpm test:coverage   # Vitest with v8 coverage (gates: 97% statements, 98% lines, 97% functions, 92% branches)
 pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
 pnpm lint            # Biome: lint + format check
 pnpm lint:fix        # Biome: auto-fix
@@ -24,7 +24,7 @@ pnpm docs            # Generate TypeDoc API docs under ./docs
 pnpm clean           # rm -rf dist docs
 ```
 
-CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and the coverage gate configured in `vitest.coverage.config.ts` (97% statements, 98% lines, 97% functions, 91% branches).
+CI runs all of these on Linux + Windows + macOS (Node 22 and 24 on each) plus `bun test src/` (Bun's vitest-compat), a per-engine `test:browser` matrix (Chromium / Firefox / WebKit), and the coverage gate configured in `vitest.coverage.config.ts` (97% statements, 98% lines, 97% functions, 92% branches).
 
 ## CI does not run on Dependabot PRs
 

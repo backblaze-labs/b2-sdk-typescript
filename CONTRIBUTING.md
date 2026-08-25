@@ -24,7 +24,7 @@ pnpm test
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
 | `pnpm test:watch` | Run tests in watch mode |
-| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 91% branches) |
+| `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
 | `pnpm lint` | Check formatting + lint rules (Biome, `--error-on-warnings` — any warning fails) |
 | `pnpm lint:fix` | Auto-fix lint and formatting issues |

@@ -1,3 +1,4 @@
+import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import { assertPathInsideRoot, hasErrorCode, noFollowFlag } from './path-safety.ts'
 
 type DeviceStat = { readonly dev: number | bigint }
@@ -193,8 +194,9 @@ async function writeStagingMarker(
     /* v8 ignore next -- best-effort chmod */
     await handle.chmod(PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
   } catch (err) {
+    const markerAlreadyExists = hasErrorCode(err, 'EEXIST')
     if (
-      hasErrorCode(err, 'EEXIST') ||
+      markerAlreadyExists ||
       /* v8 ignore next -- ELOOP depends on platform-specific O_NOFOLLOW behavior */
       hasErrorCode(err, 'ELOOP')
     ) {
@@ -271,8 +273,10 @@ async function reapStaleDownloadStagingDirectories(
   } catch (err) {
     /* v8 ignore next -- concurrent managed-root removal is a filesystem race without a stable hook */
     if (hasErrorCode(err, 'ENOENT')) return
-    /* v8 ignore next -- permission errors here are platform-dependent after the root is opened */
-    emitCleanupWarning('failed to inspect B2 SDK download staging entries')
+    /* v8 ignore next -- platform-specific root permission failures cannot be simulated portably */
+    emitCleanupWarning(
+      `failed to inspect B2 SDK download staging entries: ${localFilesystemErrorReason(err)}`,
+    )
     return
   }
 
@@ -346,10 +350,7 @@ async function readManagedStagingEntryActivity(
       stagingStatsActivityMs(markerStats),
     )
 
-    for (const entry of [...entries].sort((a, b) =>
-      /* v8 ignore next -- duplicate directory names cannot occur in a single readdir result */
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    )) {
+    for (const entry of [...entries].sort(compareDirectoryEntriesByName)) {
       const stats = await lstat(path.join(candidate, entry.name))
       statsParts.push(`${entry.name}:${stagingStatsSignature(stats)}`)
       newestActivityMs = Math.max(newestActivityMs, stagingStatsActivityMs(stats))
@@ -359,6 +360,16 @@ async function readManagedStagingEntryActivity(
   } catch {
     return undefined
   }
+}
+
+function compareDirectoryEntriesByName(
+  a: { readonly name: string },
+  b: { readonly name: string },
+): number {
+  if (a.name < b.name) return -1
+  if (a.name > b.name) return 1
+  /* v8 ignore next -- duplicate directory names cannot occur in a single readdir result */
+  return 0
 }
 
 function stagingStatsActivityMs(stats: { readonly mtimeMs: number }) {
@@ -402,10 +413,9 @@ async function forEachWithConcurrency<T>(
   let index = 0
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (index < items.length) {
-      const item = items[index]
+      const item = items[index] as T
       index += 1
-      /* v8 ignore next -- this helper is only called with dense arrays from readdir */
-      if (item !== undefined) await fn(item)
+      await fn(item)
     }
   })
   await Promise.all(workers)
