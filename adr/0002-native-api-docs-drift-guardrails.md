@@ -1,9 +1,8 @@
 # ADR 0002: Native API docs drift guardrails
 
-Status: Accepted; live validation recorded; upstream docs handoff blocked
+Status: Accepted
 
 Date: 2026-08-24
-Last validation: 2026-08-25
 
 Issue: [#108](https://github.com/backblaze-labs/b2-sdk-typescript/issues/108)
 
@@ -24,17 +23,13 @@ shape.
   update requests, and `{ isClientAuthorizedToRead, value }` for bucket
   responses.
 
-The native API docs repository named in the issue,
-`backblaze-labs/b2-native-api-docs`, was rechecked with
-`gh repo view backblaze-labs/b2-native-api-docs` on 2026-08-24 and still did not
-resolve for the authenticated user. The findings therefore remain tracked here
-until they can be moved or reported upstream.
-
-The docs repository was checked again on 2026-08-25 with both
-`gh repo view backblaze-labs/b2-native-api-docs` and
+On 2026-08-25, after an earlier 2026-08-24 `gh repo view` check, the native API
+docs repository named in the issue, `backblaze-labs/b2-native-api-docs`, was
+checked again with both `gh repo view backblaze-labs/b2-native-api-docs` and
 `gh search repos "b2 native api docs owner:backblaze-labs"`; it still did not
 resolve for the authenticated user, and no matching repository was found. The
-upstream handoff remains blocked until that repository is accessible.
+findings remain tracked here, and upstream handoff remains blocked until that
+repository is accessible.
 
 ## Decision
 
