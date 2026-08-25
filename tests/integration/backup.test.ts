@@ -414,8 +414,20 @@ function skipIfSetupUnavailable(ctx: TestContext): boolean {
   return true
 }
 
+// The SDK raises B2PartnerAuthorizationError both for a genuinely suite-less
+// (unentitled) key and for malformed/unsafe authorize responses (redacted token,
+// non-HTTPS or unsafe endpoints, convenience fields that disagree with apiInfo).
+// Only the first is a clean skip; the rest are real SDK/live-contract failures and
+// must propagate. The suite-less case is the sole message that carries no endpoint
+// data, thrown when apiInfo omits both groupsApi and backupApi.
+const BACKUP_SUITE_MISSING_MESSAGE =
+  'Partner authorization must include apiInfo.groupsApi or apiInfo.backupApi'
+
 function isBackupAccessUnavailableError(err: unknown): boolean {
-  return err instanceof B2PartnerAuthorizationError || hasB2ErrorCode(err, 'access_denied')
+  if (err instanceof B2PartnerAuthorizationError && err.message === BACKUP_SUITE_MISSING_MESSAGE) {
+    return true
+  }
+  return hasB2ErrorCode(err, 'access_denied')
 }
 
 function isBackupReadPrerequisiteError(err: unknown): boolean {
