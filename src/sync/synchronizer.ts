@@ -1100,8 +1100,10 @@ function isB2SyncPath(path: SyncPath): path is B2SyncPath {
   return 'selectedVersion' in path
 }
 
+const defaultActionSignal = new AbortController().signal
+
 function actionSignal(signal: AbortSignal | undefined): AbortSignal {
-  return signal as AbortSignal
+  return signal ?? defaultActionSignal
 }
 
 function throwIfAborted(signal: AbortSignal): void {
