@@ -79,16 +79,20 @@ export class LocalFolder implements SyncFolder {
     validateSyncFilters(options)
     const nodeDeps = await loadLocalNodeDeps()
     const root = nodeDeps.resolve(this.root)
+    const followSymlinks =
+      options.localSymlinks === 'follow' && options.requireLocalSafePaths !== true
     let scanRoot = root
     const collected: LocalSyncPath[] = []
     const activeDirectoryIds = new Set<string>()
     const followedDirectoryIds = new Set<string>()
-    try {
-      scanRoot = await nodeDeps.realpath(root)
-      const rootStats = await nodeDeps.stat(scanRoot)
-      if (rootStats.isDirectory()) activeDirectoryIds.add(localNodeIdentity(rootStats))
-    } catch {
-      // Root read errors are reported by walk(), preserving the existing diagnostic shape.
+    if (followSymlinks) {
+      try {
+        scanRoot = await nodeDeps.realpath(root)
+        const rootStats = await nodeDeps.stat(scanRoot)
+        if (rootStats.isDirectory()) activeDirectoryIds.add(localNodeIdentity(rootStats))
+      } catch {
+        // Root read errors are reported by walk(), preserving the existing diagnostic shape.
+      }
     }
     await this.walk(
       scanRoot,

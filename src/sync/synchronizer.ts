@@ -813,7 +813,13 @@ function createActionFactory(
           const targetPath =
             rootContext === undefined
               ? await resolveContainedLocalPath(root, source.relativePath, absPath)
-              : await resolveContainedLocalPath(rootContext.realPath, source.relativePath, absPath)
+              : config.options.localSymlinks === 'follow'
+                ? await resolveContainedLocalPath(
+                    rootContext.realPath,
+                    source.relativePath,
+                    absPath,
+                  )
+                : await resolveContainedLocalPath(rootContext.realPath, source.relativePath)
           throwIfAborted(signal)
           // FileSource avoids whole-file buffering and rejects path swaps on a
           // best-effort basis. On Windows, callers that need tamper-resistant
