@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process'
 import { access, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../../bucket.ts'
 import type { B2Client } from '../../client.ts'
@@ -40,6 +42,7 @@ const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
+const execFileAsync = promisify(execFile)
 const reservedTempName = makeReservedSyncTempFileName(
   'payload.bin',
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -321,6 +324,28 @@ describe('LocalFolder', () => {
       message: 'failed to scan local symlink: ENOENT',
     })
     expect(JSON.stringify(errors[0])).not.toContain(tmpDir)
+  })
+
+  it.skipIf(isWindows)('skips followed symlinks to non-file targets inside the root', async () => {
+    const fifoPath = join(tmpDir, 'pipe')
+    await execFileAsync('mkfifo', [fifoPath])
+    await symlink(fifoPath, join(tmpDir, 'pipe-link'), 'file')
+    const skips: string[] = []
+
+    const folder = new LocalFolder(tmpDir)
+    const entries = await collect<LocalSyncPath>(
+      folder.scan({
+        localSymlinks: 'follow',
+        onSkip(event) {
+          skips.push(`${event.reason}:${event.path}:${event.message}`)
+        },
+      }),
+    )
+
+    expect(entries).toEqual([])
+    expect(skips).toEqual([
+      'local-symlink:pipe-link:Skipped local path "pipe-link": symlink target is not a regular file or directory',
+    ])
   })
 
   it.skipIf(isWindows)('skips followed symlinks that resolve outside the root', async () => {

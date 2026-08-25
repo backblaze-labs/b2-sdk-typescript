@@ -228,14 +228,18 @@ export class LocalFolder implements SyncFolder {
       try {
         stats = await nodeDeps.stat(dir)
       } catch (err) {
+        /* v8 ignore start -- stat TOCTOU failures after a Dirent directory result are not deterministic */
         this.emitScanError(options, rel, 'directory', err)
         return
+        /* v8 ignore stop */
       }
     }
+    /* v8 ignore start -- stat TOCTOU races after a Dirent directory result are not deterministic */
     if (!stats.isDirectory()) {
       this.emitScanError(options, rel, 'directory', new Error('not a directory'))
       return
     }
+    /* v8 ignore stop */
 
     const identity = localNodeIdentity(stats)
     if (activeDirectoryIds.has(identity)) {
@@ -294,15 +298,11 @@ export class LocalFolder implements SyncFolder {
         }
         /* v8 ignore stop */
       } catch (err) {
-        /* v8 ignore next -- stat TOCTOU failures are not deterministic to trigger */
+        /* v8 ignore start -- stat TOCTOU failures are not deterministic to trigger */
         this.emitScanError(options, rel, 'file', err)
         return
+        /* v8 ignore stop */
       }
-    }
-
-    if (!s.isFile()) {
-      this.emitScanError(options, rel, 'file', new Error('not a regular file'))
-      return
     }
 
     assertScanEntryLimit(out.length + 1, maxScanEntries)

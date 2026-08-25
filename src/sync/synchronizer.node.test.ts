@@ -28,6 +28,7 @@ import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
 import type {
   B2SyncFolder,
+  LocalSyncFolder,
   SupportedSynchronizerConfig,
   SynchronizerConfig,
   SynchronizerDownConfig,
@@ -1291,6 +1292,53 @@ describe('synchronize upload safety', () => {
 
       const config: SynchronizerUpConfig = {
         source: new LocalFolder(linkSource),
+        dest: makeB2MemoryFolder([]),
+        options: { compareMode: 'size', keepMode: 'no-delete' },
+        bucket,
+        prefix: '',
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(false)
+      expect(bucket.upload).toHaveBeenCalledTimes(1)
+      expect(uploaded).toBe('content')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(isWindows)('uploads legacy scanner real paths under a symlinked root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-upload-legacy-symlink-root-'))
+    try {
+      const realSource = join(root, 'real-source')
+      const linkSource = join(root, 'source-link')
+      const filePath = join(realSource, 'file.txt')
+      await mkdir(realSource)
+      await writeFile(filePath, 'content')
+      await symlink(realSource, linkSource, 'dir')
+
+      let uploaded = ''
+      const bucket = {
+        upload: vi.fn().mockImplementation(async (options: { source: FileSourceLike }) => {
+          uploaded = new TextDecoder().decode(await options.source.toArrayBuffer())
+        }),
+      } as unknown as Bucket
+      const source: LocalSyncFolder = {
+        type: 'local',
+        root: linkSource,
+        async *scan() {
+          const fileStats = await stat(filePath)
+          yield {
+            relativePath: 'file.txt',
+            absolutePath: await realpath(filePath),
+            modTimeMillis: Math.floor(fileStats.mtimeMs),
+            size: fileStats.size,
+          }
+        },
+      }
+
+      const config: SynchronizerUpConfig = {
+        source,
         dest: makeB2MemoryFolder([]),
         options: { compareMode: 'size', keepMode: 'no-delete' },
         bucket,
