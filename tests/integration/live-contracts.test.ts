@@ -12,6 +12,7 @@ import { B2Client } from '../../src/client.ts'
 import { createNativeDownloadAuthorizationUrl } from '../../src/s3/index.ts'
 import { sha1Hex } from '../../src/streams/hash.ts'
 import { BufferSource } from '../../src/streams/source.ts'
+import type { BucketInfo } from '../../src/types/bucket.ts'
 import { DownloadHeaderName } from '../../src/types/download.ts'
 import { EncryptionKey } from '../../src/types/encryption.ts'
 import type { FileVersion } from '../../src/types/file.ts'
@@ -72,6 +73,12 @@ function expectReplicationConfigurationWrapper(value: unknown): asserts value is
   }
 }
 
+function expectSingleBucketInfo(
+  buckets: readonly BucketInfo[],
+): asserts buckets is readonly [BucketInfo] {
+  expect(buckets).toHaveLength(1)
+}
+
 function docsDriftLifecycleRules(): [
   {
     readonly daysFromHidingToDeleting: 1
@@ -108,7 +115,7 @@ async function withTemporaryBucket<T>(
   }
 }
 
-async function listSingleBucket(client: B2Client, bucket: Bucket): Promise<Bucket['info']> {
+async function listSingleBucket(client: B2Client, bucket: Bucket): Promise<BucketInfo> {
   const listed = await client.raw.listBuckets(
     client.accountInfo.getApiUrl(),
     client.accountInfo.getAuthToken(),
@@ -117,9 +124,8 @@ async function listSingleBucket(client: B2Client, bucket: Bucket): Promise<Bucke
       bucketId: bucket.id,
     },
   )
-  const listedBucket = listed.buckets[0]
-  expect(listedBucket).toBeDefined()
-  return listedBucket as Bucket['info']
+  expectSingleBucketInfo(listed.buckets)
+  return listed.buckets[0]
 }
 
 async function uploadRawPart(
