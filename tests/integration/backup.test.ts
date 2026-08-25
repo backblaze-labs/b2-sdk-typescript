@@ -418,13 +418,20 @@ function skipIfSetupUnavailable(ctx: TestContext): boolean {
 // (unentitled) key and for malformed/unsafe authorize responses (redacted token,
 // non-HTTPS or unsafe endpoints, convenience fields that disagree with apiInfo).
 // Only the first is a clean skip; the rest are real SDK/live-contract failures and
-// must propagate. The suite-less case is the sole message that carries no endpoint
-// data, thrown when apiInfo omits both groupsApi and backupApi.
-const BACKUP_SUITE_MISSING_MESSAGE =
-  'Partner authorization must include apiInfo.groupsApi or apiInfo.backupApi'
+// must propagate. The suite-less case is the sole condition that carries no
+// endpoint data, raised when apiInfo omits both groupsApi and backupApi: on the
+// authorize path via src/partner/raw.ts and via the shape validator in
+// src/partner/auth-shape.ts. Match both exact messages so only that case skips.
+const BACKUP_SUITE_MISSING_MESSAGES = new Set([
+  'Partner authorize response did not include apiInfo.groupsApi or apiInfo.backupApi',
+  'Partner authorization must include apiInfo.groupsApi or apiInfo.backupApi',
+])
 
 function isBackupAccessUnavailableError(err: unknown): boolean {
-  if (err instanceof B2PartnerAuthorizationError && err.message === BACKUP_SUITE_MISSING_MESSAGE) {
+  if (
+    err instanceof B2PartnerAuthorizationError &&
+    BACKUP_SUITE_MISSING_MESSAGES.has(err.message)
+  ) {
     return true
   }
   return hasB2ErrorCode(err, 'access_denied')
