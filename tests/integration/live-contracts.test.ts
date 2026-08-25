@@ -16,6 +16,7 @@ import { DownloadHeaderName } from '../../src/types/download.ts'
 import { EncryptionKey } from '../../src/types/encryption.ts'
 import type { FileVersion } from '../../src/types/file.ts'
 import { accountId, type LargeFileId } from '../../src/types/ids.ts'
+import type { ReplicationConfiguration } from '../../src/types/replication.ts'
 import type { UploadPartResponse } from '../../src/types/upload.ts'
 import { uploadPartWithFreshUrl } from '../../src/upload/retry.ts'
 import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
@@ -59,13 +60,66 @@ function expectPlainObject(value: unknown): asserts value is Record<string, unkn
   expect(Array.isArray(value)).toBe(false)
 }
 
-function expectReplicationConfigurationWrapper(value: unknown): void {
+function expectReplicationConfigurationWrapper(value: unknown): asserts value is {
+  readonly isClientAuthorizedToRead: boolean
+  readonly value: ReplicationConfiguration | null
+} {
   expectPlainObject(value)
   expect(typeof value['isClientAuthorizedToRead']).toBe('boolean')
   expect(Object.hasOwn(value, 'value')).toBe(true)
   if (value['value'] !== null) {
     expectPlainObject(value['value'])
   }
+}
+
+function docsDriftLifecycleRules(): [
+  {
+    readonly daysFromHidingToDeleting: 1
+    readonly daysFromUploadingToHiding: null
+    readonly fileNamePrefix: 'docs-drift/'
+  },
+] {
+  return [
+    {
+      daysFromHidingToDeleting: 1,
+      daysFromUploadingToHiding: null,
+      fileNamePrefix: 'docs-drift/',
+    },
+  ]
+}
+
+async function withTemporaryBucket<T>(
+  client: B2Client,
+  label: string,
+  fn: (temporaryBucket: Bucket) => Promise<T>,
+): Promise<T> {
+  const temporaryBucketName = makeBucketName(`docs-drift-${label}`)
+  const temporaryBucket = await setupStep(`create bucket ${temporaryBucketName}`, () =>
+    client.createBucket({
+      bucketName: temporaryBucketName,
+      bucketType: 'allPrivate',
+    }),
+  )
+
+  try {
+    return await fn(temporaryBucket)
+  } finally {
+    await deleteBucketIfPresent(temporaryBucket)
+  }
+}
+
+async function listSingleBucket(client: B2Client, bucket: Bucket): Promise<Bucket['info']> {
+  const listed = await client.raw.listBuckets(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    {
+      accountId: accountId(client.accountInfo.getAccountId()),
+      bucketId: bucket.id,
+    },
+  )
+  const listedBucket = listed.buckets[0]
+  expect(listedBucket).toBeDefined()
+  return listedBucket as Bucket['info']
 }
 
 async function uploadRawPart(
@@ -264,41 +318,49 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
       expect(copied.contentLength).toBe(data.byteLength)
     })
 
-    it('returns lifecycleRules arrays and replicationConfiguration wrappers', async () => {
-      const lifecycleRules = [
-        {
+    it('returns lifecycleRules as an array from b2_update_bucket', async () => {
+      await withTemporaryBucket(client, 'lifecycle-update', async (temporaryBucket) => {
+        const updated = await temporaryBucket.update({ lifecycleRules: docsDriftLifecycleRules() })
+
+        expect(Array.isArray(updated.lifecycleRules)).toBe(true)
+        expect(updated.lifecycleRules).toHaveLength(1)
+        expect(updated.lifecycleRules[0]).toMatchObject({
           daysFromHidingToDeleting: 1,
-          daysFromUploadingToHiding: null,
           fileNamePrefix: 'docs-drift/',
-        },
-      ]
-
-      const updated = await bucket.update({ lifecycleRules })
-      expect(Array.isArray(updated.lifecycleRules)).toBe(true)
-      expect(updated.lifecycleRules).toHaveLength(1)
-      expect(updated.lifecycleRules[0]).toMatchObject({
-        daysFromHidingToDeleting: 1,
-        fileNamePrefix: 'docs-drift/',
+        })
       })
-      expectReplicationConfigurationWrapper(updated.replicationConfiguration)
+    })
 
-      const listed = await client.raw.listBuckets(
-        client.accountInfo.getApiUrl(),
-        client.accountInfo.getAuthToken(),
-        {
-          accountId: accountId(client.accountInfo.getAccountId()),
-          bucketId: bucket.id,
-        },
-      )
-      const listedBucket = listed.buckets[0]
-      expect(listedBucket).toBeDefined()
-      expect(Array.isArray(listedBucket?.lifecycleRules)).toBe(true)
-      expect(listedBucket?.lifecycleRules).toHaveLength(1)
-      expect(listedBucket?.lifecycleRules[0]).toMatchObject({
-        daysFromHidingToDeleting: 1,
-        fileNamePrefix: 'docs-drift/',
+    it('returns lifecycleRules as an array from b2_list_buckets', async () => {
+      await withTemporaryBucket(client, 'lifecycle-list', async (temporaryBucket) => {
+        await temporaryBucket.update({ lifecycleRules: docsDriftLifecycleRules() })
+
+        const listedBucket = await listSingleBucket(client, temporaryBucket)
+        expect(Array.isArray(listedBucket.lifecycleRules)).toBe(true)
+        expect(listedBucket.lifecycleRules).toHaveLength(1)
+        expect(listedBucket.lifecycleRules[0]).toMatchObject({
+          daysFromHidingToDeleting: 1,
+          fileNamePrefix: 'docs-drift/',
+        })
       })
-      expectReplicationConfigurationWrapper(listedBucket?.replicationConfiguration)
+    })
+
+    it('returns replicationConfiguration wrapper from b2_update_bucket', async () => {
+      await withTemporaryBucket(client, 'replication-update', async (temporaryBucket) => {
+        const updated = await temporaryBucket.update({
+          bucketInfo: { docsDrift: 'replication-update' },
+        })
+
+        expectReplicationConfigurationWrapper(updated.replicationConfiguration)
+      })
+    })
+
+    it('returns replicationConfiguration wrapper from b2_list_buckets', async () => {
+      await withTemporaryBucket(client, 'replication-list', async (temporaryBucket) => {
+        const listedBucket = await listSingleBucket(client, temporaryBucket)
+
+        expectReplicationConfigurationWrapper(listedBucket.replicationConfiguration)
+      })
     })
   })
 
