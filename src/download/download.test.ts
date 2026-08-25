@@ -305,6 +305,50 @@ describe('downloadById', () => {
     expect(last?.partsCompleted).toBe(1)
     expect(last?.totalParts).toBe(1)
   })
+
+  it('cancels progress-wrapped downloads while a read is pending', async () => {
+    const pullStarted = Promise.withResolvers<void>()
+    const cancel = vi.fn()
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        pullStarted.resolve(undefined)
+      },
+      cancel(reason) {
+        cancel(reason)
+      },
+    })
+    const raw = {
+      async downloadFileById(): Promise<HttpResponse> {
+        return {
+          status: 200,
+          headers: new Headers({
+            'Content-Length': '1',
+            'Content-Type': 'application/octet-stream',
+            'X-Bz-Content-Sha1': 'none',
+            'X-Bz-File-Id': 'pending_read_cancel',
+            'X-Bz-File-Name': 'pending-read-cancel.bin',
+            'X-Bz-Upload-Timestamp': '1',
+          }),
+          body,
+          json: () => Promise.reject(new Error('Not JSON')),
+          text: () => Promise.resolve(''),
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        }
+      },
+    } as unknown as RawClient
+
+    const result = await downloadById(raw, mockAccountInfo(), {
+      fileId: 'pending_read_cancel' as FileId,
+      onProgress: vi.fn(),
+    })
+    const reader = result.body.getReader()
+    const read = reader.read()
+    await pullStarted.promise
+
+    await expect(reader.cancel('caller stopped')).resolves.toBeUndefined()
+    await expect(read).resolves.toEqual({ done: true, value: undefined })
+    expect(cancel).toHaveBeenCalledWith('caller stopped')
+  })
 })
 
 describe('head downloads', () => {
