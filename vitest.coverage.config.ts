@@ -47,10 +47,12 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**/*.ts'],
       exclude: [
+        // Test files are not shipped runtime.
         'src/**/*.test.ts',
         'src/**/*.slow.test.ts',
-        'src/types/**',
         'src/version.ts',
+        // Type-only contracts emit no runtime statements, so excluding them
+        // keeps the report focused on code that can execute.
         'src/auth/account-info.ts',
         'src/sync/types.ts',
         // Test helpers are imported only by other tests; never bundled into

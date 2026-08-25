@@ -33,4 +33,12 @@ describe('notification custom header helpers', () => {
     expect(Object.getOwnPropertyDescriptor(record, '__proto__')?.value).toBe('literal-proto')
     expect(record['constructor']).toBe('literal-constructor')
   })
+
+  it('treats undefined inputs as empty header collections', () => {
+    const record = notificationCustomHeadersToRecord(undefined)
+
+    expect(Object.getPrototypeOf(record)).toBeNull()
+    expect(Object.keys(record)).toEqual([])
+    expect(recordToNotificationCustomHeaders(undefined)).toEqual([])
+  })
 })

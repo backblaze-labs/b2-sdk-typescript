@@ -20,6 +20,7 @@ import {
   groupId,
   type KnownBucketKeyOption,
   KnownBucketResponseType,
+  keyId,
   LegalHoldValue,
   MetadataDirective,
   PartnerCapability,
@@ -285,7 +286,8 @@ describe('enum value typing (compile-time)', () => {
 })
 
 describe('branded ID factories', () => {
-  it('re-exports partner and backup ID factories from the type barrel', () => {
+  it('re-exports branded ID factories from the type barrel', () => {
+    expect(keyId('app-key-id')).toBe('app-key-id')
     expect(groupId('254')).toBe('254')
     expect(computerId('deb0b1bcd412a7759709081c')).toBe('deb0b1bcd412a7759709081c')
   })
