@@ -93,4 +93,16 @@ describe('ReauthCoalescer', () => {
     await expect(coalescer.run()).resolves.toBe('fresh-token')
     expect(refreshCalls).toBe(2)
   })
+
+  it('does not abort a refresh that settles normally for the final waiter', async () => {
+    let refreshSignal: AbortSignal | undefined
+    const coalescer = new ReauthCoalescer<string>(async (signal) => {
+      refreshSignal = signal
+      return 'fresh-token'
+    })
+
+    await expect(coalescer.run()).resolves.toBe('fresh-token')
+
+    expect(refreshSignal?.aborted).toBe(false)
+  })
 })

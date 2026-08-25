@@ -135,7 +135,7 @@ pnpm run verify     # lint + lint:docs + lint:spelling + typecheck + typecheck:e
 `pnpm run verify` must exit `0`. For extra confidence on the published artifact:
 
 ```bash
-pnpm test:coverage  # coverage gate: 97% statements, 98% lines, 97% functions, 91% branches
+pnpm test:coverage  # coverage gate: 97% statements, 98% lines, 97% functions, 92% branches
 pnpm test:browser   # real Chromium + Firefox + WebKit via Playwright
 pnpm pack --pack-destination /tmp && tar -tzf /tmp/backblaze-labs-b2-sdk-*.tgz | sort
 ```

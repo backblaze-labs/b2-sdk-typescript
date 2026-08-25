@@ -1,3 +1,4 @@
+import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import { assertPathInsideRoot, hasErrorCode, noFollowFlag } from './path-safety.ts'
 
 type DeviceStat = { readonly dev: number | bigint }
@@ -193,7 +194,12 @@ async function writeStagingMarker(
     /* v8 ignore next -- best-effort chmod */
     await handle.chmod(PRIVATE_DOWNLOAD_FILE_MODE).catch(() => {})
   } catch (err) {
-    if (hasErrorCode(err, 'EEXIST') || hasErrorCode(err, 'ELOOP')) {
+    const markerAlreadyExists = hasErrorCode(err, 'EEXIST')
+    if (
+      markerAlreadyExists ||
+      /* v8 ignore next -- ELOOP depends on platform-specific O_NOFOLLOW behavior */
+      hasErrorCode(err, 'ELOOP')
+    ) {
       const markerStats = await lstat(markerPath).catch(() => undefined)
       if (markerStats?.isFile() === true) return
       throw new Error('unsafe local destination path: staging marker is not a regular file')
@@ -245,6 +251,7 @@ async function reapStaleDownloadStagingDirectoriesOnce(
     nowMillis,
     activityEntryLimit,
   ).finally(() => {
+    /* v8 ignore next -- this map entry cannot be replaced until the current cleanup settles */
     if (reapedManagedDirectories.get(managedDirectory) === next) {
       reapedManagedDirectories.delete(managedDirectory)
     }
@@ -264,8 +271,12 @@ async function reapStaleDownloadStagingDirectories(
   try {
     entries = await readdir(managedDirectory, { withFileTypes: true })
   } catch (err) {
+    /* v8 ignore next -- concurrent managed-root removal is a filesystem race without a stable hook */
     if (hasErrorCode(err, 'ENOENT')) return
-    emitCleanupWarning('failed to inspect B2 SDK download staging entries')
+    /* v8 ignore next -- platform-specific root permission failures cannot be simulated portably */
+    emitCleanupWarning(
+      `failed to inspect B2 SDK download staging entries: ${localFilesystemErrorReason(err)}`,
+    )
     return
   }
 
@@ -279,6 +290,7 @@ async function reapStaleDownloadStagingDirectories(
       cleanupErrors.push({ entryName: entry.name, operation: 'inspect' })
       return undefined
     })
+    /* v8 ignore next -- requires a concurrent delete between activity read and realpath */
     if (realCandidate === undefined) return
     try {
       assertPathInsideRoot(managedDirectory, realCandidate, path)
@@ -292,6 +304,7 @@ async function reapStaleDownloadStagingDirectories(
         latestActivity.signature !== activity.signature ||
         !stagingActivityIsStale(latestActivity, nowMillis)
       ) {
+        /* v8 ignore next -- requires concurrent writes between the first and second activity reads */
         return
       }
       await rm(realCandidate, { recursive: true, force: true })
@@ -337,9 +350,7 @@ async function readManagedStagingEntryActivity(
       stagingStatsActivityMs(markerStats),
     )
 
-    for (const entry of [...entries].sort((a, b) =>
-      a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
-    )) {
+    for (const entry of [...entries].sort(compareDirectoryEntriesByName)) {
       const stats = await lstat(path.join(candidate, entry.name))
       statsParts.push(`${entry.name}:${stagingStatsSignature(stats)}`)
       newestActivityMs = Math.max(newestActivityMs, stagingStatsActivityMs(stats))
@@ -349,6 +360,16 @@ async function readManagedStagingEntryActivity(
   } catch {
     return undefined
   }
+}
+
+function compareDirectoryEntriesByName(
+  a: { readonly name: string },
+  b: { readonly name: string },
+): number {
+  if (a.name < b.name) return -1
+  if (a.name > b.name) return 1
+  /* v8 ignore next -- duplicate directory names cannot occur in a single readdir result */
+  return 0
 }
 
 function stagingStatsActivityMs(stats: { readonly mtimeMs: number }) {
@@ -392,9 +413,9 @@ async function forEachWithConcurrency<T>(
   let index = 0
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (index < items.length) {
-      const item = items[index]
+      const item = items[index] as T
       index += 1
-      if (item !== undefined) await fn(item)
+      await fn(item)
     }
   })
   await Promise.all(workers)
