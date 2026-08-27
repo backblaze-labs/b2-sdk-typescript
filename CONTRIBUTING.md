@@ -191,11 +191,15 @@ await client.authorize()
 
 ## Commit messages
 
-Use concise commit messages. Focus on the "why" not the "what". Examples:
+Single line, subject only, under 72 characters, with a
+[Conventional Commits](https://www.conventionalcommits.org) type prefix
+(`fix:` / `feat:` / `docs:` / `test:` / `refactor:` / `chore:` / `ci:` / …). Focus
+on the "why" over the "what", and don't add AI-tool attribution trailers. The full
+policy lives in [`AGENTS.md`](AGENTS.md). Examples:
 
-- `fix upload URL eviction on 408 timeout`
-- `add SSE-C header plumbing for download requests`
-- `support AbortSignal in parallel download stream`
+- `fix: evict upload URL on 408 timeout`
+- `feat: plumb SSE-C headers into download requests`
+- `feat: support AbortSignal in the parallel download stream`
 
 ## Reporting issues
 
