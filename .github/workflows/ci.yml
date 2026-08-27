@@ -71,6 +71,11 @@ jobs:
       # pinned package-type analysis, npm integrity comparison, and gh repo context.
       - run: pnpm run verify:release
         if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
+      # Markdown consistency guard: reconciles doc claims (endpoint/export counts,
+      # coverage numbers, min Node, ADR catalog, links, pnpm-script refs, harness
+      # pointers) against ground truth. Runs on docs-only changes too.
+      - run: pnpm run verify:docs-consistency
+        if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
       - run: pnpm run verify:ci-docs-filter
         if: ${{ needs.changes.outputs.code == 'true' }}
 

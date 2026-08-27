@@ -19,3 +19,13 @@ Reference material for **users** (not this internal record) lives at the repo
 root: [`../README.md`](../README.md), [`../CONTRIBUTING.md`](../CONTRIBUTING.md),
 [`../CHANGELOG.md`](../CHANGELOG.md), [`../MIGRATION.md`](../MIGRATION.md),
 [`../SECURITY.md`](../SECURITY.md).
+
+## Staying consistent
+
+Consistency is enforced mechanically, not by vigilance. `pnpm run
+verify:docs-consistency` (`scripts/verify-docs-consistency.test.mjs`, part of
+`pnpm verify` and CI's docs path) reconciles markdown claims against ground truth
+— endpoint/export counts vs `package.json` + `src/`, coverage numbers vs the
+vitest config, min Node vs `engines`, the ADR catalog vs the ADR files, every
+relative link, and every `pnpm <script>` reference. When a class of drift keeps
+recurring, add a check there rather than a paragraph here.

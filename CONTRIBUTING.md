@@ -88,6 +88,7 @@ One-time local browser setup: `pnpm exec playwright install chromium firefox web
 8. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
 9. If you added a new exported type used in any public method signature, re-export it from `src/index.ts` (TypeDoc fails the docs job otherwise)
 10. If you added a new internal relative import, use the `.ts` extension (`import { x } from './foo.ts'`). The Deno typecheck job in `.github/workflows/examples.yml` fails immediately if a `.js` extension slips in.
+11. If you touched docs, or anything docs cite (endpoint/export counts, coverage thresholds, min Node, ADRs), `pnpm run verify:docs-consistency` passes. This guard reconciles markdown claims against ground truth and runs in CI on docs-only changes too, so update the prose in the same PR as the source it describes.
 
 ## Code style
 

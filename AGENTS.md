@@ -81,7 +81,11 @@ Every pull-request-triggered workflow (`ci`, `examples`, `security`,
 `if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}` so
 Dependabot PRs skip all CI (dependency bumps are consolidated manually). **When
 you add a job to a PR-triggered workflow, add the same guard** (AND it into any
-existing `if`). Docs-only PRs skip the heavy matrix via `.github/actions/detect-changes`.
+existing `if`). Docs-only PRs skip the heavy matrix via `.github/actions/detect-changes`
+but still run `pnpm run verify:docs-consistency` — the guard that reconciles doc
+claims (counts, coverage numbers, min Node, ADR catalog, links, script refs)
+against ground truth. Change a cited number in source? Update the prose in the
+same PR, or this fails.
 
 ## Formatting
 
