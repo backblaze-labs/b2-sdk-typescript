@@ -50,9 +50,8 @@ files:
   - 'src/**/*.ts'
   - 'examples/**/*.ts'
   - 'examples/**/*.md'
-  - 'adr/**/*.md'
+  - 'docs/**/*.md'
   - '*.md'
-  - 'CLAUDE.md'
 
 # Patterns we never want to flag, even inside otherwise-scanned files.
 # - SHA-1 / SHA-256 hex strings: long contiguous hex looks like gibberish but isn't.

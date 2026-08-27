@@ -35,6 +35,6 @@
     }
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/docs", "!**/node_modules", "!**/*.cjs", "!**/coverage"]
+    "includes": ["**", "!**/dist", "!**/api-docs", "!**/node_modules", "!**/*.cjs", "!**/coverage"]
   }
 }

@@ -14,7 +14,7 @@
     "src/simulator/index.ts",
     "src/s3/index.ts"
   ],
-  "out": "docs",
+  "out": "api-docs",
   "name": "@backblaze-labs/b2-sdk",
   "includeVersion": true,
   "readme": "README.md",

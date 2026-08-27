@@ -35,7 +35,6 @@ is_docs_path() {
   local path="$1"
 
   [[ "$path" == docs/* ]] && return 0
-  [[ "$path" == adr/*.md ]] && return 0
   [[ "$path" == *.md ]] && return 0
   return 1
 }

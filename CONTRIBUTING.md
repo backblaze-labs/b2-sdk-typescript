@@ -33,7 +33,7 @@ pnpm test
 | `pnpm typecheck` | Run `tsc --noEmit` with full strictness |
 | `pnpm typecheck:examples` | Typecheck the cookbook examples against `src/` |
 | `pnpm test:integration` | Run integration tests against real B2 (local runs skip without credentials; same-repo CI requires them) |
-| `pnpm docs` | Generate TypeDoc API documentation under `./docs` |
+| `pnpm docs` | Generate TypeDoc API documentation under `./api-docs` |
 
 CI also runs `bun test src/` against the same test suite plus a per-engine browser matrix (Chromium / Firefox / WebKit). Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
 
@@ -142,7 +142,7 @@ import { B2Error } from './errors/index.ts'          // used with instanceof
 
 Architecture decisions that affect public APIs, package layout, authorization,
 compatibility, simulator behavior, or security posture are recorded under
-[`adr/`](adr/README.md).
+[`docs/design-docs/`](docs/design-docs/index.md).
 
 ```
 src/
