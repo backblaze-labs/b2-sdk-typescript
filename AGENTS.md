@@ -10,7 +10,7 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 | Where | What |
 |---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Subpath exports, source layout, layering, and the key design decisions. **Read before touching `src/`.** |
-| [`docs/`](docs/) | System of record. [`docs/design-docs/`](docs/design-docs/) holds ADRs (dated; catalog + status in [`index.md`](docs/design-docs/index.md)). |
+| [`docs/`](docs/README.md) | **System of record.** [core beliefs](docs/design-docs/core-beliefs.md), [design-docs/ADRs](docs/design-docs/index.md), [quality score](docs/QUALITY_SCORE.md), [exec-plans + tech-debt](docs/exec-plans/tech-debt-tracker.md), [references](docs/references/). |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev workflow, PR checklist, release steps. |
 | [`CHANGELOG.md`](CHANGELOG.md) / [`MIGRATION.md`](MIGRATION.md) | Keep-a-Changelog history / v3→v4 upgrade guide. |
 | `api-docs/` | Generated TypeDoc reference (`pnpm docs`; not versioned). |
