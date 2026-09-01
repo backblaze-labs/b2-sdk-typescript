@@ -19,8 +19,8 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 ## Overview
 
 Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic
-(Node ^22.22.2 or >=24.15.0, browsers, Bun, Deno, Cloudflare Workers, Vercel
-Edge). Zero runtime dependencies in core. Built with Vite library mode + Vitest.
+(Node 22.3+, browsers, Bun, Deno, Cloudflare Workers, Vercel Edge). Zero runtime
+dependencies in core. Built with Vite library mode + Vitest.
 
 ## Commands
 
