@@ -42,7 +42,7 @@ pnpm verify          # Full local gate (lint, typecheck, tests, build, exports) 
 ```
 
 Run `pnpm verify` before claiming a change is done. CI runs the same gate on
-Linux + Windows + macOS (Node 22.22 and 24) plus `bun test src/` and the
+Linux + Windows + macOS (Node 22.22.2 and 24) plus `bun test src/` and the
 per-engine browser matrix.
 
 ## Conventions that bite (full list in [ARCHITECTURE.md](ARCHITECTURE.md))

@@ -786,7 +786,7 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.22 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
+| Node.js | 22.3+ | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.22.2 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
