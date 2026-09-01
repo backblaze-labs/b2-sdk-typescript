@@ -28,6 +28,7 @@ import { BackupClient } from '../../src/backup/index.ts'
 import type { HttpRequest, HttpResponse, UrlGuardedTransport } from '../../src/http/transport.ts'
 import { FetchTransport } from '../../src/http/transport.ts'
 import { PartnerClient } from '../../src/partner/index.ts'
+import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   masterKey,
   masterKeyId,
@@ -113,7 +114,16 @@ describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () 
       return
     }
 
-    await backup.listComputers()
+    try {
+      await backup.listComputers()
+    } catch (err) {
+      if (hasB2ErrorCode(err, 'access_denied')) {
+        // Authorized for Backup but the account is not entitled to list
+        // computers; the v1 route can only be asserted once the call succeeds.
+        return
+      }
+      throw err
+    }
     expect(recorder.versionOf('bz_list_computers')).toBe('v1')
   })
 })
