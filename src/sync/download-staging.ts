@@ -21,6 +21,12 @@ export const DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT = 1024
 const reapedManagedDirectories = new Map<string, Promise<void>>()
 const activeManagedDirectoryCreations = new Map<string, number>()
 
+/** @internal */
+export const downloadStagingTestHooks: {
+  afterCleanupMarkerStat?: (managedDirectory: string) => Promise<void> | void
+  beforeCleanupMarkerUnlink?: (markerPath: string) => Promise<void> | void
+} = {}
+
 type StagingActivitySnapshot = {
   readonly newestActivityMs: number
   readonly signature: string
@@ -191,7 +197,11 @@ async function removeDownloadStagingRootMarkerAndDirectoryCore(
   })
   if (managedStats === undefined || !managedStats.isDirectory()) return
 
-  const realManagedDirectory = await realpath(managedDirectory)
+  const realManagedDirectory = await realpath(managedDirectory).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ENOENT')) return undefined
+    throw err
+  })
+  if (realManagedDirectory === undefined) return
   assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
   if (downloadStagingRootCreationIsActive(realManagedDirectory)) return
 
@@ -202,13 +212,27 @@ async function removeDownloadStagingRootMarkerAndDirectoryCore(
   })
   if (markerStats?.isFile() !== true) return
 
-  const entries = await readdir(realManagedDirectory, { withFileTypes: true })
+  await downloadStagingTestHooks.afterCleanupMarkerStat?.(realManagedDirectory)
+  const entries = await readdir(realManagedDirectory, { withFileTypes: true }).catch(
+    (err: unknown) => {
+      if (hasErrorCode(err, 'ENOENT')) return undefined
+      throw err
+    },
+  )
+  if (entries === undefined) return
   if (entries.length !== 1 || entries[0]?.name !== DOWNLOAD_STAGING_MARKER_NAME) return
   const currentRealManagedDirectory = await realpath(managedDirectory).catch(() => undefined)
   if (currentRealManagedDirectory !== realManagedDirectory) return
   if (downloadStagingRootCreationIsActive(realManagedDirectory)) return
 
-  await unlink(markerPath)
+  await downloadStagingTestHooks.beforeCleanupMarkerUnlink?.(markerPath)
+  const markerRemoved = await unlink(markerPath)
+    .then(() => true)
+    .catch((err: unknown) => {
+      if (hasErrorCode(err, 'ENOENT')) return false
+      throw err
+    })
+  if (!markerRemoved) return
   try {
     await rmdir(realManagedDirectory)
   } catch (err) {
