@@ -36,6 +36,15 @@ describe('version resolver', () => {
     })
   })
 
+  it('treats semver build metadata as stable for published releases', () => {
+    expect(resolveVersion('1.2.3+build-1', 'published')).toEqual({
+      version: '1.2.3+build-1',
+      releaseChannel: 'published',
+      isPublishedRelease: true,
+      productVersion: '1.2.3+build-1',
+    })
+  })
+
   it('resolves missing or non-published signals to dev', () => {
     for (const signal of [undefined, 'dev', 'ci', 'source']) {
       expect(resolveVersion('1.2.3', signal).productVersion).toBe('dev')

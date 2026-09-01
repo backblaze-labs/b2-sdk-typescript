@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -25,17 +25,27 @@ function assertOk(result) {
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
 }
 
+function cleanBuildOutput() {
+  rmSync(join(repo, 'api-docs'), { force: true, recursive: true })
+  rmSync(join(repo, 'dist'), { force: true, recursive: true })
+}
+
+function isStableSemver(version) {
+  const versionWithoutBuildMetadata = version.split('+', 1)[0] ?? version
+  return !versionWithoutBuildMetadata.includes('-')
+}
+
 test('release build wiring advertises the published product token for stable versions', () => {
   try {
-    assertOk(runPnpm(['run', 'clean']))
+    cleanBuildOutput()
     assertOk(runPnpm(['run', 'build:release']))
 
     const result = runPnpm(['run', 'verify:release-channel', '--', '--published'])
 
     assertOk(result)
-    const expectedProductVersion = pkg.version.includes('-') ? 'dev' : pkg.version
+    const expectedProductVersion = isStableSemver(pkg.version) ? pkg.version : 'dev'
     assert.match(result.stdout, new RegExp(`b2-sdk-typescript/${expectedProductVersion}`))
   } finally {
-    runPnpm(['run', 'clean'])
+    cleanBuildOutput()
   }
 })

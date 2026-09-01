@@ -33,15 +33,20 @@ export interface VersionResolution {
  * Works in every runtime the SDK targets:
  *   - Node 22.3+, Bun, Deno: native JSON import attributes.
  *   - Vite builds: the JSON import is replaced with a version-only shim, and
- *     the release-channel define is replaced with a string. The publish path
- *     sets it to `published`; other builds use `dev`, so runtime chunks do
- *     not carry unrelated package metadata.
+ *     the publish path injects the release-channel define as `published`.
+ *     Other builds leave the define absent, so runtime chunks do not carry
+ *     unrelated package metadata.
  *   - Vitest browser mode: Vite handles the import the same way as build.
  */
 export const VERSION: string = pkg.version
 
 const configuredReleaseSignal =
   typeof __B2_SDK_RELEASE_CHANNEL__ === 'string' ? __B2_SDK_RELEASE_CHANNEL__ : 'dev'
+
+function isStableSemver(version: string): boolean {
+  const versionWithoutBuildMetadata = version.split('+', 1)[0] ?? version
+  return !versionWithoutBuildMetadata.includes('-')
+}
 
 /**
  * Resolve build version metadata from a version and positive release signal.
@@ -56,7 +61,7 @@ export function resolveVersion(
   version: string,
   releaseSignal: string | undefined = 'dev',
 ): VersionResolution {
-  const isStableVersion = !version.includes('-')
+  const isStableVersion = isStableSemver(version)
   const isRelease = releaseSignal === 'published' && isStableVersion
   const releaseChannel = isRelease ? 'published' : 'dev'
 

@@ -23,19 +23,28 @@ async function importBuiltModule(rel) {
   }
 }
 
+function isStableSemver(version) {
+  const versionWithoutBuildMetadata = version.split('+', 1)[0] ?? version
+  return !versionWithoutBuildMetadata.includes('-')
+}
+
 const pkg = JSON.parse(await fs.readFile(join(repo, 'package.json'), 'utf8'))
 const version = pkg.version
 if (typeof version !== 'string' || version.length === 0) {
   fail('package.json version must be a non-empty string')
 }
 
-const stableReleaseBuild = expectReleaseBuild && !version.includes('-')
+const stableReleaseBuild = expectReleaseBuild && isStableSemver(version)
 const expectedChannel = stableReleaseBuild ? 'published' : 'dev'
 const expectedProductVersion = stableReleaseBuild ? version : 'dev'
 const expectedToken = `b2-sdk-typescript/${expectedProductVersion}`
 
 const versionModule = await importBuiltModule('dist/version.js')
 const userAgentModule = await importBuiltModule('dist/http/user-agent.js')
+const actualProductVersion =
+  typeof versionModule.productVersion === 'function' ? versionModule.productVersion() : undefined
+const actualUserAgent =
+  typeof userAgentModule.getUserAgent === 'function' ? userAgentModule.getUserAgent() : undefined
 
 const checks = [
   [versionModule.VERSION === version, `VERSION must be ${version}`],
@@ -49,11 +58,15 @@ const checks = [
     'productVersion must be exported by dist/version.js',
   ],
   [
-    versionModule.productVersion?.() === expectedProductVersion,
+    typeof userAgentModule.getUserAgent === 'function',
+    'getUserAgent must be exported by dist/http/user-agent.js',
+  ],
+  [
+    actualProductVersion === expectedProductVersion,
     `productVersion() must be ${expectedProductVersion}`,
   ],
   [
-    userAgentModule.getUserAgent?.().startsWith(`${expectedToken} `),
+    actualUserAgent?.startsWith(`${expectedToken} `) === true,
     `getUserAgent() must start with ${expectedToken}`,
   ],
 ]
