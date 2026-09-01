@@ -2280,7 +2280,7 @@ describe('synchronize', () => {
       // Use a portable per-OS tmpdir so this test passes on Windows (where
       // `/tmp/dest` would resolve to `C:\tmp\dest` and likely fail to create).
       const { tmpdir } = await import('node:os')
-      const { mkdtemp, readFile, rm } = await import('node:fs/promises')
+      const { mkdtemp, readdir, readFile, rm } = await import('node:fs/promises')
       const { join } = await import('node:path')
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-'))
       try {
@@ -2288,11 +2288,11 @@ describe('synchronize', () => {
         const mockBucket = makeMockBucket({ 'fid_remote.txt': data })
         const sourceFile = makeB2SyncPath('remote.txt', 2000, data.byteLength)
         const source = makeMemoryFolder([sourceFile], 'b2')
-        const dest = makeMemoryFolder([], 'local')
+        const dest = new LocalFolder(root)
 
         const config: SynchronizerDownConfig = {
           source: { ...source, type: 'b2' },
-          dest: { ...dest, type: 'local', root },
+          dest,
           options: { compareMode: 'modtime', keepMode: 'no-delete' },
           bucket: mockBucket as unknown as Bucket,
         }
@@ -2307,6 +2307,7 @@ describe('synchronize', () => {
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         )
         await expect(readFile(join(root, 'remote.txt'))).resolves.toEqual(Buffer.from(data))
+        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).rejects.toThrow()
       } finally {
         await rm(root, { recursive: true, force: true })
       }

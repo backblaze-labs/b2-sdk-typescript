@@ -135,6 +135,40 @@ export async function createDownloadStagingDirectory(
 }
 
 /**
+ * Removes an empty SDK-managed download staging root after per-run entries are gone.
+ * @param managedDirectory - Resolved SDK-managed staging root path.
+ * @param path - Node path module used for platform-specific path operations.
+ *
+ * @internal
+ */
+export async function removeEmptyDownloadStagingRoot(
+  managedDirectory: string,
+  path: typeof import('node:path'),
+): Promise<void> {
+  const { rmdir, unlink } = await import('node:fs/promises')
+
+  try {
+    await unlink(path.join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME))
+  } catch (err) {
+    /* v8 ignore next -- concurrent managed-root cleanup is a filesystem race */
+    if (!hasErrorCode(err, 'ENOENT')) throw err
+  }
+
+  try {
+    await rmdir(managedDirectory)
+  } catch (err) {
+    /* v8 ignore next -- concurrent/live staging entries are normal best-effort cleanup cases */
+    if (
+      !hasErrorCode(err, 'ENOENT') &&
+      !hasErrorCode(err, 'ENOTEMPTY') &&
+      !hasErrorCode(err, 'EEXIST')
+    ) {
+      throw err
+    }
+  }
+}
+
+/**
  * Returns true when a scan-root entry is an SDK-managed download staging root.
  * @param directory - Candidate directory to inspect.
  *

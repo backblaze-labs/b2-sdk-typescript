@@ -160,6 +160,7 @@ export async function writeLocalStreamInsideRoot(
     readonly expectedBytes: number
     readonly expectedDestination?: LocalSyncPath | null
     readonly idleTimeoutMillis: number
+    readonly onDownloadStagingRoot?: (managedDirectory: string) => void
     readonly signal?: AbortSignal
   },
 ): Promise<void> {
@@ -264,6 +265,7 @@ export async function writeLocalStreamInsideRoot(
     await parentHandle?.close().catch(() => {})
     throw err
   }
+  options.onDownloadStagingRoot?.(path.dirname(stagingDirectory))
   const tmpPath = path.join(stagingDirectory, `.b2sdk-${randomUUID()}.partial`)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
