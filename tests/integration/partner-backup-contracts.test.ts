@@ -32,7 +32,7 @@ import {
   masterKey,
   masterKeyId,
   requireMasterCredentials,
-  skipUnlessMasterKey as skip,
+  skipUnlessMasterKey,
 } from '../helpers/live-b2.ts'
 
 const realm = process.env['B2_REALM']?.trim()
@@ -69,7 +69,7 @@ function recordingFetchTransport(): {
 
 const realmOption = realm !== undefined && realm !== '' ? { realm } : {}
 
-describe.skipIf(skip)('Partner/Backup live API version pins', () => {
+describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () => {
   it('authorizes Partner on v3 and reads groups on v4', async () => {
     const recorder = recordingFetchTransport()
     const partner = new PartnerClient({

@@ -30,10 +30,19 @@ export const complianceCleanupRetryDelayMs = 1000
 const complianceProtectedErrorCodes = ['access_denied', 'file_lock_compliance_protected']
 
 const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
-const requirePartnerCredentials = process.env.B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS === '1'
+const requireMasterCredentialsFlag =
+  process.env.B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS === '1' ||
+  // Legacy alias retained for older local scripts and in-flight CI branches.
+  process.env.B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS === '1'
+const hasPartialB2IntegrationCredentials = (keyId === '') !== (appKey === '')
+const hasPartialMasterCredentials = (masterKeyId === '') !== (masterKey === '')
 
 export function requireB2IntegrationCredentials(): void {
-  if (skipB2Integration && requireCredentials) {
+  if (!requireCredentials) return
+  if (hasPartialB2IntegrationCredentials) {
+    throw new Error('B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY must be provided together')
+  }
+  if (skipB2Integration) {
     throw new Error(
       'B2 integration credentials are required when B2_INTEGRATION_REQUIRE_CREDENTIALS=1',
     )
@@ -41,12 +50,13 @@ export function requireB2IntegrationCredentials(): void {
 }
 
 export function requireMasterCredentials(): void {
-  if ((masterKeyId === '') !== (masterKey === '')) {
+  if (!requireMasterCredentialsFlag) return
+  if (hasPartialMasterCredentials) {
     throw new Error('B2_MASTER_KEY_ID and B2_MASTER_KEY must be provided together')
   }
-  if (skipUnlessMasterKey && requirePartnerCredentials) {
+  if (skipUnlessMasterKey) {
     throw new Error(
-      'B2 master-key integration credentials are required when B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS=1',
+      'B2 master-key integration credentials are required when B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS=1',
     )
   }
 }

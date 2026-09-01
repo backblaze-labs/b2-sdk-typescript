@@ -86,7 +86,8 @@ endpoints reject non-master application keys.
 | Native storage and Object Lock | `B2_APPLICATION_KEY_ID` / `B2_APPLICATION_KEY` | Non-master key with bucket create/list/delete, file read/write/list/delete, and Object Lock retention/legal-hold/bypass caps for the Object Lock suite. |
 | Application-key lifecycle | `B2_KEY_MANAGEMENT_APPLICATION_KEY_ID` / `B2_KEY_MANAGEMENT_APPLICATION_KEY` | Dedicated non-master key with `writeKeys`, `listKeys`, `deleteKeys`, and `readFiles`; optionally `B2_KEY_MANAGEMENT_BUCKET_ID` when it cannot create/list buckets. |
 | Partner API and Computer Backup | `B2_MASTER_KEY_ID` / `B2_MASTER_KEY` | Account master key with Business Groups, sales-approved Partner access, and Computer Backup entitlement for those live suites. |
-| Destructive Partner provisioning | `B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER=1` plus the `B2_INTEGRATION_PARTNER_*` target variables | Opt-in only; use disposable Partner group/member targets. |
+| Master-key required mode | `B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS=1` | Makes missing or half-configured `B2_MASTER_KEY_ID` / `B2_MASTER_KEY` fail the scoped master-key suite. `B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS` is a legacy alias only. |
+| Destructive Partner provisioning | `B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER=1` plus the `B2_INTEGRATION_PARTNER_*` target variables | Manual `workflow_dispatch` opt-in only, on one Node matrix leg; use disposable Partner group/member targets. |
 | Destructive Computer Backup deletion | `B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP=1` plus the `B2_INTEGRATION_BACKUP_*` target variables | Opt-in only; use disposable backup records. |
 
 ## CI
