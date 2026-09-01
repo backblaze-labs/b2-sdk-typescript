@@ -5,12 +5,12 @@
 [![npm](https://img.shields.io/npm/v/@backblaze-labs/b2-sdk?color=cb3837)](https://www.npmjs.com/package/@backblaze-labs/b2-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.3-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%5E22.22.2%20%7C%7C%20%E2%89%A524.15-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen)](package.json)
 
 A Backblaze-maintained TypeScript and JavaScript SDK for Backblaze B2 Cloud Storage, currently incubating in [Backblaze Labs](https://github.com/backblaze-labs).
 
-**Isomorphic at the source level.** One source tree runs unmodified in Node.js 22.3+, Bun, Deno, and browsers, and is designed around the same Web APIs used by Cloudflare Workers and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
+**Isomorphic at the source level.** One source tree runs unmodified in supported Node.js releases, Bun, Deno, and browsers, and is designed around the same Web APIs used by Cloudflare Workers and Vercel Edge. Internal imports use `.ts` extensions so Deno reads `src/` directly with no build step. See [Source isomorphism](#source-isomorphism).
 
 **Async-first.** Built on Web Streams, `AbortSignal`, and `crypto.subtle`. No callbacks, no legacy APIs.
 
@@ -776,7 +776,7 @@ deno check examples/node-list-buckets.ts
 # Bun does the same.
 bun examples/node-list-buckets.ts
 
-# Node 22.6+ with --experimental-strip-types runs raw .ts.
+# Supported Node.js releases with --experimental-strip-types run raw .ts.
 node --experimental-strip-types examples/node-list-buckets.ts
 ```
 
@@ -786,14 +786,14 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.18 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
+| Node.js | ^22.22.2 or >=24.15.0 | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.22 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
 | Cloudflare Workers | - | Compatible target when the standard Web APIs above are available; not yet smoke-tested in CI with a Workers runtime. |
 | Vercel Edge | - | Compatible target when the standard Web APIs above are available; not yet smoke-tested in CI with Vercel Edge. |
 
-Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
+Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Supported Node.js releases are `^22.22.2 || >=24.15.0`; Node 22.22.1 and older are not supported. `FileSource(path)` throws on runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 

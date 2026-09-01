@@ -44,7 +44,7 @@ Run from the SDK root directory. Examples use `npx tsx` for direct TypeScript ex
 Build the SDK once first (`pnpm build`) for the Node and Bun commands — they import the package by its bare specifier, which resolves to `dist/`. The Deno command reads `../src` directly via `examples/deno.json` and needs no build.
 
 ```bash
-# Node 22.3+ (with tsx)
+# Supported Node.js releases (with tsx)
 npx tsx examples/node-list-buckets.ts
 
 # Bun

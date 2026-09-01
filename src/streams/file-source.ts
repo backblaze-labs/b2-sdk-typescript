@@ -69,7 +69,7 @@ function getNodeFsSync(): NodeFsSync {
   const fs = processLike?.getBuiltinModule?.('node:fs')
   if (!isNodeFsSync(fs)) {
     throw new Error(
-      'FileSource constructor requires Node.js 22.3+ synchronous filesystem APIs; use FileSource.fromPath() when synchronous filesystem access is unavailable.',
+      'FileSource constructor requires supported Node.js synchronous filesystem APIs; use FileSource.fromPath() when synchronous filesystem access is unavailable.',
     )
   }
   return fs

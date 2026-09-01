@@ -7,7 +7,7 @@ import pkg from '../package.json' with { type: 'json' }
  * the published artifact.
  *
  * Works in every runtime the SDK targets:
- *   - Node 22.3+, Bun, Deno: native JSON import attributes.
+ *   - Supported Node.js releases, Bun, Deno: native JSON import attributes.
  *   - Vite builds: the JSON import is replaced with a version-only shim so
  *     published runtime chunks do not carry unrelated package metadata.
  *   - Vitest browser mode: Vite handles the import the same way as build.

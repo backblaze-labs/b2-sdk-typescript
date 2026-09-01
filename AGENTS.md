@@ -19,8 +19,8 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 ## Overview
 
 Official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript. Isomorphic
-(Node 22.3+, browsers, Bun, Deno, Cloudflare Workers, Vercel Edge). Zero runtime
-dependencies in core. Built with Vite library mode + Vitest.
+(Node ^22.22.2 or >=24.15.0, browsers, Bun, Deno, Cloudflare Workers, Vercel
+Edge). Zero runtime dependencies in core. Built with Vite library mode + Vitest.
 
 ## Commands
 
@@ -42,8 +42,8 @@ pnpm verify          # Full local gate (lint, typecheck, tests, build, exports) 
 ```
 
 Run `pnpm verify` before claiming a change is done. CI runs the same gate on
-Linux + Windows + macOS (Node 22 and 24) plus `bun test src/` and the per-engine
-browser matrix.
+Linux + Windows + macOS (Node 22.22 and 24) plus `bun test src/` and the
+per-engine browser matrix.
 
 ## Conventions that bite (full list in [ARCHITECTURE.md](ARCHITECTURE.md))
 
