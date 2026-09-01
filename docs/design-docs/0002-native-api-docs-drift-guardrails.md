@@ -23,19 +23,9 @@ shape.
   update requests, and `{ isClientAuthorizedToRead, value }` for bucket
   responses.
 
-On 2026-08-25, after an earlier 2026-08-24 `gh repo view` check, the native API
-docs repository named in the issue, `backblaze-labs/b2-native-api-docs`, was
-checked again with both `gh repo view backblaze-labs/b2-native-api-docs` and
-`gh search repos "b2 native api docs owner:backblaze-labs"`; it still did not
-resolve for the authenticated user, and no matching repository was found. The
-findings remain tracked here, and upstream handoff remains blocked until that
-repository is accessible.
-
-On 2026-09-01, the same repository accessibility checks were repeated. The
-repository still did not resolve for the authenticated user, and repository
-search still returned no matching `backblaze-labs` result. Upstream handoff
-therefore remains blocked; this ADR remains the SDK-side tracking record for the
-three validated docs-generation inconsistencies.
+Native docs repository access status: `backblaze-labs/b2-native-api-docs` still
+did not resolve for the authenticated user on the latest recheck (2026-09-01,
+via `gh repo view` and `gh search repos`), so upstream handoff remains blocked.
 
 ## Decision
 
