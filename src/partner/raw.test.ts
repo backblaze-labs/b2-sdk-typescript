@@ -557,6 +557,33 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(String(result)).not.toContain(secret)
   })
 
+  it('preserves unexpected groupMember fields when the shape is variant', async () => {
+    const secret = 'variant-group-member-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present, but groupMember is a partial/variant object that
+      // does not match every documented field: allowlist redaction would drop
+      // the extra field, so shallow redaction must preserve it instead.
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+        groupMember: { accountId: memberAccountId, unexpectedField: 'keep-me' },
+      },
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+
+    // The variant field survives instead of being silently dropped.
+    expect((result.groupMember as { unexpectedField?: string }).unexpectedField).toBe('keep-me')
+    // …and the one-time key is preserved but redacted through serialization.
+    expect(result.applicationKey).toBe(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+  })
+
   it('sends Partner list endpoints as canonical GET query requests', async () => {
     const nextGroup = groupId('255')
     const { raw, seenRequests } = makePartnerEndpointRawClient({

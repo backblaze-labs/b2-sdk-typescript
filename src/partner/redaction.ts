@@ -153,6 +153,21 @@ function isCredentialBearing(
   )
 }
 
+// True when `groupMember` matches every documented field type, so the
+// field-specific (allowlist) redaction copies the full shape without dropping
+// unexpected fields. A partial/variant object falls back to shallow redaction.
+function matchesGroupMemberShape(groupMember: unknown): groupMember is PartnerGroupMember {
+  return (
+    isSingleJsonObject(groupMember) &&
+    typeof groupMember['accountId'] === 'string' &&
+    typeof groupMember['email'] === 'string' &&
+    typeof groupMember['groupId'] === 'string' &&
+    typeof groupMember['groupName'] === 'string' &&
+    typeof groupMember['region'] === 'string' &&
+    typeof groupMember['s3Endpoint'] === 'string'
+  )
+}
+
 // True when the reserve-trial response also matches every documented
 // non-credential field, so the field-specific (allowlist) redaction is exact.
 function matchesReserveTrialAccountShape(response: ReserveTrialCreateAccountResponse): boolean {
@@ -399,7 +414,7 @@ export function redactCreateGroupMemberResponse(
     )
   }
   // Full documented shape → field-specific (allowlist) redaction.
-  if (isSingleJsonObject(response.groupMember)) {
+  if (matchesGroupMemberShape(response.groupMember)) {
     return redactCreateGroupMemberResult(response)
   }
   // Credential present but the surrounding shape is unexpected: never discard a
@@ -461,6 +476,6 @@ export function redactReserveTrialCreateAccountResponse(
   return redactWithHooks(
     response,
     redactApplicationKeyShallow,
-    () => `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`,
+    () => `[ReserveTrialCreateAccountResponse ${APPLICATION_KEY_REDACTED}]`,
   )
 }
