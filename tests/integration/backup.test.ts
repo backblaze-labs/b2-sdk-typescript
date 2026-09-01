@@ -39,16 +39,16 @@ import { hasB2ErrorCode } from '../helpers/b2-cleanup.ts'
 import {
   directFetchTimeoutMs,
   env,
+  masterKey,
+  masterKeyId,
+  requireMasterCredentials,
   safeErrorSummary,
   setupStep,
   skipFeature,
+  skipUnlessMasterKey,
 } from '../helpers/live-b2.ts'
 
-const masterKeyId = process.env['B2_MASTER_KEY_ID'] ?? ''
-const masterKey = process.env['B2_MASTER_KEY'] ?? ''
 const realm = env('B2_REALM')
-const skipMissingMasterKey = masterKeyId === '' || masterKey === ''
-const requirePartnerCredentials = process.env['B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS'] === '1'
 const configuredBackupAccountId = env('B2_INTEGRATION_BACKUP_ACCOUNT_ID')
 const unauthorizedBackupAccountId = env('B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID')
 const allowDestructiveBackup = process.env['B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP'] === '1'
@@ -59,11 +59,7 @@ const backupFeature = 'Computer Backup API'
 const destructiveFeature = 'Computer Backup destructive deletion'
 const authorizationRejectionCodes = ['access_denied', 'unauthorized', 'invalid_account_id'] as const
 
-if (skipMissingMasterKey && requirePartnerCredentials) {
-  throw new Error(
-    'B2 master-key integration credentials are required when B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS=1',
-  )
-}
+requireMasterCredentials()
 
 const realmOption = realm !== undefined ? { realm } : {}
 
@@ -71,7 +67,7 @@ let backup: BackupClient | null = null
 let authorization: PartnerAuthorizeResponse | null = null
 let setupSkipReason: string | null = null
 
-describe.skipIf(skipMissingMasterKey)('Computer Backup live endpoint integration contracts', () => {
+describe.skipIf(skipUnlessMasterKey)('Computer Backup live endpoint integration contracts', () => {
   beforeAll(async () => {
     backup = new BackupClient({
       masterKeyId,

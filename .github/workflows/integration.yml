@@ -7,12 +7,25 @@ name: Integration (real B2)
 # Required repo secrets:
 #   B2_APPLICATION_KEY_ID
 #   B2_APPLICATION_KEY
+# Configure this as a non-master application key with bucket create/list/delete,
+# file read/write/list/delete, Object Lock retention/legal-hold/bypass caps, and
+# notification caps if live notification-rule tests are added.
+# Optional master-key secrets for Partner / Computer Backup coverage in the
+# shared integration suite on trusted main runs; required by the trusted
+# main-only Backup job:
+#   B2_MASTER_KEY_ID
+#   B2_MASTER_KEY
+# Optional repo variables for destructive Partner provisioning tests:
+#   B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER
+#   B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_ID
+#   B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_NAME
+#   B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN
+#   B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK
+#   B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL
+#   B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER
 # Optional dedicated credentials for the trusted application-key lifecycle job:
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY
-# Required repo secrets for the trusted Computer Backup live-contracts job:
-#   B2_MASTER_KEY_ID
-#   B2_MASTER_KEY
 # Optional if the key-management credential cannot list or create buckets:
 #   B2_KEY_MANAGEMENT_BUCKET_ID
 # When configured, the key-management credential should be a dedicated contract key with
@@ -93,6 +106,15 @@ jobs:
         env:
           B2_APPLICATION_KEY_ID: ${{ secrets.B2_APPLICATION_KEY_ID }}
           B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_MASTER_KEY_ID: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && secrets.B2_MASTER_KEY_ID || '' }}
+          B2_MASTER_KEY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && secrets.B2_MASTER_KEY || '' }}
+          B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER: ${{ vars.B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER }}
+          B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_ID: ${{ vars.B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_ID }}
+          B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_NAME: ${{ vars.B2_INTEGRATION_PARTNER_DESTRUCTIVE_GROUP_NAME }}
+          B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN: ${{ vars.B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN }}
+          B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK: ${{ vars.B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK }}
+          B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL: ${{ vars.B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL }}
+          B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER: ${{ vars.B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER }}
           B2_INTEGRATION_REQUIRE_CREDENTIALS: '1'
         run: |
           if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ]; then

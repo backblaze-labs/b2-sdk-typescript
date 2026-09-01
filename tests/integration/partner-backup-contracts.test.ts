@@ -28,11 +28,15 @@ import { BackupClient } from '../../src/backup/index.ts'
 import type { HttpRequest, HttpResponse, UrlGuardedTransport } from '../../src/http/transport.ts'
 import { FetchTransport } from '../../src/http/transport.ts'
 import { PartnerClient } from '../../src/partner/index.ts'
+import {
+  masterKey,
+  masterKeyId,
+  requireMasterCredentials,
+  skipUnlessMasterKey as skip,
+} from '../helpers/live-b2.ts'
 
-const masterKeyId = process.env['B2_MASTER_KEY_ID'] ?? ''
-const masterKey = process.env['B2_MASTER_KEY'] ?? ''
 const realm = process.env['B2_REALM']?.trim()
-const skip = !masterKeyId || !masterKey
+requireMasterCredentials()
 
 /**
  * Wraps a real {@link FetchTransport} and records the wire version segment seen

@@ -41,16 +41,16 @@ import {
   cleanupAttempts,
   cleanupRetryDelayMs,
   env,
+  masterKey,
+  masterKeyId,
+  requireMasterCredentials,
   safeErrorSummary,
   setupStep,
   skipFeature,
+  skipUnlessMasterKey,
 } from '../helpers/live-b2.ts'
 
-const masterKeyId = process.env['B2_MASTER_KEY_ID'] ?? ''
-const masterKey = process.env['B2_MASTER_KEY'] ?? ''
 const realm = env('B2_REALM')
-const skipMissingMasterKey = masterKeyId === '' || masterKey === ''
-const requirePartnerCredentials = process.env['B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS'] === '1'
 const allowDestructivePartner = process.env['B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER'] === '1'
 const allowIrreversiblePartnerTrial =
   process.env['B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL'] === '1'
@@ -63,11 +63,7 @@ const partnerFeature = 'Partner API groups and members'
 const destructiveFeature = 'Partner API destructive provisioning'
 const reserveTrialFeature = 'Partner API irreversible reserve-trial provisioning'
 
-if (skipMissingMasterKey && requirePartnerCredentials) {
-  throw new Error(
-    'B2 master-key integration credentials are required when B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS=1',
-  )
-}
+requireMasterCredentials()
 
 interface CreatedGroupMemberForCleanup {
   readonly groupId: GroupId
@@ -93,7 +89,7 @@ let partner: PartnerClient | null = null
 let authorization: PartnerAuthorizeResponse | null = null
 let setupSkipReason: string | null = null
 
-describe.skipIf(skipMissingMasterKey)('Partner live endpoint integration contracts', () => {
+describe.skipIf(skipUnlessMasterKey)('Partner live endpoint integration contracts', () => {
   beforeAll(async () => {
     partner = new PartnerClient({
       masterKeyId,
