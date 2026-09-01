@@ -27,6 +27,16 @@ Native docs repository access status: `backblaze-labs/b2-native-api-docs` still
 did not resolve for the authenticated user on the latest recheck (2026-09-01,
 via `gh repo view` and `gh search repos`), so upstream handoff remains blocked.
 
+Latest recheck commands and observed outputs:
+
+```sh
+$ gh repo view backblaze-labs/b2-native-api-docs --json nameWithOwner,url,description,isPrivate
+GraphQL: Could not resolve to a Repository with the name 'backblaze-labs/b2-native-api-docs'. (repository)
+
+$ gh search repos "b2 native api docs owner:backblaze-labs" --json fullName,url,description --limit 20
+[]
+```
+
 ## Decision
 
 Do not change SDK types from generated native API docs alone. Keep the SDK's
