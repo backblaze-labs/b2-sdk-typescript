@@ -12,6 +12,9 @@ import { deleteFileVersionOnce, hasB2ErrorCode } from './b2-cleanup.ts'
 export const keyId = process.env.B2_APPLICATION_KEY_ID ?? ''
 export const appKey = process.env.B2_APPLICATION_KEY ?? ''
 export const skipB2Integration = !keyId || !appKey
+export const masterKeyId = process.env.B2_MASTER_KEY_ID ?? ''
+export const masterKey = process.env.B2_MASTER_KEY ?? ''
+export const skipUnlessMasterKey = !masterKeyId || !masterKey
 export const currentBucketPrefix = 'sdk-it-'
 export const legacyBucketPrefix = 'sdk-test-'
 export const staleBucketAgeMs = 60 * 60 * 1000
@@ -27,12 +30,36 @@ export const complianceCleanupRetryDelayMs = 1000
 const complianceProtectedErrorCodes = ['access_denied', 'file_lock_compliance_protected']
 
 const requireCredentials = process.env.B2_INTEGRATION_REQUIRE_CREDENTIALS === '1'
+const requireMasterCredentialsFlag =
+  process.env.B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS === '1' ||
+  // Legacy alias retained for older local scripts and in-flight CI branches.
+  process.env.B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS === '1'
+const masterCredentialsRequiredMessage =
+  'B2 master-key integration credentials are required when ' +
+  'B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS=1 or legacy ' +
+  'B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS=1'
+const hasPartialB2IntegrationCredentials = (keyId === '') !== (appKey === '')
+const hasPartialMasterCredentials = (masterKeyId === '') !== (masterKey === '')
 
 export function requireB2IntegrationCredentials(): void {
-  if (skipB2Integration && requireCredentials) {
+  if (!requireCredentials) return
+  if (hasPartialB2IntegrationCredentials) {
+    throw new Error('B2_APPLICATION_KEY_ID and B2_APPLICATION_KEY must be provided together')
+  }
+  if (skipB2Integration) {
     throw new Error(
       'B2 integration credentials are required when B2_INTEGRATION_REQUIRE_CREDENTIALS=1',
     )
+  }
+}
+
+export function requireMasterCredentials(): void {
+  if (!requireMasterCredentialsFlag) return
+  if (hasPartialMasterCredentials) {
+    throw new Error('B2_MASTER_KEY_ID and B2_MASTER_KEY must be provided together')
+  }
+  if (skipUnlessMasterKey) {
+    throw new Error(masterCredentialsRequiredMessage)
   }
 }
 
