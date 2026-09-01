@@ -21,7 +21,7 @@ describe('partner and backup wire response shapes', () => {
     const b2Stats: PartnerB2Stats = {
       b2BytesStoredCount: 1024,
       b2FilesStoredCount: 3,
-      b2StatsAsOfTimestamp: '2026-08-14T00:00:00Z',
+      b2StatsAsOfTimestamp: 'd20260814_m000000',
       bucketCount: 1,
     }
     const groupMember = {
@@ -43,14 +43,14 @@ describe('partner and backup wire response shapes', () => {
       accountId: adminAccountId,
       groups: [
         {
-          accountStandingDetails: { state: 'active' },
+          accountStandingDetails: { state: 'B2_GOOD_STANDING' },
           b2Stats,
           groupId: group,
           groupName: 'Example Group',
           groupProducts: ['BACKUP', 'STORAGE'],
           groupStats: {
-            createdTimestamp: '2026-08-14T00:00:00Z',
-            groupStatsAsOfTimestamp: '2026-08-14T00:00:00Z',
+            createdTimestamp: 'd20260814_m000000',
+            groupStatsAsOfTimestamp: 'd20260814_m000000',
             memberCount: 1,
           },
         },

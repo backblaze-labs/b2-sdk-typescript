@@ -869,7 +869,8 @@ function expectNonNegativeIntegerCount(value: number, label: string): void {
 
 function expectTimestampString(value: string, label: string): void {
   expectNonEmptyString(value, label)
-  expect(Number.isNaN(Date.parse(value)), label).toBe(false)
+  // B2 Partner API timestamps use the `dYYYYMMDD_mHHMMSS` format, not ISO 8601.
+  expect(value, label).toMatch(/^d\d{8}_m\d{6}$/)
 }
 
 function expectDateString(value: string, label: string): void {

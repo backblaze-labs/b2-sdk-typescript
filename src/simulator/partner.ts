@@ -83,6 +83,15 @@ function utcDateString(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
+// B2 Partner API timestamps are `dYYYYMMDD_mHHMMSS` (UTC), not ISO 8601.
+function b2FriendlyTimestamp(ms: number): string {
+  const date = new Date(ms)
+  const pad = (n: number, width = 2): string => String(n).padStart(width, '0')
+  const day = `${pad(date.getUTCFullYear(), 4)}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}`
+  const time = `${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
+  return `d${day}_m${time}`
+}
+
 function utcDayStartMs(ms: number): number {
   const date = new Date(ms)
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
@@ -1064,9 +1073,9 @@ export class PartnerSimulator {
   }
 
   private publicGroup(group: StoredPartnerGroup): PartnerGroup {
-    const timestamp = new Date(group.createdTimestamp).toISOString()
+    const timestamp = b2FriendlyTimestamp(group.createdTimestamp)
     return {
-      accountStandingDetails: { state: 'good_standing' },
+      accountStandingDetails: { state: 'B2_GOOD_STANDING' },
       b2Stats: this.emptyB2Stats(group.createdTimestamp),
       groupId: groupIdOf(group.groupId),
       groupName: group.groupName,
@@ -1109,7 +1118,7 @@ export class PartnerSimulator {
     return {
       b2BytesStoredCount: 0,
       b2FilesStoredCount: 0,
-      b2StatsAsOfTimestamp: new Date(timestamp).toISOString(),
+      b2StatsAsOfTimestamp: b2FriendlyTimestamp(timestamp),
       bucketCount: 0,
     }
   }

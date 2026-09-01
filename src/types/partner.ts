@@ -224,10 +224,9 @@ export interface ListGroupsRequest {
 /**
  * B2 storage statistics returned for partner groups and group members.
  *
- * Live `b2_list_groups` and `b2_list_group_members` responses return these
- * count fields as quoted decimal strings, despite Partner docs listing them as
- * integers. The SDK preserves the wire shape instead of normalizing them to
- * numbers.
+ * Live `b2_list_groups` and `b2_list_group_members` responses return the count
+ * fields as JSON numbers (matching the Partner docs), and the daily-snapshot
+ * timestamp as a B2 `dYYYYMMDD_mHHMMSS` string.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -236,7 +235,7 @@ export interface PartnerB2Stats {
   readonly b2BytesStoredCount: number
   /** Total files stored, as an integer count. */
   readonly b2FilesStoredCount: number
-  /** ISO 8601 UTC date-time string for the daily B2 statistics snapshot, or null if unavailable. */
+  /** B2 `dYYYYMMDD_mHHMMSS` UTC timestamp for the daily B2 statistics snapshot, or null if unavailable. */
   readonly b2StatsAsOfTimestamp: string | null
   /** Total bucket count, as an integer count. */
   readonly bucketCount: number
@@ -258,9 +257,9 @@ export interface PartnerAccountStandingDetails {
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerGroupStats {
-  /** ISO 8601 UTC date-time string for when the group was created. */
+  /** B2 `dYYYYMMDD_mHHMMSS` UTC timestamp for when the group was created. */
   readonly createdTimestamp: string
-  /** ISO 8601 UTC date-time string for the last update to the group's statistics. */
+  /** B2 `dYYYYMMDD_mHHMMSS` UTC timestamp for the last update to the group's statistics. */
   readonly groupStatsAsOfTimestamp: string
   /** Total number of accepted members in the group. */
   readonly memberCount: number
@@ -274,7 +273,7 @@ export interface PartnerGroupStats {
 export interface PartnerGroup {
   /** Account standing information for the group. */
   readonly accountStandingDetails: PartnerAccountStandingDetails
-  /** B2 storage statistics for the group. Count fields are preserved as decimal strings. */
+  /** B2 storage statistics for the group. Count fields are integer numbers. */
   readonly b2Stats: PartnerB2Stats
   /** Unique ID of the group. */
   readonly groupId: GroupId
@@ -332,7 +331,7 @@ export interface ListGroupMembersRequest {
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface ListedGroupMember extends PartnerGroupMember {
-  /** B2 storage statistics for the member. Count fields are preserved as decimal strings. */
+  /** B2 storage statistics for the member. Count fields are integer numbers. */
   readonly b2Stats: PartnerB2Stats
 }
 
