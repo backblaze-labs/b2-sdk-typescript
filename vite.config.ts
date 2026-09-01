@@ -5,6 +5,10 @@ import dts from 'vite-plugin-dts'
 
 const packageJsonPath = resolve(__dirname, 'package.json')
 const versionJsonModuleId = '\0b2-sdk-version-json'
+const releaseDefine =
+  process.env['B2_SDK_RELEASE_CHANNEL'] === 'published'
+    ? { __B2_SDK_RELEASE_CHANNEL__: JSON.stringify('published') }
+    : {}
 
 function versionJsonOnlyPlugin() {
   const { version } = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version: string }
@@ -26,6 +30,7 @@ function versionJsonOnlyPlugin() {
 }
 
 export default defineConfig({
+  define: releaseDefine,
   plugins: [
     versionJsonOnlyPlugin(),
     dts({
@@ -58,6 +63,7 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        version: resolve(__dirname, 'src/version.ts'),
         'raw/index': resolve(__dirname, 'src/raw/index.ts'),
         'errors/index': resolve(__dirname, 'src/errors/index.ts'),
         'auth/index': resolve(__dirname, 'src/auth/index.ts'),
