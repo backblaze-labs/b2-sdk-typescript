@@ -22,7 +22,9 @@ import {
   createDownloadStagingDirectory,
   DOWNLOAD_STAGING_DIRECTORY_NAME,
   DOWNLOAD_STAGING_MARKER_NAME,
+  downloadStagingTestHooks,
   isManagedDownloadStagingRoot,
+  removeDownloadStagingRootMarkerAndDirectory,
 } from './download-staging.ts'
 import { assertSameScannedRegularFile, localFileIdentityFromStats } from './local-file-identity.ts'
 import {
@@ -1011,6 +1013,61 @@ describe('writeLocalStreamInsideRoot', () => {
       await expect(readFile(join(root, 'file.txt'), 'utf8')).resolves.toBe('abc')
       await expect(readFile(payload, 'utf8')).resolves.toBe('not managed')
     } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats concurrent staging root removal during root cleanup as benign', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-root-cleanup-race-'))
+    const originalEmitWarning = process.emitWarning
+    const warnings: string[] = []
+    try {
+      const realRoot = await realpath(root)
+      const managedDirectory = join(realRoot, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await mkdir(managedDirectory)
+      await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+      process.emitWarning = ((warning: string | Error) => {
+        warnings.push(warning instanceof Error ? warning.message : warning)
+      }) as typeof process.emitWarning
+      downloadStagingTestHooks.afterCleanupMarkerStat = async (directory) => {
+        if (directory === managedDirectory) await rm(managedDirectory, { recursive: true })
+      }
+
+      await removeDownloadStagingRootMarkerAndDirectory(realRoot, managedDirectory, nodePath)
+
+      expect(warnings).toEqual([])
+      await expect(readdir(managedDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      delete downloadStagingTestHooks.afterCleanupMarkerStat
+      process.emitWarning = originalEmitWarning
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('treats concurrent staging marker removal during root cleanup as benign', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-marker-cleanup-race-'))
+    const originalEmitWarning = process.emitWarning
+    const warnings: string[] = []
+    try {
+      const realRoot = await realpath(root)
+      const managedDirectory = join(realRoot, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      const markerPath = join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME)
+      await mkdir(managedDirectory)
+      await writeFile(markerPath, '')
+      process.emitWarning = ((warning: string | Error) => {
+        warnings.push(warning instanceof Error ? warning.message : warning)
+      }) as typeof process.emitWarning
+      downloadStagingTestHooks.beforeCleanupMarkerUnlink = async (path) => {
+        if (path === markerPath) await rm(markerPath, { force: true })
+      }
+
+      await removeDownloadStagingRootMarkerAndDirectory(realRoot, managedDirectory, nodePath)
+
+      expect(warnings).toEqual([])
+      await expect(readFile(markerPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      delete downloadStagingTestHooks.beforeCleanupMarkerUnlink
+      process.emitWarning = originalEmitWarning
       await rm(root, { recursive: true, force: true })
     }
   })

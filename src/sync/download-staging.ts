@@ -19,6 +19,13 @@ const MAX_CLEANUP_WARNING_ENTRIES = 3
 /** @internal */
 export const DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT = 1024
 const reapedManagedDirectories = new Map<string, Promise<void>>()
+const activeManagedDirectoryCreations = new Map<string, number>()
+
+/** @internal */
+export const downloadStagingTestHooks: {
+  afterCleanupMarkerStat?: (managedDirectory: string) => Promise<void> | void
+  beforeCleanupMarkerUnlink?: (markerPath: string) => Promise<void> | void
+} = {}
 
 type StagingActivitySnapshot = {
   readonly newestActivityMs: number
@@ -28,6 +35,14 @@ type StagingActivitySnapshot = {
 type CleanupWarning = {
   readonly entryName: string
   readonly operation: 'inspect' | 'remove'
+}
+
+/** @internal */
+export interface DownloadStagingDirectory {
+  /** Resolved SDK-managed staging root shared by download runs under one sync root. */
+  readonly managedDirectory: string
+  /** Resolved per-run staging directory for one download. */
+  readonly stagingDirectory: string
 }
 
 /**
@@ -54,8 +69,9 @@ export function isDownloadStagingDirectorySegment(segment: string | undefined): 
  * @param statForDeviceCheck - Stat function used to verify filesystem devices.
  * @param beforeStagingMarkerWrite - Test hook called before marker creation.
  * @param activityEntryLimit - Maximum entry count inspected for stale staging activity.
+ * @param afterManagedStagingMarkerWrite - Test hook called after managed-root marker creation.
  *
- * @returns The resolved staging directory path.
+ * @returns The resolved managed and per-run staging directory paths.
  *
  * @internal
  */
@@ -66,70 +82,172 @@ export async function createDownloadStagingDirectory(
   statForDeviceCheck: DeviceStatFn,
   beforeStagingMarkerWrite?: (directory: string) => Promise<void> | void,
   activityEntryLimit = DOWNLOAD_STAGING_ACTIVITY_ENTRY_LIMIT,
-): Promise<string> {
+  afterManagedStagingMarkerWrite?: (directory: string) => Promise<void> | void,
+): Promise<DownloadStagingDirectory> {
   const { chmod, lstat, mkdir, readdir, realpath, rm } = await import('node:fs/promises')
   const managedDirectory = path.join(rootRealPath, DOWNLOAD_STAGING_DIRECTORY_NAME)
+  const releaseManagedDirectoryCreation = retainDownloadStagingRootCreation(managedDirectory)
   try {
-    await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
-  } catch (err) {
-    if (!hasErrorCode(err, 'EEXIST')) throw err
-  }
-  const managedStats = await lstat(managedDirectory)
-  if (!managedStats.isDirectory()) {
-    throw new Error(
-      `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is not a directory`,
-    )
-  }
-  const realManagedDirectory = await realpath(managedDirectory)
-  assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
-  await assertDownloadPathSameDevice(
-    rootRealPath,
-    realManagedDirectory,
-    statForDeviceCheck,
-    'unsafe local destination path: cannot stage download across filesystems',
-  )
-
-  if (!(await isManagedDownloadStagingRoot(realManagedDirectory))) {
-    const entries = await readdir(realManagedDirectory)
-    if (entries.length > 0 && !(await isManagedDownloadStagingRoot(realManagedDirectory))) {
+    try {
+      await mkdir(managedDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
+    } catch (err) {
+      if (!hasErrorCode(err, 'EEXIST')) throw err
+    }
+    const managedStats = await lstat(managedDirectory)
+    if (!managedStats.isDirectory()) {
       throw new Error(
-        `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved for SDK download staging`,
+        `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is not a directory`,
       )
     }
-  }
-  await beforeStagingMarkerWrite?.(realManagedDirectory)
-  await writeStagingMarker(realManagedDirectory, path)
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  await reapStaleDownloadStagingDirectoriesOnce(
-    realManagedDirectory,
-    path,
-    Date.now(),
-    activityEntryLimit,
-  )
-
-  const stagingDirectory = path.join(
-    realManagedDirectory,
-    `${Date.now()}-${randomUUID()}${DOWNLOAD_STAGING_ENTRY_SUFFIX}`,
-  )
-  await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
-  /* v8 ignore next -- best-effort chmod */
-  await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
-  try {
-    const realStagingDirectory = await realpath(stagingDirectory)
-    assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
+    const realManagedDirectory = await realpath(managedDirectory)
+    assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
     await assertDownloadPathSameDevice(
       rootRealPath,
-      realStagingDirectory,
+      realManagedDirectory,
       statForDeviceCheck,
       'unsafe local destination path: cannot stage download across filesystems',
     )
-    await beforeStagingMarkerWrite?.(realStagingDirectory)
-    await writeStagingMarker(realStagingDirectory, path)
-    return realStagingDirectory
+
+    if (!(await isManagedDownloadStagingRoot(realManagedDirectory))) {
+      const entries = await readdir(realManagedDirectory)
+      if (entries.length > 0 && !(await isManagedDownloadStagingRoot(realManagedDirectory))) {
+        throw new Error(
+          `unsafe local destination path: ${DOWNLOAD_STAGING_DIRECTORY_NAME} is reserved for SDK download staging`,
+        )
+      }
+    }
+    await beforeStagingMarkerWrite?.(realManagedDirectory)
+    await writeStagingMarker(realManagedDirectory, path)
+    await afterManagedStagingMarkerWrite?.(realManagedDirectory)
+    /* v8 ignore next -- best-effort chmod */
+    await chmod(realManagedDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
+    await reapStaleDownloadStagingDirectoriesOnce(
+      realManagedDirectory,
+      path,
+      Date.now(),
+      activityEntryLimit,
+    )
+
+    const stagingDirectory = path.join(
+      realManagedDirectory,
+      `${Date.now()}-${randomUUID()}${DOWNLOAD_STAGING_ENTRY_SUFFIX}`,
+    )
+    await mkdir(stagingDirectory, { mode: PRIVATE_DOWNLOAD_DIRECTORY_MODE })
+    /* v8 ignore next -- best-effort chmod */
+    await chmod(stagingDirectory, PRIVATE_DOWNLOAD_DIRECTORY_MODE).catch(() => {})
+    try {
+      const realStagingDirectory = await realpath(stagingDirectory)
+      assertPathInsideRoot(realManagedDirectory, realStagingDirectory, path)
+      await assertDownloadPathSameDevice(
+        rootRealPath,
+        realStagingDirectory,
+        statForDeviceCheck,
+        'unsafe local destination path: cannot stage download across filesystems',
+      )
+      await beforeStagingMarkerWrite?.(realStagingDirectory)
+      await writeStagingMarker(realStagingDirectory, path)
+      return {
+        managedDirectory: realManagedDirectory,
+        stagingDirectory: realStagingDirectory,
+      }
+    } catch (err) {
+      /* v8 ignore next -- best-effort cleanup */
+      await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+      throw err
+    }
+  } finally {
+    releaseManagedDirectoryCreation()
+  }
+}
+
+/**
+ * Removes the SDK root marker and the now-empty SDK-managed staging root
+ * once all per-run `.download` entries are gone.
+ * @param rootRealPath - Resolved local sync root path.
+ * @param managedDirectory - Resolved SDK-managed staging root path.
+ * @param path - Node path module used for platform-specific path operations.
+ *
+ * @internal
+ */
+export async function removeDownloadStagingRootMarkerAndDirectory(
+  rootRealPath: string,
+  managedDirectory: string,
+  path: typeof import('node:path'),
+): Promise<void> {
+  try {
+    await removeDownloadStagingRootMarkerAndDirectoryCore(rootRealPath, managedDirectory, path)
   } catch (err) {
-    /* v8 ignore next -- best-effort cleanup */
-    await rm(stagingDirectory, { recursive: true, force: true }).catch(() => {})
+    emitCleanupWarning(
+      `failed to remove B2 SDK download staging root: ${localFilesystemErrorReason(err)}`,
+    )
+  }
+}
+
+async function removeDownloadStagingRootMarkerAndDirectoryCore(
+  rootRealPath: string,
+  managedDirectory: string,
+  path: typeof import('node:path'),
+): Promise<void> {
+  const { lstat, readdir, realpath, rmdir, unlink } = await import('node:fs/promises')
+  if (downloadStagingRootCreationIsActive(managedDirectory)) return
+
+  const managedStats = await lstat(managedDirectory).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ENOENT')) return undefined
+    throw err
+  })
+  if (managedStats === undefined || !managedStats.isDirectory()) return
+
+  const realManagedDirectory = await realpath(managedDirectory).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ENOENT')) return undefined
+    throw err
+  })
+  if (realManagedDirectory === undefined) return
+  assertPathInsideRoot(rootRealPath, realManagedDirectory, path)
+  if (downloadStagingRootCreationIsActive(realManagedDirectory)) return
+
+  const markerPath = path.join(realManagedDirectory, DOWNLOAD_STAGING_MARKER_NAME)
+  const markerStats = await lstat(markerPath).catch((err: unknown) => {
+    if (hasErrorCode(err, 'ENOENT')) return undefined
+    throw err
+  })
+  if (markerStats?.isFile() !== true) return
+
+  await downloadStagingTestHooks.afterCleanupMarkerStat?.(realManagedDirectory)
+  const entries = await readdir(realManagedDirectory, { withFileTypes: true }).catch(
+    (err: unknown) => {
+      if (hasErrorCode(err, 'ENOENT')) return undefined
+      throw err
+    },
+  )
+  if (entries === undefined) return
+  if (entries.length !== 1 || entries[0]?.name !== DOWNLOAD_STAGING_MARKER_NAME) return
+  const currentRealManagedDirectory = await realpath(managedDirectory).catch(() => undefined)
+  if (currentRealManagedDirectory !== realManagedDirectory) return
+  if (downloadStagingRootCreationIsActive(realManagedDirectory)) return
+
+  await downloadStagingTestHooks.beforeCleanupMarkerUnlink?.(markerPath)
+  const markerRemoved = await unlink(markerPath)
+    .then(() => true)
+    .catch((err: unknown) => {
+      if (hasErrorCode(err, 'ENOENT')) return false
+      throw err
+    })
+  if (!markerRemoved) return
+  try {
+    await rmdir(realManagedDirectory)
+  } catch (err) {
+    if (hasErrorCode(err, 'ENOENT')) return
+    if (hasErrorCode(err, 'ENOTEMPTY') || hasErrorCode(err, 'EEXIST')) {
+      await restoreDownloadStagingRootMarker(realManagedDirectory, path)
+      return
+    }
+    await restoreDownloadStagingRootMarker(realManagedDirectory, path).catch((restoreErr) => {
+      emitCleanupWarning(
+        `failed to restore B2 SDK download staging marker: ${localFilesystemErrorReason(
+          restoreErr,
+        )}`,
+      )
+    })
     throw err
   }
 }
@@ -209,6 +327,38 @@ async function writeStagingMarker(
     /* v8 ignore next -- best-effort close */
     await handle?.close().catch(() => {})
   }
+}
+
+function retainDownloadStagingRootCreation(managedDirectory: string): () => void {
+  activeManagedDirectoryCreations.set(
+    managedDirectory,
+    (activeManagedDirectoryCreations.get(managedDirectory) ?? 0) + 1,
+  )
+  return () => {
+    const count = activeManagedDirectoryCreations.get(managedDirectory)
+    /* v8 ignore next -- releases are paired with retains in a single closure */
+    if (count === undefined || count <= 1) {
+      activeManagedDirectoryCreations.delete(managedDirectory)
+    } else {
+      activeManagedDirectoryCreations.set(managedDirectory, count - 1)
+    }
+  }
+}
+
+function downloadStagingRootCreationIsActive(managedDirectory: string): boolean {
+  return activeManagedDirectoryCreations.has(managedDirectory)
+}
+
+async function restoreDownloadStagingRootMarker(
+  managedDirectory: string,
+  path: typeof import('node:path'),
+): Promise<void> {
+  const { lstat, realpath } = await import('node:fs/promises')
+  const managedStats = await lstat(managedDirectory).catch(() => undefined)
+  if (managedStats?.isDirectory() !== true) return
+  const currentRealManagedDirectory = await realpath(managedDirectory).catch(() => undefined)
+  if (currentRealManagedDirectory !== managedDirectory) return
+  await writeStagingMarker(managedDirectory, path)
 }
 
 /**

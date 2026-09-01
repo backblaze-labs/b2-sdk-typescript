@@ -20,6 +20,10 @@ import {
   normalizeSha1VerificationMaxBytes,
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  removeDownloadStagingRootMarkerAndDirectory,
+} from './download-staging.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import {
   deleteLocalFileInsideRoot,
@@ -74,6 +78,7 @@ interface ScanEventBuffer {
  */
 export const synchronizerTestHooks: {
   afterNonSha1PlanBatch?: (batchSize: number) => void
+  beforeDownloadStagingRootCleanup?: (managedDirectory: string) => Promise<void> | void
 } = {}
 
 /** Base configuration for a sync operation. */
@@ -172,6 +177,15 @@ interface LocalRootContexts {
   readonly dest?: LocalRootContext
 }
 
+interface DownloadStagingRootCleanupTarget {
+  readonly managedDirectory: string
+  readonly rootRealPath: string
+}
+
+interface SynchronizerLifecycleHooks {
+  readonly onDownloadStagingRoot?: (target: DownloadStagingRootCleanupTarget) => void
+}
+
 /**
  * Infers the sync direction from the source and destination folder types.
  * @param source - The folder to read files from.
@@ -242,7 +256,12 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const factory = createActionFactory(config, localRootContexts)
+  const downloadStagingRoots = await downloadStagingRootCleanupTargets(direction, localRootContexts)
+  const factory = createActionFactory(config, localRootContexts, {
+    onDownloadStagingRoot(target) {
+      downloadStagingRoots.set(target.managedDirectory, target)
+    },
+  })
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
   const actionAbortController = new AbortController()
   const removeAbortForwarder = forwardAbortSignal(options.signal, actionAbortController)
@@ -320,6 +339,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     }
     removeAbortForwarder()
     await drainActions()
+    await removeDownloadStagingRootMarkersAndDirectoriesAfterSync(downloadStagingRoots)
   }
 
   async function collectPairs(): Promise<SyncPair[]> {
@@ -537,6 +557,37 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     while (runningActions.size > 0) {
       await Promise.race(runningActions)
     }
+  }
+}
+
+async function downloadStagingRootCleanupTargets(
+  direction: SyncDirection,
+  localRootContexts: LocalRootContexts,
+): Promise<Map<string, DownloadStagingRootCleanupTarget>> {
+  const targets = new Map<string, DownloadStagingRootCleanupTarget>()
+  if (direction !== 'b2-to-local' || localRootContexts.dest === undefined) return targets
+
+  const path = await import('node:path')
+  const target = {
+    managedDirectory: path.join(localRootContexts.dest.realPath, DOWNLOAD_STAGING_DIRECTORY_NAME),
+    rootRealPath: localRootContexts.dest.realPath,
+  } satisfies DownloadStagingRootCleanupTarget
+  targets.set(target.managedDirectory, target)
+  return targets
+}
+
+async function removeDownloadStagingRootMarkersAndDirectoriesAfterSync(
+  targets: ReadonlyMap<string, DownloadStagingRootCleanupTarget>,
+): Promise<void> {
+  if (targets.size === 0) return
+  const path = await import('node:path')
+  for (const target of targets.values()) {
+    await synchronizerTestHooks.beforeDownloadStagingRootCleanup?.(target.managedDirectory)
+    await removeDownloadStagingRootMarkerAndDirectory(
+      target.rootRealPath,
+      target.managedDirectory,
+      path,
+    )
   }
 }
 
@@ -775,12 +826,14 @@ function toSseCDownloadKey(setting: EncryptionSetting | undefined): SseCDownload
  *
  * @param config - Synchronizer configuration containing source, destination, and options.
  * @param localRootContexts - Resolved filesystem roots captured before action creation.
+ * @param lifecycleHooks - Hooks used to report action-scoped cleanup state.
  *
  * @returns An action factory bound to the provided configuration.
  */
 function createActionFactory(
   config: SynchronizerConfig,
   localRootContexts: LocalRootContexts,
+  lifecycleHooks: SynchronizerLifecycleHooks = {},
 ): ActionFactory {
   const upConfig = config as Partial<SynchronizerUpConfig>
   const downConfig = config as Partial<SynchronizerDownConfig>
@@ -876,6 +929,15 @@ function createActionFactory(
             expectedBytes,
             ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
+            ...(lifecycleHooks.onDownloadStagingRoot !== undefined
+              ? {
+                  onDownloadStagingRoot: (managedDirectory: string) => {
+                    const rootRealPath = localRootContexts.dest?.realPath
+                    if (rootRealPath === undefined) return
+                    lifecycleHooks.onDownloadStagingRoot?.({ managedDirectory, rootRealPath })
+                  },
+                }
+              : {}),
             signal: actionSignal(signal),
           })
         } catch (err) {

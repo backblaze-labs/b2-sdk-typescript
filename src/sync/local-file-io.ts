@@ -31,6 +31,7 @@ export const localFileIoTestHooks: {
   beforeFinalRename?: (path: string) => Promise<void> | void
   beforeLocalDeleteOpenParent?: (path: string) => Promise<void> | void
   beforeLocalDeleteUnlink?: (path: string) => Promise<void> | void
+  afterManagedStagingMarkerWrite?: (path: string) => Promise<void> | void
   beforeStagingMarkerWrite?: (path: string) => Promise<void> | void
   disableProcFdAnchoring?: boolean
   downloadStagingActivityEntryLimit?: number
@@ -160,6 +161,7 @@ export async function writeLocalStreamInsideRoot(
     readonly expectedBytes: number
     readonly expectedDestination?: LocalSyncPath | null
     readonly idleTimeoutMillis: number
+    readonly onDownloadStagingRoot?: (managedDirectory: string) => void
     readonly signal?: AbortSignal
   },
 ): Promise<void> {
@@ -250,20 +252,25 @@ export async function writeLocalStreamInsideRoot(
     throw err
   }
   let stagingDirectory: string
+  let managedStagingDirectory: string
   try {
-    stagingDirectory = await createDownloadStagingDirectory(
+    const staging = await createDownloadStagingDirectory(
       rootRealPath,
       path,
       randomUUID,
       statForDeviceCheck,
       localFileIoTestHooks.beforeStagingMarkerWrite,
       localFileIoTestHooks.downloadStagingActivityEntryLimit,
+      localFileIoTestHooks.afterManagedStagingMarkerWrite,
     )
+    stagingDirectory = staging.stagingDirectory
+    managedStagingDirectory = staging.managedDirectory
   } catch (err) {
     /* v8 ignore next -- best-effort close during setup failure */
     await parentHandle?.close().catch(() => {})
     throw err
   }
+  options.onDownloadStagingRoot?.(managedStagingDirectory)
   const tmpPath = path.join(stagingDirectory, `.b2sdk-${randomUUID()}.partial`)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
