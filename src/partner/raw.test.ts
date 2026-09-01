@@ -528,9 +528,33 @@ describe('PartnerRawClient group management endpoints', () => {
         groupId: group,
         memberEmail: 'member@example.com',
       }),
-      'b2_create_group_member response was not a single JSON object',
+      'b2_create_group_member response did not contain a usable application key',
       secret,
     )
+  })
+
+  it('preserves the credential when the create-group-member shape is unexpected', async () => {
+    const secret = 'partial-shape-create-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present at the top level, but groupMember is absent.
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+      },
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+
+    // The one-time key must survive an unexpected shape (issue #280 F17).
+    expect(result.applicationKey).toBe(secret)
+    // …and still redact through SDK safe serialization.
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(String(result)).not.toContain(secret)
   })
 
   it('sends Partner list endpoints as canonical GET query requests', async () => {
@@ -1275,9 +1299,37 @@ describe('PartnerRawClient reserve trial endpoint', () => {
         term: 7,
         storage: 1,
       }),
-      'b2_reserve_trial_create_account response was not a single JSON object',
+      'b2_reserve_trial_create_account response did not contain a usable application key',
       secret,
     )
+  })
+
+  it('preserves the credential when the reserve-trial shape is unexpected', async () => {
+    const secret = 'partial-shape-trial-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present, but bucketName/bucketId and other fields are absent.
+      b2_reserve_trial_create_account: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+      },
+    })
+
+    const result = await raw.reserveTrialCreateAccount(
+      'https://groups.backblazeb2.com/partner',
+      authToken,
+      {
+        email: 'trial-partial-shape@example.com',
+        term: 7,
+        storage: 1,
+      },
+    )
+
+    // Fixing the request (F18) means this path now provisions before redacting;
+    // an unexpected response shape must not discard the minted key.
+    expect(result.applicationKey).toBe(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(String(result)).not.toContain(secret)
   })
 
   it('does not retry reserve trial failures with an embedded b2api base segment', async () => {

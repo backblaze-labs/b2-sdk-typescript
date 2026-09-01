@@ -137,40 +137,41 @@ function isSingleJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function assertCreateGroupMemberResponseShape(
+// The one invariant a create/reserve redaction wrapper must never violate: a
+// usable one-time credential must survive. B2 mints the application key exactly
+// once, after the (non-deletable) account already exists, so throwing the
+// response away over an unexpected *non-credential* field would destroy an
+// unrecoverable secret — the core hazard of #280. We hard-fail only when there
+// is no usable credential to preserve (nothing is lost in that case).
+function isCredentialBearing(
   response: unknown,
-): asserts response is CreateGroupMemberResponse {
-  if (
-    !isSingleJsonObject(response) ||
-    typeof response['applicationKey'] !== 'string' ||
-    typeof response['applicationKeyId'] !== 'string' ||
-    !isSingleJsonObject(response['groupMember'])
-  ) {
-    throw new B2PartnerAuthorizationError(
-      'b2_create_group_member response was not a single JSON object',
-    )
-  }
+): response is { applicationKey: string; applicationKeyId: string } {
+  return (
+    isSingleJsonObject(response) &&
+    typeof response['applicationKey'] === 'string' &&
+    typeof response['applicationKeyId'] === 'string'
+  )
 }
 
-function assertReserveTrialCreateAccountResponseShape(
-  response: unknown,
-): asserts response is ReserveTrialCreateAccountResponse {
-  if (
-    !isSingleJsonObject(response) ||
-    typeof response['accountId'] !== 'string' ||
-    typeof response['applicationKey'] !== 'string' ||
-    typeof response['applicationKeyId'] !== 'string' ||
-    typeof response['s3Endpoint'] !== 'string' ||
-    typeof response['startDate'] !== 'string' ||
-    typeof response['endDate'] !== 'string' ||
-    typeof response['email'] !== 'string' ||
-    typeof response['bucketName'] !== 'string' ||
-    typeof response['bucketId'] !== 'string'
-  ) {
-    throw new B2PartnerAuthorizationError(
-      'b2_reserve_trial_create_account response was not a single JSON object',
-    )
-  }
+// True when the reserve-trial response also matches every documented
+// non-credential field, so the field-specific (allowlist) redaction is exact.
+function matchesReserveTrialAccountShape(response: ReserveTrialCreateAccountResponse): boolean {
+  return (
+    typeof response.accountId === 'string' &&
+    typeof response.s3Endpoint === 'string' &&
+    typeof response.startDate === 'string' &&
+    typeof response.endDate === 'string' &&
+    typeof response.email === 'string' &&
+    typeof response.bucketName === 'string' &&
+    typeof response.bucketId === 'string'
+  )
+}
+
+// Redaction hook for a credential-bearing response whose surrounding shape is
+// unexpected: shallow-copy every field the server sent and redact only the
+// one-time secret, so the response is never discarded and never logs the key.
+function redactApplicationKeyShallow<T extends object>(target: T): unknown {
+  return { ...target, applicationKey: APPLICATION_KEY_REDACTED }
 }
 
 // Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
@@ -387,13 +388,27 @@ export function redactCreateGroupMemberResult(
  *
  * @returns The same response object with redaction hooks installed when possible.
  *
- * @throws B2PartnerAuthorizationError if the response is not the expected single object.
+ * @throws B2PartnerAuthorizationError if the response carries no usable application key.
  */
 export function redactCreateGroupMemberResponse(
   response: CreateGroupMemberResponse,
 ): CreateGroupMemberResponse {
-  assertCreateGroupMemberResponseShape(response)
-  return redactCreateGroupMemberResult(response)
+  if (!isCredentialBearing(response)) {
+    throw new B2PartnerAuthorizationError(
+      'b2_create_group_member response did not contain a usable application key',
+    )
+  }
+  // Full documented shape → field-specific (allowlist) redaction.
+  if (isSingleJsonObject(response.groupMember)) {
+    return redactCreateGroupMemberResult(response)
+  }
+  // Credential present but the surrounding shape is unexpected: never discard a
+  // provisioned one-time key. Return it with only the secret redacted for logs.
+  return redactWithHooks(
+    response,
+    redactApplicationKeyShallow,
+    () => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
@@ -427,11 +442,25 @@ export function redactReserveTrialCreateAccountResult(
  *
  * @returns The same response object with redaction hooks installed when possible.
  *
- * @throws B2PartnerAuthorizationError if the response is not the expected single object.
+ * @throws B2PartnerAuthorizationError if the response carries no usable application key.
  */
 export function redactReserveTrialCreateAccountResponse(
   response: ReserveTrialCreateAccountResponse,
 ): ReserveTrialCreateAccountResponse {
-  assertReserveTrialCreateAccountResponseShape(response)
-  return redactReserveTrialCreateAccountResult(response)
+  if (!isCredentialBearing(response)) {
+    throw new B2PartnerAuthorizationError(
+      'b2_reserve_trial_create_account response did not contain a usable application key',
+    )
+  }
+  // Full documented shape → field-specific (allowlist) redaction.
+  if (matchesReserveTrialAccountShape(response)) {
+    return redactReserveTrialCreateAccountResult(response)
+  }
+  // Credential present but the surrounding shape is unexpected: never discard a
+  // provisioned one-time key. Return it with only the secret redacted for logs.
+  return redactWithHooks(
+    response,
+    redactApplicationKeyShallow,
+    () => `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
