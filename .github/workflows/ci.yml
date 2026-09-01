@@ -343,7 +343,7 @@ jobs:
           fi
 
   # Real-B2 integration tests live in their own workflow (integration.yml),
-  # which runs the Node 22.22 + 24 matrix sequentially + the real-examples
+  # which runs the Node 22.22.2 + 24 matrix sequentially + the real-examples
   # follow-up + a weekly schedule + workflow_dispatch. Having a duplicate
   # `pnpm test:integration` job here would race that workflow for the same
   # `sdk-test-*` buckets on every push to main, because GitHub Actions
