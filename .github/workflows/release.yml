@@ -82,9 +82,9 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - name: Build release artifact
-        env:
-          B2_SDK_RELEASE_CHANNEL: published
-        run: pnpm build
+        run: pnpm run build:release
+      - name: Assert release User-Agent channel
+        run: pnpm run verify:release-channel -- --published
       - run: pnpm run verify:metadata
       - run: pnpm run verify:release
       - run: pnpm run verify:exports

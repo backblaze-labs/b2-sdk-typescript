@@ -192,6 +192,31 @@ function rejectInstallScripts(jobName, body, errors) {
 const errors = []
 
 const pkg = JSON.parse(await read('package.json'))
+const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {}
+
+if (scripts['build:release'] !== 'node scripts/build-release-artifact.mjs') {
+  errors.push('package.json build:release must run scripts/build-release-artifact.mjs.')
+}
+if (scripts['verify:release-channel'] !== 'node scripts/verify-release-channel.mjs') {
+  errors.push('package.json verify:release-channel must run scripts/verify-release-channel.mjs.')
+}
+if (typeof scripts.prepublishOnly !== 'string') {
+  errors.push('package.json must define a prepublishOnly release gate.')
+} else {
+  if (/\bB2_SDK_RELEASE_CHANNEL=published\b/.test(scripts.prepublishOnly)) {
+    errors.push('package.json prepublishOnly must not use POSIX-only inline env assignment.')
+  }
+  if (
+    !includesInOrder(
+      scripts.prepublishOnly,
+      'pnpm run build:release',
+      'pnpm run verify:release-channel -- --published',
+    )
+  ) {
+    errors.push('package.json prepublishOnly must verify the release channel after build:release.')
+  }
+}
+
 for (const section of [
   'dependencies',
   'devDependencies',
@@ -254,6 +279,27 @@ if (buildJob !== '') {
     errors.push(
       'release.yml build job must not run or install attw before packing the verified artifact.',
     )
+  }
+  if (!buildJob.includes('run: pnpm run build:release')) {
+    errors.push('release.yml build job must build the artifact through build:release.')
+  }
+  if (
+    !includesInOrder(
+      buildJob,
+      'run: pnpm run build:release',
+      'run: pnpm run verify:release-channel -- --published',
+    )
+  ) {
+    errors.push('release.yml build job must verify the release channel after build:release.')
+  }
+  if (
+    !includesInOrder(
+      buildJob,
+      'run: pnpm run verify:release-channel -- --published',
+      '- name: Pack verified release artifact',
+    )
+  ) {
+    errors.push('release.yml build job must verify the release channel before packing.')
   }
   if (
     !includesInOrder(

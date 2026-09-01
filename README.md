@@ -598,7 +598,7 @@ b2-sdk-typescript/<version-or-dev> (typescript; @backblaze-labs/b2-sdk; node/<no
 
 Both `b2-sdk-typescript/` (stable product token) and `@backblaze-labs/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
 
-The public `VERSION` constant is always the numeric package semver. The User-Agent product token reports that semver only from a stable published package; source, CI, `npm pack`, and prerelease builds report `b2-sdk-typescript/dev` so development traffic stays distinguishable.
+The public `VERSION` constant is always the package semver string. The User-Agent product token reports that semver only from a stable published package; source, CI, `npm pack`, and prerelease builds report `b2-sdk-typescript/dev` so development traffic stays distinguishable.
 
 To prepend your own application identifier:
 

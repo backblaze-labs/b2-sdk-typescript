@@ -62,6 +62,7 @@ export default defineConfig({
     lib: {
       entry: {
         index: resolve(__dirname, 'src/index.ts'),
+        version: resolve(__dirname, 'src/version.ts'),
         'raw/index': resolve(__dirname, 'src/raw/index.ts'),
         'errors/index': resolve(__dirname, 'src/errors/index.ts'),
         'auth/index': resolve(__dirname, 'src/auth/index.ts'),

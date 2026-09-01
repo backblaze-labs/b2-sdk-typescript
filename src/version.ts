@@ -26,8 +26,9 @@ export interface VersionResolution {
  * Current SDK version. Read directly from package.json so there is no
  * second-source-of-truth to keep in sync — bumping `version` in package.json
  * automatically propagates here and into the published artifact. The outbound
- * SDK User-Agent uses {@link productVersion} so source, CI, `npm pack`, and
- * prerelease builds advertise `dev` instead of a real-looking release number.
+ * SDK User-Agent uses the resolved product version segment so source, CI,
+ * `npm pack`, and prerelease builds advertise `dev` instead of a real-looking
+ * release number.
  *
  * Works in every runtime the SDK targets:
  *   - Node 22.3+, Bun, Deno: native JSON import attributes.
@@ -38,7 +39,7 @@ export interface VersionResolution {
  */
 export const VERSION: string = pkg.version
 
-const configuredReleaseChannel =
+const configuredReleaseSignal =
   typeof __B2_SDK_RELEASE_CHANNEL__ === 'string' ? __B2_SDK_RELEASE_CHANNEL__ : 'dev'
 
 /**
@@ -52,7 +53,7 @@ const configuredReleaseChannel =
  */
 export function resolveVersion(
   version: string,
-  releaseSignal: string | undefined = configuredReleaseChannel,
+  releaseSignal: string | undefined = configuredReleaseSignal,
 ): VersionResolution {
   const isStableVersion = !version.includes('-')
   const isRelease = releaseSignal === 'published' && isStableVersion
@@ -81,6 +82,8 @@ export const isPublishedRelease: boolean = resolvedVersion.isPublishedRelease
 
 /**
  * Version segment for the SDK User-Agent product token.
+ * Kept as a function because it is derived resolver output consumed by the
+ * User-Agent builder, not a second version constant for callers to maintain.
  *
  * @returns The package semver for stable published releases, otherwise `dev`.
  */

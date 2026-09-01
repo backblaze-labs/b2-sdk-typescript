@@ -231,5 +231,4 @@ export type { PageFetcher, PaginatorOptions } from './util/paginator.ts'
 // paginating raw endpoints or composing custom iteration shapes.
 export { paginateItems, paginatePages } from './util/paginator.ts'
 
-export type { ReleaseChannel } from './version.ts'
-export { isPublishedRelease, productVersion, RELEASE_CHANNEL, VERSION } from './version.ts'
+export { VERSION } from './version.ts'
