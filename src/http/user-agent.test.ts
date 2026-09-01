@@ -6,7 +6,7 @@ import { getUserAgent, SDK_PACKAGE, SDK_PRODUCT, sdkProductToken } from './user-
 describe('getUserAgent', () => {
   it('starts with the SDK product token + product version', () => {
     const ua = getUserAgent()
-    expect(ua).toMatch(new RegExp(`^${SDK_PRODUCT}\\/${productVersion()}\\s\\(`))
+    expect(ua.startsWith(`${SDK_PRODUCT}/${productVersion()} (`)).toBe(true)
   })
 
   it('includes the typescript language token and npm package name in the comment', () => {

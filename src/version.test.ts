@@ -10,7 +10,7 @@ import {
 
 describe('version resolver', () => {
   it('keeps the public VERSION export as package semver', () => {
-    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/)
+    expect(VERSION).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/)
   })
 
   it('keeps module-level release metadata internally consistent', () => {
