@@ -17,7 +17,7 @@ import {
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
 import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse } from '../test-utils/index.ts'
-import { accountId, groupId, partnerToken } from '../types/ids.ts'
+import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
 import {
   type ListedGroupMember,
   type PartnerAuthorizeResponse,
@@ -302,10 +302,9 @@ describe('PartnerClient facade', () => {
       groupId: group.groupId,
       memberEmail: 'a-facade-member@example.com',
     })
-    const createdAMember = createdA[0]?.groupMember
-    if (createdAMember === undefined) throw new Error('expected created group member')
+    const createdAMember = createdA.groupMember
 
-    expect(createdZ[0]?.groupMember).toMatchObject({
+    expect(createdZ.groupMember).toMatchObject({
       email: 'z-facade-member@example.com',
       region: Region.UsEast,
       s3Endpoint: 's3.us-east-001.backblazeb2.com',
@@ -370,7 +369,18 @@ describe('PartnerClient facade', () => {
     await client.authorize()
     const group = groupId('group-id')
     const memberAccountId = accountId('member-account')
-    const createSpy = vi.spyOn(client.raw, 'createGroupMember').mockResolvedValue([])
+    const createSpy = vi.spyOn(client.raw, 'createGroupMember').mockResolvedValue({
+      applicationKey: 'application-key-secret',
+      applicationKeyId: applicationKeyId('application-key-id'),
+      groupMember: {
+        accountId: memberAccountId,
+        email: 'member@example.com',
+        groupId: group,
+        groupName: 'Example Group',
+        region: Region.UsWest,
+        s3Endpoint: 's3.us-west-001.backblazeb2.com',
+      },
+    })
     const ejectSpy = vi.spyOn(client.raw, 'ejectGroupMember').mockResolvedValue({
       accountId: memberAccountId,
       email: 'member@example.com',
@@ -395,12 +405,12 @@ describe('PartnerClient facade', () => {
     expect(ejectSpy.mock.calls[0]?.[2]).toMatchObject({ email: null })
   })
 
-  it('reserves trial accounts from single and array inputs through the simulator', async () => {
+  it('reserves a trial account with a single-object wire body through the simulator', async () => {
     const { client, seenRequests } = makeRecordingPartnerClient()
     const controller = new AbortController()
     await client.authorize()
 
-    const single = await client.reserveTrialAccounts(
+    const trial = await client.reserveTrialAccount(
       {
         email: 'facade-trial-one@example.com',
         term: 15,
@@ -409,75 +419,22 @@ describe('PartnerClient facade', () => {
       },
       { signal: controller.signal },
     )
-    const multiple = await client.reserveTrialAccounts([
-      {
-        email: 'facade-trial-two@example.com',
-        term: 7,
-        storage: 1,
-      },
-      {
-        email: 'facade-trial-three@example.com',
-        term: 30,
-        storage: 50,
-        region: Region.EuCentral,
-      },
-    ])
 
-    expect(single.map((trial) => trial.email)).toEqual(['facade-trial-one@example.com'])
-    expect(multiple.map((trial) => trial.email)).toEqual([
-      'facade-trial-two@example.com',
-      'facade-trial-three@example.com',
-    ])
+    expect(trial.email).toBe('facade-trial-one@example.com')
+    expect(Array.isArray(trial)).toBe(false)
     const reserveRequests = seenRequests.filter(
       (request) => apiEndpointName(request) === 'b2_reserve_trial_create_account',
     )
-    expect(reserveRequests).toHaveLength(2)
-    const singleReserveRequest = reserveRequests[0]
-    const multipleReserveRequest = reserveRequests[1]
-    if (singleReserveRequest === undefined || multipleReserveRequest === undefined) {
-      throw new Error('expected reserve trial requests')
-    }
-    expect(requestJsonBody(singleReserveRequest)).toEqual([
-      {
-        email: 'facade-trial-one@example.com',
-        term: 15,
-        storage: 12,
-        region: Region.UsEast,
-      },
-    ])
-    expect(singleReserveRequest.signal).toBe(controller.signal)
-    expect(requestJsonBody(multipleReserveRequest)).toEqual([
-      {
-        email: 'facade-trial-two@example.com',
-        term: 7,
-        storage: 1,
-      },
-      {
-        email: 'facade-trial-three@example.com',
-        term: 30,
-        storage: 50,
-        region: Region.EuCentral,
-      },
-    ])
-  })
-
-  it('rejects empty reserve trial account arrays before the raw request', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
-    await client.authorize()
-
-    await expect(
-      client.reserveTrialAccounts(
-        [] as unknown as Parameters<typeof client.reserveTrialAccounts>[0],
-      ),
-    ).rejects.toThrow(
-      'reserveTrialAccounts request array must include at least one account request',
-    )
-
-    expect(
-      seenRequests.filter(
-        (request) => apiEndpointName(request) === 'b2_reserve_trial_create_account',
-      ),
-    ).toEqual([])
+    expect(reserveRequests).toHaveLength(1)
+    const reserveRequest = reserveRequests[0]
+    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
+    expect(requestJsonBody(reserveRequest)).toEqual({
+      email: 'facade-trial-one@example.com',
+      term: 15,
+      storage: 12,
+      region: Region.UsEast,
+    })
+    expect(reserveRequest.signal).toBe(controller.signal)
   })
 
   it('rejects calls when Partner authorization has no groups API suite', async () => {

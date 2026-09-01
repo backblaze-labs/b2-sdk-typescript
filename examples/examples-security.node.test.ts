@@ -2,8 +2,11 @@ import { mkdtemp, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
+import { PartnerClient } from '../src/partner/client.ts'
+import { APPLICATION_KEY_REDACTED } from '../src/partner/redaction.ts'
+import { B2Simulator } from '../src/simulator/index.ts'
 import type {
-  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
 } from '../src/types/partner.ts'
 import { type ApplicationKeySecretRecord, writeApplicationKeySecretsFile } from './_shared/env.ts'
@@ -55,7 +58,7 @@ function secretRecord(): ApplicationKeySecretRecord {
   }
 }
 
-function trialRequest(): ReserveTrialCreateAccountRequest {
+function trialRequest(): readonly [ReserveTrialCreateAccountRequestEntry] {
   return [{ email: 'trial@example.com', term: 7, storage: 1 }]
 }
 
@@ -122,6 +125,45 @@ describe('Partner examples secret handling', () => {
         results: [{ email: 'trial@example.com', applicationKey: RAW_SECRET }],
       })
       expect(checkpoint).not.toHaveProperty('inProgressEmail')
+    } finally {
+      await writer.close()
+    }
+  })
+
+  it('checkpoints raw keys from SDK-created trial results', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2-example-sdk-batch-'))
+    const batchPath = join(dir, 'trial-batch.json')
+    const request = [{ email: 'sdk-trial@example.com', term: 7, storage: 1 }] satisfies readonly [
+      ReserveTrialCreateAccountRequestEntry,
+    ]
+    const sim = new B2Simulator({ partnerAuthorize: true })
+    const partner = new PartnerClient({
+      masterKeyId: 'master-key-id',
+      masterKey: 'master-key',
+      transport: sim.transport(),
+      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
+    })
+    await partner.authorize()
+    const writer = await TrialBatchWriter.create(batchPath, request)
+
+    try {
+      await writer.recordInProgress(request[0])
+      const trial = await partner.reserveTrialAccount(request[0])
+      const rawKey = trial.applicationKey
+
+      expect(JSON.stringify(trial)).toContain(APPLICATION_KEY_REDACTED)
+      expect(JSON.stringify(trial)).not.toContain(rawKey)
+
+      await writer.recordResult(trial)
+      const body = await readFile(batchPath, 'utf8')
+      const checkpoint = JSON.parse(body) as unknown
+
+      expect(body).toContain(rawKey)
+      expect(body).not.toContain(APPLICATION_KEY_REDACTED)
+      expect(checkpoint).toMatchObject({
+        status: 'pending',
+        results: [{ email: 'sdk-trial@example.com', applicationKey: rawKey }],
+      })
     } finally {
       await writer.close()
     }

@@ -1,7 +1,6 @@
 import type { Stats } from 'node:fs'
 import { type FileHandle, lstat, open, readFile } from 'node:fs/promises'
 import type {
-  ReserveTrialCreateAccountRequest,
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
 } from '@backblaze-labs/b2-sdk/partner'
@@ -13,9 +12,37 @@ export interface TrialBatchCheckpoint {
   readonly status: 'pending' | 'completed'
   readonly createdAt: string
   readonly updatedAt: string
-  readonly requested: ReserveTrialCreateAccountRequest
+  readonly requested: readonly ReserveTrialCreateAccountRequestEntry[]
   readonly inProgressEmail?: string
   readonly results: readonly ReserveTrialCreateAccountResult[]
+}
+
+function requestForCheckpoint(
+  request: ReserveTrialCreateAccountRequestEntry,
+): ReserveTrialCreateAccountRequestEntry {
+  return {
+    email: request.email,
+    ...(request.region !== undefined ? { region: request.region } : {}),
+    term: request.term,
+    storage: request.storage,
+  }
+}
+
+function resultForCheckpoint(
+  result: ReserveTrialCreateAccountResult,
+): ReserveTrialCreateAccountResult {
+  // Preserve the raw one-time key even when SDK result objects install redacting toJSON hooks.
+  return {
+    accountId: result.accountId,
+    applicationKey: result.applicationKey,
+    applicationKeyId: result.applicationKeyId,
+    s3Endpoint: result.s3Endpoint,
+    startDate: result.startDate,
+    endDate: result.endDate,
+    email: result.email,
+    bucketName: result.bucketName,
+    bucketId: result.bucketId,
+  }
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -119,7 +146,7 @@ export class TrialBatchWriter {
 
   static async create(
     filePath: string,
-    requested: ReserveTrialCreateAccountRequest,
+    requested: readonly ReserveTrialCreateAccountRequestEntry[],
   ): Promise<TrialBatchWriter> {
     const handle = await open(filePath, 'wx+', BATCH_FILE_MODE)
     await handle.chmod(BATCH_FILE_MODE)
@@ -128,7 +155,7 @@ export class TrialBatchWriter {
       status: 'pending',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      requested,
+      requested: requested.map((request) => requestForCheckpoint(request)),
       results: [],
     }
     const writer = new TrialBatchWriter(filePath, handle, await handle.stat(), checkpoint)
@@ -152,7 +179,7 @@ export class TrialBatchWriter {
       createdAt: this.checkpoint.createdAt,
       updatedAt: new Date().toISOString(),
       requested: this.checkpoint.requested,
-      results: [...this.checkpoint.results, result],
+      results: [...this.checkpoint.results, resultForCheckpoint(result)],
     })
   }
 

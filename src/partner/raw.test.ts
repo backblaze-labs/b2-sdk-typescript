@@ -32,6 +32,7 @@ import {
   type PartnerAuthorizeResponse,
   PartnerCapability,
   Region,
+  type ReserveTrialCreateAccountRequest,
   type ReserveTrialCreateAccountResult,
 } from '../types/partner.ts'
 import { partnerAuthorizeResponseForPersistence } from './auth-clone.ts'
@@ -107,6 +108,24 @@ function cachedPartnerAuth(): PartnerAuthorizeResponse {
 function requestJsonBody(request: HttpRequest): unknown {
   if (typeof request.body !== 'string') throw new Error('expected JSON request body')
   return JSON.parse(request.body) as unknown
+}
+
+async function expectPartnerResponseShapeError(
+  promise: Promise<unknown>,
+  expectedMessage: string,
+  rawSecret: string,
+): Promise<void> {
+  let thrown: unknown
+  try {
+    await promise
+  } catch (err) {
+    thrown = err
+  }
+
+  expect(thrown).toBeInstanceOf(B2PartnerAuthorizationError)
+  expect(thrown).toHaveProperty('message', expectedMessage)
+  expect(String(thrown)).not.toContain(rawSecret)
+  expect(JSON.stringify(thrown)).not.toContain(rawSecret)
 }
 
 function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown>>): {
@@ -257,7 +276,7 @@ describe('Partner redaction projections', () => {
     } as unknown as CreateGroupMemberResult
 
     const redacted = createGroupMemberResultToRedactedJson(result)
-    const [redactedFromResponse] = createGroupMemberResponseToRedactedJson([result])
+    const redactedFromResponse = createGroupMemberResponseToRedactedJson(result)
     const serialized = JSON.stringify(redacted)
 
     expect(redactedFromResponse).toEqual(redacted)
@@ -294,7 +313,7 @@ describe('Partner redaction projections', () => {
     } as unknown as ReserveTrialCreateAccountResult
 
     const redacted = reserveTrialCreateAccountResultToRedactedJson(result)
-    const [redactedFromResponse] = reserveTrialCreateAccountResponseToRedactedJson([result])
+    const redactedFromResponse = reserveTrialCreateAccountResponseToRedactedJson(result)
     const serialized = JSON.stringify(redacted)
 
     expect(redactedFromResponse).toEqual(redacted)
@@ -323,10 +342,26 @@ describe('PartnerRawClient group management endpoints', () => {
     region: Region.UsWest,
     s3Endpoint: 's3.us-west-004.backblazeb2.com',
   }
+  const groupMemberResult: CreateGroupMemberResult = {
+    applicationKey: 'application-key-secret',
+    applicationKeyId: applicationKeyId('application-key-id'),
+    groupMember,
+  }
+  const reserveTrialResult: ReserveTrialCreateAccountResult = {
+    accountId: accountId('trial-account'),
+    applicationKey: 'trial-application-key-secret',
+    applicationKeyId: applicationKeyId('trial-application-key-id'),
+    bucketId: bucketId('trial-bucket-id'),
+    bucketName: 'trial-bucket',
+    email: 'trial-one@example.com',
+    endDate: '2026-08-28',
+    s3Endpoint: 's3.us-west-004.backblazeb2.com',
+    startDate: '2026-08-21',
+  }
 
   it('pins Partner group-management methods to v4 endpoints', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [],
+      b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
@@ -337,7 +372,7 @@ describe('PartnerRawClient group management endpoints', () => {
           nextEmail: null,
         },
       ],
-      b2_reserve_trial_create_account: [],
+      b2_reserve_trial_create_account: reserveTrialResult,
     })
 
     await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -371,13 +406,11 @@ describe('PartnerRawClient group management endpoints', () => {
 
   it('sends Partner POST bodies through the partner base path', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [
-        {
-          applicationKey: 'application-key-secret',
-          applicationKeyId: applicationKeyId('application-key-id'),
-          groupMember,
-        },
-      ],
+      b2_create_group_member: {
+        applicationKey: 'application-key-secret',
+        applicationKeyId: applicationKeyId('application-key-id'),
+        groupMember,
+      },
       b2_eject_group_member: groupMember,
     })
 
@@ -394,7 +427,7 @@ describe('PartnerRawClient group management endpoints', () => {
       email: 'replacement@example.com',
     })
 
-    expect(created[0]?.groupMember.accountId).toBe(memberAccountId)
+    expect(created.groupMember.accountId).toBe(memberAccountId)
     expect(ejected.accountId).toBe(memberAccountId)
     expect(seenRequests).toHaveLength(2)
     const createRequest = seenRequests[0]
@@ -437,13 +470,11 @@ describe('PartnerRawClient group management endpoints', () => {
   it('redacts group-member application keys through SDK safe serialization paths', async () => {
     const secret = 'application-key-secret'
     const { raw } = makePartnerEndpointRawClient({
-      b2_create_group_member: [
-        {
-          applicationKey: secret,
-          applicationKeyId: applicationKeyId('application-key-id'),
-          groupMember,
-        },
-      ],
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+        groupMember,
+      },
     })
 
     const result = await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -451,8 +482,7 @@ describe('PartnerRawClient group management endpoints', () => {
       groupId: group,
       memberEmail: 'member@example.com',
     })
-    const [created] = result
-    if (created === undefined) throw new Error('expected create group member result')
+    const created = result
     const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
     const inspectedResult = (created as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
     const inspectedResponse = (result as unknown as Record<symbol, () => unknown>)[
@@ -468,9 +498,90 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(String(created)).not.toContain(secret)
     expect(JSON.stringify(inspectedResult)).not.toContain(secret)
     expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
-    expect(createGroupMemberResponseToRedactedJson(result)[0]?.applicationKey).toBe(
+    expect(createGroupMemberResponseToRedactedJson(result).applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
     )
+  })
+
+  it.each([
+    {
+      label: 'array',
+      body: (secret: string): unknown[] => [{ ...groupMemberResult, applicationKey: secret }],
+    },
+    { label: 'null', body: (): null => null },
+    { label: 'primitive', body: (): string => 'not-a-json-object' },
+    {
+      label: 'wrapper',
+      body: (secret: string): { readonly result: CreateGroupMemberResult } => ({
+        result: { ...groupMemberResult, applicationKey: secret },
+      }),
+    },
+  ])('rejects malformed create-group-member $label responses safely', async ({ body }) => {
+    const secret = 'hostile-create-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_create_group_member: body(secret),
+    })
+
+    await expectPartnerResponseShapeError(
+      raw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberEmail: 'member@example.com',
+      }),
+      'b2_create_group_member response did not contain a usable application key',
+      secret,
+    )
+  })
+
+  it('preserves the credential when the create-group-member shape is unexpected', async () => {
+    const secret = 'partial-shape-create-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present at the top level, but groupMember is absent.
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+      },
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+
+    // The one-time key must survive an unexpected shape (issue #280 F17).
+    expect(result.applicationKey).toBe(secret)
+    // …and still redact through SDK safe serialization.
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(String(result)).not.toContain(secret)
+  })
+
+  it('preserves unexpected groupMember fields when the shape is variant', async () => {
+    const secret = 'variant-group-member-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present, but groupMember is a partial/variant object that
+      // does not match every documented field: allowlist redaction would drop
+      // the extra field, so shallow redaction must preserve it instead.
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+        groupMember: { accountId: memberAccountId, unexpectedField: 'keep-me' },
+      },
+    })
+
+    const result = await raw.createGroupMember(groupsApiUrl, authToken, {
+      adminAccountId,
+      groupId: group,
+      memberEmail: 'member@example.com',
+    })
+
+    // The variant field survives instead of being silently dropped.
+    expect((result.groupMember as { unexpectedField?: string }).unexpectedField).toBe('keep-me')
+    // …and the one-time key is preserved but redacted through serialization.
+    expect(result.applicationKey).toBe(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
   })
 
   it('sends Partner list endpoints as canonical GET query requests', async () => {
@@ -585,9 +696,9 @@ describe('PartnerRawClient group management endpoints', () => {
       groupId: listedGroup.groupId,
       memberEmail: 'a-raw-simulator@example.com',
     })
-    expect(Array.isArray(createdB)).toBe(true)
-    expect(Array.isArray(createdA)).toBe(true)
-    expect(createdB[0]?.groupMember).toMatchObject({
+    expect(Array.isArray(createdB)).toBe(false)
+    expect(Array.isArray(createdA)).toBe(false)
+    expect(createdB.groupMember).toMatchObject({
       email: 'b-raw-simulator@example.com',
       region: Region.UsEast,
       s3Endpoint: 's3.us-east-001.backblazeb2.com',
@@ -616,8 +727,7 @@ describe('PartnerRawClient group management endpoints', () => {
     ])
     expect(secondMembersPage[0]?.nextEmail).toBeNull()
 
-    const createdAMember = createdA[0]?.groupMember
-    if (createdAMember === undefined) throw new Error('expected created member')
+    const createdAMember = createdA.groupMember
     const ejected = await raw.ejectGroupMember(groupsApiUrl, authToken, {
       adminAccountId,
       groupId: listedGroup.groupId,
@@ -697,7 +807,7 @@ describe('PartnerRawClient group management endpoints', () => {
 
   it('omits undefined optional Partner request fields', async () => {
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [],
+      b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
@@ -750,7 +860,7 @@ describe('PartnerRawClient group management endpoints', () => {
     const controller = new AbortController()
     const retry = { maxRetries: 2 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [],
+      b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
       b2_list_group_members: [
@@ -805,7 +915,7 @@ describe('PartnerRawClient group management endpoints', () => {
   it('keeps mutation retries disabled when only timeout retry options are supplied', async () => {
     const retry = { requestTimeoutMs: 1000 }
     const { raw, seenRequests } = makePartnerEndpointRawClient({
-      b2_create_group_member: [],
+      b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
     })
 
@@ -861,7 +971,7 @@ describe('PartnerRawClient group management endpoints', () => {
     'rejects unsafe POST groupsApiUrl before sending tokens: %s',
     async (_label, unsafeGroupsApiUrl) => {
       const { raw, seenRequests } = makePartnerEndpointRawClient({
-        b2_create_group_member: [],
+        b2_create_group_member: groupMemberResult,
       })
 
       await expect(
@@ -1028,6 +1138,17 @@ describe('PartnerRawClient group management endpoints', () => {
 
 describe('PartnerRawClient reserve trial endpoint', () => {
   const authToken = partnerToken('partner-token')
+  const reserveTrialResult: ReserveTrialCreateAccountResult = {
+    accountId: accountId('trial-account'),
+    applicationKey: 'trial-application-key-secret',
+    applicationKeyId: applicationKeyId('trial-application-key-id'),
+    bucketId: bucketId('trial-bucket-id'),
+    bucketName: 'trial-bucket',
+    email: 'trial-response-object@example.com',
+    endDate: '2026-08-28',
+    s3Endpoint: 's3.us-west-004.backblazeb2.com',
+    startDate: '2026-08-21',
+  }
 
   it('creates one reserve trial account from a single request through the simulator', async () => {
     const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
@@ -1039,19 +1160,18 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       region: Region.UsEast,
     })
 
-    expect(Array.isArray(result)).toBe(true)
-    expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({
+    expect(Array.isArray(result)).toBe(false)
+    expect(result).toMatchObject({
       email: 'trial-one@example.com',
       s3Endpoint: 's3.us-east-001.backblazeb2.com',
       startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     })
-    expect(result[0]?.accountId).toEqual(expect.any(String))
-    expect(result[0]?.applicationKey).toEqual(expect.any(String))
-    expect(result[0]?.applicationKeyId).toEqual(expect.any(String))
-    expect(result[0]?.bucketId).toEqual(expect.any(String))
-    expect(result[0]?.applicationKey).not.toBe('')
+    expect(result.accountId).toEqual(expect.any(String))
+    expect(result.applicationKey).toEqual(expect.any(String))
+    expect(result.applicationKeyId).toEqual(expect.any(String))
+    expect(result.bucketId).toEqual(expect.any(String))
+    expect(result.applicationKey).not.toBe('')
     const reserveRequest = seenRequests.at(-1)
     if (reserveRequest === undefined) throw new Error('expected reserve trial request')
     expect(reserveRequest).toMatchObject({
@@ -1063,25 +1183,39 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       },
       retry: expect.objectContaining({ maxRetries: 0 }),
     })
-    expect(requestJsonBody(reserveRequest)).toEqual([
-      {
-        email: 'trial-one@example.com',
-        term: 15,
-        storage: 12,
-        region: Region.UsEast,
-      },
-    ])
+    expect(requestJsonBody(reserveRequest)).toEqual({
+      email: 'trial-one@example.com',
+      term: 15,
+      storage: 12,
+      region: Region.UsEast,
+    })
+  })
+
+  it('rejects array reserve trial requests before sending Partner tokens', async () => {
+    const { raw, seenRequests } = makePartnerEndpointRawClient({
+      b2_reserve_trial_create_account: reserveTrialResult,
+    })
+
+    await expect(
+      raw.reserveTrialCreateAccount('https://groups.backblazeb2.com/partner', authToken, [
+        {
+          email: 'trial-array-request@example.com',
+          term: 7,
+          storage: 1,
+        },
+      ] as unknown as ReserveTrialCreateAccountRequest),
+    ).rejects.toThrow('reserveTrialCreateAccount request must be a single account object')
+    expect(seenRequests).toEqual([])
   })
 
   it('authorizes storage clients as the created trial account', async () => {
     const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
 
-    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+    const trial = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
       email: 'trial-storage-auth@example.com',
       term: 7,
       storage: 1,
     })
-    if (trial === undefined) throw new Error('expected reserve trial result')
 
     const client = new B2Client({
       applicationKeyId: trial.applicationKeyId,
@@ -1091,50 +1225,6 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     const auth = await client.authorize()
 
     expect(auth.accountId).toBe(trial.accountId)
-  })
-
-  it('creates multiple reserve trial accounts from an array request through the simulator', async () => {
-    const { raw, seenRequests, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
-
-    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, [
-      {
-        email: 'trial-two@example.com',
-        term: 7,
-        storage: 1,
-      },
-      {
-        email: 'trial-three@example.com',
-        term: 30,
-        storage: 50,
-        region: Region.EuCentral,
-      },
-    ])
-
-    expect(Array.isArray(result)).toBe(true)
-    expect(result).toHaveLength(2)
-    expect(result.map((account) => account.email)).toEqual([
-      'trial-two@example.com',
-      'trial-three@example.com',
-    ])
-    expect(result.map((account) => account.s3Endpoint)).toEqual([
-      's3.us-west-001.backblazeb2.com',
-      's3.eu-central-001.backblazeb2.com',
-    ])
-    const reserveRequest = seenRequests.at(-1)
-    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
-    expect(requestJsonBody(reserveRequest)).toEqual([
-      {
-        email: 'trial-two@example.com',
-        term: 7,
-        storage: 1,
-      },
-      {
-        email: 'trial-three@example.com',
-        term: 30,
-        storage: 50,
-        region: Region.EuCentral,
-      },
-    ])
   })
 
   it('omits null region values from the reserve trial wire request', async () => {
@@ -1147,16 +1237,14 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       region: null,
     })
 
-    expect(result[0]?.s3Endpoint).toBe('s3.us-west-001.backblazeb2.com')
+    expect(result.s3Endpoint).toBe('s3.us-west-001.backblazeb2.com')
     const reserveRequest = seenRequests.at(-1)
     if (reserveRequest === undefined) throw new Error('expected reserve trial request')
-    expect(requestJsonBody(reserveRequest)).toEqual([
-      {
-        email: 'trial-default-region@example.com',
-        term: 7,
-        storage: 1,
-      },
-    ])
+    expect(requestJsonBody(reserveRequest)).toEqual({
+      email: 'trial-default-region@example.com',
+      term: 7,
+      storage: 1,
+    })
   })
 
   it('redacts reserve trial application keys through SDK safe serialization paths', async () => {
@@ -1167,8 +1255,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
       term: 7,
       storage: 1,
     })
-    const [account] = result
-    if (account === undefined) throw new Error('expected reserve trial result')
+    const account = result
     const secret = account.applicationKey
     const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
     const inspectedResult = (account as unknown as Record<symbol, () => unknown>)[inspectSymbol]?.()
@@ -1191,23 +1278,85 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     expect(JSON.stringify(account)).not.toContain(secret)
     expect(JSON.stringify(inspectedResult)).not.toContain(secret)
     expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
-    expect(reserveTrialCreateAccountResponseToRedactedJson(result)[0]?.applicationKey).toBe(
+    expect(reserveTrialCreateAccountResponseToRedactedJson(result).applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
     )
   })
 
-  it('rejects non-array reserve trial response bodies with a typed SDK error', async () => {
+  it('accepts single-object reserve trial response bodies', async () => {
     const { raw } = makePartnerEndpointRawClient({
-      b2_reserve_trial_create_account: { accountId: 'not-an-array' },
+      b2_reserve_trial_create_account: reserveTrialResult,
     })
 
-    await expect(
+    const result = await raw.reserveTrialCreateAccount(
+      'https://groups.backblazeb2.com/partner',
+      authToken,
+      {
+        email: 'trial-response-object@example.com',
+        term: 7,
+        storage: 1,
+      },
+    )
+
+    expect(result.applicationKey).toBe(reserveTrialResult.applicationKey)
+  })
+
+  it.each([
+    {
+      label: 'array',
+      body: (secret: string): unknown[] => [{ ...reserveTrialResult, applicationKey: secret }],
+    },
+    { label: 'null', body: (): null => null },
+    { label: 'primitive', body: (): string => 'not-a-json-object' },
+    {
+      label: 'wrapper',
+      body: (secret: string): { readonly result: ReserveTrialCreateAccountResult } => ({
+        result: { ...reserveTrialResult, applicationKey: secret },
+      }),
+    },
+  ])('rejects malformed reserve-trial $label responses safely', async ({ body }) => {
+    const secret = 'hostile-trial-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_reserve_trial_create_account: body(secret),
+    })
+
+    await expectPartnerResponseShapeError(
       raw.reserveTrialCreateAccount('https://groups.backblazeb2.com/partner', authToken, {
-        email: 'trial-bad-response@example.com',
+        email: 'trial-response-object@example.com',
         term: 7,
         storage: 1,
       }),
-    ).rejects.toThrow(B2PartnerAuthorizationError)
+      'b2_reserve_trial_create_account response did not contain a usable application key',
+      secret,
+    )
+  })
+
+  it('preserves the credential when the reserve-trial shape is unexpected', async () => {
+    const secret = 'partial-shape-trial-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      // Credential present, but bucketName/bucketId and other fields are absent.
+      b2_reserve_trial_create_account: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+      },
+    })
+
+    const result = await raw.reserveTrialCreateAccount(
+      'https://groups.backblazeb2.com/partner',
+      authToken,
+      {
+        email: 'trial-partial-shape@example.com',
+        term: 7,
+        storage: 1,
+      },
+    )
+
+    // Fixing the request (F18) means this path now provisions before redacting;
+    // an unexpected response shape must not discard the minted key.
+    expect(result.applicationKey).toBe(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(String(result)).not.toContain(secret)
   })
 
   it('does not retry reserve trial failures with an embedded b2api base segment', async () => {
@@ -1369,7 +1518,7 @@ describe('PartnerRawClient reserve trial endpoint', () => {
           Authorization: authBody.authorizationToken ?? '',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+        body: JSON.stringify({ email: 'attacker@example.com', term: 7, storage: 1 }),
       })
 
       expect(reserveResponse.status).toBe(403)
@@ -1414,19 +1563,18 @@ describe('PartnerRawClient reserve trial endpoint', () => {
         Authorization: authBody.authorizationToken ?? '',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify([{ email: 'mismatch@example.com', term: 7, storage: 1 }]),
+      body: JSON.stringify({ email: 'mismatch@example.com', term: 7, storage: 1 }),
     })
     expect(reserveResponse.status).toBe(403)
   })
 
   it('does not mint simulator Partner tokens with child account application keys', async () => {
     const { raw, sim, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
-    const [trial] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+    const trial = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
       email: 'child-key-partner-auth@example.com',
       term: 7,
       storage: 1,
     })
-    if (trial === undefined) throw new Error('expected reserve trial result')
 
     const authResponse = await sim.transport().send({
       url: 'http://localhost:0/b2api/v3/b2_authorize_account',
@@ -1484,13 +1632,12 @@ describe('PartnerRawClient reserve trial endpoint', () => {
   it('models the reserve trial account result shape with branded IDs', async () => {
     const { raw, groupsApiUrl, authToken } = await makeSimulatorPartnerRawClient()
 
-    const [result] = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
+    const result = await raw.reserveTrialCreateAccount(groupsApiUrl, authToken, {
       email: 'trial-shape@example.com',
       term: 7,
       storage: 1,
     })
 
-    if (result === undefined) throw new Error('expected reserve trial result')
     expect(result.bucketId).toEqual(bucketId(result.bucketId))
     expect(result.applicationKeyId).toEqual(applicationKeyId(result.applicationKeyId))
   })

@@ -155,7 +155,7 @@ export interface PartnerGroupMember {
 /**
  * Single result element returned by `b2_create_group_member`.
  *
- * The `b2_create_group_member` wire response is a JSON array of these objects.
+ * The `b2_create_group_member` wire response is one JSON object.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -169,11 +169,11 @@ export interface CreateGroupMemberResult {
 }
 
 /**
- * Array-shaped wire response from `b2_create_group_member`.
+ * Single-object wire response from `b2_create_group_member`.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type CreateGroupMemberResponse = readonly CreateGroupMemberResult[]
+export type CreateGroupMemberResponse = CreateGroupMemberResult
 
 /**
  * Request parameters for `b2_eject_group_member`.
@@ -200,9 +200,6 @@ export type EjectGroupMemberResult = PartnerGroupMember
 
 /**
  * Single-object wire response from `b2_eject_group_member`.
- *
- * B2 returns one ejected-member object (not an array), unlike
- * `b2_create_group_member` which returns an array.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -363,11 +360,11 @@ export interface ListGroupMembersResult {
 export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
 
 /**
- * Single request element accepted by `b2_reserve_trial_create_account`.
+ * Request body accepted by `b2_reserve_trial_create_account`.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export interface ReserveTrialCreateAccountRequestEntry {
+export interface ReserveTrialCreateAccountRequest {
   /** Email address for the new B2 reserve trial account. */
   readonly email: string
   /** Region for the new account's data, or null to let Backblaze choose. */
@@ -379,21 +376,16 @@ export interface ReserveTrialCreateAccountRequestEntry {
 }
 
 /**
- * Array-shaped wire request body for `b2_reserve_trial_create_account`.
- * The Partner API requires at least one request entry per call.
+ * Request element type for caller-managed batches of single-account requests.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ReserveTrialCreateAccountRequest = readonly [
-  ReserveTrialCreateAccountRequestEntry,
-  ...ReserveTrialCreateAccountRequestEntry[],
-]
+export type ReserveTrialCreateAccountRequestEntry = ReserveTrialCreateAccountRequest
 
 /**
  * Single result element returned by `b2_reserve_trial_create_account`.
  *
- * The `b2_reserve_trial_create_account` wire response is a JSON array of
- * these objects.
+ * The `b2_reserve_trial_create_account` wire response is one JSON object.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -419,8 +411,8 @@ export interface ReserveTrialCreateAccountResult {
 }
 
 /**
- * Array-shaped wire response from `b2_reserve_trial_create_account`.
+ * Single-object wire response from `b2_reserve_trial_create_account`.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ReserveTrialCreateAccountResponse = readonly ReserveTrialCreateAccountResult[]
+export type ReserveTrialCreateAccountResponse = ReserveTrialCreateAccountResult

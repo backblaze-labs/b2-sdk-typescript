@@ -43,12 +43,12 @@ export type RedactedCreateGroupMemberResultJson = Omit<
 }
 
 /**
- * JSON-safe create-group-member response with every one-time application key
+ * JSON-safe create-group-member response with the one-time application key
  * secret replaced by a placeholder string.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type RedactedCreateGroupMemberResponseJson = readonly RedactedCreateGroupMemberResultJson[]
+export type RedactedCreateGroupMemberResponseJson = RedactedCreateGroupMemberResultJson
 
 /**
  * JSON-safe reserve-trial account result with the one-time application key
@@ -65,13 +65,13 @@ export type RedactedReserveTrialCreateAccountResultJson = Omit<
 }
 
 /**
- * JSON-safe reserve-trial account response with every one-time application key
+ * JSON-safe reserve-trial account response with the one-time application key
  * secret replaced by a placeholder string.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedReserveTrialCreateAccountResponseJson =
-  readonly RedactedReserveTrialCreateAccountResultJson[]
+  RedactedReserveTrialCreateAccountResultJson
 
 const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
 
@@ -133,6 +133,62 @@ function partnerGroupMemberToRedactedJson(groupMember: PartnerGroupMember): Part
   }
 }
 
+function isSingleJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// The one invariant a create/reserve redaction wrapper must never violate: a
+// usable one-time credential must survive. B2 mints the application key exactly
+// once, after the (non-deletable) account already exists, so throwing the
+// response away over an unexpected *non-credential* field would destroy an
+// unrecoverable secret — the core hazard of #280. We hard-fail only when there
+// is no usable credential to preserve (nothing is lost in that case).
+function isCredentialBearing(
+  response: unknown,
+): response is { applicationKey: string; applicationKeyId: string } {
+  return (
+    isSingleJsonObject(response) &&
+    typeof response['applicationKey'] === 'string' &&
+    typeof response['applicationKeyId'] === 'string'
+  )
+}
+
+// True when `groupMember` matches every documented field type, so the
+// field-specific (allowlist) redaction copies the full shape without dropping
+// unexpected fields. A partial/variant object falls back to shallow redaction.
+function matchesGroupMemberShape(groupMember: unknown): groupMember is PartnerGroupMember {
+  return (
+    isSingleJsonObject(groupMember) &&
+    typeof groupMember['accountId'] === 'string' &&
+    typeof groupMember['email'] === 'string' &&
+    typeof groupMember['groupId'] === 'string' &&
+    typeof groupMember['groupName'] === 'string' &&
+    typeof groupMember['region'] === 'string' &&
+    typeof groupMember['s3Endpoint'] === 'string'
+  )
+}
+
+// True when the reserve-trial response also matches every documented
+// non-credential field, so the field-specific (allowlist) redaction is exact.
+function matchesReserveTrialAccountShape(response: ReserveTrialCreateAccountResponse): boolean {
+  return (
+    typeof response.accountId === 'string' &&
+    typeof response.s3Endpoint === 'string' &&
+    typeof response.startDate === 'string' &&
+    typeof response.endDate === 'string' &&
+    typeof response.email === 'string' &&
+    typeof response.bucketName === 'string' &&
+    typeof response.bucketId === 'string'
+  )
+}
+
+// Redaction hook for a credential-bearing response whose surrounding shape is
+// unexpected: shallow-copy every field the server sent and redact only the
+// one-time secret, so the response is never discarded and never logs the key.
+function redactApplicationKeyShallow<T extends object>(target: T): unknown {
+  return { ...target, applicationKey: APPLICATION_KEY_REDACTED }
+}
+
 // Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
 // honors own hooks. Install both shapes so SDK safe serialization is portable.
 function installPortableJsonHook<T extends object>(target: T, toJson: () => unknown): void {
@@ -149,6 +205,31 @@ function installPortableJsonHook<T extends object>(target: T, toJson: () => unkn
     enumerable: false,
     configurable: true,
   })
+}
+
+function redactWithHooks<T extends object>(
+  value: T,
+  toRedactedJsonForTarget: (target: T) => unknown,
+  toRedactedString: () => string,
+): T {
+  const target = Object.isExtensible(value) ? value : ({ ...value } as T)
+  const toRedactedJson = (): unknown => toRedactedJsonForTarget(target)
+
+  installPortableJsonHook(target, toRedactedJson)
+  Object.defineProperties(target, {
+    toString: {
+      value: toRedactedString,
+      enumerable: false,
+      configurable: true,
+    },
+    [inspectSymbol]: {
+      value: toRedactedJson,
+      enumerable: false,
+      configurable: true,
+    },
+  })
+
+  return target
 }
 
 /**
@@ -202,14 +283,14 @@ export function createGroupMemberResultToRedactedJson(
  *
  * @param response - Create group member response to render safely.
  *
- * @returns A plain array with every application key secret replaced by a placeholder.
+ * @returns A plain object with the application key secret replaced by a placeholder.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function createGroupMemberResponseToRedactedJson(
   response: CreateGroupMemberResponse,
 ): RedactedCreateGroupMemberResponseJson {
-  return response.map((result) => createGroupMemberResultToRedactedJson(result))
+  return createGroupMemberResultToRedactedJson(response)
 }
 
 /**
@@ -242,14 +323,14 @@ export function reserveTrialCreateAccountResultToRedactedJson(
  *
  * @param response - Reserve trial account response to render safely.
  *
- * @returns A plain array with every application key secret replaced by a placeholder.
+ * @returns A plain object with the application key secret replaced by a placeholder.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function reserveTrialCreateAccountResponseToRedactedJson(
   response: ReserveTrialCreateAccountResponse,
 ): RedactedReserveTrialCreateAccountResponseJson {
-  return response.map((result) => reserveTrialCreateAccountResultToRedactedJson(result))
+  return reserveTrialCreateAccountResultToRedactedJson(response)
 }
 
 /**
@@ -307,75 +388,42 @@ export function redactPartnerAuthorizeResponse(
 export function redactCreateGroupMemberResult(
   result: CreateGroupMemberResult,
 ): CreateGroupMemberResult {
-  const target = Object.isExtensible(result) ? result : { ...result }
-  const toRedactedJson = (): RedactedCreateGroupMemberResultJson =>
-    createGroupMemberResultToRedactedJson(target)
-  const toRedactedString = (): string => `[CreateGroupMemberResult ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  return redactWithHooks(
+    result,
+    createGroupMemberResultToRedactedJson,
+    () => `[CreateGroupMemberResult ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
- * Adds non-enumerable serialization and inspection hooks that redact all
- * create-group-member application key secrets while preserving direct access.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * create-group-member application key secret while preserving direct access.
  *
  * @param response - Create group member response to protect from accidental logging.
  *
- * @returns The same response array with redaction hooks installed when possible.
+ * @returns The same response object with redaction hooks installed when possible.
  *
- * @throws B2PartnerAuthorizationError if the response is not an array.
+ * @throws B2PartnerAuthorizationError if the response carries no usable application key.
  */
 export function redactCreateGroupMemberResponse(
   response: CreateGroupMemberResponse,
 ): CreateGroupMemberResponse {
-  if (!Array.isArray(response)) {
-    throw new B2PartnerAuthorizationError('b2_create_group_member response was not a JSON array')
+  if (!isCredentialBearing(response)) {
+    throw new B2PartnerAuthorizationError(
+      'b2_create_group_member response did not contain a usable application key',
+    )
   }
-
-  const target = Object.isExtensible(response) ? response : [...response]
-  const writableTarget = target as CreateGroupMemberResult[]
-  for (let i = 0; i < writableTarget.length; i++) {
-    const result = writableTarget[i]
-    if (result !== undefined) writableTarget[i] = redactCreateGroupMemberResult(result)
+  // Full documented shape → field-specific (allowlist) redaction.
+  if (matchesGroupMemberShape(response.groupMember)) {
+    return redactCreateGroupMemberResult(response)
   }
-
-  const toRedactedJson = (): RedactedCreateGroupMemberResponseJson =>
-    createGroupMemberResponseToRedactedJson(target)
-  const toRedactedString = (): string => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`
-
-  Object.defineProperties(target, {
-    toJSON: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  // Credential present but the surrounding shape is unexpected: never discard a
+  // provisioned one-time key. Return it with only the secret redacted for logs.
+  return redactWithHooks(
+    response,
+    redactApplicationKeyShallow,
+    () => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
@@ -383,7 +431,7 @@ export function redactCreateGroupMemberResponse(
  * application key secret while preserving direct property access.
  *
  * `JSON.stringify` redacts because the response contains newly minted
- * application key secrets that are commonly logged as batch results. Callers
+ * application key secrets that are commonly logged with responses. Callers
  * that need to persist the key should read `applicationKey` directly into
  * secure storage before serializing the object.
  *
@@ -394,77 +442,40 @@ export function redactCreateGroupMemberResponse(
 export function redactReserveTrialCreateAccountResult(
   result: ReserveTrialCreateAccountResult,
 ): ReserveTrialCreateAccountResult {
-  const target = Object.isExtensible(result) ? result : { ...result }
-  const toRedactedJson = (): RedactedReserveTrialCreateAccountResultJson =>
-    reserveTrialCreateAccountResultToRedactedJson(target)
-  const toRedactedString = (): string =>
-    `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  return redactWithHooks(
+    result,
+    reserveTrialCreateAccountResultToRedactedJson,
+    () => `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
- * Adds non-enumerable serialization and inspection hooks that redact all
- * reserve-trial application key secrets while preserving direct property access.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * reserve-trial application key secret while preserving direct property access.
  *
  * @param response - Reserve trial account response to protect from accidental logging.
  *
- * @returns The same response array with redaction hooks installed when possible.
+ * @returns The same response object with redaction hooks installed when possible.
  *
- * @throws B2PartnerAuthorizationError if the response is not an array.
+ * @throws B2PartnerAuthorizationError if the response carries no usable application key.
  */
 export function redactReserveTrialCreateAccountResponse(
   response: ReserveTrialCreateAccountResponse,
 ): ReserveTrialCreateAccountResponse {
-  if (!Array.isArray(response)) {
+  if (!isCredentialBearing(response)) {
     throw new B2PartnerAuthorizationError(
-      'b2_reserve_trial_create_account response was not a JSON array',
+      'b2_reserve_trial_create_account response did not contain a usable application key',
     )
   }
-
-  const target = Object.isExtensible(response) ? response : [...response]
-  const writableTarget = target as ReserveTrialCreateAccountResult[]
-  for (let i = 0; i < writableTarget.length; i++) {
-    const result = writableTarget[i]
-    if (result !== undefined) writableTarget[i] = redactReserveTrialCreateAccountResult(result)
+  // Full documented shape → field-specific (allowlist) redaction.
+  if (matchesReserveTrialAccountShape(response)) {
+    return redactReserveTrialCreateAccountResult(response)
   }
-
-  const toRedactedJson = (): RedactedReserveTrialCreateAccountResponseJson =>
-    reserveTrialCreateAccountResponseToRedactedJson(target)
-  const toRedactedString = (): string =>
-    `[ReserveTrialCreateAccountResponse ${APPLICATION_KEY_REDACTED}]`
-
-  Object.defineProperties(target, {
-    toJSON: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  // Credential present but the surrounding shape is unexpected: never discard a
+  // provisioned one-time key. Return it with only the secret redacted for logs.
+  return redactWithHooks(
+    response,
+    redactApplicationKeyShallow,
+    () => `[ReserveTrialCreateAccountResponse ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
