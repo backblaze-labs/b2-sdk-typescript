@@ -276,7 +276,9 @@ describe.skipIf(isWindows)('FileSource', () => {
     const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockReturnValue(undefined)
 
     try {
-      expect(() => new FileSource('/missing-sync-fs')).toThrow(/Node\.js 22\.3\+/)
+      expect(() => new FileSource('/missing-sync-fs')).toThrow(
+        /process\.getBuiltinModule\("node:fs"\)/,
+      )
     } finally {
       getBuiltinModule.mockRestore()
     }

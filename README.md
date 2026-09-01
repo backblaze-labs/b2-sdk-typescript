@@ -786,14 +786,14 @@ So you get both: an `npm install`-ready `dist/` (ESM + CJS + DTS), *and* a `src/
 
 | Runtime | Version | Status |
 |---|---|---|
-| Node.js | 22.3+ | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.18 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
+| Node.js | 22.3+ | Primary target. CI runs the fast suite on Linux, Windows, and macOS for Node 22.22.2 + 24; slow and coverage jobs run on Linux. `FileSource` uses weaker size/mtime validation on Windows because portable dev/inode and ctime fields are unreliable there. |
 | Bun | latest | Tested in CI via `bun test src/` + example typecheck. |
 | Deno | 2.x | Source isomorphism verified in CI via `deno check` against `src/`. |
 | Browsers | Chromium, Firefox, WebKit (last 2 evergreen) | Tested in CI via Playwright. |
 | Cloudflare Workers | - | Compatible target when the standard Web APIs above are available; not yet smoke-tested in CI with a Workers runtime. |
 | Vercel Edge | - | Compatible target when the standard Web APIs above are available; not yet smoke-tested in CI with Vercel Edge. |
 
-Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on older Node 22.x runtimes that lack synchronous `process.getBuiltinModule()`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
+Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is not supported (Node 20 reached EOL April 2026). `FileSource(path)` throws on runtimes that lack `process.getBuiltinModule('node:fs')`; `FileSource.fromPath(path)` remains the async construction path for supported Node filesystem platforms. On Windows, `FileSource` is supported with weaker size/mtime validation because portable dev/inode and ctime fields are unreliable there.
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 

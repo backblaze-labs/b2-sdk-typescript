@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Repository Node.js 22 CI and toolchain checks now use the JSDoc lint floor.**
+  CI and contributor docs now use Node 22.22.2+ for full project checks while
+  the published SDK runtime contract remains Node.js 22.3+. Closes #282.
 - **Progress byte callbacks are coalesced by default.** Transfer `onProgress` byte-only callbacks are throttled to the SDK's 100 ms default interval, while part-completion and final progress callbacks still emit immediately. Use `progressIntervalMillis: 0` when per-chunk progress sampling is required.
 - **Bucket default retention metadata now matches B2's nested wire shape.** BREAKING: `BucketInfo.defaultRetention` was removed because B2 does not return a top-level default-retention field; read `bucket.info.fileLockConfiguration.value?.defaultRetention` instead. `Bucket.getDefaultRetention()` now reads that nested field and can return `undefined` when file-lock configuration is unreadable. The nested default retention type also includes B2's unset response shape `{ mode: null, period: null }`; callers that checked `BucketRetentionMode.None` for unset bucket defaults should handle `null` mode on response metadata.
 - **Bucket replication configuration is now capability-filtered.** BREAKING: `BucketInfo.replicationConfiguration` changed from a bare `ReplicationConfiguration` to the wrapped `{ isClientAuthorizedToRead: boolean; value: ReplicationConfiguration | null }` shape B2 returns, and `Bucket.getReplication()` returns that wrapper. Callers accessing `.replicationConfiguration.asReplicationSource` must move to `.replicationConfiguration.value?.asReplicationSource`; `value` is `null` when replication is not configured or the caller is not authorized to read it (fail-closed). Request shapes (`CreateBucketRequest` / `UpdateBucketRequest`) keep the bare `ReplicationConfiguration`.

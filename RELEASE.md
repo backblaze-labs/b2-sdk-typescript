@@ -67,7 +67,7 @@ Now wire up OIDC so every future release publishes from CI with zero secrets:
 
 There is **no `NPM_TOKEN` secret to create or rotate.** The `id-token: write` permission in `release.yml` is what lets the npm CLI mint a short-lived, single-use credential at publish time.
 
-> **Requirements for the OIDC path:** npm CLI ≥ 11.5.1 and Node ≥ 22.14.0. The artifact build job pins Node 22.18.0, while the publish-only job uses Node 24 so the GitHub-hosted runner carries npm 11 for trusted publishing. pnpm remains pinned via `packageManager` for install/build/test steps.
+> **Requirements for the OIDC path:** npm CLI ≥ 11.5.1 and Node ≥ 22.14.0 for trusted publishing itself. The artifact build job pins Node 22.22.2 so the repo toolchain matches its JSDoc lint floor, while the publish-only job uses Node 24 so the GitHub-hosted runner carries npm 11 for trusted publishing. pnpm remains pinned via `packageManager` for install/build/test steps.
 
 <details>
 <summary>Fallback: token-based publishing (only if you can't use OIDC)</summary>
