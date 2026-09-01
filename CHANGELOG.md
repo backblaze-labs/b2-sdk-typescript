@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-01
+
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
 
 ### Added
@@ -302,7 +304,8 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
 
-[Unreleased]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.3.0...HEAD
+[Unreleased]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.4.0...HEAD
+[0.4.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.3.0...v0.4.0
 [0.3.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/backblaze-labs/b2-sdk-typescript/releases/tag/v0.1.0
