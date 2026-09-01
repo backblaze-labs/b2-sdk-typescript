@@ -593,12 +593,12 @@ const client = new B2Client({
 Every request the SDK issues carries a User-Agent header that Backblaze can grep server logs by:
 
 ```
-b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)
+b2-sdk-typescript/<version-or-dev> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)
 ```
 
 Both `b2-sdk-typescript/` (stable product token) and `@backblaze-labs/b2-sdk` (npm package name) are part of the documented contract — log queries that match either one find every request issued by this SDK. The comment block also reports the runtime (`node/<version>`, `bun/<version>`, `deno/<version>`, or `browser`) plus the OS and architecture on non-browser runtimes.
 
-The version is read straight from `package.json` via a JSON import attribute, so bumping the package version automatically propagates to the UA, the published artifact, and the runtime constant. There is no second source of truth to keep in sync.
+The public `VERSION` constant is always the numeric package semver. The User-Agent product token reports that semver only from a stable published package; source, CI, `npm pack`, and prerelease builds report `b2-sdk-typescript/dev` so development traffic stays distinguishable.
 
 To prepend your own application identifier:
 
@@ -608,7 +608,7 @@ const client = new B2Client({
   applicationKey,
   userAgent: 'my-app/1.0',
 })
-// → "my-app/1.0 b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)"
+// → "my-app/1.0 b2-sdk-typescript/<version-or-dev> (typescript; @backblaze-labs/b2-sdk; node/<node-version>; linux; x64)"
 ```
 
 ## SSRF guard

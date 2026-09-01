@@ -48,7 +48,7 @@ src/
   internal/      Shared internals (b2-naming, url-redaction, upload-retry-options)
   util/          Small helpers (abort, best-effort, bytes, crypto, defaults, error-reason, ...)
   index.ts       Public API re-exports
-  version.ts     VERSION constant
+  version.ts     VERSION constant + release-channel resolver
 ```
 
 ## TypeScript strictness
@@ -77,7 +77,7 @@ Maximum strictness is on. Common pitfalls:
 - **Isomorphic simulator.** `B2Simulator.handleRequest` is `async` so the `b2_copy_part` handler can use the SDK's own `sha1Hex` (lazy `node:crypto`, WebCrypto fallback). This is why the whole suite runs in browsers.
 - **Sync engine fs imports are lazy.** `src/sync/synchronizer.ts` imports `node:fs/promises` + `node:path` via `await import(...)` inside the action closures, so the synchronizer loads in browsers (B2-to-B2 sync works there); only local-disk actions throw off-Node.
 - **SSRF guard on the default transport.** `FetchTransport` calls `urlGuard.check(url)` before every `fetch`. `B2Client.authorize()` locks the guard to host suffixes from the realm's authorize response (+ `backblaze.com` for upload pods). Custom transports (e.g. the simulator) bypass by design. Throws non-retryable `B2SsrfError`. See `src/http/url-guard.ts`.
-- **User-Agent contract.** Format: `b2-sdk-typescript/<version> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])`. `b2-sdk-typescript/` and `@backblaze-labs/b2-sdk` are stable product tokens — do not rename without coordinating. See `src/http/user-agent.ts`. `src/version.ts` is the only file importing `package.json` (`import pkg from '../package.json' with { type: 'json' }`), re-exported as `VERSION`.
+- **User-Agent contract.** Format: `b2-sdk-typescript/<version-or-dev> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])`. `b2-sdk-typescript/` and `@backblaze-labs/b2-sdk` are stable product tokens — do not rename without coordinating. See `src/http/user-agent.ts`. `src/version.ts` is the only file importing `package.json` (`import pkg from '../package.json' with { type: 'json' }`), re-exported as numeric `VERSION`, and the publish path injects the positive release-channel signal so only stable published builds advertise the semver in the product token.
 - **`LARGE_TEST_TIMEOUT = 60_000`** for any test round-tripping multi-MB through the simulator + per-part SHA-1 (`src/upload/upload.test.ts`, `src/copy/copy.test.ts`, `src/upload/stream.test.ts`). macOS runners are ~2-3× slower; 30 s is too tight.
 
 ## Native API v4

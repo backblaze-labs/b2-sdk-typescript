@@ -1,4 +1,4 @@
-import { VERSION } from '../version.ts'
+import { productVersion } from '../version.ts'
 
 /**
  * Stable identifier Backblaze can grep server logs for to find every request
@@ -12,6 +12,17 @@ export const SDK_PRODUCT = 'b2-sdk-typescript'
  * {@link SDK_PRODUCT} so log queries that grep on either token work.
  */
 export const SDK_PACKAGE = '@backblaze-labs/b2-sdk'
+
+/**
+ * Build the stable SDK product token for the User-Agent header.
+ *
+ * @param version - Version segment resolved by {@link productVersion}.
+ *
+ * @returns The `b2-sdk-typescript/<version-or-dev>` product token.
+ */
+export function sdkProductToken(version: string = productVersion()): string {
+  return `${SDK_PRODUCT}/${version}`
+}
 
 /** Detected runtime + OS information for the User-Agent comment. */
 interface Platform {
@@ -104,6 +115,6 @@ export function getUserAgent(custom?: string): string {
   const parts = ['typescript', SDK_PACKAGE, runtime]
   if (os !== undefined) parts.push(os)
   if (arch !== undefined) parts.push(arch)
-  const base = `${SDK_PRODUCT}/${VERSION} (${parts.join('; ')})`
+  const base = `${sdkProductToken()} (${parts.join('; ')})`
   return custom ? `${custom} ${base}` : base
 }

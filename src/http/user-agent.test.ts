@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { VERSION } from '../version.ts'
-import { getUserAgent, SDK_PACKAGE, SDK_PRODUCT } from './user-agent.ts'
+import { productVersion, resolveVersion } from '../version.ts'
+import { getUserAgent, SDK_PACKAGE, SDK_PRODUCT, sdkProductToken } from './user-agent.ts'
 
 describe('getUserAgent', () => {
-  it('starts with the SDK product token + version', () => {
+  it('starts with the SDK product token + product version', () => {
     const ua = getUserAgent()
-    expect(ua).toMatch(new RegExp(`^${SDK_PRODUCT}\\/${VERSION}\\s\\(`))
+    expect(ua).toMatch(new RegExp(`^${SDK_PRODUCT}\\/${productVersion()}\\s\\(`))
   })
 
   it('includes the typescript language token and npm package name in the comment', () => {
@@ -20,13 +20,23 @@ describe('getUserAgent', () => {
   it('prepends a custom prefix verbatim and keeps the SDK identifiers intact', () => {
     const ua = getUserAgent('my-app/1.0')
     expect(ua).toMatch(/^my-app\/1\.0 /)
-    expect(ua).toContain(`${SDK_PRODUCT}/${VERSION}`)
+    expect(ua).toContain(sdkProductToken())
     expect(ua).toContain(SDK_PACKAGE)
+  })
+
+  it('uses dev as the source-build product token', () => {
+    expect(sdkProductToken()).toBe(`${SDK_PRODUCT}/dev`)
+  })
+
+  it('can render a published-release product token from the shared resolver', () => {
+    const release = resolveVersion('1.2.3', 'published')
+
+    expect(sdkProductToken(release.productVersion)).toBe(`${SDK_PRODUCT}/1.2.3`)
   })
 
   it('uses semicolon-separated tokens inside the comment', () => {
     const ua = getUserAgent()
-    // Format: b2-sdk-typescript/<v> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])
+    // Format: b2-sdk-typescript/<v-or-dev> (typescript; @backblaze-labs/b2-sdk; <runtime>; [os; ][arch])
     const match = /^[^\s]+\s\(([^)]+)\)$/.exec(ua)
     expect(match).not.toBeNull()
     const inside = match?.[1]

@@ -81,7 +81,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build
+      - name: Build release artifact
+        env:
+          B2_SDK_RELEASE_CHANNEL: published
+        run: pnpm build
       - run: pnpm run verify:metadata
       - run: pnpm run verify:release
       - run: pnpm run verify:exports
