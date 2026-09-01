@@ -13,10 +13,18 @@ describe('version resolver', () => {
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/)
   })
 
-  it('defaults source builds to the dev User-Agent version', () => {
-    expect(RELEASE_CHANNEL).toBe('dev')
-    expect(isPublishedRelease).toBe(false)
-    expect(productVersion()).toBe('dev')
+  it('keeps module-level release metadata internally consistent', () => {
+    expect(isPublishedRelease).toBe(RELEASE_CHANNEL === 'published')
+    expect(productVersion()).toBe(RELEASE_CHANNEL === 'published' ? VERSION : 'dev')
+  })
+
+  it('resolves source builds to the dev User-Agent version without a publish signal', () => {
+    expect(resolveVersion('1.2.3')).toEqual({
+      version: '1.2.3',
+      releaseChannel: 'dev',
+      isPublishedRelease: false,
+      productVersion: 'dev',
+    })
   })
 
   it('resolves stable published releases to the package semver', () => {

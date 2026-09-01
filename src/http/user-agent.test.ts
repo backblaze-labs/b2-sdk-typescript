@@ -24,8 +24,10 @@ describe('getUserAgent', () => {
     expect(ua).toContain(SDK_PACKAGE)
   })
 
-  it('uses dev as the source-build product token', () => {
-    expect(sdkProductToken()).toBe(`${SDK_PRODUCT}/dev`)
+  it('can render the source-build product token from the shared resolver', () => {
+    const dev = resolveVersion('1.2.3')
+
+    expect(sdkProductToken(dev.productVersion)).toBe(`${SDK_PRODUCT}/dev`)
   })
 
   it('can render a published-release product token from the shared resolver', () => {
