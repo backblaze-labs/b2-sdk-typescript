@@ -1107,10 +1107,10 @@ export class PartnerSimulator {
 
   private emptyB2Stats(timestamp: number): PartnerB2Stats {
     return {
-      b2BytesStoredCount: '0',
-      b2FilesStoredCount: '0',
+      b2BytesStoredCount: 0,
+      b2FilesStoredCount: 0,
       b2StatsAsOfTimestamp: new Date(timestamp).toISOString(),
-      bucketCount: '0',
+      bucketCount: 0,
     }
   }
 }

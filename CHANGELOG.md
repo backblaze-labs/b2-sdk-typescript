@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Partner group `b2Stats` counters are numbers, not strings.** BREAKING: `PartnerB2Stats.b2BytesStoredCount`, `b2FilesStoredCount`, and `bucketCount` are now `number` — matching what live B2 `b2_list_groups` / `b2_list_group_members` actually return — instead of the previously-assumed quoted decimal `string`. Callers that coerced these with `Number(...)` / `parseInt(...)` should drop the conversion. Confirmed against live B2. Closes #214.
 - **Repository Node.js 22 CI and toolchain checks now use the JSDoc lint floor.**
   CI and contributor docs now use Node 22.22.2+ for full project checks while
   the published SDK runtime contract remains Node.js 22.3+. Closes #282.

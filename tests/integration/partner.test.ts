@@ -785,9 +785,9 @@ function expectPartnerGroupShape(group: PartnerGroup): void {
 }
 
 function expectPartnerB2StatsShape(stats: PartnerB2Stats): void {
-  expectDecimalString(stats.b2BytesStoredCount, 'b2Stats.b2BytesStoredCount')
-  expectDecimalString(stats.b2FilesStoredCount, 'b2Stats.b2FilesStoredCount')
-  expectDecimalString(stats.bucketCount, 'b2Stats.bucketCount')
+  expectNonNegativeIntegerCount(stats.b2BytesStoredCount, 'b2Stats.b2BytesStoredCount')
+  expectNonNegativeIntegerCount(stats.b2FilesStoredCount, 'b2Stats.b2FilesStoredCount')
+  expectNonNegativeIntegerCount(stats.bucketCount, 'b2Stats.bucketCount')
   if (stats.b2StatsAsOfTimestamp !== null) {
     expectTimestampString(stats.b2StatsAsOfTimestamp, 'b2Stats.b2StatsAsOfTimestamp')
   }
@@ -861,9 +861,10 @@ function expectNonEmptyString(value: string, label: string): void {
   expect(value.length, label).toBeGreaterThan(0)
 }
 
-function expectDecimalString(value: string, label: string): void {
-  expectNonEmptyString(value, label)
-  expect(value, label).toMatch(/^\d+$/)
+function expectNonNegativeIntegerCount(value: number, label: string): void {
+  expect(typeof value, label).toBe('number')
+  expect(Number.isInteger(value), label).toBe(true)
+  expect(value, label).toBeGreaterThanOrEqual(0)
 }
 
 function expectTimestampString(value: string, label: string): void {

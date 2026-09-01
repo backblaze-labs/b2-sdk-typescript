@@ -232,14 +232,14 @@ export interface ListGroupsRequest {
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export interface PartnerB2Stats {
-  /** Total bytes stored as a quoted decimal string. */
-  readonly b2BytesStoredCount: string
-  /** Total files stored as a quoted decimal string. */
-  readonly b2FilesStoredCount: string
+  /** Total bytes stored, as an integer count. */
+  readonly b2BytesStoredCount: number
+  /** Total files stored, as an integer count. */
+  readonly b2FilesStoredCount: number
   /** ISO 8601 UTC date-time string for the daily B2 statistics snapshot, or null if unavailable. */
   readonly b2StatsAsOfTimestamp: string | null
-  /** Total bucket count as a quoted decimal string. */
-  readonly bucketCount: string
+  /** Total bucket count, as an integer count. */
+  readonly bucketCount: number
 }
 
 /**
