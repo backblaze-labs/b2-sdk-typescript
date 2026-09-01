@@ -20,7 +20,10 @@ import {
   normalizeSha1VerificationMaxBytes,
   withSha1VerificationDeadline,
 } from './b2-sha1-reader.ts'
-import { removeEmptyDownloadStagingRoot } from './download-staging.ts'
+import {
+  DOWNLOAD_STAGING_DIRECTORY_NAME,
+  removeDownloadStagingRootMarkerAndDirectory,
+} from './download-staging.ts'
 import { localFilesystemErrorReason } from './filesystem-errors.ts'
 import {
   deleteLocalFileInsideRoot,
@@ -75,6 +78,7 @@ interface ScanEventBuffer {
  */
 export const synchronizerTestHooks: {
   afterNonSha1PlanBatch?: (batchSize: number) => void
+  beforeDownloadStagingRootCleanup?: (managedDirectory: string) => Promise<void> | void
 } = {}
 
 /** Base configuration for a sync operation. */
@@ -173,8 +177,13 @@ interface LocalRootContexts {
   readonly dest?: LocalRootContext
 }
 
+interface DownloadStagingRootCleanupTarget {
+  readonly managedDirectory: string
+  readonly rootRealPath: string
+}
+
 interface SynchronizerLifecycleHooks {
-  readonly onDownloadStagingRoot?: (managedDirectory: string) => void
+  readonly onDownloadStagingRoot?: (target: DownloadStagingRootCleanupTarget) => void
 }
 
 /**
@@ -247,10 +256,10 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     },
   }
 
-  const downloadStagingRoots = new Set<string>()
+  const downloadStagingRoots = await downloadStagingRootCleanupTargets(direction, localRootContexts)
   const factory = createActionFactory(config, localRootContexts, {
-    onDownloadStagingRoot(managedDirectory) {
-      downloadStagingRoots.add(managedDirectory)
+    onDownloadStagingRoot(target) {
+      downloadStagingRoots.set(target.managedDirectory, target)
     },
   })
   const readB2Sha1 = dryRun ? undefined : createB2Sha1Reader(config)
@@ -330,7 +339,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
     }
     removeAbortForwarder()
     await drainActions()
-    await removeEmptyDownloadStagingRootsAfterSync(downloadStagingRoots)
+    await removeDownloadStagingRootMarkersAndDirectoriesAfterSync(downloadStagingRoots)
   }
 
   async function collectPairs(): Promise<SyncPair[]> {
@@ -551,16 +560,35 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   }
 }
 
-async function removeEmptyDownloadStagingRootsAfterSync(
-  managedDirectories: ReadonlySet<string>,
-): Promise<void> {
-  if (managedDirectories.size === 0) return
+async function downloadStagingRootCleanupTargets(
+  direction: SyncDirection,
+  localRootContexts: LocalRootContexts,
+): Promise<Map<string, DownloadStagingRootCleanupTarget>> {
+  const targets = new Map<string, DownloadStagingRootCleanupTarget>()
+  if (direction !== 'b2-to-local' || localRootContexts.dest === undefined) return targets
+
   const path = await import('node:path')
-  await Promise.all(
-    [...managedDirectories].map((managedDirectory) =>
-      removeEmptyDownloadStagingRoot(managedDirectory, path).catch(() => {}),
-    ),
-  )
+  const target = {
+    managedDirectory: path.join(localRootContexts.dest.realPath, DOWNLOAD_STAGING_DIRECTORY_NAME),
+    rootRealPath: localRootContexts.dest.realPath,
+  } satisfies DownloadStagingRootCleanupTarget
+  targets.set(target.managedDirectory, target)
+  return targets
+}
+
+async function removeDownloadStagingRootMarkersAndDirectoriesAfterSync(
+  targets: ReadonlyMap<string, DownloadStagingRootCleanupTarget>,
+): Promise<void> {
+  if (targets.size === 0) return
+  const path = await import('node:path')
+  for (const target of targets.values()) {
+    await synchronizerTestHooks.beforeDownloadStagingRootCleanup?.(target.managedDirectory)
+    await removeDownloadStagingRootMarkerAndDirectory(
+      target.rootRealPath,
+      target.managedDirectory,
+      path,
+    )
+  }
 }
 
 /**
@@ -902,7 +930,13 @@ function createActionFactory(
             ...(scannedDest !== undefined ? { expectedDestination: scannedDest } : {}),
             idleTimeoutMillis,
             ...(lifecycleHooks.onDownloadStagingRoot !== undefined
-              ? { onDownloadStagingRoot: lifecycleHooks.onDownloadStagingRoot }
+              ? {
+                  onDownloadStagingRoot: (managedDirectory: string) => {
+                    const rootRealPath = localRootContexts.dest?.realPath
+                    if (rootRealPath === undefined) return
+                    lifecycleHooks.onDownloadStagingRoot?.({ managedDirectory, rootRealPath })
+                  },
+                }
               : {}),
             signal: actionSignal(signal),
           })

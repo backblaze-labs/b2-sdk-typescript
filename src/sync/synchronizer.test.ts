@@ -9,9 +9,9 @@ import { FileAction, type FileVersion, type ListedFileVersion } from '../types/f
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import {
   DOWNLOAD_STAGING_DIRECTORY_NAME,
-  localFileIoTestHooks,
-  writeLocalStreamInsideRoot,
-} from './local-file-io.ts'
+  DOWNLOAD_STAGING_MARKER_NAME,
+} from './download-staging.ts'
+import { localFileIoTestHooks, writeLocalStreamInsideRoot } from './local-file-io.ts'
 import { compareSyncRelativePaths } from './path-order.ts'
 import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
@@ -2307,11 +2307,206 @@ describe('synchronize', () => {
           expect.objectContaining({ signal: expect.any(AbortSignal) }),
         )
         await expect(readFile(join(root, 'remote.txt'))).resolves.toEqual(Buffer.from(data))
-        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).rejects.toThrow()
+        await expect(readdir(join(root, DOWNLOAD_STAGING_DIRECTORY_NAME))).rejects.toMatchObject({
+          code: 'ENOENT',
+        })
       } finally {
         await rm(root, { recursive: true, force: true })
       }
     })
+
+    it.skipIf(!isNode)(
+      'cleans up an existing empty staging root on a no-op download sync',
+      async () => {
+        const { mkdir, mkdtemp, readdir, readFile, rm, writeFile } = await import(
+          'node:fs/promises'
+        )
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-noop-cleanup-'))
+        try {
+          const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+          await mkdir(managedDirectory)
+          await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+          await writeFile(join(root, 'remote.txt'), 'abc')
+
+          const source = makeMemoryFolder([makeB2SyncPath('remote.txt', 2000, 3)], 'b2')
+          const config: SynchronizerDownConfig = {
+            source: { ...source, type: 'b2' },
+            dest: new LocalFolder(root),
+            options: { compareMode: 'size', keepMode: 'no-delete' },
+            bucket: makeMockBucket() as unknown as Bucket,
+          }
+
+          const events = await collectEvents(config)
+
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: 'skip', path: 'remote.txt' }),
+          )
+          await expect(readFile(join(root, 'remote.txt'), 'utf8')).resolves.toBe('abc')
+          await expect(readdir(managedDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode)(
+      'does not clean a staging root while another download is creating its run directory',
+      async () => {
+        const { mkdtemp, readdir, readFile, realpath, rm } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cleanup-race-'))
+        const managedDirectory = join(await realpath(root), DOWNLOAD_STAGING_DIRECTORY_NAME)
+        const markerWritten = deferred()
+        const releaseStagingCreation = deferred()
+        let paused = false
+        try {
+          localFileIoTestHooks.afterManagedStagingMarkerWrite = async (directory) => {
+            if (paused || directory !== managedDirectory) return
+            paused = true
+            markerWritten.resolve(undefined)
+            await releaseStagingCreation.promise
+          }
+
+          const data = new Uint8Array([7, 8, 9])
+          const firstSource = makeMemoryFolder(
+            [makeB2SyncPath('remote.txt', 2000, data.byteLength)],
+            'b2',
+          )
+          const firstConfig: SynchronizerDownConfig = {
+            source: { ...firstSource, type: 'b2' },
+            dest: new LocalFolder(root),
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: makeMockBucket({ 'fid_remote.txt': data }) as unknown as Bucket,
+          }
+          const firstSync = collectEvents(firstConfig)
+          await markerWritten.promise
+
+          const secondConfig: SynchronizerDownConfig = {
+            source: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            dest: new LocalFolder(root),
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: makeMockBucket() as unknown as Bucket,
+          }
+          const secondEvents = await collectEvents(secondConfig)
+          expect(secondEvents.filter((event) => event.type === 'error')).toEqual([])
+
+          releaseStagingCreation.resolve(undefined)
+          const firstEvents = await firstSync
+
+          expect(firstEvents).toContainEqual(
+            expect.objectContaining({ type: 'download-done', path: 'remote.txt' }),
+          )
+          await expect(readFile(join(root, 'remote.txt'))).resolves.toEqual(Buffer.from(data))
+          await expect(readdir(managedDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+        } finally {
+          releaseStagingCreation.resolve(undefined)
+          delete localFileIoTestHooks.afterManagedStagingMarkerWrite
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode || isWindows)(
+      'does not follow a swapped staging root symlink during cleanup',
+      async () => {
+        const { mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } = await import(
+          'node:fs/promises'
+        )
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cleanup-link-'))
+        const outside = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cleanup-out-'))
+        const realRoot = await realpath(root)
+        const managedDirectory = join(realRoot, DOWNLOAD_STAGING_DIRECTORY_NAME)
+        const movedManagedDirectory = join(realRoot, 'moved-staging')
+        const outsideMarker = join(outside, DOWNLOAD_STAGING_MARKER_NAME)
+        try {
+          await mkdir(managedDirectory)
+          await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+          await writeFile(outsideMarker, 'outside')
+          synchronizerTestHooks.beforeDownloadStagingRootCleanup = async (directory) => {
+            if (directory !== managedDirectory) return
+            await rename(managedDirectory, movedManagedDirectory)
+            await symlink(outside, managedDirectory, 'dir')
+          }
+
+          const config: SynchronizerDownConfig = {
+            source: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            dest: new LocalFolder(root),
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: makeMockBucket() as unknown as Bucket,
+          }
+          const events = await collectEvents(config)
+
+          expect(events.filter((event) => event.type === 'error')).toEqual([])
+          await expect(readFile(outsideMarker, 'utf8')).resolves.toBe('outside')
+          await expect(
+            readFile(join(movedManagedDirectory, DOWNLOAD_STAGING_MARKER_NAME), 'utf8'),
+          ).resolves.toBe('')
+        } finally {
+          delete synchronizerTestHooks.beforeDownloadStagingRootCleanup
+          await rm(managedDirectory, { force: true }).catch(() => {})
+          await rm(root, { recursive: true, force: true })
+          await rm(outside, { recursive: true, force: true })
+        }
+      },
+    )
+
+    it.skipIf(!isNode || isWindows)(
+      'warns when staging root cleanup hits a non-benign filesystem error',
+      async () => {
+        const { chmod, mkdir, mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-cleanup-warning-'))
+        const originalEmitWarning = process.emitWarning
+        const warnings: { readonly code: string | undefined; readonly message: string }[] = []
+        let rootModeChanged = false
+        try {
+          const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+          await mkdir(managedDirectory)
+          await writeFile(join(managedDirectory, DOWNLOAD_STAGING_MARKER_NAME), '')
+          process.emitWarning = ((
+            warning: string | Error,
+            options?: { readonly code?: string },
+          ) => {
+            warnings.push({
+              code: options?.code,
+              message: warning instanceof Error ? warning.message : warning,
+            })
+          }) as typeof process.emitWarning
+          synchronizerTestHooks.beforeDownloadStagingRootCleanup = async () => {
+            await chmod(root, 0o500)
+            rootModeChanged = true
+          }
+
+          const config: SynchronizerDownConfig = {
+            source: { ...makeMemoryFolder([], 'b2'), type: 'b2' },
+            dest: new LocalFolder(root),
+            options: { compareMode: 'modtime', keepMode: 'no-delete' },
+            bucket: makeMockBucket() as unknown as Bucket,
+          }
+          await collectEvents(config)
+
+          expect(warnings).toContainEqual(
+            expect.objectContaining({
+              code: 'B2SDK_DOWNLOAD_STAGING_CLEANUP_FAILED',
+            }),
+          )
+          expect(warnings.map((warning) => warning.message).join(' ')).toContain(
+            'failed to remove B2 SDK download staging root',
+          )
+        } finally {
+          delete synchronizerTestHooks.beforeDownloadStagingRootCleanup
+          process.emitWarning = originalEmitWarning
+          if (rootModeChanged) await chmod(root, 0o700).catch(() => {})
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
 
     it.skipIf(!isNode)('passes abort signals to B2 download actions', async () => {
       const { tmpdir } = await import('node:os')

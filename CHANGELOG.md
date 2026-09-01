@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **B2-to-local sync removes the managed download staging root on completion.** Completed downloads now clean the SDK-owned `.b2sdk-download-staging` directory after per-run staging entries are gone, including no-op follow-up syncs that only find an older marker-only staging root. Closes #156.
 - **Progress throttling drains part-boundary bytes safely.** A pending coalesced byte-progress update is emitted before the part-completion update, delayed progress listener errors no longer escape detached timers, and pending progress timers are cleared on transfer cleanup.
 - **Followed local symlinks stay inside the sync root.** `localSymlinks: 'follow'` skips file and directory symlink targets outside the local root, avoids repeated traversal of the same followed directory identity, and `synchronize()` now honors followed in-root file targets before upload actions.
 - **B2 content file-info upload headers are now percent-encoded.** `contentDisposition`, `contentLanguage`, `expires`, `cacheControl`, and `contentEncoding` values sent as `X-Bz-Info-b2-*` upload headers are now encoded with B2 file-info encoding, matching the custom `fileInfo` path, so values with `%`, non-ASCII, or other unsafe characters round-trip correctly. These values must now be passed raw (unencoded). Closes #213.
