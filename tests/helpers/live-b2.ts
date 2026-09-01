@@ -34,6 +34,10 @@ const requireMasterCredentialsFlag =
   process.env.B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS === '1' ||
   // Legacy alias retained for older local scripts and in-flight CI branches.
   process.env.B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS === '1'
+const masterCredentialsRequiredMessage =
+  'B2 master-key integration credentials are required when ' +
+  'B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS=1 or legacy ' +
+  'B2_INTEGRATION_REQUIRE_PARTNER_CREDENTIALS=1'
 const hasPartialB2IntegrationCredentials = (keyId === '') !== (appKey === '')
 const hasPartialMasterCredentials = (masterKeyId === '') !== (masterKey === '')
 
@@ -55,9 +59,7 @@ export function requireMasterCredentials(): void {
     throw new Error('B2_MASTER_KEY_ID and B2_MASTER_KEY must be provided together')
   }
   if (skipUnlessMasterKey) {
-    throw new Error(
-      'B2 master-key integration credentials are required when B2_INTEGRATION_REQUIRE_MASTER_CREDENTIALS=1',
-    )
+    throw new Error(masterCredentialsRequiredMessage)
   }
 }
 
