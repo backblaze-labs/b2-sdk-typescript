@@ -35,16 +35,12 @@ async function main() {
     const partner = await partnerClientFromEnv()
     await partner.authorize()
 
-    const [trial] = await partner.reserveTrialAccounts({
+    const trial = await partner.reserveTrialAccounts({
       email,
       term,
       storage,
       ...(region !== undefined ? { region } : {}),
     })
-
-    if (trial === undefined) {
-      fail('The Partner API returned no trial account result.')
-    }
 
     await secretsFile.write([
       {

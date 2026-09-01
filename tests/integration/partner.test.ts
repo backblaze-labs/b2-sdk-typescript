@@ -194,7 +194,7 @@ describe.skipIf(skipMissingMasterKey)('Partner live endpoint integration contrac
   )
 
   it.skipIf(!allowDestructivePartner || !allowIrreversiblePartnerTrial)(
-    'reserves a disposable trial account as an array response',
+    'reserves a disposable trial account as an object response',
     async (ctx) => {
       const livePartner = requireAuthorizedPartner(ctx)
       if (livePartner === null) return
@@ -231,7 +231,7 @@ describe.skipIf(skipMissingMasterKey)('Partner live endpoint integration contrac
 })
 
 describe('Partner live assertion redaction guards', () => {
-  it('keeps secret-bearing response bodies out of length failures', () => {
+  it('keeps secret-bearing response bodies out of shape failures', () => {
     const secret = 'fake-live-application-key-secret'
     const createFailure = assertionFailureMessage(() =>
       expectCreateGroupMemberResponseShape(
@@ -595,10 +595,10 @@ function registerReturnedGroupMembersForCleanup(
   fallbackGroupId: GroupId,
   fallbackMemberEmail?: string,
 ): number {
-  if (!Array.isArray(response)) return 0
+  const entries = Array.isArray(response) ? response : [response]
 
   let registered = 0
-  for (const entry of response) {
+  for (const entry of entries) {
     const cleanup = cleanupTargetFromCreateGroupMemberResult(
       entry,
       fallbackGroupId,
@@ -695,14 +695,15 @@ function logReserveTrialCreated(
   requestedEmail: string,
   reconciliationOwner: string,
 ): void {
-  if (!Array.isArray(response)) {
+  const entries = Array.isArray(response) ? response : [response]
+  if (entries.length === 0) {
     console.info(
       `[b2 integration] reserve_trial_create_account response owner=${reconciliationOwner} requestedEmail=${requestedEmail} responseShape=${typeof response}`,
     )
     return
   }
 
-  for (const entry of response) {
+  for (const entry of entries) {
     const record = objectRecord(entry)
     const account = stringFieldOrPlaceholder(record, 'accountId')
     const email = stringFieldOrPlaceholder(record, 'email', requestedEmail)
@@ -818,10 +819,8 @@ function expectCreateGroupMemberResponseShape(
   response: CreateGroupMemberResponse,
   expected: { readonly groupId: GroupId; readonly memberEmail: string },
 ): PartnerGroupMember {
-  expect(Array.isArray(response)).toBe(true)
-  expect(response.length).toBe(1)
-  const result = response[0]
-  if (result === undefined) throw new Error('expected one created group-member result')
+  expect(Array.isArray(response)).toBe(false)
+  const result = response
   expectNonEmptyString(result.applicationKeyId, 'applicationKeyId')
   expectNonEmptyString(result.applicationKey, 'applicationKey')
   expect(result.groupMember.email).toBe(expected.memberEmail)
@@ -843,10 +842,8 @@ function expectReserveTrialCreateAccountResponseShape(
   response: ReserveTrialCreateAccountResponse,
   email: string,
 ): void {
-  expect(Array.isArray(response)).toBe(true)
-  expect(response.length).toBe(1)
-  const result = response[0]
-  if (result === undefined) throw new Error('expected one reserve-trial result')
+  expect(Array.isArray(response)).toBe(false)
+  const result = response
   expectNonEmptyString(result.accountId, 'accountId')
   expectNonEmptyString(result.applicationKeyId, 'applicationKeyId')
   expectNonEmptyString(result.applicationKey, 'applicationKey')

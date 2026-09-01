@@ -1,4 +1,3 @@
-import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type {
   CreateGroupMemberResponse,
   CreateGroupMemberResult,
@@ -43,12 +42,12 @@ export type RedactedCreateGroupMemberResultJson = Omit<
 }
 
 /**
- * JSON-safe create-group-member response with every one-time application key
+ * JSON-safe create-group-member response with the one-time application key
  * secret replaced by a placeholder string.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type RedactedCreateGroupMemberResponseJson = readonly RedactedCreateGroupMemberResultJson[]
+export type RedactedCreateGroupMemberResponseJson = RedactedCreateGroupMemberResultJson
 
 /**
  * JSON-safe reserve-trial account result with the one-time application key
@@ -65,13 +64,13 @@ export type RedactedReserveTrialCreateAccountResultJson = Omit<
 }
 
 /**
- * JSON-safe reserve-trial account response with every one-time application key
+ * JSON-safe reserve-trial account response with the one-time application key
  * secret replaced by a placeholder string.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type RedactedReserveTrialCreateAccountResponseJson =
-  readonly RedactedReserveTrialCreateAccountResultJson[]
+  RedactedReserveTrialCreateAccountResultJson
 
 const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
 
@@ -202,14 +201,14 @@ export function createGroupMemberResultToRedactedJson(
  *
  * @param response - Create group member response to render safely.
  *
- * @returns A plain array with every application key secret replaced by a placeholder.
+ * @returns A plain object with the application key secret replaced by a placeholder.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function createGroupMemberResponseToRedactedJson(
   response: CreateGroupMemberResponse,
 ): RedactedCreateGroupMemberResponseJson {
-  return response.map((result) => createGroupMemberResultToRedactedJson(result))
+  return createGroupMemberResultToRedactedJson(response)
 }
 
 /**
@@ -242,14 +241,14 @@ export function reserveTrialCreateAccountResultToRedactedJson(
  *
  * @param response - Reserve trial account response to render safely.
  *
- * @returns A plain array with every application key secret replaced by a placeholder.
+ * @returns A plain object with the application key secret replaced by a placeholder.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export function reserveTrialCreateAccountResponseToRedactedJson(
   response: ReserveTrialCreateAccountResponse,
 ): RedactedReserveTrialCreateAccountResponseJson {
-  return response.map((result) => reserveTrialCreateAccountResultToRedactedJson(result))
+  return reserveTrialCreateAccountResultToRedactedJson(response)
 }
 
 /**
@@ -330,39 +329,23 @@ export function redactCreateGroupMemberResult(
 }
 
 /**
- * Adds non-enumerable serialization and inspection hooks that redact all
- * create-group-member application key secrets while preserving direct access.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * create-group-member application key secret while preserving direct access.
  *
  * @param response - Create group member response to protect from accidental logging.
  *
- * @returns The same response array with redaction hooks installed when possible.
- *
- * @throws B2PartnerAuthorizationError if the response is not an array.
+ * @returns The same response object with redaction hooks installed when possible.
  */
 export function redactCreateGroupMemberResponse(
   response: CreateGroupMemberResponse,
 ): CreateGroupMemberResponse {
-  if (!Array.isArray(response)) {
-    throw new B2PartnerAuthorizationError('b2_create_group_member response was not a JSON array')
-  }
-
-  const target = Object.isExtensible(response) ? response : [...response]
-  const writableTarget = target as CreateGroupMemberResult[]
-  for (let i = 0; i < writableTarget.length; i++) {
-    const result = writableTarget[i]
-    if (result !== undefined) writableTarget[i] = redactCreateGroupMemberResult(result)
-  }
-
+  const target = Object.isExtensible(response) ? response : { ...response }
   const toRedactedJson = (): RedactedCreateGroupMemberResponseJson =>
     createGroupMemberResponseToRedactedJson(target)
   const toRedactedString = (): string => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`
 
+  installPortableJsonHook(target, toRedactedJson)
   Object.defineProperties(target, {
-    toJSON: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
     toString: {
       value: toRedactedString,
       enumerable: false,
@@ -383,7 +366,7 @@ export function redactCreateGroupMemberResponse(
  * application key secret while preserving direct property access.
  *
  * `JSON.stringify` redacts because the response contains newly minted
- * application key secrets that are commonly logged as batch results. Callers
+ * application key secrets that are commonly logged with responses. Callers
  * that need to persist the key should read `applicationKey` directly into
  * secure storage before serializing the object.
  *
@@ -418,42 +401,24 @@ export function redactReserveTrialCreateAccountResult(
 }
 
 /**
- * Adds non-enumerable serialization and inspection hooks that redact all
- * reserve-trial application key secrets while preserving direct property access.
+ * Adds non-enumerable serialization and inspection hooks that redact the
+ * reserve-trial application key secret while preserving direct property access.
  *
  * @param response - Reserve trial account response to protect from accidental logging.
  *
- * @returns The same response array with redaction hooks installed when possible.
- *
- * @throws B2PartnerAuthorizationError if the response is not an array.
+ * @returns The same response object with redaction hooks installed when possible.
  */
 export function redactReserveTrialCreateAccountResponse(
   response: ReserveTrialCreateAccountResponse,
 ): ReserveTrialCreateAccountResponse {
-  if (!Array.isArray(response)) {
-    throw new B2PartnerAuthorizationError(
-      'b2_reserve_trial_create_account response was not a JSON array',
-    )
-  }
-
-  const target = Object.isExtensible(response) ? response : [...response]
-  const writableTarget = target as ReserveTrialCreateAccountResult[]
-  for (let i = 0; i < writableTarget.length; i++) {
-    const result = writableTarget[i]
-    if (result !== undefined) writableTarget[i] = redactReserveTrialCreateAccountResult(result)
-  }
-
+  const target = Object.isExtensible(response) ? response : { ...response }
   const toRedactedJson = (): RedactedReserveTrialCreateAccountResponseJson =>
     reserveTrialCreateAccountResponseToRedactedJson(target)
   const toRedactedString = (): string =>
     `[ReserveTrialCreateAccountResponse ${APPLICATION_KEY_REDACTED}]`
 
+  installPortableJsonHook(target, toRedactedJson)
   Object.defineProperties(target, {
-    toJSON: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
     toString: {
       value: toRedactedString,
       enumerable: false,

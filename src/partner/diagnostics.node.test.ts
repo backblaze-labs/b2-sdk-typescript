@@ -28,20 +28,18 @@ describe('Partner Node diagnostics', () => {
   it('redacts group-member application keys through util.inspect', async () => {
     const secret = 'application-key-secret'
     const raw = makeGuardedRawClient({
-      b2_create_group_member: [
-        {
-          applicationKey: secret,
-          applicationKeyId: applicationKeyId('application-key-id'),
-          groupMember: {
-            accountId: accountId('member-account'),
-            email: 'member@example.com',
-            groupId: groupId('254'),
-            groupName: 'Example Group',
-            region: Region.UsWest,
-            s3Endpoint: 's3.us-west-004.backblazeb2.com',
-          },
+      b2_create_group_member: {
+        applicationKey: secret,
+        applicationKeyId: applicationKeyId('application-key-id'),
+        groupMember: {
+          accountId: accountId('member-account'),
+          email: 'member@example.com',
+          groupId: groupId('254'),
+          groupName: 'Example Group',
+          region: Region.UsWest,
+          s3Endpoint: 's3.us-west-004.backblazeb2.com',
         },
-      ],
+      },
     })
 
     const result = await raw.createGroupMember(
@@ -53,8 +51,7 @@ describe('Partner Node diagnostics', () => {
         memberEmail: 'member@example.com',
       },
     )
-    const [created] = result
-    if (created === undefined) throw new Error('expected create group member result')
+    const created = result
 
     expect(inspect(result)).not.toContain(secret)
     expect(inspect(created)).not.toContain(secret)
@@ -73,8 +70,7 @@ describe('Partner Node diagnostics', () => {
       term: 7,
       storage: 1,
     })
-    const [account] = result
-    if (account === undefined) throw new Error('expected reserve trial result')
+    const account = result
 
     expect(inspect(result)).not.toContain(account.applicationKey)
     expect(inspect(account)).not.toContain(account.applicationKey)

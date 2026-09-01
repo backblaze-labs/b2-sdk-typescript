@@ -41,23 +41,21 @@ async function main() {
       ...(region !== undefined ? { region } : {}),
     })
 
-    await secretsFile.write(
-      created.map((result) => ({
-        accountId: result.groupMember.accountId,
-        applicationKeyId: result.applicationKeyId,
-        applicationKey: result.applicationKey,
-        email: result.groupMember.email,
-        s3Endpoint: result.groupMember.s3Endpoint,
-      })),
-    )
+    await secretsFile.write([
+      {
+        accountId: created.groupMember.accountId,
+        applicationKeyId: created.applicationKeyId,
+        applicationKey: created.applicationKey,
+        email: created.groupMember.email,
+        s3Endpoint: created.groupMember.s3Endpoint,
+      },
+    ])
 
-    for (const result of created) {
-      console.log(`Created member account: ${result.groupMember.accountId}`)
-      console.log(`Email: ${result.groupMember.email}`)
-      console.log(`Group: ${result.groupMember.groupName} (${result.groupMember.groupId})`)
-      console.log(`Application key ID: ${result.applicationKeyId}`)
-      console.log(`Application key secret: written to ${applicationKeyFilePath}`)
-    }
+    console.log(`Created member account: ${created.groupMember.accountId}`)
+    console.log(`Email: ${created.groupMember.email}`)
+    console.log(`Group: ${created.groupMember.groupName} (${created.groupMember.groupId})`)
+    console.log(`Application key ID: ${created.applicationKeyId}`)
+    console.log(`Application key secret: written to ${applicationKeyFilePath}`)
   } finally {
     await secretsFile.close()
   }

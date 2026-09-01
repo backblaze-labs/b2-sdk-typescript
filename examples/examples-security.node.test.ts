@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  ReserveTrialCreateAccountRequest,
+  ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
 } from '../src/types/partner.ts'
 import { type ApplicationKeySecretRecord, writeApplicationKeySecretsFile } from './_shared/env.ts'
@@ -55,7 +55,7 @@ function secretRecord(): ApplicationKeySecretRecord {
   }
 }
 
-function trialRequest(): ReserveTrialCreateAccountRequest {
+function trialRequest(): readonly ReserveTrialCreateAccountRequestEntry[] {
   return [{ email: 'trial@example.com', term: 7, storage: 1 }]
 }
 

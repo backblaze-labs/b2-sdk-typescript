@@ -13,7 +13,6 @@ import type {
   PartnerGroup,
   Region,
   ReserveTrialCreateAccountRequest,
-  ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResponse,
 } from '../types/partner.ts'
 import { paginateItems } from '../util/paginator.ts'
@@ -194,7 +193,7 @@ export interface EjectGroupMemberOptions {
 }
 
 /**
- * Options for reserving B2 Reserve trial accounts.
+ * Options for reserving a B2 Reserve trial account.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -398,7 +397,7 @@ export class PartnerClient {
    *
    * @param options - Group ID, member email, and optional region.
    *
-   * @returns The created member result array, including the member application key.
+   * @returns The created member result, including the member application key.
    *
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
@@ -450,29 +449,24 @@ export class PartnerClient {
   }
 
   /**
-   * Reserves one or more new B2 Reserve trial accounts.
+   * Reserves a new B2 Reserve trial account.
    *
    * This operation is non-idempotent and automatic retries/expired-token
    * reauthorization are disabled at the raw layer. If the request fails after
-   * the server processes it, the returned application keys may be
-   * unrecoverable; reconcile account state before reissuing a batch.
+   * the server processes it, the returned application key may be unrecoverable;
+   * reconcile account state before reissuing a request for the same email.
    *
-   * @param request - A single trial account request or a non-empty request array.
+   * @param request - The trial account request.
    * @param options - Optional abort signal.
    *
-   * @returns The created reserve-trial account result array.
+   * @returns The created reserve-trial account result.
    *
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
   async reserveTrialAccounts(
-    request: ReserveTrialCreateAccountRequestEntry | ReserveTrialCreateAccountRequest,
+    request: ReserveTrialCreateAccountRequest,
     options?: ReserveTrialAccountsOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
-    if (Array.isArray(request) && request.length === 0) {
-      throw new TypeError(
-        'reserveTrialAccounts request array must include at least one account request.',
-      )
-    }
     const { groupsApiUrl, authToken } = this.groupsCoordinates(this.ensureGroupsAuthorization())
     return this.raw.reserveTrialCreateAccount(
       groupsApiUrl,

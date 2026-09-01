@@ -144,7 +144,7 @@ function restrictedEndpointRequest(
         url: partnerBaseUrl,
         method: 'POST',
         authorization: auth.authorizationToken,
-        body: [{ email: 'blocked-trial@example.com', term: 7, storage: 1 }],
+        body: { email: 'blocked-trial@example.com', term: 7, storage: 1 },
       }
     case PartnerEndpoint.ListComputers:
       return {
@@ -186,7 +186,7 @@ describe('B2Simulator partner endpoints', () => {
       },
     })
     expect(created.status).toBe(200)
-    expect(created.body[0]?.groupMember.email).toBe('permissive@example.com')
+    expect(created.body.groupMember.email).toBe('permissive@example.com')
 
     const computers = await simulatorRequest<ListComputersResponse>(sim, {
       url: 'http://localhost:0/api/backup/v1/bz_list_computers?accountId=offline-backup',
@@ -287,14 +287,14 @@ describe('B2Simulator partner endpoints', () => {
 
     expect(createdZ.status).toBe(200)
     expect(createdA.status).toBe(200)
-    expect(createdZ.body[0]?.groupMember).toMatchObject({
+    expect(createdZ.body.groupMember).toMatchObject({
       email: 'z-member@example.com',
       groupId: group.groupId,
       region: Region.UsEast,
       s3Endpoint: 's3.us-east-001.backblazeb2.com',
     })
-    expect(createdZ.body[0]?.applicationKeyId).toEqual(expect.any(String))
-    expect(createdZ.body[0]?.applicationKey).toEqual(expect.any(String))
+    expect(createdZ.body.applicationKeyId).toEqual(expect.any(String))
+    expect(createdZ.body.applicationKey).toEqual(expect.any(String))
 
     const duplicate = await simulatorRequest<ErrorBody>(sim, {
       url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
@@ -335,7 +335,7 @@ describe('B2Simulator partner endpoints', () => {
       body: {
         adminAccountId,
         groupId: group.groupId,
-        memberAccountId: createdA.body[0]?.groupMember.accountId,
+        memberAccountId: createdA.body.groupMember.accountId,
         email: 'a-ejected@example.com',
       },
     })
@@ -364,7 +364,7 @@ describe('B2Simulator partner endpoints', () => {
       url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
       method: 'POST',
       authorization: auth.authorizationToken,
-      body: [{ email: 'full-cap-trial@example.com', term: 7, storage: 1 }],
+      body: { email: 'full-cap-trial@example.com', term: 7, storage: 1 },
     })
     expect(reserved.status).toBe(200)
 
@@ -379,7 +379,7 @@ describe('B2Simulator partner endpoints', () => {
       },
     })
     expect(created.status).toBe(200)
-    const memberAccountId = created.body[0]?.groupMember.accountId
+    const memberAccountId = created.body.groupMember.accountId
     if (memberAccountId === undefined) throw new Error('expected full-cap member')
 
     const members = await simulatorRequest<ListGroupMembersResponse>(sim, {
@@ -568,7 +568,7 @@ describe('B2Simulator partner endpoints', () => {
     })
     const createdText = await createdResponse.text()
     const created = JSON.parse(createdText) as CreateGroupMemberResponse
-    const memberKey = created[0]?.applicationKey
+    const memberKey = created.applicationKey
     if (memberKey === undefined) throw new Error('expected member application key')
     expect(createdText).toContain(memberKey)
     expect(createdText).not.toContain(APPLICATION_KEY_REDACTED)
@@ -580,11 +580,11 @@ describe('B2Simulator partner endpoints', () => {
         Authorization: auth.authorizationToken,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify([{ email: 'wire-trial@example.com', term: 7, storage: 1 }]),
+      body: JSON.stringify({ email: 'wire-trial@example.com', term: 7, storage: 1 }),
     })
     const trialText = await trialResponse.text()
     const trial = JSON.parse(trialText) as ReserveTrialCreateAccountResponse
-    const trialKey = trial[0]?.applicationKey
+    const trialKey = trial.applicationKey
     if (trialKey === undefined) throw new Error('expected trial application key')
     expect(trialText).toContain(trialKey)
     expect(trialText).not.toContain(APPLICATION_KEY_REDACTED)
@@ -693,7 +693,7 @@ describe('B2Simulator partner endpoints', () => {
         memberEmail: 'reuse@example.com',
       },
     })
-    const memberAccountId = created.body[0]?.groupMember.accountId
+    const memberAccountId = created.body.groupMember.accountId
     if (memberAccountId === undefined) throw new Error('expected created member')
 
     const ejected = await simulatorRequest<EjectGroupMemberResponse>(sim, {
@@ -720,7 +720,7 @@ describe('B2Simulator partner endpoints', () => {
       },
     })
     expect(recreated.status).toBe(200)
-    expect(recreated.body[0]?.groupMember.email).toBe('reuse@example.com')
+    expect(recreated.body.groupMember.email).toBe('reuse@example.com')
   })
 
   it('reports invalid reserve trial email values clearly', async () => {
@@ -731,7 +731,7 @@ describe('B2Simulator partner endpoints', () => {
       url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
       method: 'POST',
       authorization: auth.authorizationToken,
-      body: [{ email: 'invalid-email', term: 7, storage: 1 }],
+      body: { email: 'invalid-email', term: 7, storage: 1 },
     })
 
     expect(result.status).toBe(400)
@@ -750,27 +750,19 @@ describe('B2Simulator partner endpoints', () => {
       readonly body: unknown
       readonly message: string
     }[] = [
-      { body: {}, message: 'request body must be an array' },
-      { body: [], message: 'request body must include at least one account' },
-      { body: [null], message: 'trial account request must be an object' },
-      { body: [{}], message: 'email is required' },
+      { body: null, message: 'trial account request must be an object' },
+      { body: [], message: 'trial account request must be an object' },
+      { body: {}, message: 'email is required' },
       {
-        body: [
-          { email: 'duplicate-trial@example.com', term: 7, storage: 1 },
-          { email: 'DUPLICATE-TRIAL@example.com', term: 7, storage: 1 },
-        ],
-        message: 'email must not already exist as a Backblaze account',
-      },
-      {
-        body: [{ email: 'term-error@example.com', term: 6, storage: 1 }],
+        body: { email: 'term-error@example.com', term: 6, storage: 1 },
         message: 'term must be between 7 and 30 days',
       },
       {
-        body: [{ email: 'storage-error@example.com', term: 7, storage: 51 }],
+        body: { email: 'storage-error@example.com', term: 7, storage: 51 },
         message: 'storage must be between 1 and 50 TB',
       },
       {
-        body: [{ email: 'region-error@example.com', term: 7, storage: 1, region: 'antarctica' }],
+        body: { email: 'region-error@example.com', term: 7, storage: 1, region: 'antarctica' },
         message: 'region is not supported',
       },
     ]
@@ -784,6 +776,22 @@ describe('B2Simulator partner endpoints', () => {
       expect(result.status).toBe(400)
       expect(result.body.message).toBe(message)
     }
+
+    const firstDuplicateTrial = await simulatorRequest<ReserveTrialCreateAccountResponse>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { email: 'duplicate-trial@example.com', term: 7, storage: 1 },
+    })
+    expect(firstDuplicateTrial.status).toBe(200)
+    const duplicateTrial = await simulatorRequest<ErrorBody>(sim, {
+      url: 'http://localhost:0/partner/b2api/v3/b2_reserve_trial_create_account',
+      method: 'POST',
+      authorization: auth.authorizationToken,
+      body: { email: 'DUPLICATE-TRIAL@example.com', term: 7, storage: 1 },
+    })
+    expect(duplicateTrial.status).toBe(400)
+    expect(duplicateTrial.body.message).toBe('email must not already exist as a Backblaze account')
 
     const missingAdminAccount = await simulatorRequest<ErrorBody>(sim, {
       url: 'http://localhost:0/partner/b2api/v3/b2_create_group_member',
@@ -929,7 +937,7 @@ describe('B2Simulator partner endpoints', () => {
         memberEmail: 'invalid-eject-email@example.com',
       },
     })
-    const memberAccountId = createdForEject.body[0]?.groupMember.accountId
+    const memberAccountId = createdForEject.body.groupMember.accountId
     if (memberAccountId === undefined) throw new Error('expected member account id')
 
     const invalidEjectEmail = await simulatorRequest<ErrorBody>(sim, {
@@ -969,7 +977,7 @@ describe('B2Simulator partner endpoints', () => {
         memberEmail: 'no-rename@example.com',
       },
     })
-    const noRenameAccountId = createdWithoutRename.body[0]?.groupMember.accountId
+    const noRenameAccountId = createdWithoutRename.body.groupMember.accountId
     if (noRenameAccountId === undefined) throw new Error('expected member account id')
     const noRenameEject = await simulatorRequest<EjectGroupMemberResponse>(sim, {
       url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
@@ -1036,7 +1044,7 @@ describe('B2Simulator partner endpoints', () => {
         Authorization: 'attacker-token',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify([{ email: 'attacker@example.com', term: 7, storage: 1 }]),
+      body: JSON.stringify({ email: 'attacker@example.com', term: 7, storage: 1 }),
     })
     expect(reserveResponse.status).toBe(401)
     await expect(reserveResponse.json()).resolves.toMatchObject({ code: 'unauthorized' })
@@ -1058,7 +1066,7 @@ describe('B2Simulator partner endpoints', () => {
         memberEmail: 'scoped-member@example.com',
       },
     })
-    const memberAccountId = created.body[0]?.groupMember.accountId
+    const memberAccountId = created.body.groupMember.accountId
     if (memberAccountId === undefined) throw new Error('expected scoped member')
 
     const computers = await simulatorRequest<ListComputersResponse>(sim, {
@@ -1142,7 +1150,7 @@ describe('B2Simulator partner endpoints', () => {
         memberEmail: 'get-eject@example.com',
       },
     })
-    const memberAccountId = validMember.body[0]?.groupMember.accountId
+    const memberAccountId = validMember.body.groupMember.accountId
     if (memberAccountId === undefined) throw new Error('expected created member')
 
     const ejectViaGet = await simulatorRequest<ErrorBody>(sim, {

@@ -333,7 +333,7 @@ export class PartnerSimulator {
   /**
    * Handles b2_reserve_trial_create_account.
    *
-   * @param body - Parsed JSON array request body.
+   * @param body - Parsed JSON request body.
    * @param authToken - Partner authorization token.
    *
    * @returns Simulator JSON response.
@@ -341,29 +341,12 @@ export class PartnerSimulator {
   reserveTrialCreateAccount(body: unknown, authToken?: string): SimulatorJsonResponse {
     const auth = this.authorizeRequest(PartnerEndpoint.ReserveTrialCreateAccount, authToken)
     if ('status' in auth) return auth
-    if (!Array.isArray(body)) {
-      return this.host.error(400, 'bad_request', 'request body must be an array')
-    }
-    if (body.length === 0) {
-      return this.host.error(400, 'bad_request', 'request body must include at least one account')
-    }
-
-    const entries: {
-      readonly entry: ReserveTrialCreateAccountRequestEntry
-      readonly normalizedEmail: string
-    }[] = []
-    const requestEmails = new Set<string>()
-    for (const item of body) {
-      const parsed = this.parseReserveTrialCreateAccountEntry(item, requestEmails)
-      if (parsed.error !== null) return parsed.error
-      entries.push(parsed)
-    }
+    const parsed = this.parseReserveTrialCreateAccountRequest(body)
+    if (parsed.error !== null) return parsed.error
 
     const startDayMs = utcDayStartMs(this.host.now())
-    const results = entries.map(({ entry, normalizedEmail }) =>
-      this.createReserveTrialAccount(entry, normalizedEmail, startDayMs),
-    )
-    return { status: 200, body: results }
+    const result = this.createReserveTrialAccount(parsed.entry, parsed.normalizedEmail, startDayMs)
+    return { status: 200, body: result }
   }
 
   /**
@@ -439,7 +422,7 @@ export class PartnerSimulator {
       applicationKey,
       groupMember: this.publicGroupMember(stored),
     }
-    return { status: 200, body: [result] }
+    return { status: 200, body: result }
   }
 
   /**
@@ -766,10 +749,7 @@ export class PartnerSimulator {
     )
   }
 
-  private parseReserveTrialCreateAccountEntry(
-    value: unknown,
-    requestEmails: Set<string>,
-  ):
+  private parseReserveTrialCreateAccountRequest(value: unknown):
     | {
         readonly entry: ReserveTrialCreateAccountRequestEntry
         readonly normalizedEmail: string
@@ -778,7 +758,7 @@ export class PartnerSimulator {
     | {
         readonly error: SimulatorJsonResponse
       } {
-    if (typeof value !== 'object' || value === null) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       return {
         error: this.host.error(400, 'bad_request', 'trial account request must be an object'),
       }
@@ -792,7 +772,7 @@ export class PartnerSimulator {
       return { error: this.host.error(400, 'bad_request', 'email address is invalid') }
     }
     const normalizedEmail = normalizeEmail(email)
-    if (this.knownEmails.has(normalizedEmail) || requestEmails.has(normalizedEmail)) {
+    if (this.knownEmails.has(normalizedEmail)) {
       return {
         error: this.host.error(
           400,
@@ -818,7 +798,6 @@ export class PartnerSimulator {
       return { error: this.host.error(400, 'bad_request', 'region is not supported') }
     }
 
-    requestEmails.add(normalizedEmail)
     return {
       entry: {
         email,

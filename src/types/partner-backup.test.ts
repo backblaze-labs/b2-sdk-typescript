@@ -33,13 +33,11 @@ describe('partner and backup wire response shapes', () => {
       s3Endpoint: 's3.us-west-004.backblazeb2.com',
     }
 
-    const createGroupMember: CreateGroupMemberResponse = [
-      {
-        applicationKey: 'application-key-secret',
-        applicationKeyId: key,
-        groupMember,
-      },
-    ]
+    const createGroupMember: CreateGroupMemberResponse = {
+      applicationKey: 'application-key-secret',
+      applicationKeyId: key,
+      groupMember,
+    }
     const ejectGroupMember: EjectGroupMemberResponse = groupMember
     const listGroups: ListGroupsResponse = {
       accountId: adminAccountId,
@@ -67,21 +65,19 @@ describe('partner and backup wire response shapes', () => {
         nextEmail: null,
       },
     ]
-    const reserveTrialCreateAccount: ReserveTrialCreateAccountResponse = [
-      {
-        accountId: memberAccountId,
-        applicationKey: 'application-key-secret',
-        applicationKeyId: key,
-        bucketId: bucket,
-        bucketName: 'trial-bucket',
-        email: 'member@example.com',
-        endDate: '2026-09-13',
-        s3Endpoint: 's3.us-west-004.backblazeb2.com',
-        startDate: '2026-08-14',
-      },
-    ]
+    const reserveTrialCreateAccount: ReserveTrialCreateAccountResponse = {
+      accountId: memberAccountId,
+      applicationKey: 'application-key-secret',
+      applicationKeyId: key,
+      bucketId: bucket,
+      bucketName: 'trial-bucket',
+      email: 'member@example.com',
+      endDate: '2026-09-13',
+      s3Endpoint: 's3.us-west-004.backblazeb2.com',
+      startDate: '2026-08-14',
+    }
 
-    expect(createGroupMember[0]?.groupMember.groupId).toBe(group)
+    expect(createGroupMember.groupMember.groupId).toBe(group)
     expect(ejectGroupMember.email).toBe('member@example.com')
     expect(listGroups.groups[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
     expect(listGroups.groups[0]?.b2Stats.b2FilesStoredCount).toBe('3')
@@ -89,7 +85,7 @@ describe('partner and backup wire response shapes', () => {
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2BytesStoredCount).toBe('1024')
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe('3')
     expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.bucketCount).toBe('1')
-    expect(reserveTrialCreateAccount[0]?.bucketId).toBe(bucket)
+    expect(reserveTrialCreateAccount.bucketId).toBe(bucket)
   })
 
   it('models Computer Backup API responses with documented shapes', () => {

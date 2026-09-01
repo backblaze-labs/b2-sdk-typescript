@@ -1,7 +1,6 @@
 import type { Stats } from 'node:fs'
 import { type FileHandle, lstat, open, readFile } from 'node:fs/promises'
 import type {
-  ReserveTrialCreateAccountRequest,
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
 } from '@backblaze-labs/b2-sdk/partner'
@@ -13,7 +12,7 @@ export interface TrialBatchCheckpoint {
   readonly status: 'pending' | 'completed'
   readonly createdAt: string
   readonly updatedAt: string
-  readonly requested: ReserveTrialCreateAccountRequest
+  readonly requested: readonly ReserveTrialCreateAccountRequestEntry[]
   readonly inProgressEmail?: string
   readonly results: readonly ReserveTrialCreateAccountResult[]
 }
@@ -119,7 +118,7 @@ export class TrialBatchWriter {
 
   static async create(
     filePath: string,
-    requested: ReserveTrialCreateAccountRequest,
+    requested: readonly ReserveTrialCreateAccountRequestEntry[],
   ): Promise<TrialBatchWriter> {
     const handle = await open(filePath, 'wx+', BATCH_FILE_MODE)
     await handle.chmod(BATCH_FILE_MODE)

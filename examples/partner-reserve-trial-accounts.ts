@@ -7,7 +7,6 @@
 
 import { resolve } from 'node:path'
 import type {
-  ReserveTrialCreateAccountRequest,
   ReserveTrialCreateAccountRequestEntry,
   ReserveTrialCreateAccountResult,
 } from '@backblaze-labs/b2-sdk/partner'
@@ -21,7 +20,7 @@ import {
 import { parseRegion, partnerClientFromEnv } from './_shared/partner.ts'
 import { refuseExistingTrialBatch, TrialBatchWriter } from './_shared/trial-batch.ts'
 
-function trialRequestsFromEnv(): ReserveTrialCreateAccountRequest {
+function trialRequestsFromEnv(): readonly ReserveTrialCreateAccountRequestEntry[] {
   const emails = requireEnv('B2_TRIAL_EMAILS')
     .split(',')
     .map((email) => email.trim())
@@ -66,10 +65,7 @@ async function main() {
   try {
     for (const request of requests) {
       await batch.recordInProgress(request)
-      const [trial] = await partner.reserveTrialAccounts(request)
-      if (trial === undefined) {
-        throw new Error(`The Partner API returned no trial account result for ${request.email}.`)
-      }
+      const trial = await partner.reserveTrialAccounts(request)
       await batch.recordResult(trial)
       trials.push(trial)
     }
