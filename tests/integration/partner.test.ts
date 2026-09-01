@@ -318,7 +318,7 @@ async function requireGroupWithActiveMember(
       const members = await listGroupMembersOrSkip(ctx, livePartner, group.groupId, 100)
       if (members === null) return null
       expectListGroupMembersResponseShape(members, group)
-      if ((members[0]?.groupMembers.length ?? 0) > 0) return { group, members }
+      if (members.groupMembers.length > 0) return { group, members }
     }
 
     if (groups.nextGroupId === null) break
@@ -756,16 +756,12 @@ function expectListGroupMembersResponseShape(
   response: ListGroupMembersResponse,
   group: PartnerGroup,
 ): void {
-  expect(Array.isArray(response)).toBe(true)
-  expect(response.length).toBe(1)
-  const [result] = response
-  if (result === undefined) throw new Error('expected one group-member result')
-
-  expect(result.groupId).toBe(group.groupId)
-  expect(result.groupName).toBe(group.groupName)
-  expectNullableString(result.nextEmail, 'nextEmail')
-  expect(Array.isArray(result.groupMembers)).toBe(true)
-  for (const member of result.groupMembers) expectListedGroupMemberShape(member, group.groupId)
+  expect(Array.isArray(response)).toBe(false)
+  expect(response.groupId).toBe(group.groupId)
+  expect(response.groupName).toBe(group.groupName)
+  expectNullableString(response.nextEmail, 'nextEmail')
+  expect(Array.isArray(response.groupMembers)).toBe(true)
+  for (const member of response.groupMembers) expectListedGroupMemberShape(member, group.groupId)
 }
 
 function expectPartnerGroupShape(group: PartnerGroup): void {

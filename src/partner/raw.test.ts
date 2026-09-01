@@ -364,14 +364,12 @@ describe('PartnerRawClient group management endpoints', () => {
       b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: [
-        {
-          groupId: group,
-          groupName: 'Example Group',
-          groupMembers: [],
-          nextEmail: null,
-        },
-      ],
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
       b2_reserve_trial_create_account: reserveTrialResult,
     })
 
@@ -592,14 +590,12 @@ describe('PartnerRawClient group management endpoints', () => {
         groups: [],
         nextGroupId: nextGroup,
       },
-      b2_list_group_members: [
-        {
-          groupId: group,
-          groupName: 'Example Group',
-          groupMembers: [],
-          nextEmail: 'next@example.com',
-        },
-      ],
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: 'next@example.com',
+      },
     })
 
     const groups = await raw.listGroups(groupsApiUrl, authToken, {
@@ -616,7 +612,7 @@ describe('PartnerRawClient group management endpoints', () => {
     })
 
     expect(groups.nextGroupId).toBe(nextGroup)
-    expect(members[0]?.nextEmail).toBe('next@example.com')
+    expect(members.nextEmail).toBe('next@example.com')
     expect(seenRequests).toEqual([
       {
         url: 'https://groups.backblazeb2.com/partner/b2api/v4/b2_list_groups?adminAccountId=admin-account&groupName=Example%20Group&startGroupId=254&maxGroupCount=10',
@@ -634,14 +630,12 @@ describe('PartnerRawClient group management endpoints', () => {
   it('surfaces empty list pages with null cursors', async () => {
     const { raw } = makePartnerEndpointRawClient({
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: [
-        {
-          groupId: group,
-          groupName: 'Example Group',
-          groupMembers: [],
-          nextEmail: null,
-        },
-      ],
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
     })
 
     const groups = await raw.listGroups(groupsApiUrl, authToken, { adminAccountId })
@@ -651,14 +645,12 @@ describe('PartnerRawClient group management endpoints', () => {
     })
 
     expect(groups).toEqual({ accountId: adminAccountId, groups: [], nextGroupId: null })
-    expect(members).toEqual([
-      {
-        groupId: group,
-        groupMembers: [],
-        groupName: 'Example Group',
-        nextEmail: null,
-      },
-    ])
+    expect(members).toEqual({
+      groupId: group,
+      groupMembers: [],
+      groupName: 'Example Group',
+      nextEmail: null,
+    })
   })
 
   it('round-trips Partner endpoints through B2Simulator with documented shapes and cursors', async () => {
@@ -709,11 +701,11 @@ describe('PartnerRawClient group management endpoints', () => {
       groupId: listedGroup.groupId,
       maxMemberCount: 1,
     })
-    expect(Array.isArray(firstMembersPage)).toBe(true)
-    expect(firstMembersPage[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(Array.isArray(firstMembersPage)).toBe(false)
+    expect(firstMembersPage.groupMembers.map((member) => member.email)).toEqual([
       'a-raw-simulator@example.com',
     ])
-    expect(firstMembersPage[0]?.nextEmail).toBe('b-raw-simulator@example.com')
+    expect(firstMembersPage.nextEmail).toBe('b-raw-simulator@example.com')
 
     const secondMembersPage = await raw.listGroupMembers(groupsApiUrl, authToken, {
       adminAccountId,
@@ -721,11 +713,11 @@ describe('PartnerRawClient group management endpoints', () => {
       startEmail: 'b-raw-simulator@example.com',
       maxMemberCount: 1,
     })
-    expect(Array.isArray(secondMembersPage)).toBe(true)
-    expect(secondMembersPage[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(Array.isArray(secondMembersPage)).toBe(false)
+    expect(secondMembersPage.groupMembers.map((member) => member.email)).toEqual([
       'b-raw-simulator@example.com',
     ])
-    expect(secondMembersPage[0]?.nextEmail).toBeNull()
+    expect(secondMembersPage.nextEmail).toBeNull()
 
     const createdAMember = createdA.groupMember
     const ejected = await raw.ejectGroupMember(groupsApiUrl, authToken, {
@@ -810,14 +802,12 @@ describe('PartnerRawClient group management endpoints', () => {
       b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: [
-        {
-          groupId: group,
-          groupName: 'Example Group',
-          groupMembers: [],
-          nextEmail: null,
-        },
-      ],
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
     })
 
     await raw.createGroupMember(groupsApiUrl, authToken, {
@@ -863,14 +853,12 @@ describe('PartnerRawClient group management endpoints', () => {
       b2_create_group_member: groupMemberResult,
       b2_eject_group_member: groupMember,
       b2_list_groups: { accountId: adminAccountId, groups: [], nextGroupId: null },
-      b2_list_group_members: [
-        {
-          groupId: group,
-          groupName: 'Example Group',
-          groupMembers: [],
-          nextEmail: null,
-        },
-      ],
+      b2_list_group_members: {
+        groupId: group,
+        groupName: 'Example Group',
+        groupMembers: [],
+        nextEmail: null,
+      },
     })
 
     await raw.createGroupMember(

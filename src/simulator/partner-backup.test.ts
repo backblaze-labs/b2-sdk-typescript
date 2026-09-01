@@ -314,19 +314,19 @@ describe('B2Simulator partner endpoints', () => {
       authorization: auth.authorizationToken,
     })
     expect(firstMembersPage.status).toBe(200)
-    expect(firstMembersPage.body[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(firstMembersPage.body.groupMembers.map((member) => member.email)).toEqual([
       'a-member@example.com',
     ])
-    expect(firstMembersPage.body[0]?.nextEmail).toBe('z-member@example.com')
+    expect(firstMembersPage.body.nextEmail).toBe('z-member@example.com')
 
     const secondMembersPage = await simulatorRequest<ListGroupMembersResponse>(sim, {
       url: `http://localhost:0/partner/b2api/v3/b2_list_group_members?adminAccountId=${adminAccountId}&groupId=${group.groupId}&startEmail=z-member%40example.com`,
       authorization: auth.authorizationToken,
     })
-    expect(secondMembersPage.body[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(secondMembersPage.body.groupMembers.map((member) => member.email)).toEqual([
       'z-member@example.com',
     ])
-    expect(secondMembersPage.body[0]?.nextEmail).toBeNull()
+    expect(secondMembersPage.body.nextEmail).toBeNull()
 
     const ejected = await simulatorRequest<EjectGroupMemberResponse>(sim, {
       url: 'http://localhost:0/partner/b2api/v3/b2_eject_group_member',
@@ -346,7 +346,7 @@ describe('B2Simulator partner endpoints', () => {
       url: `http://localhost:0/partner/b2api/v3/b2_list_group_members?adminAccountId=${adminAccountId}&groupId=${group.groupId}`,
       authorization: auth.authorizationToken,
     })
-    expect(remainingMembersPage.body[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(remainingMembersPage.body.groupMembers.map((member) => member.email)).toEqual([
       'z-member@example.com',
     ])
   })
@@ -663,7 +663,7 @@ describe('B2Simulator partner endpoints', () => {
       authorization: auth.authorizationToken,
     })
     expect(queryResult.status).toBe(200)
-    expect(queryResult.body[0]?.groupMembers.map((member) => member.email)).toContain(
+    expect(queryResult.body.groupMembers.map((member) => member.email)).toContain(
       'zero-count@example.com',
     )
 
@@ -675,7 +675,7 @@ describe('B2Simulator partner endpoints', () => {
       { adminAccountId: auth.accountId, groupId: group.groupId, maxMemberCount: 0 },
     )
     expect(bodyResult.status).toBe(200)
-    expect((bodyResult.body as ListGroupMembersResponse)[0]?.groupMembers).toHaveLength(1)
+    expect((bodyResult.body as ListGroupMembersResponse).groupMembers).toHaveLength(1)
   })
 
   it('releases the old email when ejection renames a member account', async () => {
@@ -1164,7 +1164,7 @@ describe('B2Simulator partner endpoints', () => {
       url: `http://localhost:0/partner/b2api/v3/b2_list_group_members?adminAccountId=${auth.accountId}&groupId=${group.groupId}`,
       authorization: auth.authorizationToken,
     })
-    expect(members.body[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(members.body.groupMembers.map((member) => member.email)).toEqual([
       'get-eject@example.com',
     ])
 

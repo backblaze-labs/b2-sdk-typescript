@@ -57,14 +57,12 @@ describe('partner and backup wire response shapes', () => {
       ],
       nextGroupId: null,
     }
-    const listGroupMembers: ListGroupMembersResponse = [
-      {
-        groupId: group,
-        groupMembers: [{ ...groupMember, b2Stats }],
-        groupName: 'Example Group',
-        nextEmail: null,
-      },
-    ]
+    const listGroupMembers: ListGroupMembersResponse = {
+      groupId: group,
+      groupMembers: [{ ...groupMember, b2Stats }],
+      groupName: 'Example Group',
+      nextEmail: null,
+    }
     const reserveTrialCreateAccount: ReserveTrialCreateAccountResponse = {
       accountId: memberAccountId,
       applicationKey: 'application-key-secret',
@@ -82,9 +80,9 @@ describe('partner and backup wire response shapes', () => {
     expect(listGroups.groups[0]?.b2Stats.b2BytesStoredCount).toBe(1024)
     expect(listGroups.groups[0]?.b2Stats.b2FilesStoredCount).toBe(3)
     expect(listGroups.groups[0]?.b2Stats.bucketCount).toBe(1)
-    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2BytesStoredCount).toBe(1024)
-    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe(3)
-    expect(listGroupMembers[0]?.groupMembers[0]?.b2Stats.bucketCount).toBe(1)
+    expect(listGroupMembers.groupMembers[0]?.b2Stats.b2BytesStoredCount).toBe(1024)
+    expect(listGroupMembers.groupMembers[0]?.b2Stats.b2FilesStoredCount).toBe(3)
+    expect(listGroupMembers.groupMembers[0]?.b2Stats.bucketCount).toBe(1)
     expect(reserveTrialCreateAccount.bucketId).toBe(bucket)
   })
 

@@ -384,15 +384,12 @@ export class PartnerClient {
           ...(cursor !== undefined ? { startEmail: cursor } : {}),
           ...(options.signal !== undefined ? { signal: options.signal } : {}),
         })
-        // The API returns an array for consistency with batch-capable Partner
-        // surfaces, but this request is scoped to one group ID.
-        const result = resp[0]
         return {
           page: resp,
-          nextCursor: result?.nextEmail ?? undefined,
+          nextCursor: resp.nextEmail ?? undefined,
         }
       },
-      (page) => page.flatMap((result) => result.groupMembers),
+      (page) => [...page.groupMembers],
       options.signal,
     )
   }

@@ -303,7 +303,7 @@ export interface ListGroupsResult {
  * Single-object wire response from `b2_list_groups`.
  *
  * B2 returns one object with `accountId`, `groups`, and the `nextGroupId`
- * cursor (not an array), unlike `b2_list_group_members` which returns an array.
+ * cursor, not an array. `b2_list_group_members` is likewise a single object.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -336,7 +336,7 @@ export interface ListedGroupMember extends PartnerGroupMember {
 }
 
 /**
- * Single result element returned by `b2_list_group_members`.
+ * One page of members for a group, returned by `b2_list_group_members`.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
@@ -352,11 +352,11 @@ export interface ListGroupMembersResult {
 }
 
 /**
- * Array-shaped wire response from `b2_list_group_members`.
+ * Single-object wire response from `b2_list_group_members`.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export type ListGroupMembersResponse = readonly ListGroupMembersResult[]
+export type ListGroupMembersResponse = ListGroupMembersResult
 
 /**
  * Request body accepted by `b2_reserve_trial_create_account`.

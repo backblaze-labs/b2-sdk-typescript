@@ -585,7 +585,7 @@ export class PartnerSimulator {
       groupMembers: page.map((member) => this.publicListedGroupMember(member)),
       nextEmail: next === undefined ? null : next.email,
     }
-    return { status: 200, body: [response] }
+    return { status: 200, body: response }
   }
 
   /**

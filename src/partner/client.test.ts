@@ -314,10 +314,10 @@ describe('PartnerClient facade', () => {
       groupId: group.groupId,
       pageSize: 1,
     })
-    expect(firstMembersPage[0]?.groupMembers.map((member) => member.email)).toEqual([
+    expect(firstMembersPage.groupMembers.map((member) => member.email)).toEqual([
       'a-facade-member@example.com',
     ])
-    expect(firstMembersPage[0]?.nextEmail).toBe('z-facade-member@example.com')
+    expect(firstMembersPage.nextEmail).toBe('z-facade-member@example.com')
 
     const members: ListedGroupMember[] = []
     for await (const member of client.paginateGroupMembers({
