@@ -31,6 +31,12 @@ resolve for the authenticated user, and no matching repository was found. The
 findings remain tracked here, and upstream handoff remains blocked until that
 repository is accessible.
 
+On 2026-09-01, the same repository accessibility checks were repeated. The
+repository still did not resolve for the authenticated user, and repository
+search still returned no matching `backblaze-labs` result. Upstream handoff
+therefore remains blocked; this ADR remains the SDK-side tracking record for the
+three validated docs-generation inconsistencies.
+
 ## Decision
 
 Do not change SDK types from generated native API docs alone. Keep the SDK's
