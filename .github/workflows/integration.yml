@@ -22,8 +22,9 @@ name: Integration (real B2)
 #   B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK
 #   B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL
 #   B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER
-# Destructive Partner allow-flags are forwarded only for workflow_dispatch on
-# the first Node matrix leg, so push/schedule runs stay read-only.
+# Destructive Partner and Backup allow-flags are forwarded only for
+# workflow_dispatch on the first Node matrix leg, so push/schedule runs stay
+# read-only.
 # Optional dedicated credentials for the trusted application-key lifecycle job:
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY_ID
 #   B2_KEY_MANAGEMENT_APPLICATION_KEY
@@ -151,7 +152,7 @@ jobs:
           B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK: ${{ vars.B2_INTEGRATION_PARTNER_DISPOSABLE_EMAIL_DOMAIN_ACK }}
           B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL: ${{ github.event_name == 'workflow_dispatch' && matrix.node-version == '22.22.2' && vars.B2_INTEGRATION_ALLOW_IRREVERSIBLE_PARTNER_TRIAL || '' }}
           B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER: ${{ vars.B2_INTEGRATION_PARTNER_TRIAL_RECONCILIATION_OWNER }}
-          B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP: ${{ vars.B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP }}
+          B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP: ${{ github.event_name == 'workflow_dispatch' && matrix.node-version == '22.22.2' && vars.B2_INTEGRATION_ALLOW_DESTRUCTIVE_BACKUP || '' }}
           B2_INTEGRATION_BACKUP_ACCOUNT_ID: ${{ vars.B2_INTEGRATION_BACKUP_ACCOUNT_ID }}
           B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID: ${{ vars.B2_INTEGRATION_BACKUP_UNAUTHORIZED_ACCOUNT_ID }}
           B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID: ${{ vars.B2_INTEGRATION_BACKUP_DISPOSABLE_ACCOUNT_ID }}
