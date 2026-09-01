@@ -35,7 +35,7 @@ async function main() {
     const partner = await partnerClientFromEnv()
     await partner.authorize()
 
-    const trial = await partner.reserveTrialAccounts({
+    const trial = await partner.reserveTrialAccount({
       email,
       term,
       storage,

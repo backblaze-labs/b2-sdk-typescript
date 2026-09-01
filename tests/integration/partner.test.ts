@@ -207,7 +207,7 @@ describe.skipIf(skipMissingMasterKey)('Partner live endpoint integration contrac
 
       let reserved: ReserveTrialCreateAccountResponse
       try {
-        reserved = await livePartner.reserveTrialAccounts({
+        reserved = await livePartner.reserveTrialAccount({
           email,
           term: 7,
           storage: 1,

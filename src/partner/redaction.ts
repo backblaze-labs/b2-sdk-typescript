@@ -1,3 +1,4 @@
+import { B2PartnerAuthorizationError } from '../errors/index.ts'
 import type {
   CreateGroupMemberResponse,
   CreateGroupMemberResult,
@@ -132,6 +133,46 @@ function partnerGroupMemberToRedactedJson(groupMember: PartnerGroupMember): Part
   }
 }
 
+function isSingleJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function assertCreateGroupMemberResponseShape(
+  response: unknown,
+): asserts response is CreateGroupMemberResponse {
+  if (
+    !isSingleJsonObject(response) ||
+    typeof response['applicationKey'] !== 'string' ||
+    typeof response['applicationKeyId'] !== 'string' ||
+    !isSingleJsonObject(response['groupMember'])
+  ) {
+    throw new B2PartnerAuthorizationError(
+      'b2_create_group_member response was not a single JSON object',
+    )
+  }
+}
+
+function assertReserveTrialCreateAccountResponseShape(
+  response: unknown,
+): asserts response is ReserveTrialCreateAccountResponse {
+  if (
+    !isSingleJsonObject(response) ||
+    typeof response['accountId'] !== 'string' ||
+    typeof response['applicationKey'] !== 'string' ||
+    typeof response['applicationKeyId'] !== 'string' ||
+    typeof response['s3Endpoint'] !== 'string' ||
+    typeof response['startDate'] !== 'string' ||
+    typeof response['endDate'] !== 'string' ||
+    typeof response['email'] !== 'string' ||
+    typeof response['bucketName'] !== 'string' ||
+    typeof response['bucketId'] !== 'string'
+  ) {
+    throw new B2PartnerAuthorizationError(
+      'b2_reserve_trial_create_account response was not a single JSON object',
+    )
+  }
+}
+
 // Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
 // honors own hooks. Install both shapes so SDK safe serialization is portable.
 function installPortableJsonHook<T extends object>(target: T, toJson: () => unknown): void {
@@ -148,6 +189,31 @@ function installPortableJsonHook<T extends object>(target: T, toJson: () => unkn
     enumerable: false,
     configurable: true,
   })
+}
+
+function redactWithHooks<T extends object>(
+  value: T,
+  toRedactedJsonForTarget: (target: T) => unknown,
+  toRedactedString: () => string,
+): T {
+  const target = Object.isExtensible(value) ? value : ({ ...value } as T)
+  const toRedactedJson = (): unknown => toRedactedJsonForTarget(target)
+
+  installPortableJsonHook(target, toRedactedJson)
+  Object.defineProperties(target, {
+    toString: {
+      value: toRedactedString,
+      enumerable: false,
+      configurable: true,
+    },
+    [inspectSymbol]: {
+      value: toRedactedJson,
+      enumerable: false,
+      configurable: true,
+    },
+  })
+
+  return target
 }
 
 /**
@@ -306,26 +372,11 @@ export function redactPartnerAuthorizeResponse(
 export function redactCreateGroupMemberResult(
   result: CreateGroupMemberResult,
 ): CreateGroupMemberResult {
-  const target = Object.isExtensible(result) ? result : { ...result }
-  const toRedactedJson = (): RedactedCreateGroupMemberResultJson =>
-    createGroupMemberResultToRedactedJson(target)
-  const toRedactedString = (): string => `[CreateGroupMemberResult ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  return redactWithHooks(
+    result,
+    createGroupMemberResultToRedactedJson,
+    () => `[CreateGroupMemberResult ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
@@ -335,30 +386,14 @@ export function redactCreateGroupMemberResult(
  * @param response - Create group member response to protect from accidental logging.
  *
  * @returns The same response object with redaction hooks installed when possible.
+ *
+ * @throws B2PartnerAuthorizationError if the response is not the expected single object.
  */
 export function redactCreateGroupMemberResponse(
   response: CreateGroupMemberResponse,
 ): CreateGroupMemberResponse {
-  const target = Object.isExtensible(response) ? response : { ...response }
-  const toRedactedJson = (): RedactedCreateGroupMemberResponseJson =>
-    createGroupMemberResponseToRedactedJson(target)
-  const toRedactedString = (): string => `[CreateGroupMemberResponse ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  assertCreateGroupMemberResponseShape(response)
+  return redactCreateGroupMemberResult(response)
 }
 
 /**
@@ -377,27 +412,11 @@ export function redactCreateGroupMemberResponse(
 export function redactReserveTrialCreateAccountResult(
   result: ReserveTrialCreateAccountResult,
 ): ReserveTrialCreateAccountResult {
-  const target = Object.isExtensible(result) ? result : { ...result }
-  const toRedactedJson = (): RedactedReserveTrialCreateAccountResultJson =>
-    reserveTrialCreateAccountResultToRedactedJson(target)
-  const toRedactedString = (): string =>
-    `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  return redactWithHooks(
+    result,
+    reserveTrialCreateAccountResultToRedactedJson,
+    () => `[ReserveTrialCreateAccountResult ${APPLICATION_KEY_REDACTED}]`,
+  )
 }
 
 /**
@@ -407,29 +426,12 @@ export function redactReserveTrialCreateAccountResult(
  * @param response - Reserve trial account response to protect from accidental logging.
  *
  * @returns The same response object with redaction hooks installed when possible.
+ *
+ * @throws B2PartnerAuthorizationError if the response is not the expected single object.
  */
 export function redactReserveTrialCreateAccountResponse(
   response: ReserveTrialCreateAccountResponse,
 ): ReserveTrialCreateAccountResponse {
-  const target = Object.isExtensible(response) ? response : { ...response }
-  const toRedactedJson = (): RedactedReserveTrialCreateAccountResponseJson =>
-    reserveTrialCreateAccountResponseToRedactedJson(target)
-  const toRedactedString = (): string =>
-    `[ReserveTrialCreateAccountResponse ${APPLICATION_KEY_REDACTED}]`
-
-  installPortableJsonHook(target, toRedactedJson)
-  Object.defineProperties(target, {
-    toString: {
-      value: toRedactedString,
-      enumerable: false,
-      configurable: true,
-    },
-    [inspectSymbol]: {
-      value: toRedactedJson,
-      enumerable: false,
-      configurable: true,
-    },
-  })
-
-  return target
+  assertReserveTrialCreateAccountResponseShape(response)
+  return redactReserveTrialCreateAccountResult(response)
 }

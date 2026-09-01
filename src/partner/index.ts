@@ -70,6 +70,7 @@ export {
   PartnerClient,
   type PartnerClientJson,
   type PartnerClientOptions,
+  type ReserveTrialAccountOptions,
   type ReserveTrialAccountsOptions,
 } from './client.ts'
 export {

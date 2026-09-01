@@ -410,7 +410,7 @@ describe('PartnerClient facade', () => {
     const controller = new AbortController()
     await client.authorize()
 
-    const trial = await client.reserveTrialAccounts(
+    const trial = await client.reserveTrialAccount(
       {
         email: 'facade-trial-one@example.com',
         term: 15,

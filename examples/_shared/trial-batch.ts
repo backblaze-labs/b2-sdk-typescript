@@ -17,6 +17,34 @@ export interface TrialBatchCheckpoint {
   readonly results: readonly ReserveTrialCreateAccountResult[]
 }
 
+function requestForCheckpoint(
+  request: ReserveTrialCreateAccountRequestEntry,
+): ReserveTrialCreateAccountRequestEntry {
+  return {
+    email: request.email,
+    ...(request.region !== undefined ? { region: request.region } : {}),
+    term: request.term,
+    storage: request.storage,
+  }
+}
+
+function resultForCheckpoint(
+  result: ReserveTrialCreateAccountResult,
+): ReserveTrialCreateAccountResult {
+  // Preserve the raw one-time key even when SDK result objects install redacting toJSON hooks.
+  return {
+    accountId: result.accountId,
+    applicationKey: result.applicationKey,
+    applicationKeyId: result.applicationKeyId,
+    s3Endpoint: result.s3Endpoint,
+    startDate: result.startDate,
+    endDate: result.endDate,
+    email: result.email,
+    bucketName: result.bucketName,
+    bucketId: result.bucketId,
+  }
+}
+
 function errorCode(error: unknown): string | undefined {
   if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
   const code = (error as { readonly code?: unknown }).code
@@ -127,7 +155,7 @@ export class TrialBatchWriter {
       status: 'pending',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      requested,
+      requested: requested.map((request) => requestForCheckpoint(request)),
       results: [],
     }
     const writer = new TrialBatchWriter(filePath, handle, await handle.stat(), checkpoint)
@@ -151,7 +179,7 @@ export class TrialBatchWriter {
       createdAt: this.checkpoint.createdAt,
       updatedAt: new Date().toISOString(),
       requested: this.checkpoint.requested,
-      results: [...this.checkpoint.results, result],
+      results: [...this.checkpoint.results, resultForCheckpoint(result)],
     })
   }
 

@@ -201,9 +201,6 @@ export type EjectGroupMemberResult = PartnerGroupMember
 /**
  * Single-object wire response from `b2_eject_group_member`.
  *
- * B2 returns one ejected-member object (not an array), unlike
- * `b2_create_group_member` which returns an array.
- *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
 export type EjectGroupMemberResponse = EjectGroupMemberResult
@@ -379,7 +376,7 @@ export interface ReserveTrialCreateAccountRequest {
 }
 
 /**
- * Backward-compatible alias for the single reserve-trial account request body.
+ * Request element type for caller-managed batches of single-account requests.
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */

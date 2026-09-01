@@ -65,7 +65,7 @@ async function main() {
   try {
     for (const request of requests) {
       await batch.recordInProgress(request)
-      const trial = await partner.reserveTrialAccounts(request)
+      const trial = await partner.reserveTrialAccount(request)
       await batch.recordResult(trial)
       trials.push(trial)
     }

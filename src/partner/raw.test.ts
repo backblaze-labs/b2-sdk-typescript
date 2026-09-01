@@ -110,6 +110,24 @@ function requestJsonBody(request: HttpRequest): unknown {
   return JSON.parse(request.body) as unknown
 }
 
+async function expectPartnerResponseShapeError(
+  promise: Promise<unknown>,
+  expectedMessage: string,
+  rawSecret: string,
+): Promise<void> {
+  let thrown: unknown
+  try {
+    await promise
+  } catch (err) {
+    thrown = err
+  }
+
+  expect(thrown).toBeInstanceOf(B2PartnerAuthorizationError)
+  expect(thrown).toHaveProperty('message', expectedMessage)
+  expect(String(thrown)).not.toContain(rawSecret)
+  expect(JSON.stringify(thrown)).not.toContain(rawSecret)
+}
+
 function makePartnerEndpointRawClient(responses: Readonly<Record<string, unknown>>): {
   readonly raw: PartnerRawClient
   readonly seenRequests: HttpRequest[]
@@ -482,6 +500,36 @@ describe('PartnerRawClient group management endpoints', () => {
     expect(JSON.stringify(inspectedResponse)).not.toContain(secret)
     expect(createGroupMemberResponseToRedactedJson(result).applicationKey).toBe(
       APPLICATION_KEY_REDACTED,
+    )
+  })
+
+  it.each([
+    {
+      label: 'array',
+      body: (secret: string): unknown[] => [{ ...groupMemberResult, applicationKey: secret }],
+    },
+    { label: 'null', body: (): null => null },
+    { label: 'primitive', body: (): string => 'not-a-json-object' },
+    {
+      label: 'wrapper',
+      body: (secret: string): { readonly result: CreateGroupMemberResult } => ({
+        result: { ...groupMemberResult, applicationKey: secret },
+      }),
+    },
+  ])('rejects malformed create-group-member $label responses safely', async ({ body }) => {
+    const secret = 'hostile-create-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_create_group_member: body(secret),
+    })
+
+    await expectPartnerResponseShapeError(
+      raw.createGroupMember(groupsApiUrl, authToken, {
+        adminAccountId,
+        groupId: group,
+        memberEmail: 'member@example.com',
+      }),
+      'b2_create_group_member response was not a single JSON object',
+      secret,
     )
   })
 
@@ -1200,6 +1248,36 @@ describe('PartnerRawClient reserve trial endpoint', () => {
     )
 
     expect(result.applicationKey).toBe(reserveTrialResult.applicationKey)
+  })
+
+  it.each([
+    {
+      label: 'array',
+      body: (secret: string): unknown[] => [{ ...reserveTrialResult, applicationKey: secret }],
+    },
+    { label: 'null', body: (): null => null },
+    { label: 'primitive', body: (): string => 'not-a-json-object' },
+    {
+      label: 'wrapper',
+      body: (secret: string): { readonly result: ReserveTrialCreateAccountResult } => ({
+        result: { ...reserveTrialResult, applicationKey: secret },
+      }),
+    },
+  ])('rejects malformed reserve-trial $label responses safely', async ({ body }) => {
+    const secret = 'hostile-trial-application-key-secret'
+    const { raw } = makePartnerEndpointRawClient({
+      b2_reserve_trial_create_account: body(secret),
+    })
+
+    await expectPartnerResponseShapeError(
+      raw.reserveTrialCreateAccount('https://groups.backblazeb2.com/partner', authToken, {
+        email: 'trial-response-object@example.com',
+        term: 7,
+        storage: 1,
+      }),
+      'b2_reserve_trial_create_account response was not a single JSON object',
+      secret,
+    )
   })
 
   it('does not retry reserve trial failures with an embedded b2api base segment', async () => {

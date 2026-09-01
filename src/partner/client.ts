@@ -197,10 +197,19 @@ export interface EjectGroupMemberOptions {
  *
  * @experimental Partner API surface; shape may change as the Partner API docs evolve.
  */
-export interface ReserveTrialAccountsOptions {
+export interface ReserveTrialAccountOptions {
   /** Abort signal for cancelling the request. */
   readonly signal?: AbortSignal
 }
+
+/**
+ * Options for reserving a B2 Reserve trial account.
+ *
+ * @deprecated Use {@link ReserveTrialAccountOptions}.
+ *
+ * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+ */
+export type ReserveTrialAccountsOptions = ReserveTrialAccountOptions
 
 /** Coordinates needed for Partner groups API requests. */
 interface PartnerGroupsCoordinates {
@@ -456,16 +465,16 @@ export class PartnerClient {
    * the server processes it, the returned application key may be unrecoverable;
    * reconcile account state before reissuing a request for the same email.
    *
-   * @param request - The trial account request.
+   * @param request - Email, trial duration, storage, and optional region for the account to create.
    * @param options - Optional abort signal.
    *
    * @returns The created reserve-trial account result.
    *
    * @experimental Partner API surface; shape may change as the Partner API docs evolve.
    */
-  async reserveTrialAccounts(
+  async reserveTrialAccount(
     request: ReserveTrialCreateAccountRequest,
-    options?: ReserveTrialAccountsOptions,
+    options?: ReserveTrialAccountOptions,
   ): Promise<ReserveTrialCreateAccountResponse> {
     const { groupsApiUrl, authToken } = this.groupsCoordinates(this.ensureGroupsAuthorization())
     return this.raw.reserveTrialCreateAccount(
@@ -474,6 +483,26 @@ export class PartnerClient {
       request,
       options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
+  }
+
+  /**
+   * Reserves a new B2 Reserve trial account.
+   *
+   * @param request - Email, trial duration, storage, and optional region for the account to create.
+   * @param options - Optional abort signal.
+   *
+   * @returns The created reserve-trial account result.
+   *
+   * @deprecated Use {@link reserveTrialAccount}. This plural alias is kept for
+   * callers that picked up the original experimental facade name.
+   *
+   * @experimental Partner API surface; shape may change as the Partner API docs evolve.
+   */
+  async reserveTrialAccounts(
+    request: ReserveTrialCreateAccountRequest,
+    options?: ReserveTrialAccountsOptions,
+  ): Promise<ReserveTrialCreateAccountResponse> {
+    return this.reserveTrialAccount(request, options)
   }
 
   /**
