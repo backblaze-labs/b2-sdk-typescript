@@ -801,7 +801,7 @@ The browser test suite (`pnpm test:browser`) runs the same source against real C
 
 Part of [Backblaze Labs](https://github.com/backblaze-labs):
 
-- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — MCP server for Backblaze B2 Cloud Storage: a focused, safe 40-tool surface for any MCP-compatible AI client.
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — MCP server for Backblaze B2 Cloud Storage: a focused, safe tool surface for any MCP-compatible AI client.
 - **[Genblaze](https://github.com/backblaze-labs/genblaze)** — Python SDK for orchestrating generative-AI media pipelines across video, audio, and image providers, with built-in provenance for every output.
 - **[b2-action](https://github.com/backblaze-labs/b2-action)** — Backblaze-maintained GitHub Action for B2 Cloud Storage.
 
