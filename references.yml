@@ -7,7 +7,7 @@
 schema_version: 1
 project: Backblaze B2 TypeScript SDK
 slug: b2-sdk-typescript
-updated: "2026-09-08"
+updated: "2026-09-09"
 
 canonical:
   repo: https://github.com/backblaze-labs/b2-sdk-typescript
@@ -24,7 +24,7 @@ references:
     type: repo
     source: GitHub
     official: true
-    added: "2026-09-08"
+    added: "2026-09-09"
     status: live
     summary: Source repository for the official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript.
 
@@ -34,7 +34,7 @@ references:
     type: docs
     source: GitHub Pages
     official: true
-    added: "2026-09-08"
+    added: "2026-09-09"
     status: live
     summary: Generated TypeDoc for the public src surface.
 
@@ -46,5 +46,5 @@ references:
     source: npm
     canonical_for: npm
     official: true
-    added: "2026-09-08"
+    added: "2026-09-09"
     status: live
