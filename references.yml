@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/backblaze-labs/.github/main/schemas/references.schema.json
+#
+# External references for this repository — docs, package registries, and the
+# directories where the official Backblaze B2 TypeScript SDK is published.
+# Machine-parseable source of truth for internal tooling; standard defined in
+# backblaze-labs/.github.
+schema_version: 1
+project: Backblaze B2 TypeScript SDK
+slug: b2-sdk-typescript
+updated: "2026-09-08"
+
+canonical:
+  repo: https://github.com/backblaze-labs/b2-sdk-typescript
+  package: "@backblaze-labs/b2-sdk"
+  homepage: https://backblaze-labs.github.io/b2-sdk-typescript/
+  display_name: Backblaze B2 TypeScript SDK
+  backlink_anchor: Backblaze B2 TypeScript SDK
+
+references:
+  # --- First-party ---
+  - id: repo
+    title: Backblaze B2 TypeScript SDK on GitHub
+    url: https://github.com/backblaze-labs/b2-sdk-typescript
+    type: repo
+    source: GitHub
+    official: true
+    added: "2026-09-08"
+    status: live
+    summary: Source repository for the official Backblaze B2 Cloud Storage SDK for TypeScript/JavaScript.
+
+  - id: api-docs
+    title: API reference (TypeDoc)
+    url: https://backblaze-labs.github.io/b2-sdk-typescript/
+    type: docs
+    source: GitHub Pages
+    official: true
+    added: "2026-09-08"
+    status: live
+    summary: Generated TypeDoc for the public src surface.
+
+  # --- Package registry ---
+  - id: npm
+    title: "@backblaze-labs/b2-sdk on npm"
+    url: https://www.npmjs.com/package/@backblaze-labs/b2-sdk
+    type: registry
+    source: npm
+    canonical_for: npm
+    official: true
+    added: "2026-09-08"
+    status: live
