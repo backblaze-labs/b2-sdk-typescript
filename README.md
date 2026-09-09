@@ -797,6 +797,14 @@ Requires: `fetch`, Web Streams, `crypto.subtle`, `AbortSignal`. Node < 22.3 is n
 
 The browser test suite (`pnpm test:browser`) runs the same source against real Chromium, Firefox, and WebKit instances. Only Node-specific tests (filename pattern `*.node.test.ts`, covering `node:fs`, `node:os`, `node:util.inspect`) are skipped.
 
+## Backblaze Labs ecosystem
+
+Part of [Backblaze Labs](https://github.com/backblaze-labs):
+
+- **[b2-mcp](https://github.com/backblaze-labs/b2-mcp)** — MCP server for Backblaze B2 Cloud Storage: a focused tool surface for any MCP-compatible AI client.
+- **[Genblaze](https://github.com/backblaze-labs/genblaze)** — Python SDK for orchestrating generative-AI media pipelines across video, audio, and image providers, with built-in provenance for every output.
+- **[b2-action](https://github.com/backblaze-labs/b2-action)** — Backblaze-maintained GitHub Action for B2 Cloud Storage.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
