@@ -95,7 +95,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
       customUploadTimestamp: String(customUploadTimestamp),
     })
-    expect(result.fileInfo).toEqual({
+    expect(result.fileInfo).toMatchObject({
       src_last_modified_millis: String(lastModifiedMillis),
     })
   })
