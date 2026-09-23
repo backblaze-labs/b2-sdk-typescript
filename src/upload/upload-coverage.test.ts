@@ -3164,6 +3164,70 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
   })
 
+  it('auto-resumes an interrupted upload that carries large_file_sha1', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const resumeBucket = await client.createBucket({
+      bucketName: 'resume-large-file-sha1',
+      bucketType: BucketType.AllPrivate,
+    })
+    const data = deterministicBytes(200_000)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'interrupt after first part',
+      skip: 1,
+      count: 1,
+    })
+    sim.injectFailure({
+      on: 'b2_cancel_large_file',
+      status: 500,
+      code: 'internal_error',
+      message: 'leave unfinished upload for resume',
+      count: 1,
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: resumeBucket.id,
+        fileName: 'interrupted.bin',
+        source: new BufferSource(data),
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('interrupt after first part')
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: resumeBucket.id },
+    )
+    const interrupted = unfinished.files[0]
+    expect(interrupted?.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
+    startLargeFile.mockClear()
+    const rejected: string[] = []
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: resumeBucket.id,
+      fileName: 'interrupted.bin',
+      source: new BufferSource(data),
+      concurrency: 1,
+      resume: true,
+      onResumeCandidateRejected: (event) => rejected.push(event.reason),
+    })
+
+    expect(rejected).toEqual([])
+    expect(result.fileName).toBe('interrupted.bin')
+    expect(startLargeFile).not.toHaveBeenCalled()
+  })
+
   it('preserves a caller-supplied large_file_sha1', async () => {
     const data = deterministicBytes(200_000)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
