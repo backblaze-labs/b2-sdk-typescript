@@ -945,6 +945,7 @@ describe('uploadLargeFile cleanup paths', () => {
         source,
         partSize,
         concurrency: 2,
+        fileInfo: { large_file_sha1: 'precomputed-for-read-abort-test' },
       }),
     ).rejects.toThrow('simulated source mutation')
 
@@ -1048,6 +1049,7 @@ describe('uploadLargeFile cleanup paths', () => {
         source: new FailingSecondSliceAfterFirstUploadSource(partSize, firstUploadStarted),
         partSize,
         concurrency: 2,
+        fileInfo: { large_file_sha1: 'precomputed-for-root-cause-test' },
       }),
     ).rejects.toThrow('simulated second part source failure')
   })
@@ -1523,6 +1525,7 @@ describe('uploadLargeFile cleanup paths', () => {
         partSize,
         concurrency: 2,
         signal: controller.signal,
+        fileInfo: { large_file_sha1: 'precomputed-for-parallel-drain-test' },
       }),
     ).rejects.toThrow(/part 2 read failed/)
 
@@ -3138,6 +3141,62 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(result.fileName).toBe('resume-hold.bin')
   })
 
+  it('records the whole-file SHA-1 in large_file_sha1 metadata', async () => {
+    const { client: multipartClient } = makeClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
+    await multipartClient.authorize()
+    const multipartBucket = await multipartClient.createBucket({
+      bucketName: 'large-file-sha1',
+      bucketType: BucketType.AllPrivate,
+    })
+    const data = deterministicBytes(200_000)
+
+    const result = await uploadLargeFile(multipartClient.raw, multipartClient.accountInfo, {
+      bucketId: multipartBucket.id,
+      fileName: 'two-parts.bin',
+      source: new BufferSource(data),
+      concurrency: 1,
+    })
+
+    expect(result.contentSha1).toBeNull()
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
+  })
+
+  it('preserves a caller-supplied large_file_sha1', async () => {
+    const data = deterministicBytes(200_000)
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'caller-large-file-sha1.bin',
+      source: new BufferSource(data),
+      partSize: 100_000,
+      concurrency: 1,
+      fileInfo: { large_file_sha1: 'caller-supplied-sha1' },
+    })
+
+    expect(result.fileInfo['large_file_sha1']).toBe('caller-supplied-sha1')
+  })
+
+  it('does not add large_file_sha1 for a non-seekable stream', async () => {
+    const data = deterministicBytes(200_000)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(data)
+        controller.close()
+      },
+    })
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'stream-large-file-sha1.bin',
+      source: new StreamSource(readable, data.byteLength),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+
+    expect(result.fileInfo).not.toHaveProperty('large_file_sha1')
+  })
+
   it.each([
     {
       name: 'hidden retention',
@@ -3674,7 +3733,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     }
   })
 
-  it('keeps caller fileInfo untouched when resume is enabled', async () => {
+  it('preserves caller fileInfo while adding a whole-file SHA-1 when resume is enabled', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
     const fileInfo = Object.fromEntries(
@@ -3692,7 +3751,9 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual(fileInfo)
+    expect(fileInfo).not.toHaveProperty('large_file_sha1')
+    expect(result.fileInfo).toMatchObject(fileInfo)
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
   })
 
   it('uses empty fileInfo with custom resume discovery limits', async () => {
@@ -3712,7 +3773,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual({})
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
   })
 
   it('skips a same-name unfinished upload with conflicting resume identity', async () => {
@@ -4176,6 +4237,7 @@ describe('uploadLargeFile control-plane aborts', () => {
       source: new BufferSource(deterministicBytes(4)),
       partSize: 2,
       signal: controller.signal,
+      fileInfo: { large_file_sha1: 'precomputed-for-start-abort-test' },
     })
     controller.abort(new Error('start aborted'))
 
