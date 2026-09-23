@@ -360,11 +360,11 @@ describe('uploadSmallFile edge cases', () => {
       legalHold: LegalHoldValue.On,
     })
 
-    expect.soft(result.fileRetention.value).toEqual({
+    expect(result.fileRetention.value).toEqual({
       mode: RetentionMode.Compliance,
       retainUntilTimestamp: expect.any(Number),
     })
-    expect.soft(result.legalHold.value).toBe(LegalHoldValue.On)
+    expect(result.legalHold.value).toBe(LegalHoldValue.On)
   })
 
   it('applies the bucket default retention to a small upload', async () => {
