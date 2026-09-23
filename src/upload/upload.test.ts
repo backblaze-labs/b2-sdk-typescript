@@ -4,7 +4,7 @@ import type { B2Client } from '../client.ts'
 import type { ContentSource } from '../streams/source.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
-import { BucketType } from '../types/bucket.ts'
+import { BucketRetentionMode, BucketType } from '../types/bucket.ts'
 import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import { uploadLargeFile } from './large.ts'
@@ -360,7 +360,34 @@ describe('uploadSmallFile edge cases', () => {
       legalHold: LegalHoldValue.On,
     })
 
-    expect(result.fileName).toBe('locked.txt')
+    expect.soft(result.fileRetention.value).toEqual({
+      mode: RetentionMode.Compliance,
+      retainUntilTimestamp: expect.any(Number),
+    })
+    expect.soft(result.legalHold.value).toBe(LegalHoldValue.On)
+  })
+
+  it('applies the bucket default retention to a small upload', async () => {
+    const lockedBucket = await client.createBucket({
+      bucketName: 'small-upload-default-retention',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+
+    const result = await uploadSmallFile(client.raw, client.accountInfo, {
+      bucketId: lockedBucket.id,
+      fileName: 'default-locked.txt',
+      source: new BufferSource(new TextEncoder().encode('locked by default')),
+    })
+
+    expect(result.fileRetention.value).toEqual({
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: result.uploadTimestamp + 24 * 60 * 60 * 1000,
+    })
   })
 
   it('reuses upload URLs across multiple uploads', async () => {

@@ -3217,6 +3217,20 @@ export class B2Simulator {
     if ('status' in customUploadTimestamp) {
       return customUploadTimestamp
     }
+    const uploadTimestamp = customUploadTimestamp.timestamp ?? this.monotonicTimestamp()
+    const fileRetention =
+      parseFileRetentionValue(
+        {
+          mode: requestHeaderValue(headers, 'x-bz-file-retention-mode'),
+          retainUntilTimestamp: Number(
+            requestHeaderValue(headers, 'x-bz-file-retention-retain-until-timestamp'),
+          ),
+        },
+        uploadTimestamp,
+      ) ?? defaultFileRetention(bucketDefaultRetention(bucket.info), uploadTimestamp)
+    const legalHold = requestHeaderValue(headers, 'x-bz-file-legal-hold') as
+      | LegalHoldValue
+      | undefined
     const fileVersion = this.makeFileVersion({
       bucketId,
       fileName,
@@ -3225,11 +3239,11 @@ export class B2Simulator {
       contentSha1,
       fileInfo,
       action: FileAction.Upload,
+      fileRetention,
+      legalHold: legalHold ?? null,
       serverSideEncryption,
       ...this.newReplicationStatusField(bucketId, fileName),
-      ...(customUploadTimestamp.timestamp !== null
-        ? { uploadTimestamp: customUploadTimestamp.timestamp }
-        : {}),
+      uploadTimestamp,
     })
     const stored: StoredFile = { fileVersion, data: storedData, serverSideEncryption }
     const existing = bucket.files.get(fileName)
