@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Repository-owned customer smoke invoked by this repository's examples CI and
+# by sdkharness. It uses the SDK's in-memory simulator, never real B2.
+set -u
+
+LEVEL="${SDKHARNESS_TEST_LEVEL:-health}"
+SCENARIO="${SDKHARNESS_SCENARIO:-golden-path}"
+WORK_DIR=""
+
+cleanup() {
+  [ -n "$WORK_DIR" ] && rm -rf "$WORK_DIR"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+run_smoke() {
+  local var
+  [ "$LEVEL" = health ] && [ "$SCENARIO" = golden-path ] || return 64
+
+  WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/b2-sdk-health.XXXXXX")" || return 1
+  mkdir -p "$WORK_DIR/smoke-data/subdir" || return 1
+  printf 'alpha file\n' > "$WORK_DIR/smoke-data/a.txt" || return 1
+  printf 'beta file\n' > "$WORK_DIR/smoke-data/b.txt" || return 1
+  printf 'nested\n' > "$WORK_DIR/smoke-data/subdir/c.txt" || return 1
+
+  # A developer or CI environment may carry real credentials. Remove all of
+  # them before setting the fixed values consumed by the in-memory simulator.
+  for var in $(compgen -e); do
+    case "$var" in B2_*) unset "$var" ;; esac
+  done
+  export B2_USE_SIMULATOR=1
+  export B2_APPLICATION_KEY_ID=smoke-id B2_APPLICATION_KEY=smoke-key
+  export B2_MASTER_KEY_ID=master-key-id B2_MASTER_KEY=master-key
+  export B2_BACKUP_PASSPHRASE=smoke-pass
+
+  printf '%s\n' '== build the distributable package'
+  pnpm build || return 1
+  printf '%s\n' '== list buckets example'
+  pnpm exec tsx examples/node-list-buckets.ts || return 1
+  printf '%s\n' '== upload example'
+  pnpm exec tsx examples/node-upload.ts smoke-test "$WORK_DIR/smoke-data/a.txt" || return 1
+  printf '%s\n' '== download example'
+  pnpm exec tsx examples/node-download.ts smoke-test smoke-test.txt "$WORK_DIR/restored.txt" || return 1
+  printf '%s\n' '== partner authorization example'
+  pnpm exec tsx examples/partner-authorize.ts || return 1
+  printf '%s\n' '== backup snapshot example'
+  pnpm exec tsx examples/node-backup-cli/backup.ts snapshot \
+    "$WORK_DIR/smoke-data" b2://smoke-test/backups || return 1
+  printf 'hello smoke\n' | cmp -s - "$WORK_DIR/restored.txt" || return 1
+}
+
+if run_smoke; then
+  printf 'SDKHARNESS_RESULT\t%s\t%s\tPASS\t-\n' "$LEVEL" "$SCENARIO"
+else
+  code=$?
+  printf 'SDKHARNESS_RESULT\t%s\t%s\tFAIL\trepository example smoke failed with exit %s\n' \
+    "$LEVEL" "$SCENARIO" "$code"
+  exit "$code"
+fi

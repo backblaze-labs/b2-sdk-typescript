@@ -99,57 +99,11 @@ jobs:
           node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Examples import `@backblaze-labs/b2-sdk` which resolves via package.json's
-      # `exports` map to `./dist/index.js`. Build dist/ so tsx can resolve
-      # those imports the same way an end user would after `npm install`.
-      # (The typecheck jobs above don't need this because tsc honours
-      # `paths` to map the bare specifier straight at ../src/*.ts.)
-      - run: pnpm build
-      - name: Prepare smoke fixtures
-        run: |
-          mkdir -p /tmp/smoke-data
-          echo "alpha file" > /tmp/smoke-data/a.txt
-          echo "beta file"  > /tmp/smoke-data/b.txt
-          mkdir -p /tmp/smoke-data/subdir
-          echo "nested"    > /tmp/smoke-data/subdir/c.txt
-      # Each example is executed against an in-memory B2Simulator (via
-      # `examples/_smoke/transport.ts`). No network, no credentials, no cost.
-      # The simulator is fresh per example process; pre-seeded with the
-      # `smoke-test` bucket containing `smoke-test.txt`.
-      - name: examples/node-list-buckets.ts
-        env:
-          B2_USE_SIMULATOR: '1'
-          B2_APPLICATION_KEY_ID: smoke-id
-          B2_APPLICATION_KEY: smoke-key
-        run: npx tsx examples/node-list-buckets.ts
-      - name: examples/node-upload.ts
-        env:
-          B2_USE_SIMULATOR: '1'
-          B2_APPLICATION_KEY_ID: smoke-id
-          B2_APPLICATION_KEY: smoke-key
-        run: npx tsx examples/node-upload.ts smoke-test /tmp/smoke-data/a.txt
-      - name: examples/node-download.ts
-        env:
-          B2_USE_SIMULATOR: '1'
-          B2_APPLICATION_KEY_ID: smoke-id
-          B2_APPLICATION_KEY: smoke-key
-        run: npx tsx examples/node-download.ts smoke-test smoke-test.txt /tmp/restored.txt
-      - name: examples/partner-authorize.ts
-        env:
-          B2_USE_SIMULATOR: '1'
-          B2_MASTER_KEY_ID: master-key-id
-          B2_MASTER_KEY: master-key
-        run: npx tsx examples/partner-authorize.ts
-      - name: examples/node-backup-cli (snapshot)
-        env:
-          B2_USE_SIMULATOR: '1'
-          B2_APPLICATION_KEY_ID: smoke-id
-          B2_APPLICATION_KEY: smoke-key
-          B2_BACKUP_PASSPHRASE: smoke-pass
-        run: npx tsx examples/node-backup-cli/backup.ts snapshot /tmp/smoke-data b2://smoke-test/backups
-      - name: Verify the downloaded file matches what the simulator served
-        run: |
-          diff /tmp/restored.txt <(printf 'hello smoke\n')
+      # This tracked executable is also the version-matched entry point used by
+      # sdkharness. Keeping one implementation prevents CI and fleet evidence
+      # from silently testing different customer flows.
+      - name: Run repository-owned customer health contract
+        run: ./.sdkharness/tests/health-golden-path
 
   typecheck-deno:
     name: Typecheck (Deno)
