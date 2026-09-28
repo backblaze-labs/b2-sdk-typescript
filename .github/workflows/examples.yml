@@ -103,7 +103,7 @@ jobs:
       # sdkharness. Keeping one implementation prevents CI and fleet evidence
       # from silently testing different customer flows.
       - name: Run repository-owned customer health contract
-        run: ./.sdkharness/tests/health-golden-path
+        run: ./.sdkharness/tests/health-examples
 
   typecheck-deno:
     name: Typecheck (Deno)
