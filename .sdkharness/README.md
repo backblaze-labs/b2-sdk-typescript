@@ -24,3 +24,9 @@ from the same revision before they run. The `run-conformance` and
 `run-resilience` dispatchers validate the loopback-only simulator contract and
 translate each check's standing verdict into the five-field
 `SDKHARNESS_RESULT` record consumed by the orchestrator.
+
+`conformance/urls.native_download` addresses a loopback fixture hostname because
+the SDK builds native share URLs only on Backblaze download hosts. The embedded
+harness simulator and the standalone B2 simulator carry different fixture names
+in their certificates, so `tests/lib/fixture-host.cjs` picks the one the pinned
+CA actually names and fails loudly when it names none.

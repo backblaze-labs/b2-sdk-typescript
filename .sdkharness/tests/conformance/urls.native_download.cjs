@@ -37,7 +37,7 @@
  * no-realm-option. A simulator PASS is WEAKER evidence than a staging PASS: it
  * says the SDK and the harness's simulator agree, not that real B2 agrees.
  *
- * HOST -- why this check alone addresses sdkharness-loopback-fixture.backblaze.net.
+ * HOST -- why this check alone addresses a loopback fixture hostname.
  * The SDK builds a native share URL only when downloadUrl's host ends in a
  * Backblaze suffix (dist/s3/index.js:11-16, :289), and the simulator reports
  * as downloadUrl the origin the client addressed, so 127.0.0.1 can never
@@ -47,10 +47,12 @@
  * echoed that origin back as downloadUrl (dist/simulator/index.js:3421)
  * without opening a socket. The SDK believed the Backblaze hostname then as
  * now; only delivery was redirected. Here that happens on the network: the
- * realm names bin/simulator/fixture-host.cjs's FIXTURE_HOST, which exists in
+ * realm names the fixture host the simulator's certificate carries (see
+ * ../lib/fixture-host.cjs: the standalone simulator and the harness-embedded
+ * one serve different names, so the pinned CA decides which), which exists in
  * no DNS and resolves to 127.0.0.1 only in this process (a dns.lookup patch),
- * loopback-cert.pem carries it as a SAN so TLS verification stays on, and
- * serve.mjs echoes it back. No other check addresses that name.
+ * the certificate carries it as a SAN so TLS verification stays on, and
+ * the simulator echoes it back. No other check addresses that name.
  *
  * It exercises this checkout through the @backblaze-labs/b2-sdk package
  * self-reference after the exact revision has been built. The API was taken
@@ -289,9 +291,9 @@ async function run() {
   // download authorization actually enforced: permissive mode serves /file/
   // regardless of the token.
   // Over TLS, on the fixture host: see HOST above.
-const { FIXTURE_HOST, routeFixtureHostToLoopback } = require('../lib/fixture-host.cjs');
+const { fixtureHostFor, routeFixtureHostToLoopback } = require('../lib/fixture-host.cjs');
   const realm = new URL(simulatorHttpsRealm());
-  realm.hostname = FIXTURE_HOST;
+  realm.hostname = fixtureHostFor(process.env.CONFORMANCE_SIMULATOR_CA);
   routeFixtureHostToLoopback();
   const { client } = await simulatorClient({ realm: realm.origin });
   const { BufferSource } = await load();
