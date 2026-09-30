@@ -32,6 +32,21 @@ import {
   uploadPartWithFreshUrl,
 } from './retry.ts'
 
+async function sourceSha1(source: ContentSource): Promise<string> {
+  const reader = source.stream().getReader()
+  const sha1 = new IncrementalSha1()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      await sha1.update(value)
+    }
+    return await sha1.digest()
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 /** Event emitted when explicit resume skips a local part because B2 already has matching SHA-1 bytes. */
 export interface ResumePartReusedEvent {
   /** File name being resumed. */
@@ -264,6 +279,11 @@ export async function uploadLargeFile(
   }
   if (options.lastModifiedMillis !== undefined) {
     fileInfo['src_last_modified_millis'] = String(options.lastModifiedMillis)
+  }
+  if (
+    fileInfo['large_file_sha1'] === undefined && options.source.canSlice
+  ) {
+    fileInfo['large_file_sha1'] = await sourceSha1(options.source)
   }
 
   // Construct the `b2_start_large_file` request body once so the two

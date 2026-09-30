@@ -95,9 +95,10 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
       customUploadTimestamp: String(customUploadTimestamp),
     })
-    expect(result.fileInfo).toEqual({
+    expect(result.fileInfo).toMatchObject({
       src_last_modified_millis: String(lastModifiedMillis),
     })
+    expect(result.fileInfo.large_file_sha1).toMatch(/^[0-9a-f]{40}$/)
   })
 
   it('multiple uploads coexist in the same bucket', async () => {

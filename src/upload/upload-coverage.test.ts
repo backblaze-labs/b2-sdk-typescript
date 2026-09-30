@@ -274,7 +274,13 @@ class FailingFirstSliceSource implements ContentSource {
   }
 
   stream(): ReadableStream<Uint8Array> {
-    throw new Error('parallel source stream should not be used')
+    const size = this.size
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(size))
+        controller.close()
+      },
+    })
   }
 
   toArrayBuffer(): Promise<ArrayBuffer> {
@@ -322,7 +328,13 @@ class FailingSecondSliceAfterFirstUploadSource implements ContentSource {
   }
 
   stream(): ReadableStream<Uint8Array> {
-    throw new Error('parallel source stream should not be used')
+    const size = this.size
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(size))
+        controller.close()
+      },
+    })
   }
 
   toArrayBuffer(): Promise<ArrayBuffer> {
@@ -379,7 +391,13 @@ class AbortAwareParallelReadSource implements ContentSource {
   }
 
   stream(): ReadableStream<Uint8Array> {
-    throw new Error('parallel source stream should not be used')
+    const size = this.size
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(size))
+        controller.close()
+      },
+    })
   }
 
   toArrayBuffer(): Promise<ArrayBuffer> {
@@ -1511,7 +1529,13 @@ describe('uploadLargeFile cleanup paths', () => {
         }
         return new BufferSource(data.slice(start, end))
       },
-      stream: () => new ReadableStream<Uint8Array>(),
+      stream: () =>
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(data)
+            controller.close()
+          },
+        }),
       toArrayBuffer: async () => data.buffer as ArrayBuffer,
     }
 
@@ -3107,6 +3131,24 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     }
   })
 
+  it('records the whole-file SHA-1 when starting a large buffer upload', async () => {
+    const partSize = 100_000
+    const data = deterministicBytes(partSize * 2)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+
+    await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'whole-file-sha1.bin',
+      source: new BufferSource(data),
+      partSize,
+      concurrency: 1,
+    })
+
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({
+      fileInfo: { large_file_sha1: await sha1Hex(data) },
+    })
+  })
+
   it('forwards fileRetention when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
@@ -3692,7 +3734,9 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual(fileInfo)
+    expect(fileInfo).not.toHaveProperty('large_file_sha1')
+    expect(result.fileInfo).toMatchObject(fileInfo)
+    expect(result.fileInfo.large_file_sha1).toBe(await sha1Hex(data))
   })
 
   it('uses empty fileInfo with custom resume discovery limits', async () => {
@@ -3712,7 +3756,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual({})
+    expect(result.fileInfo).toEqual({ large_file_sha1: await sha1Hex(data) })
   })
 
   it('skips a same-name unfinished upload with conflicting resume identity', async () => {
@@ -4162,10 +4206,12 @@ describe('uploadLargeFile fresh multipart metadata', () => {
 describe('uploadLargeFile control-plane aborts', () => {
   it('passes a linked abort signal to stalled startLargeFile requests', async () => {
     const controller = new AbortController()
+    const startEntered = Promise.withResolvers<void>()
     let startSignal: AbortSignal | undefined
     const raw = {
       startLargeFile(...args: Parameters<RawClient['startLargeFile']>) {
         startSignal = args[3]?.signal
+        startEntered.resolve()
         return rejectOnAbort(args[3]?.signal, 'start aborted')
       },
     } as unknown as RawClient
@@ -4177,6 +4223,7 @@ describe('uploadLargeFile control-plane aborts', () => {
       partSize: 2,
       signal: controller.signal,
     })
+    await startEntered.promise
     controller.abort(new Error('start aborted'))
 
     await expect(upload).rejects.toThrow('start aborted')

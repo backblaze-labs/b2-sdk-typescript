@@ -347,7 +347,8 @@ function candidateMetadataRejectReason(
   }
 
   const candidateInfo = splitResumeFileInfo(candidate.fileInfo ?? {})
-  if (!recordEquals(candidateInfo.fileInfo, criteria.fileInfo)) return 'file-info-mismatch'
+  const criteriaInfo = splitResumeFileInfo(criteria.fileInfo)
+  if (!recordEquals(candidateInfo.fileInfo, criteriaInfo.fileInfo)) return 'file-info-mismatch'
   if (
     candidateInfo.sourceSize !== undefined &&
     candidateInfo.sourceSize !== String(criteria.sourceSize)
@@ -458,7 +459,10 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
   let sourceSize: string | undefined
   let partSize: string | undefined
   for (const [key, value] of Object.entries(fileInfo)) {
-    if (key === RESUME_SOURCE_SIZE_INFO_KEY) {
+    if (key === 'large_file_sha1') {
+      // Deterministic content metadata is not part of the caller's upload identity.
+      continue
+    } else if (key === RESUME_SOURCE_SIZE_INFO_KEY) {
       sourceSize = value
     } else if (key === RESUME_PART_SIZE_INFO_KEY) {
       partSize = value
