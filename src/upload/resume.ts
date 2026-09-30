@@ -347,7 +347,8 @@ function candidateMetadataRejectReason(
   }
 
   const candidateInfo = splitResumeFileInfo(candidate.fileInfo ?? {})
-  if (!recordEquals(candidateInfo.fileInfo, criteria.fileInfo)) return 'file-info-mismatch'
+  const criteriaInfo = splitResumeFileInfo(criteria.fileInfo)
+  if (!recordEquals(candidateInfo.fileInfo, criteriaInfo.fileInfo)) return 'file-info-mismatch'
   if (
     candidateInfo.sourceSize !== undefined &&
     candidateInfo.sourceSize !== String(criteria.sourceSize)
@@ -462,6 +463,9 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
       sourceSize = value
     } else if (key === RESUME_PART_SIZE_INFO_KEY) {
       partSize = value
+    } else if (key === 'large_file_sha1') {
+      // Whole-file SHA-1 is deterministic content metadata, not caller-owned
+      // upload identity. It may be present on one side of a resume comparison.
     } else {
       userFileInfo[key] = value
     }
