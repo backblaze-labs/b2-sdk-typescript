@@ -40,11 +40,10 @@ export interface UploadRetryOptions {
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
-   * Whether ambiguous failures after an upload POST should be retried,
-   * including response-body read failures and transport errors where B2 may
-   * have stored the payload before the success response was lost.
-   * Defaults to false. Set true only when duplicate versions or parts are
-   * acceptable.
+   * Whether ambiguous response-body read failures after an upload POST should
+   * be retried. Connection-level NetworkErrors always retry with a fresh
+   * upload URL. Defaults to false. Set true only when duplicate versions or
+   * parts are acceptable.
    */
   readonly retryResponseBodyFailures?: boolean | undefined
 }
@@ -69,7 +68,7 @@ const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
  * Resolves the public default for `retryResponseBodyFailures`. Callers must
- * opt into replaying ambiguous upload POST failures for every upload mode.
+ * opt into replaying ambiguous upload response-body failures.
  *
  * @param value - Caller-provided override, if any.
  *
@@ -230,7 +229,6 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     let uploadEntry: UploadUrlEntry | undefined
-    let uploadStarted = false
 
     try {
       options.signal?.throwIfAborted()
@@ -239,7 +237,6 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
           ? (options.checkout() ?? (await options.fetchFresh()))
           : await options.fetchFresh()
 
-      uploadStarted = true
       const result = await options.upload(uploadEntry)
       options.returnEntry(uploadEntry)
       return result
@@ -258,10 +255,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (
-        !isUploadRetryable(retryError, { ...options, uploadStarted }) ||
-        attempt === retryOptions.maxRetries
-      ) {
+      if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
 
@@ -295,17 +289,10 @@ function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryE
   }
 }
 
-function isUploadRetryable(
-  err: unknown,
-  options: UploadLayerRetryOptions & {
-    readonly partNumber: number | null
-    readonly uploadStarted: boolean
-  },
-): err is B2Error | NetworkError {
+function isUploadRetryable(err: unknown): err is B2Error | NetworkError {
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
-    if (!options.uploadStarted) return true
-    return options.retryResponseBodyFailures === true
+    return true
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
