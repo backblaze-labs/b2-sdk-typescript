@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multipart uploads record whole-file SHA-1 metadata.** B2 records a multipart whole-file digest only as `fileInfo.large_file_sha1`, and file info is fixed by `b2_start_large_file`; for sliceable sources, the SDK reads planned parts in order before starting the upload and records the digest. Forward-only streams are left untouched because their content is not available before start. An explicit caller-supplied `large_file_sha1` is preserved as-is.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
