@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`.sdkharness` `run-resilience` refuses a simulator that already served requests.** The resilience checks count the simulator's whole request journal, which has no reset, so on a simulator shared by several scenarios `upload.cap_exceeded_403` and `api.retry_after_503` read earlier scenarios' requests as their own and failed with a false SDK verdict. The dispatcher now fails with a `configuration` reason (`requireFreshSimulator` in `.sdkharness/tests/lib/guard.cjs`); the harness already starts a fresh simulator per scenario, so its results are unchanged.
 - **`.sdkharness` guard follow-ups.** A `dist/` that exists but lacks the file `package.json` exports for an import is now a `FAIL` (a moved or renamed build output is a regression); only an absent `dist/` is `COULD-NOT-RUN`. The `run-resilience` fresh-simulator guard now has dispatcher-level tests (used simulator, unreachable journal), and the dispatcher and leaf unit tests skip on Windows, where they cannot spawn shebang scripts, so `pnpm verify` stays portable. The four refusal assertions (`enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold`, `lock.per_file_retention`) note that their error type, status and code values are simulator-derived and must be re-verified against real B2 before use outside the simulator. No verdict for a known SDK finding changes.
 
+### Changed
+
+- **Object Lock simulator validation follow-up.** The simulator currently accepts invalid `X-Bz-File-Retention-*` and `X-Bz-File-Legal-Hold` upload header values. Real B2 rejects invalid values with HTTP 400; validation remains a follow-up and is intentionally out of scope for this change.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
