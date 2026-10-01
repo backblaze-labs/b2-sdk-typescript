@@ -255,10 +255,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (
-        !isUploadRetryable(retryError) ||
-        attempt === retryOptions.maxRetries
-      ) {
+      if (!isUploadRetryable(retryError) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
 
