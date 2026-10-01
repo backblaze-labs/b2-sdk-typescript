@@ -71,6 +71,12 @@ HEALTHCHECK_REALM_URL=$SDKHARNESS_SIMULATOR_URL B2_TEST_APPLICATION_KEY_ID=test-
 Each dispatcher prints one `SDKHARNESS_RESULT` line and refuses any simulator URL that
 is not `http://127.0.0.1:<port>`. A leaf that prints `COULD-NOT-RUN` but exits nonzero
 is reported as a failure, not a skip (`pnpm run test:sdkharness-dispatchers`). The
-`urls.native_download` check needs a simulator whose certificate matches its fixture
-host (see `lib/fixture-host.cjs`). Known SDK findings (for example
+`urls.native_download` check works with either simulator (it reads the fixture host from the
+pinned CA, see below). Known SDK findings (for example
 `large.multipart` and the connection-fault resilience scenarios) fail by design.
+
+`conformance/urls.native_download` addresses a loopback fixture hostname because
+the SDK builds native share URLs only on Backblaze download hosts. The embedded
+harness simulator and the standalone B2 simulator carry different fixture names
+in their certificates, so `tests/lib/fixture-host.cjs` picks the one the pinned
+CA actually names and fails loudly when it names none.
