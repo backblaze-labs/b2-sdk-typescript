@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Object Lock simulator validation follow-up.** The simulator currently accepts invalid `X-Bz-File-Retention-*` and `X-Bz-File-Legal-Hold` upload header values. Real B2 rejects invalid values with HTTP 400; validation remains a follow-up and is intentionally out of scope for this change.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
