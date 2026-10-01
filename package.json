@@ -158,6 +158,7 @@
     "audit:deps": "node scripts/audit-dependencies.mjs",
     "test:audit:deps": "node --test scripts/audit-dependencies.test.mjs",
     "test:release-channel": "node --test scripts/verify-release-channel.test.mjs",
+    "test:sdkharness-dispatchers": "node --test scripts/sdkharness-dispatchers.test.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
     "docs": "typedoc",
