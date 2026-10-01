@@ -78,6 +78,10 @@ jobs:
         if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
       - run: pnpm run verify:ci-docs-filter
         if: ${{ needs.changes.outputs.code == 'true' }}
+      # The repository-owned sdkharness dispatchers must not turn a crashed or failed leaf into
+      # a passing or skipped result.
+      - run: pnpm run test:sdkharness-dispatchers
+        if: ${{ needs.changes.outputs.code == 'true' }}
 
   test-fast:
     name: Test fast (${{ matrix.os }} / Node ${{ matrix.node-version }})

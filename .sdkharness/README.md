@@ -24,3 +24,53 @@ from the same revision before they run. The `run-conformance` and
 `run-resilience` dispatchers validate the loopback-only simulator contract and
 translate each check's standing verdict into the five-field
 `SDKHARNESS_RESULT` record consumed by the orchestrator.
+
+## Run one check locally
+
+Nothing here touches B2. You need Node 22+ and pnpm.
+
+```bash
+# 1. Build this checkout (the checks import it through its package self-reference)
+pnpm install --frozen-lockfile && pnpm build
+
+# 2. A local simulator (any one of these; it needs access to backblaze-labs/b2-simulator)
+git clone https://github.com/backblaze-labs/b2-simulator /tmp/b2-simulator
+node /tmp/b2-simulator/bin/simulator/serve.mjs --control > /tmp/sim.out &    # prints the URLs
+# ...or use the simulator embedded in the harness: sdkharness/bin/simulator/serve.mjs
+
+# 3. Read the URLs it printed
+export SDKHARNESS_SIMULATOR_URL=$(sed -n 's/^SIMULATOR-LISTENING \(http:.*\)/\1/p' /tmp/sim.out)
+export SDKHARNESS_SIMULATOR_HTTPS_URL=$(sed -n 's/^SIMULATOR-LISTENING \(https:.*\)/\1/p' /tmp/sim.out)
+export SDKHARNESS_SIMULATOR_CONTROL_URL=$(sed -n 's/^SIMULATOR-CONTROL \(.*\)/\1/p' /tmp/sim.out)
+export SDKHARNESS_SIMULATOR_CA=/tmp/b2-simulator/bin/simulator/loopback-cert.pem
+```
+
+The standalone simulator also exports the same values as `B2SIM_URL`,
+`B2SIM_HTTPS_URL`, `B2SIM_CONTROL_URL` and `B2SIM_CA` (its `bin/lib/simulator.sh`
+helper); the checks read the `SDKHARNESS_SIMULATOR_*` names above.
+
+```bash
+# conformance (one capability)
+SDKHARNESS_TEST_LEVEL=conformance SDKHARNESS_SCENARIO=files.upload .sdkharness/tests/run-conformance
+
+# resilience (one injected fault; needs the control URL, i.e. serve.mjs --control)
+SDKHARNESS_TEST_LEVEL=resilience SDKHARNESS_SCENARIO=api.backoff_503 .sdkharness/tests/run-resilience
+
+# customer health (needs a bucket in the simulator first)
+node --input-type=module -e "
+import { B2Client } from '@backblaze-labs/b2-sdk'
+const client = new B2Client({ applicationKeyId: 'test-key-id', applicationKey: 'test-key', realm: process.env.SDKHARNESS_SIMULATOR_URL, allowedHostSuffixes: [] })
+await client.authorize()
+await client.createBucket({ bucketName: 'sdkharness-healthcheck', bucketType: 'allPrivate' })
+"
+HEALTHCHECK_REALM_URL=$SDKHARNESS_SIMULATOR_URL B2_TEST_APPLICATION_KEY_ID=test-key-id \
+  B2_TEST_APPLICATION_KEY=test-key B2_BUCKET_NAME=sdkharness-healthcheck \
+  .sdkharness/tests/health-golden-path
+```
+
+Each dispatcher prints one `SDKHARNESS_RESULT` line and refuses any simulator URL that
+is not `http://127.0.0.1:<port>`. A leaf that prints `COULD-NOT-RUN` but exits nonzero
+is reported as a failure, not a skip (`pnpm run test:sdkharness-dispatchers`). The
+`urls.native_download` check needs a simulator whose certificate matches its fixture
+host (see `lib/fixture-host.cjs`). Known SDK findings (for example
+`large.multipart` and the connection-fault resilience scenarios) fail by design.
