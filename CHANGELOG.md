@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Upload connection recovery now uses a fresh URL.** A connection reset or stall after an upload request body starts now evicts the failed upload URL, re-sends the full body to a fresh URL, and retries according to the configured retry policy. This follows B2's documented recovery flow and preserves the SSRF-error exclusion. If B2 stored a small-file upload before the connection failed, the retry can create a duplicate file version; reconcile versions when that ambiguity matters.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
