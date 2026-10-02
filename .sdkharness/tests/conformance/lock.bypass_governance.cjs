@@ -22,6 +22,13 @@
  * Object Lock is enabled on the file."
  * https://www.backblaze.com/apidocs/b2-delete-file-version
  *
+ * 401 access_denied is accepted as the refusal (lib/governance-refusal.cjs):
+ * the Python SDK's raw-API contract test for this exact call passes against
+ * real B2 with a 401, and the standalone simulator's default profile answers
+ * the same. A bad or expired token, a 5xx, a 404 or a network error is not a
+ * refusal for this reason. The exact code and message are not verified against
+ * real B2.
+ *
  * TARGET -- why this slug always says @simulator.
  * b2-sdk-typescript does not target a B2 realm from this harness. Every check
  * here drives the SDK's real HTTP path against the harness's own B2 simulator
@@ -40,6 +47,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+
+const { isGovernanceRefusal } = require('../lib/governance-refusal.cjs');
 
 const SLUG = 'b2-sdk-typescript';
 const CAPABILITY = 'lock.bypass_governance';
@@ -269,10 +278,19 @@ async function run() {
     if (refusal === null) {
       throw new Failure('delete without bypass', 'the governed version was deleted without bypass');
     }
-    // The refusal must name governance, not be any old error.
-    if (!/governance/i.test(String(refusal && refusal.message))) {
+    // The refusal must be about the lock, not any old error: it names
+    // governance, or it is B2's 401 access_denied (see lib/governance-refusal.cjs).
+    if (!isGovernanceRefusal(refusal)) {
       throw new Failure('delete without bypass',
         'the refusal did not name governance retention: ' + redact(refusal));
+    }
+
+    // And the lock must have held: the refused delete removed nothing.
+    const survived = await step('confirm the refused delete removed nothing', () =>
+      bucket.listFileVersions({ prefix: OBJECT_NAME }));
+    if (!survived.files.some((file) => file.fileId === uploaded.fileId)) {
+      throw new Failure('delete without bypass',
+        'the delete was refused but the governed version is gone');
     }
 
     await step('delete with bypass', () =>
