@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -81,3 +82,45 @@ for (const level of ['conformance', 'resilience']) {
     }
   })
 }
+
+// The refusal that lock.bypass_governance accepts for a delete without bypass.
+const { isGovernanceRefusal } = createRequire(import.meta.url)(
+  join(source, 'lib', 'governance-refusal.cjs'),
+)
+
+function b2Error(status, code, message = 'x') {
+  return Object.assign(new Error(message), { name: 'B2Error', status, code })
+}
+
+test('a 401 access_denied is the governance refusal', () => {
+  assert.equal(isGovernanceRefusal(b2Error(401, 'access_denied', 'Access Denied')), true)
+})
+
+test('a message that names governance retention is still the governance refusal', () => {
+  assert.equal(
+    isGovernanceRefusal(b2Error(400, 'file_lock_governance_protected', 'Governance retention')),
+    true,
+  )
+})
+
+test('an unrelated refusal is not the governance refusal', () => {
+  for (const error of [
+    b2Error(401, 'bad_auth_token'),
+    b2Error(401, 'expired_auth_token'),
+    b2Error(403, 'access_denied'),
+    b2Error(404, 'file_not_present'),
+    b2Error(503, 'service_unavailable'),
+    new TypeError('fetch failed'),
+    null,
+    undefined,
+  ]) {
+    assert.equal(isGovernanceRefusal(error), false, String(error?.message))
+  }
+})
+
+test('lock.bypass_governance uses the shared refusal rule', async () => {
+  const { readFileSync } = await import('node:fs')
+  const leaf = readFileSync(join(source, 'conformance', 'lock.bypass_governance.cjs'), 'utf8')
+  assert.match(leaf, /isGovernanceRefusal\(refusal\)/)
+  assert.match(leaf, /confirm the refused delete removed nothing/)
+})
