@@ -6,7 +6,6 @@ import {
 } from '../errors/index.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
 import { InMemoryPartnerAccountInfo } from '../partner/in-memory.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import {
   deferred,
   jsonErrorResponse,
@@ -16,37 +15,10 @@ import {
 import type { ComputerBackup } from '../types/backup.ts'
 import { accountId, computerId, partnerToken } from '../types/ids.ts'
 import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
-import { BackupClient, type BackupClientOptions } from './client.ts'
+import { BackupClient } from './client.ts'
 
 function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
-}
-
-function makeBackupClient(options?: {
-  readonly client?: Partial<Omit<BackupClientOptions, 'masterKeyId' | 'masterKey' | 'transport'>>
-}): {
-  readonly client: BackupClient
-  readonly seenRequests: HttpRequest[]
-} {
-  const sim = new B2Simulator({ partnerAuthorize: true })
-  const inner = sim.transport()
-  const seenRequests: HttpRequest[] = []
-  const transport: HttpTransport = {
-    async send(request) {
-      seenRequests.push(request)
-      return inner.send(request)
-    },
-  }
-  return {
-    client: new BackupClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      transport,
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-      ...(options?.client ?? {}),
-    }),
-    seenRequests,
-  }
 }
 
 function partnerAuthorizeResponse(
@@ -111,68 +83,6 @@ function inMemoryJsonResponse<T>(data: T): HttpResponse {
 }
 
 describe('BackupClient facade', () => {
-  it('authorizes, lists, paginates, and deletes simulator backup computers', async () => {
-    const { client, seenRequests } = makeBackupClient()
-
-    const auth = await client.authorize()
-    const firstPage = await client.listComputers({ pageSize: 1 })
-    const computers: ComputerBackup[] = []
-    for await (const computer of client.paginateComputers({ pageSize: 1 })) {
-      computers.push(computer)
-    }
-    const computersWithoutOptions: ComputerBackup[] = []
-    for await (const computer of client.paginateComputers()) {
-      computersWithoutOptions.push(computer)
-    }
-    const firstComputer = computers[0]
-    if (firstComputer === undefined) throw new Error('expected at least one backup computer')
-    const deleted = await client.deleteComputer({ computerId: firstComputer.computerId })
-    const afterDelete = await client.listComputers()
-
-    expect(auth.backupApiUrl).toBeDefined()
-    expect(firstPage.computers).toHaveLength(1)
-    expect(firstPage.nextComputerId).not.toBeNull()
-    expect(computers.map((computer) => computer.computerName)).toEqual([
-      'sim-computer-1',
-      'sim-computer-2',
-      'sim-computer-3',
-    ])
-    expect(computersWithoutOptions).toHaveLength(3)
-    expect(deleted[0]?.computerId).toBe(firstComputer.computerId)
-    expect(afterDelete.computers.map((computer) => computer.computerId)).not.toContain(
-      firstComputer.computerId,
-    )
-    expect(seenRequests.map(apiEndpointName)).toContain('b2_authorize_account')
-    expect(seenRequests.map(apiEndpointName)).toContain('bz_list_computers')
-    expect(seenRequests.map(apiEndpointName)).toContain('bz_delete_computer')
-  })
-
-  it('uses cached Partner authorization state without a fresh authorize call', async () => {
-    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    partnerAccountInfo.setAuth(partnerAuthorizeResponse('cached-partner-token'))
-    const sim = new B2Simulator()
-    const inner = sim.transport()
-    const seenRequests: HttpRequest[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenRequests.push(request)
-        return inner.send(request)
-      },
-    }
-    const client = new BackupClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      transport,
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-      partnerAccountInfo,
-    })
-
-    await client.listComputers({ pageSize: 2 })
-
-    expect(seenRequests.map(apiEndpointName)).toEqual(['bz_list_computers'])
-    expect(seenRequests[0]?.headers?.['Authorization']).toBe('cached-partner-token')
-  })
-
   it('reauthorizes and retries listComputers on an expired Partner token', async () => {
     let authorizeCount = 0
     const listAuthorizations: string[] = []
@@ -522,22 +432,5 @@ describe('BackupClient facade', () => {
     })
 
     expect(client.urlGuard?.getAllowedSuffixes()).toEqual([])
-  })
-
-  it('redacts Master Application Key credentials and Partner tokens in diagnostics', async () => {
-    const { client } = makeBackupClient()
-
-    expect(JSON.stringify(client)).toContain('[unauthorized]')
-    expect(client.toString()).toBe('[BackupClient [redacted Master Application Key]]')
-
-    await client.authorize()
-
-    expect(JSON.stringify(client)).not.toContain('master-key')
-    expect(JSON.stringify(client)).not.toContain(client.partnerAccountInfo.getPartnerToken())
-    expect(JSON.stringify(client)).toContain('[redacted Partner token]')
-    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
-    expect((client as unknown as Record<symbol, () => string>)[inspectSymbol]?.()).toBe(
-      client.toString(),
-    )
   })
 })

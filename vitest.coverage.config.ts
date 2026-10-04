@@ -30,8 +30,7 @@ export default defineConfig({
     // keeps the RPC connection warm across file boundaries and avoids the timeout.
     fileParallelism: false,
     // Disable per-file isolation so the single worker can actually run all
-    // files sequentially without restart. Tests already create fresh
-    // `B2Simulator` instances per file, so we don't need vitest's isolation.
+    // files sequentially without restart.
     isolate: false,
     testTimeout: 180_000,
     hookTimeout: 60_000,
@@ -65,9 +64,9 @@ export default defineConfig({
       // CI gate: drop below these and the coverage job fails. Adjust upward
       // as coverage improves; never adjust downward to paper over a real drop.
       //
-      // Shipped index modules, including src/simulator/index.ts, are included
-      // in the denominator. Keep this gate aligned with the documented project
-      // policy; add targeted tests instead of lowering it for denominator moves.
+      // Shipped modules are included in the denominator. Keep this gate aligned
+      // with the documented project policy; add targeted tests instead of
+      // lowering it for denominator moves.
       thresholds: {
         statements: 97,
         lines: 98,

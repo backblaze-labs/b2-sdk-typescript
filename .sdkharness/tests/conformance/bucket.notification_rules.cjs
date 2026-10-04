@@ -19,9 +19,9 @@
  * X-Bz-Event-Notification-Signature" -- and its example response carries it
  * unredacted.
  * https://www.backblaze.com/apidocs/b2-get-bucket-notification-rules
- * The 2026-09-22 scenario row asserted the opposite and failed B2Simulator for
- * being faithful to that contract. If B2 ever stops returning the secret, this
- * check goes red and that is a real finding.
+ * The 2026-09-22 scenario row asserted the opposite and failed the embedded
+ * SDK test server for being faithful to that contract. If B2 ever stops
+ * returning the secret, this check goes red and that is a real finding.
  *
  * TARGET -- why this slug always says @simulator.
  * b2-sdk-typescript does not target a B2 realm from this harness. Every check

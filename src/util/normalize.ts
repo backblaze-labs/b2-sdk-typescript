@@ -11,8 +11,8 @@
  * `if (fv.contentSha1) { ... }` without an extra `=== 'none'` guard.
  *
  * Normalization happens at the RawClient boundary so every SDK consumer
- * (RawClient direct users, the high-level facade, the simulator-driven
- * tests, generated docs) sees the same `null` value.
+ * (RawClient direct users, the high-level facade, tests, and generated docs)
+ * sees the same `null` value.
  *
  * @packageDocumentation
  */

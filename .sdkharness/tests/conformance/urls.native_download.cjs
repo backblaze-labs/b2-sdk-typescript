@@ -44,7 +44,8 @@
  * pass. This is the same arrangement the pre-relocation in-process check
  * relied on: with no realm option the SDK built requests for
  * https://api.backblazeb2.com (dist/client.js:51), and SimulatorTransport
- * echoed that origin back as downloadUrl (dist/simulator/index.js:3421)
+ * echoed that origin back as downloadUrl (the former embedded SDK test
+ * server's built output)
  * without opening a socket. The SDK believed the Backblaze hostname then as
  * now; only delivery was redirected. Here that happens on the network: the
  * realm names bin/simulator/fixture-host.cjs's FIXTURE_HOST, which exists in

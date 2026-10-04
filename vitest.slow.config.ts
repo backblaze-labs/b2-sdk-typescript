@@ -1,11 +1,9 @@
 import { defineConfig } from 'vitest/config'
 
 /**
- * Vitest config for the *slow* unit test tier: multipart upload/copy/stream
- * round-trips that compute real SHA-1 over multi-MB buffers through the
- * in-memory `B2Simulator`. These tests are CPU-bound and time-sensitive, so
- * running them concurrently with the fast suite (or with each other) on a
- * CI runner produced 60s-timeout failures.
+ * Vitest config for the *slow* unit test tier. These tests are CPU-bound and
+ * time-sensitive, so running them concurrently with the fast suite (or with
+ * each other) on a CI runner produced 60s-timeout failures.
  *
  * Conventions:
  *   - Lives in files named `*.slow.test.ts` next to the code they cover.
@@ -17,8 +15,7 @@ import { defineConfig } from 'vitest/config'
  *     (tinypool's `onTaskUpdate` RPC) has a hard-coded ~60 s timeout that fires
  *     when an individual SHA-1 test runs >60 s on a slow runner. A single shared
  *     worker keeps the RPC connection warm across file boundaries and avoids the
- *     per-file re-handshake that races the timeout. Tests already create fresh
- *     `B2Simulator` instances per file, so vitest's per-file isolation isn't needed.
+ *     per-file re-handshake that races the timeout.
  *   - `dangerouslyIgnoreUnhandledErrors: true` survives any residual RPC
  *     timeout that fires from the tinypool layer at teardown (an internal
  *     vitest-worker error, not a real test failure). All tests pass; this

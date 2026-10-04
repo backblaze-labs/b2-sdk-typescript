@@ -1,10 +1,8 @@
 /**
  * Shared test helpers.
  *
- * These were originally inlined in every `*.test.ts` file (11+ copies of
- * `makeClient()`, 9 of `readStream()`, etc.). Pulling them here trims ~330
- * LOC of duplication and gives new tests a single, discoverable place to
- * find the canonical building blocks.
+ * Shared stream, byte, promise, and transport helpers keep test setup concise
+ * and give new tests a single place to find the canonical building blocks.
  *
  * This module is excluded from coverage reports (`vitest.coverage.config.ts`)
  * and from production builds (`vite.config.ts`) — it ships nowhere except
@@ -13,64 +11,8 @@
  * @packageDocumentation
  */
 
-import { B2Client, type B2ClientOptions } from '../client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { utf8Encoder } from '../util/text-codec.ts'
-
-/**
- * Builds an un-authorized {@link B2Client} backed by a fresh in-memory
- * {@link B2Simulator}. Returns the client + simulator so tests can
- * inspect simulator state.
- *
- * Sync (no `authorize()` call) to match the pattern existing tests rely
- * on: most call `await client.authorize()` separately in `beforeEach` and
- * occasionally want to exercise pre-authorize behaviour without paying
- * for the network round-trip on every helper invocation.
- *
- * @param options - Either an opaque {@link B2SimulatorOptions} bag (back-compat
- *   for the historical `makeClient(simOpts)` call shape) or a structured
- *   `{ sim, client }` pair when the test needs to override `B2Client` options
- *   such as `retry: { maxRetries: 0 }`. The structured form is preferred for
- *   new code because it keeps simulator vs client concerns visibly separate.
- *
- * @returns A `{ client, sim }` pair. Call `await client.authorize()` before
- *   making any authenticated request.
- */
-export function makeClient(
-  options?:
-    | B2SimulatorOptions
-    | {
-        sim?: B2SimulatorOptions
-        client?: Partial<Omit<B2ClientOptions, 'applicationKeyId' | 'applicationKey' | 'transport'>>
-      },
-): {
-  client: B2Client
-  sim: B2Simulator
-} {
-  // Discriminate the structured form (`{ sim?, client? }`) from the
-  // legacy form (a bare `B2SimulatorOptions`) by checking whether every
-  // top-level key is one of the structured-form members. Legacy callers
-  // pass simulator fields directly (`minimumPartSize`, `strictAuth`,
-  // …), which fall through to the else branch.
-  const keys = options !== undefined ? Object.keys(options) : []
-  const isStructured = options !== undefined && keys.every((k) => k === 'sim' || k === 'client')
-  const simOptions = isStructured
-    ? (options as { sim?: B2SimulatorOptions }).sim
-    : (options as B2SimulatorOptions | undefined)
-  const clientOverrides = isStructured
-    ? (options as { client?: Partial<B2ClientOptions> }).client
-    : undefined
-
-  const sim = new B2Simulator(simOptions ?? {})
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-    ...(clientOverrides ?? {}),
-  })
-  return { client, sim }
-}
 
 /**
  * Drains a `ReadableStream<Uint8Array>` into a single contiguous

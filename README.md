@@ -512,8 +512,6 @@ import {
 // Webhook signature verification for B2 event notifications
 import { verifyWebhookSignature, requireValidWebhook } from '@backblaze-labs/b2-sdk/notifications'
 
-// In-memory B2 server for tests (no network required)
-import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
 ```
 
 `createS3ClientConfig()` is for `@aws-sdk/client-s3`; install that optional peer
@@ -675,47 +673,6 @@ your own `AbortSignal`. Worst-case terminal latency can be roughly
 `(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
 
 When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
-
-## Testing with the simulator
-
-The SDK ships an in-memory B2 simulator for unit testing without network access:
-
-```ts
-import { describe, it, expect, beforeEach } from 'vitest'
-import { B2Client, BucketType } from '@backblaze-labs/b2-sdk'
-import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
-import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
-
-describe('my app', () => {
-  let client: B2Client
-
-  beforeEach(async () => {
-    const sim = new B2Simulator()
-    client = new B2Client({
-      applicationKeyId: 'test',
-      applicationKey: 'test',
-      transport: sim.transport(),
-    })
-    await client.authorize()
-  })
-
-  it('uploads and retrieves a file', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'test-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({
-      fileName: 'test.txt',
-      source: new BufferSource(new TextEncoder().encode('hello')),
-    })
-
-    const listing = await bucket.listFileNames()
-    expect(listing.files).toHaveLength(1)
-    expect(listing.files[0].fileName).toBe('test.txt')
-  })
-})
-```
 
 ## Error handling
 

@@ -136,8 +136,8 @@ export class B2Folder implements SyncFolder {
           )
         }
 
-        // Real B2 honors the prefix in listFileVersions, but custom
-        // transports and the simulator can over-return. Guard before
+        // Real B2 honors the prefix in listFileVersions, but custom transports
+        // can over-return. Guard before
         // stripping the raw prefix so relativePath is never corrupted.
         if (this.rawPrefix !== '' && !fv.fileName.startsWith(this.rawPrefix)) {
           this.emitSkip(

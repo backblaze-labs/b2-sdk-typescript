@@ -2,8 +2,8 @@
  * Pure function: given a B2 client + bucket + file-key + prefix scope,
  * produce a signed download URL valid for `expiresInSeconds`.
  *
- * Separated from the HTTP layer so it can be unit-tested against the
- * in-memory `B2Simulator` without spinning up a real server.
+ * Separated from the HTTP layer so it can be unit-tested without spinning up
+ * a real server.
  */
 
 import type { B2Client, Bucket } from '@backblaze-labs/b2-sdk'

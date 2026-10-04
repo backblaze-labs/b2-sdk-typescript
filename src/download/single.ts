@@ -214,11 +214,10 @@ export async function headById(
     options.fileId,
     { ...toRawDownloadOptions(options), method: 'HEAD' },
   )
-  // Body for HEAD is normally `null` per the fetch spec. Some transports
-  // (notably the SDK's `B2Simulator`) synthesize a non-null body for
-  // shape consistency. In either case, cancelling is a no-op for the
-  // caller; wrap in `bestEffort` so a stream-lifecycle quirk in a
-  // future runtime can't fail an otherwise-successful HEAD.
+  // Body for HEAD is normally `null` per the fetch spec. Some custom transports
+  // synthesize a non-null body for shape consistency. In either case, cancelling
+  // is a no-op for the caller; wrap in `bestEffort` so a stream-lifecycle quirk
+  // in a future runtime can't fail an otherwise-successful HEAD.
   if (resp.body !== null) {
     // Bind to a local so the type narrowing carries into the closure;
     // bare `resp.body` in the lambda would re-broaden to `... | null`.

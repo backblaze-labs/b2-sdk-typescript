@@ -100,16 +100,6 @@
         "default": "./dist/sync/index.cjs"
       }
     },
-    "./simulator": {
-      "import": {
-        "types": "./dist/simulator/index.d.ts",
-        "default": "./dist/simulator/index.js"
-      },
-      "require": {
-        "types": "./dist/simulator/index.d.cts",
-        "default": "./dist/simulator/index.cjs"
-      }
-    },
     "./notifications": {
       "import": {
         "types": "./dist/notifications/index.d.ts",

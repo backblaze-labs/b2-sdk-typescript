@@ -20,8 +20,8 @@ for (const dir of ['conformance', 'resilience']) {
   }
 }
 
-test('every tests.tsv conformance/resilience scenario has a leaf, and there are 54', () => {
-  assert.equal(leaves.length, 54);
+test('every tests.tsv conformance/resilience scenario has a leaf, and there are 53', () => {
+  assert.equal(leaves.length, 53);
 });
 
 for (const { dir, file, source } of leaves) {

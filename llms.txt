@@ -61,7 +61,6 @@ const endpoint = `https://s3.${process.env.B2_REGION}.backblazeb2.com`
 | `@backblaze-labs/b2-sdk/auth` | Auth helpers, `InMemoryAccountInfo` |
 | `@backblaze-labs/b2-sdk/auth/file` | Node-only `FileAccountInfo` persistent auth cache |
 | `@backblaze-labs/b2-sdk/notifications` | Bucket event notifications |
-| `@backblaze-labs/b2-sdk/simulator` | In-process B2 simulator for tests |
 
 ## Common patterns
 
@@ -130,15 +129,6 @@ await bucket.upload({
 ```ts
 import { Capability } from '@backblaze-labs/b2-sdk'
 const key = await client.createKey({ keyName: 'my-key', capabilities: [Capability.ReadFiles, Capability.WriteFiles] })
-```
-
-### In-process simulator (for tests)
-
-```ts
-import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
-const sim = new B2Simulator()
-const client = sim.createClient()
-await client.authorize()
 ```
 
 ## Error handling

@@ -38,8 +38,8 @@ disagrees with a documented invariant, one of them is a bug.
 
 ## Tests are the safety net
 
-- Tests use the in-memory `B2Simulator`, never the network. Credentialed live
-  suites confirm the wire contract and **skip cleanly** without credentials — a
+- Unit tests use injected transports and focused fakes. Credentialed live suites
+  confirm the wire contract and **skip cleanly** without credentials — a
   limited-but-valid key produces honest skips, never a red build.
 
 ## Docs are the system of record

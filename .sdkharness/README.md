@@ -5,16 +5,11 @@
 orchestrator. The contract is versioned with this repository so the harness
 executes checks that match the SDK revision under test.
 
-`health/examples` (`tests/health-examples`) is the same built-package example smoke used by
-`.github/workflows/examples.yml`. Its target is `offline` because it uses this
-SDK's in-memory `B2Simulator`; it does not exercise real B2 or sdkharness's HTTP
-simulator.
-
 `health/golden-path` (`tests/health-golden-path`) exercises authorize, upload, byte-verified download, list,
 delete, and post-delete absence through sdkharness's shared HTTP simulator. It
 refuses a non-loopback target and a non-fixed credential (see "Guard rules"
-below) before it builds or sends anything. The harness initially runs both checks only as non-counting
-shadow evidence.
+below) before it builds or sends anything. The harness initially runs it only as
+non-counting shadow evidence.
 
 The `conformance/*` checks define this SDK's executable behavior against the
 shared simulator. The `resilience/*` checks define its recovery behavior under
@@ -56,13 +51,13 @@ simulator or build needed).
 
 ## Run one check locally
 
-From a checkout of this repository, with the loopback simulator from the
-`sdkharness` tree (`<sdkharness>/bin/simulator/serve.mjs`; `--control` adds the
-fault-control listener the resilience checks need):
+From a checkout of this repository, with the sdkharness loopback server running
+(`--control` adds the fault-control listener the resilience checks need):
 
 ```bash
-# 1. Start the simulator on loopback (leave it running; it prints its URLs).
-node <sdkharness>/bin/simulator/serve.mjs --control > /tmp/sim.log 2>&1 &
+# 1. Start sdkharness's configured simulator on loopback (leave it running; it
+#    prints its URLs).
+node <path-to-sdkharness-simulator> --control > /tmp/sim.log 2>&1 &
 cat /tmp/sim.log
 #   SIMULATOR-LISTENING http://127.0.0.1:<port>
 #   SIMULATOR-LISTENING https://127.0.0.1:<port>
@@ -74,7 +69,7 @@ pnpm install --frozen-lockfile && pnpm build
 # 3. Point the dispatcher at the simulator.
 export SDKHARNESS_SIMULATOR_URL=http://127.0.0.1:<port>
 export SDKHARNESS_SIMULATOR_HTTPS_URL=https://127.0.0.1:<port>   # urls.* only
-export SDKHARNESS_SIMULATOR_CA=<sdkharness>/bin/simulator/loopback-cert.pem
+export SDKHARNESS_SIMULATOR_CA=<path-to-simulator-ca>
 export SDKHARNESS_SIMULATOR_CONTROL_URL=http://127.0.0.1:<port>  # resilience only
 
 # 4. Run one scenario through its dispatcher.
