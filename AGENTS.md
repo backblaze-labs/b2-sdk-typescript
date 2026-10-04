@@ -25,8 +25,8 @@ dependencies in core. Built with Vite library mode + Vitest.
 ## Commands
 
 ```bash
-pnpm build           # Vite library mode: ESM + CJS + DTS for all 12 export entries
-pnpm test            # Vitest: src/**/*.test.ts against the in-memory B2Simulator (Node)
+pnpm build           # Vite library mode: ESM + CJS + DTS for all 11 export entries
+pnpm test            # Vitest: src/**/*.test.ts (Node)
 pnpm test:watch      # Vitest in watch mode
 pnpm test:coverage   # Vitest v8 coverage (gates: 97% statements, 98% lines, 97% functions, 92% branches)
 pnpm test:browser    # Vitest browser mode: real Chromium/Firefox/WebKit via Playwright
@@ -56,13 +56,9 @@ per-engine browser matrix.
 
 ## Testing
 
-Tests use the in-memory `B2Simulator` (no network):
-
-```ts
-const sim = new B2Simulator()
-const client = new B2Client({ applicationKeyId: 'test-key-id', applicationKey: 'test-key', transport: sim.transport() })
-await client.authorize()
-```
+Unit tests use injected transports and focused fakes. The repository-owned
+`.sdkharness` contracts exercise the built SDK against sdkharness's loopback
+HTTP server.
 
 | Pattern | Runs in |
 |---|---|

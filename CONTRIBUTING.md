@@ -22,7 +22,7 @@ pnpm test
 | Command | Purpose |
 |---|---|
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
-| `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
+| `pnpm test` | Run tests (Vitest) |
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
@@ -37,15 +37,10 @@ pnpm test
 
 CI also runs `bun test src/` against the same test suite plus a per-engine browser matrix (Chromium / Firefox / WebKit). Avoid module-level mocking patterns (`vi.mock` with `importOriginal` / `vi.importActual`) that Bun's vitest-compat doesn't support: prefer dependency injection (see `RetryTransport`'s `sleepImpl` option).
 
-### Simulator vs real B2
+### Unit tests vs real B2
 
-`pnpm test` uses the in-memory `B2Simulator`: it is fast, deterministic, and
-models the SDK's supported wire contract. It is not a promise to preserve every
-historical Backblaze B2 behavior. During v3/v4 transition windows, the simulator
-should accept both routes only where the SDK intentionally supports both and the
-semantics are identical. Deprecated SDK aliases should normalize before they
-reach raw calls or simulator routes, and contract tests should make alias versus
-canonical behavior explicit.
+`pnpm test` uses injected transports and focused fakes. Tests should keep
+deprecated SDK aliases distinct from canonical wire behavior.
 
 `pnpm test:integration` is the live Backblaze B2 evidence path. Local runs skip
 without `B2_APPLICATION_KEY_ID` and `B2_APPLICATION_KEY` so contributors can work
@@ -84,8 +79,8 @@ One-time local browser setup: `pnpm exec playwright install chromium firefox web
 4. `pnpm test:coverage` keeps coverage at or above the configured statement, line, function, and branch thresholds
 5. `pnpm lint`, `pnpm lint:docs`, and `pnpm lint:spelling` all pass with **zero warnings** (the `lint` script uses `--error-on-warnings`). If CSpell flags a legitimate term, add it to `.cspell/project-words.txt` rather than inlining `// cspell:ignore`
 6. `pnpm docs` runs cleanly (TypeDoc treats warnings as errors)
-7. If you added a new public API, add a test using the `B2Simulator`
-8. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and wire it into the simulator if feasible
+7. If you added a new public API, add a focused unit test
+8. If you added a new B2 endpoint, add it to the `RawClient` in `src/raw/index.ts` and cover its request and response handling
 9. If you added a new exported type used in any public method signature, re-export it from `src/index.ts` (TypeDoc fails the docs job otherwise)
 10. If you added a new internal relative import, use the `.ts` extension (`import { x } from './foo.ts'`). The Deno typecheck job in `.github/workflows/examples.yml` fails immediately if a `.js` extension slips in.
 11. If you touched docs, or anything docs cite (endpoint/export counts, coverage thresholds, min Node, ADRs), `pnpm run verify:docs-consistency` passes. This guard reconciles markdown claims against ground truth and runs in CI on docs-only changes too, so update the prose in the same PR as the source it describes.
@@ -142,7 +137,7 @@ import { B2Error } from './errors/index.ts'          // used with instanceof
 ## Architecture overview
 
 Architecture decisions that affect public APIs, package layout, authorization,
-compatibility, simulator behavior, or security posture are recorded under
+compatibility, transport behavior, or security posture are recorded under
 [`docs/design-docs/`](docs/design-docs/index.md).
 
 ```
@@ -161,7 +156,6 @@ src/
   s3/            S3-compatible helpers (createS3ClientConfig, presignS3GetObjectUrl, presignS3PutObjectUrl)
   partner/       Partner API: PartnerClient + PartnerRawClient, authorizePartner + PartnerAccountInfo, redaction
   backup/        Computer Backup (bz_): BackupClient + BackupRawClient
-  simulator/     In-memory B2 server for testing
   client.ts      B2Client: high-level facade over RawClient + hasCapabilities
   bucket.ts      Bucket: operations scoped to a bucket (including deleteMany/deleteAll/copyLargeFile/unhideFile)
   object.ts      B2Object: operations scoped to a file name (including createReadStream/createWriteStream)
@@ -169,26 +163,17 @@ src/
 
 ### Testing
 
-Tests use the in-memory `B2Simulator` which implements the B2 API at the HTTP level. No network, no mocking frameworks, deterministic.
-
-```ts
-const sim = new B2Simulator()
-const client = new B2Client({
-  applicationKeyId: 'test',
-  applicationKey: 'test',
-  transport: sim.transport(),
-})
-await client.authorize()
-```
+Unit tests use dependency injection and focused `HttpTransport` fakes. The
+repository-owned `.sdkharness` contracts exercise the built package against a
+loopback HTTP server.
 
 ### Adding a new B2 API endpoint
 
 1. Add request/response types to `src/types/` (e.g., `src/types/file.ts`)
 2. Add the method to `RawClient` in `src/raw/index.ts`
 3. Re-export from `src/types/index.ts` if needed
-4. Add handler to `B2Simulator` in `src/simulator/index.ts`
-5. Add high-level wrapper to `Bucket`, `B2Object`, or `B2Client` as appropriate
-6. Write a test in `src/client.test.ts`
+4. Add a high-level wrapper to `Bucket`, `B2Object`, or `B2Client` as appropriate
+5. Add focused request, response, and error-path tests
 
 ## Commit messages
 

@@ -179,8 +179,6 @@ export function synchronize() {}
 export function LocalFolder() {}
 export function B2Folder() {}
 `
-    case './simulator':
-      return 'export function B2Simulator() {}\nexport const BUCKET_NAME_MIN = 6\n'
     case './notifications':
       return `
 export function verifyWebhookSignature() {}
@@ -249,8 +247,6 @@ exports.synchronize = function synchronize() {}
 exports.LocalFolder = function LocalFolder() {}
 exports.B2Folder = function B2Folder() {}
 `
-    case './simulator':
-      return 'exports.B2Simulator = function B2Simulator() {}\nexports.BUCKET_NAME_MIN = 6\n'
     case './notifications':
       return `
 exports.verifyWebhookSignature = function verifyWebhookSignature() {}

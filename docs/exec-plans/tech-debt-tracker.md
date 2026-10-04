@@ -12,8 +12,9 @@ current milestone: **v0.4.0**.
 | 1 | **Branch-coverage headroom** — a few error/edge branches sit at the 92% floor. | Tracked ([#273](https://github.com/backblaze-labs/b2-sdk-typescript/issues/273)) | Add targeted edge-path tests (e.g. `types/file.ts`); raise the gate only after the slack exists. |
 | 2 | **Native API doc drift** — B2 docs and live behavior disagree in places. | Mitigated | When the native docs repo becomes accessible, move or report the [design-doc 0002](../design-docs/0002-native-api-docs-drift-guardrails.md) findings upstream. |
 | 3 | **No mutation / property-based / fuzz testing.** | Deferred | Coverage proves execution, not assertion strength. Pilot mutation testing on `raw/` + `http/` first. |
-| 4 | **No recorded-wire snapshot fixtures.** | Deferred | Simulator parity is hand-maintained; capture sanitized real-B2 responses as golden fixtures for the raw client. |
-| 5 | **Backup (`bz_`) live coverage is thin** — entitlement-gated (403 "not entitled"). | Accepted | Keep live probes as clean skips; expand simulator-side backup cases instead of relying on live runs. |
+| 4 | **No recorded-wire snapshot fixtures.** | Deferred | Capture sanitized real-B2 responses as golden fixtures for the raw client. |
+| 5 | **Backup (`bz_`) live coverage is thin** — entitlement-gated (403 "not entitled"). | Accepted | Keep live probes as clean skips; expand injected-transport cases instead of relying on live runs. |
+| 6 | **No in-repo end-to-end test backend.** | Deferred | Decide whether and how to consume the standalone B2 server, then restore the deleted workflow coverage in a separate change. |
 
 ## Conventions
 

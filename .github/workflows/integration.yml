@@ -47,8 +47,8 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly Monday 06:00 UTC. Catches drift from B2 API changes that the
-    # in-memory simulator wouldn't see.
+    # Weekly Monday 06:00 UTC. Catches drift from B2 API changes that unit
+    # tests cannot see.
     - cron: '0 6 * * 1'
   workflow_dispatch:
 

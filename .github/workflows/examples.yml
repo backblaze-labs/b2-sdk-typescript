@@ -84,27 +84,6 @@ jobs:
       - name: Typecheck examples against src/ (Bun-hosted tsc)
         run: bunx --bun tsc --noEmit -p examples/tsconfig.json
 
-  smoke-examples:
-    name: Smoke-run examples (B2Simulator)
-    needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.2
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      # This tracked executable is also the version-matched entry point used by
-      # sdkharness. Keeping one implementation prevents CI and fleet evidence
-      # from silently testing different customer flows.
-      - name: Run repository-owned customer health contract
-        run: ./.sdkharness/tests/health-examples
-
   typecheck-deno:
     name: Typecheck (Deno)
     needs: changes
@@ -147,7 +126,7 @@ jobs:
 
   examples-result:
     name: Examples result
-    needs: [changes, typecheck-node, typecheck-bun, smoke-examples, typecheck-deno]
+    needs: [changes, typecheck-node, typecheck-bun, typecheck-deno]
     if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
     runs-on: ubuntu-latest
     steps:
@@ -157,7 +136,6 @@ jobs:
           CHANGES_RESULT: ${{ needs.changes.result }}
           TYPECHECK_NODE_RESULT: ${{ needs.typecheck-node.result }}
           TYPECHECK_BUN_RESULT: ${{ needs.typecheck-bun.result }}
-          SMOKE_EXAMPLES_RESULT: ${{ needs.smoke-examples.result }}
           TYPECHECK_DENO_RESULT: ${{ needs.typecheck-deno.result }}
         run: |
           set -euo pipefail
@@ -181,12 +159,10 @@ jobs:
           if [ "$CODE_CHANGED" = "true" ]; then
             require_success typecheck-node "$TYPECHECK_NODE_RESULT"
             require_success typecheck-bun "$TYPECHECK_BUN_RESULT"
-            require_success smoke-examples "$SMOKE_EXAMPLES_RESULT"
             require_success typecheck-deno "$TYPECHECK_DENO_RESULT"
           else
             require_skipped typecheck-node "$TYPECHECK_NODE_RESULT"
             require_skipped typecheck-bun "$TYPECHECK_BUN_RESULT"
-            require_skipped smoke-examples "$SMOKE_EXAMPLES_RESULT"
             require_skipped typecheck-deno "$TYPECHECK_DENO_RESULT"
           fi
 

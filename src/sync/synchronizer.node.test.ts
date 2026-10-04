@@ -14,17 +14,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
-import { B2Client } from '../client.ts'
 import { ChecksumMismatchError } from '../errors/index.ts'
-import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
-import { B2Simulator } from '../simulator/index.ts'
-import { deterministicBytes } from '../test-utils/index.ts'
-import { BucketType } from '../types/bucket.ts'
 import { EncryptionMode } from '../types/encryption.ts'
 import { FileAction, type FileVersion, type ListedFileVersion } from '../types/file.ts'
 import type { AccountId, BucketId, FileId } from '../types/ids.ts'
 import { localFileIoTestHooks } from './local-file-io.ts'
-import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
 import type {
   B2SyncFolder,
@@ -63,16 +57,6 @@ async function recreateDirectoryWithNewIdentity(parent: string, name: string): P
 
   throw new Error('test setup could not recreate directory with a new identity')
 }
-
-function recordingTransport(inner: HttpTransport, urls: string[]): HttpTransport {
-  return {
-    send(request: HttpRequest): Promise<HttpResponse> {
-      urls.push(request.url)
-      return inner.send(request)
-    },
-  }
-}
-
 function makeB2Path(relativePath: string, size: number, fileName = relativePath): B2SyncPath {
   const version: FileVersion = {
     accountId: 'acc' as unknown as AccountId,
@@ -170,65 +154,6 @@ function delayedBody(
     },
   })
 }
-
-describe('synchronize large local files', () => {
-  it('routes large sync uploads through multipart and round-trips downloads', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-large-'))
-    try {
-      const sourceRoot = join(root, 'source')
-      const destRoot = join(root, 'dest')
-      await mkdir(sourceRoot)
-      await mkdir(destRoot)
-
-      const filePath = join(sourceRoot, 'large.bin')
-      const payload = deterministicBytes(1024 * 3 + 123)
-      await writeFile(filePath, payload)
-
-      const urls: string[] = []
-      const sim = new B2Simulator({ minimumPartSize: 1024, recommendedPartSize: 1024 })
-      const client = new B2Client({
-        applicationKeyId: 'test-key-id',
-        applicationKey: 'test-key',
-        transport: recordingTransport(sim.transport(), urls),
-      })
-      await client.authorize()
-      const bucket = await client.createBucket({
-        bucketName: 'sync-large',
-        bucketType: BucketType.AllPrivate,
-      })
-
-      const uploadConfig: SynchronizerUpConfig = {
-        source: new LocalFolder(sourceRoot),
-        dest: new B2Folder(bucket, 'mirror/'),
-        options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket,
-        prefix: 'mirror/',
-      }
-
-      const uploadEvents = await collectEvents(uploadConfig)
-      expect(uploadEvents.some((event) => event.type === 'upload-done')).toBe(true)
-      expect(uploadEvents.some((event) => event.type === 'error')).toBe(false)
-      expect(urls.some((url) => url.includes('b2_start_large_file'))).toBe(true)
-      expect(urls.some((url) => url.includes('b2_upload_file'))).toBe(false)
-      expect(urls.filter((url) => url.includes('b2_upload_part?fileId=')).length).toBeGreaterThan(1)
-      expect(urls.some((url) => url.includes('b2_finish_large_file'))).toBe(true)
-
-      const downloadConfig: SynchronizerDownConfig = {
-        source: new B2Folder(bucket, 'mirror/'),
-        dest: new LocalFolder(destRoot),
-        options: { compareMode: 'modtime', keepMode: 'no-delete' },
-        bucket,
-      }
-
-      const downloadEvents = await collectEvents(downloadConfig)
-      expect(downloadEvents.some((event) => event.type === 'download-done')).toBe(true)
-      expect(downloadEvents.some((event) => event.type === 'error')).toBe(false)
-      expect(new Uint8Array(await readFile(join(destRoot, 'large.bin')))).toEqual(payload)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-})
 
 describe('synchronize download safety', () => {
   it.skipIf(isWindows)('skips local destination symlinks before delete-mode actions', async () => {

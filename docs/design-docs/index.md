@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Dated design docs (ADRs) for decisions that shape public API, package layout, authorization, simulator behavior, compatibility, or security posture. This is part of the `docs/` system of record; the entry point is [`AGENTS.md`](../../AGENTS.md).
+Dated design docs (ADRs) for decisions that shape public API, package layout, authorization, transport behavior, compatibility, or security posture. This is part of the `docs/` system of record; the entry point is [`AGENTS.md`](../../AGENTS.md).
 
 > Not an ADR, but living here as a companion: [`core-beliefs.md`](core-beliefs.md) — the standing agent-first operating principles for this repo.
 

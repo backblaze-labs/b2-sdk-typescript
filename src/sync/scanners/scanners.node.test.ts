@@ -5,10 +5,6 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../../bucket.ts'
-import type { B2Client } from '../../client.ts'
-import { BufferSource } from '../../streams/source.ts'
-import { makeClient } from '../../test-utils/index.ts'
-import { BucketType } from '../../types/bucket.ts'
 import { EncryptionMode } from '../../types/encryption.ts'
 import {
   type ConcreteFileAction,
@@ -38,7 +34,6 @@ async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
   return items
 }
 
-const enc = new TextEncoder()
 const processLike = (globalThis as { process?: { platform?: string } }).process
 const isWindows = processLike?.platform === 'win32'
 const isDarwin = processLike?.platform === 'darwin'
@@ -47,15 +42,6 @@ const reservedTempName = makeReservedSyncTempFileName(
   'payload.bin',
   'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
 )
-
-/**
- * Advance the fake clock by 1 ms so the simulator assigns a distinct
- * uploadTimestamp to each file version. Call between successive uploads
- * or between an upload and a hide.
- */
-function tick(): void {
-  vi.advanceTimersByTime(1)
-}
 
 function makeB2FileVersion(
   name: string,
@@ -703,30 +689,6 @@ describe('LocalFolder', () => {
 // ---------------------------------------------------------------------------
 
 describe('B2Folder', () => {
-  let client: B2Client
-
-  beforeEach(async () => {
-    vi.useFakeTimers({ now: Date.now() })
-    ;({ client } = makeClient())
-    await client.authorize()
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('scans an empty bucket and yields nothing', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'empty-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries).toEqual([])
-  })
-
   it('stops B2 pagination when aborted after a page', async () => {
     const controller = new AbortController()
     const listFileVersions = vi.fn().mockImplementation(async () => {
@@ -839,128 +801,6 @@ describe('B2Folder', () => {
         message: 'failed to scan B2 file versions: unexpected upstream abort',
       }),
     )
-  })
-
-  it('rejects B2 objects in the reserved SDK temp namespace', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'reserved-temp-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-    await bucket.upload({
-      fileName: reservedTempName,
-      source: new BufferSource(enc.encode('remote data')),
-    })
-
-    const folder = new B2Folder(bucket)
-
-    await expect(collect<B2SyncPath>(folder.scan())).rejects.toThrow(/reserved SDK temporary/)
-  })
-
-  it('scans a bucket with files and yields them sorted by name', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'sorted-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    // Upload in non-alphabetical order
-    await bucket.upload({ fileName: 'zebra.txt', source: new BufferSource(enc.encode('z')) })
-    tick()
-    await bucket.upload({ fileName: 'Zebra.txt', source: new BufferSource(enc.encode('Z')) })
-    tick()
-    await bucket.upload({ fileName: 'apple.txt', source: new BufferSource(enc.encode('a')) })
-    tick()
-    await bucket.upload({ fileName: 'mango.txt', source: new BufferSource(enc.encode('m')) })
-    tick()
-    await bucket.upload({ fileName: 'Zoo.txt', source: new BufferSource(enc.encode('Z')) })
-
-    const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries.map((e) => e.relativePath)).toEqual([
-      'Zebra.txt',
-      'Zoo.txt',
-      'apple.txt',
-      'mango.txt',
-      'zebra.txt',
-    ])
-
-    // Verify each entry has the expected properties
-    for (const entry of entries) {
-      expect(entry.size).toBeGreaterThan(0)
-      expect(entry.modTimeMillis).toBeGreaterThan(0)
-      expect(entry.selectedVersion).toBeDefined()
-      expect(entry.allVersions.length).toBeGreaterThanOrEqual(1)
-    }
-  })
-
-  it('excludes hidden files', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'hide-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({ fileName: 'keep.txt', source: new BufferSource(enc.encode('keep')) })
-    tick()
-    await bucket.upload({
-      fileName: 'hidden.txt',
-      source: new BufferSource(enc.encode('will hide')),
-    })
-    tick()
-    await bucket.hideFile('hidden.txt')
-
-    const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries.map((e) => e.relativePath)).toEqual(['keep.txt'])
-  })
-
-  it('keeps Windows-reserved basenames available for B2 scans', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'reserved-name-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({ fileName: 'aux.txt', source: new BufferSource(enc.encode('aux')) })
-
-    const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries.map((e) => e.relativePath)).toEqual(['aux.txt'])
-  })
-
-  it('fails with a defined error when the B2 scan entry limit is exceeded', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'scan-limit-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a')) })
-    await bucket.upload({ fileName: 'b.txt', source: new BufferSource(enc.encode('b')) })
-
-    const folder = new B2Folder(bucket)
-    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
-      'Sync scan entry limit exceeded',
-    )
-  })
-
-  it('counts retained B2 versions for scan limits', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'scan-limit-versions-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a1')) })
-    tick()
-    await bucket.upload({ fileName: 'a.txt', source: new BufferSource(enc.encode('a2')) })
-
-    const folder = new B2Folder(bucket)
-    await expect(collect<B2SyncPath>(folder.scan({ maxScanEntries: 1 }))).rejects.toThrow(
-      'Sync scan entry limit exceeded',
-    )
-    const entries = await collect<B2SyncPath>(folder.scan({ maxScanEntries: 2 }))
-
-    expect(entries.map((entry) => entry.relativePath)).toEqual(['a.txt'])
-    expect(entries[0]?.allVersions).toHaveLength(2)
   })
 
   it('counts excluded B2 versions against scan limits', async () => {
@@ -1095,186 +935,6 @@ describe('B2Folder', () => {
       [],
     )
     expect(calls).toEqual([{}])
-  })
-
-  it('groups multiple versions and picks the latest', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'version-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    // Upload the same file three times to create multiple versions.
-    // Advance the fake clock between each upload so each gets a distinct timestamp.
-    await bucket.upload({ fileName: 'doc.txt', source: new BufferSource(enc.encode('v1')) })
-    tick()
-    await bucket.upload({ fileName: 'doc.txt', source: new BufferSource(enc.encode('v2--')) })
-    tick()
-    await bucket.upload({
-      fileName: 'doc.txt',
-      source: new BufferSource(enc.encode('v3------')),
-    })
-
-    const folder = new B2Folder(bucket)
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries).toHaveLength(1)
-    const entry = entries[0]
-    if (!entry) throw new Error('expected at least one entry')
-    expect(entry.relativePath).toBe('doc.txt')
-
-    // The selected version should be the latest (largest content = v3)
-    expect(entry.selectedVersion.contentLength).toBe(enc.encode('v3------').byteLength)
-
-    // All three versions should be tracked
-    expect(entry.allVersions).toHaveLength(3)
-
-    // Versions should be sorted newest first (descending uploadTimestamp)
-    for (let i = 1; i < entry.allVersions.length; i++) {
-      const prev = entry.allVersions[i - 1]
-      const curr = entry.allVersions[i]
-      expect(prev?.uploadTimestamp).toBeGreaterThan(curr?.uploadTimestamp ?? 0)
-    }
-  })
-
-  it('respects prefix filtering', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'prefix-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({
-      fileName: 'photos/cat.jpg',
-      source: new BufferSource(enc.encode('cat')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'photos/dog.jpg',
-      source: new BufferSource(enc.encode('dog')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'docs/readme.md',
-      source: new BufferSource(enc.encode('readme')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'docs/guide.md',
-      source: new BufferSource(enc.encode('guide')),
-    })
-
-    // Scan with "photos/" prefix. The simulator does not filter by prefix
-    // server-side, so B2Folder also guards against out-of-prefix names
-    // client-side before stripping the prefix.
-    const photosFolder = new B2Folder(bucket, 'photos/')
-    const photoEntries = await collect<B2SyncPath>(photosFolder.scan())
-
-    // The prefix is stripped from the relative paths
-    expect(photoEntries.map((e) => e.relativePath)).toEqual(['cat.jpg', 'dog.jpg'])
-
-    const docsFolder = new B2Folder(bucket, 'docs/')
-    const docEntries = await collect<B2SyncPath>(docsFolder.scan())
-
-    expect(docEntries.map((e) => e.relativePath)).toEqual(['guide.md', 'readme.md'])
-
-    // Scan without prefix yields full file names as relative paths
-    const allFolder = new B2Folder(bucket)
-    const allEntries = await collect<B2SyncPath>(allFolder.scan())
-
-    expect(allEntries).toHaveLength(4)
-    expect(allEntries.map((e) => e.relativePath)).toEqual([
-      'docs/guide.md',
-      'docs/readme.md',
-      'photos/cat.jpg',
-      'photos/dog.jpg',
-    ])
-  })
-
-  it('applies include and exclude filters after stripping the prefix', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'filter-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({
-      fileName: 'backup/docs/readme.md',
-      source: new BufferSource(enc.encode('readme')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'backup/docs/draft.tmp',
-      source: new BufferSource(enc.encode('draft')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'backup/cache/artifact.md',
-      source: new BufferSource(enc.encode('cache')),
-    })
-
-    const folder = new B2Folder(bucket, 'backup/')
-    const entries = await collect<B2SyncPath>(
-      folder.scan({
-        include: ['**/*.md'],
-        exclude: ['cache/**'],
-      }),
-    )
-
-    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md'])
-  })
-
-  it('keeps B2 descendants for exact slash-containing excludes', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'exact-exclude-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({
-      fileName: 'backup/a/b/c.txt',
-      source: new BufferSource(enc.encode('keep')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'backup/build/output/app.js',
-      source: new BufferSource(enc.encode('keep')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'backup/build/other/app.js',
-      source: new BufferSource(enc.encode('keep')),
-    })
-
-    const folder = new B2Folder(bucket, 'backup/')
-    const exactExcludeEntries = await collect<B2SyncPath>(folder.scan({ exclude: ['a/b'] }))
-    const includeExcludeEntries = await collect<B2SyncPath>(
-      folder.scan({ include: ['build/**'], exclude: ['build/output'] }),
-    )
-
-    expect(exactExcludeEntries.map((e) => e.relativePath)).toContain('a/b/c.txt')
-    expect(includeExcludeEntries.map((e) => e.relativePath)).toEqual([
-      'build/other/app.js',
-      'build/output/app.js',
-    ])
-  })
-
-  it('does not yield leading slashes when prefix omits its trailing slash', async () => {
-    const bucket = await client.createBucket({
-      bucketName: 'prefix-normalize-bucket',
-      bucketType: BucketType.AllPrivate,
-    })
-
-    await bucket.upload({
-      fileName: 'backupfile.txt',
-      source: new BufferSource(enc.encode('raw-prefix')),
-    })
-    tick()
-    await bucket.upload({
-      fileName: 'backup/docs/readme.md',
-      source: new BufferSource(enc.encode('readme')),
-    })
-
-    const folder = new B2Folder(bucket, 'backup')
-    const entries = await collect<B2SyncPath>(folder.scan())
-
-    expect(entries.map((e) => e.relativePath)).toEqual(['docs/readme.md', 'file.txt'])
   })
 
   it('rejects multi-slash suffixes after a slashless raw prefix', async () => {

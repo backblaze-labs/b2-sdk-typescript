@@ -211,7 +211,7 @@ test('importBuiltSdk: only an absent dist/ is amber, even for a subpath', async 
 test('importBuiltSdk: a subpath removed from package.json exports is a FAIL', async () => {
   const root = fakeCheckout({ withDist: true });
   await assert.rejects(
-    guard.importBuiltSdk('@backblaze-labs/b2-sdk/simulator', hooks, { root, importer: async () => ({}) }),
+    guard.importBuiltSdk('@backblaze-labs/b2-sdk/not-exported', hooks, { root, importer: async () => ({}) }),
     (error) => error.verdict === 'fail' && /not exported/.test(error.message),
   );
 });

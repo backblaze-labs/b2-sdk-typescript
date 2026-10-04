@@ -8,9 +8,15 @@ Issue: [#160](https://github.com/backblaze-labs/b2-sdk-typescript/issues/160)
 
 ## Context
 
-The SDK is currently one zero-dependency isomorphic package with subpath exports for storage-facing modules and shared infrastructure such as `HttpTransport`, `RetryTransport`, `UrlGuard`, the `B2Error` hierarchy, encoding helpers, streams, and `B2Simulator`.
+The SDK is one zero-dependency isomorphic package with subpath exports for
+storage-facing modules and shared infrastructure such as `HttpTransport`,
+`RetryTransport`, `UrlGuard`, the `B2Error` hierarchy, encoding helpers, and
+streams.
 
-Storage authorization types are intentionally tied to `apiInfo.storageApi` through `AuthorizeAccountResponse` and `AccountInfo`. The simulator also has one storage-oriented issued token and endpoint-capability model. Partner API and Computer Backup support need an architecture decision before those surfaces add public types and runtime behavior.
+Storage authorization types are intentionally tied to `apiInfo.storageApi`
+through `AuthorizeAccountResponse` and `AccountInfo`. Partner API and Computer
+Backup support need an architecture decision before those surfaces add public
+types and runtime behavior.
 
 ## Decision
 
@@ -19,9 +25,21 @@ Add Partner API and Computer Backup as new subpath exports in the existing packa
 - `@backblaze-labs/b2-sdk/partner`
 - `@backblaze-labs/b2-sdk/backup`
 
-Do not create a second npm package, and do not add partner or backup methods to the storage `RawClient` or `B2Client`. Keeping one package preserves the current zero-dependency, isomorphic distribution model and lets the new surfaces reuse shared transports, retry plumbing, URL guarding, errors, encoding, streams, and simulator utilities without creating duplicated infrastructure.
+Do not create a second npm package, and do not add partner or backup methods to
+the storage `RawClient` or `B2Client`. Keeping one package preserves the
+current zero-dependency, isomorphic distribution model and lets the new surfaces
+reuse shared transports, retry plumbing, URL guarding, errors, encoding, and
+streams without creating duplicated infrastructure.
 
-Partner and backup implementations must define endpoint-specific retry and idempotency policy before enabling automatic retries for each operation. The safe default is to avoid replaying non-idempotent mutations after network errors, request timeouts, transient HTTP failures, or lost or unreadable responses. A mutating endpoint may opt into automatic replay only when it has an idempotency key, is documented as server-side replay-safe, or is otherwise proven idempotent for the SDK call shape. Simulator-backed tests must cover lost-response and network-error cases for any mutating partner or backup endpoint that enables automatic retries.
+Partner and backup implementations must define endpoint-specific retry and
+idempotency policy before enabling automatic retries for each operation. The
+safe default is to avoid replaying non-idempotent mutations after network
+errors, request timeouts, transient HTTP failures, or lost or unreadable
+responses. A mutating endpoint may opt into automatic replay only when it has an
+idempotency key, is documented as server-side replay-safe, or is otherwise
+proven idempotent for the SDK call shape. Injected-transport tests must cover
+lost-response and network-error cases for any mutating partner or backup
+endpoint that enables automatic retries.
 
 Model Partner API authorization as a distinct `authorizePartner` flow. It uses the Master Application Key HTTP Basic exchange against `b2_authorize_account`, but stores the result in a separate `PartnerAccountInfo` abstraction instead of the storage `AccountInfo`. The partner account state must represent partner response fields such as `groupsApiUrl` and `backupApiUrl` without weakening the existing storage types that are hard-bound to `apiInfo.storageApi`.
 
@@ -46,6 +64,7 @@ Follow-on work should include:
 - wiring `/backup` clients to accept `/partner`'s `PartnerAccountInfo` and use `backupApiUrl`
 - defining endpoint-specific retry policy before automatic replay is enabled
 - deriving partner and backup URL guards from `groupsApiUrl` and `backupApiUrl`
-- extending simulator token and capability modeling for partner and backup endpoints without regressing storage strict-auth behavior
+- covering Partner and Backup token and capability behavior without regressing
+  storage authorization behavior
 
 This decision intentionally records architecture only. It does not add public runtime exports or placeholder modules before the product API shapes are implemented.

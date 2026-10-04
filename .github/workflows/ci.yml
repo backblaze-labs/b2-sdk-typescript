@@ -122,11 +122,9 @@ jobs:
     name: Test slow (multipart)
     needs: changes
     if: ${{ needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.user.login != 'dependabot[bot]') }}
-    # Slow tier is CPU/wall-clock-bound, not OS-specific. Multipart tests
-    # exercise the simulator's SHA-1 path which behaves identically across
-    # Linux/macOS/Windows. Run on Linux only (cheapest runner minutes) and
-    # only the current LTS Node — we cover OS + Node matrix surface in
-    # `test-fast` already.
+    # Slow tier is CPU/wall-clock-bound, not OS-specific. Run on Linux only
+    # (cheapest runner minutes) and only the current LTS Node — we cover OS +
+    # Node matrix surface in `test-fast` already.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,9 +161,8 @@ jobs:
         with:
           bun-version: latest
       - run: pnpm install --frozen-lockfile
-      # Bun runs every `*.test.ts` (including `*.slow.test.ts`). The slow
-      # multipart tests need a generous timeout — Bun's default 5 s isn't
-      # enough for the simulator's per-part SHA-1 of 5 MB+ buffers.
+      # Bun runs every `*.test.ts` (including `*.slow.test.ts`). Keep a
+      # generous timeout for the remaining slow tests.
       - run: bun test --timeout 180000 src/
 
   coverage:
@@ -276,7 +273,6 @@ jobs:
           test -f dist/index.d.cts
           test -f dist/raw/index.js
           test -f dist/errors/index.js
-          test -f dist/simulator/index.js
       # CI consumer-package smoke for issue #102. This is the single maintained
       # pack/install path: it packs the SDK, installs the tarball with npm into
       # an ephemeral consumer project, then imports/requires every public export

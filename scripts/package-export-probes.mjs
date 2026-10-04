@@ -126,13 +126,6 @@ export const publicExportProbes = [
     ],
   },
   {
-    subpath: './simulator',
-    checks: [
-      ["typeof entry.B2Simulator === 'function'", 'B2Simulator export missing'],
-      ["typeof entry.BUCKET_NAME_MIN === 'number'", 'simulator constants missing'],
-    ],
-  },
-  {
     subpath: './notifications',
     checks: [
       [

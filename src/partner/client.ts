@@ -73,7 +73,7 @@ export interface PartnerClientOptions {
   /**
    * Explicitly disable the default SSRF guard after authorize.
    *
-   * This is intended only for controlled simulator/private-proxy tests. Never
+   * This is intended only for controlled private-proxy tests. Never
    * enable it for URLs derived from untrusted input or production credentials.
    * Only consulted when {@link PartnerClientOptions.transport} is unset.
    */

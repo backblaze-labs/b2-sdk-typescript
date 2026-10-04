@@ -2,7 +2,6 @@ import { inspect } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import type { HttpRequest, UrlGuardedTransport } from '../http/transport.ts'
 import { UrlGuard } from '../http/url-guard.ts'
-import { B2Simulator } from '../simulator/index.ts'
 import { jsonResponse } from '../test-utils/index.ts'
 import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
 import { PartnerCapability, Region } from '../types/partner.ts'
@@ -57,25 +56,6 @@ describe('Partner Node diagnostics', () => {
     expect(inspect(created)).not.toContain(secret)
     expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
     expect(inspect(created)).toContain(APPLICATION_KEY_REDACTED)
-  })
-
-  it('redacts reserve trial application keys through util.inspect', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
-    const raw = new PartnerRawClient({ transport: sim.transport() })
-    const auth = await raw.authorizePartner('master-key-id', 'master-key')
-    if (auth.groupsApiUrl === undefined) throw new Error('expected simulator Partner API URL')
-
-    const result = await raw.reserveTrialCreateAccount(auth.groupsApiUrl, auth.authorizationToken, {
-      email: 'trial-node-inspect-redaction@example.com',
-      term: 7,
-      storage: 1,
-    })
-    const account = result
-
-    expect(inspect(result)).not.toContain(account.applicationKey)
-    expect(inspect(account)).not.toContain(account.applicationKey)
-    expect(inspect(result)).toContain(APPLICATION_KEY_REDACTED)
-    expect(inspect(account)).toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('redacts PartnerClient credentials and tokens through util.inspect', () => {

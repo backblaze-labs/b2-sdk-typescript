@@ -21,9 +21,9 @@
  * https://www.backblaze.com/docs/cloud-storage-enable-object-lock-with-the-native-api:
  * defaultRetention { mode, period { duration, unit } }.
  *
- * This is the check that found the gap: B2Simulator round-trips the bucket
- * default correctly but does not apply it to a newly uploaded object, which
- * the quote above says it must. Filed and open:
+ * This is the check that found the gap: the embedded SDK test server
+ * round-trips the bucket default correctly but does not apply it to a newly
+ * uploaded object, which the quote above says it must. Filed and open:
  * https://github.com/backblaze-labs/b2-sdk-typescript/issues/303. The FAIL
  * below is the simulator failing to honour B2's own documented contract --
  * do not soften this assertion to match the simulator's current behaviour.

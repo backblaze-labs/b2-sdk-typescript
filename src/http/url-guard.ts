@@ -46,8 +46,8 @@ export class UrlGuard {
    * `backblazeb2.com` allows `api.backblazeb2.com` and
    * `s3.us-west-004.backblazeb2.com`.
    *
-   * Passing an empty array disables the guard (used by the simulator and
-   * other test setups). Production code should always lock the guard after
+   * Passing an empty array disables the guard for controlled test setups.
+   * Production code should always lock the guard after
    * a successful `b2_authorize_account`.
    *
    * @param suffixes - Allowed host suffixes.

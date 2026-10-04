@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { BackupClient } from '../backup/client.ts'
 import {
   B2PartnerAuthorizationError,
   B2SsrfError,
@@ -15,58 +14,16 @@ import {
   TooManyMembersError,
 } from '../errors/index.ts'
 import type { HttpRequest, HttpTransport } from '../http/transport.ts'
-import { B2Simulator, type B2SimulatorOptions } from '../simulator/index.ts'
 import { jsonErrorResponse, jsonResponse } from '../test-utils/index.ts'
-import { accountId, applicationKeyId, groupId, partnerToken } from '../types/ids.ts'
-import {
-  type ListedGroupMember,
-  type PartnerAuthorizeResponse,
-  PartnerCapability,
-  type PartnerGroup,
-  Region,
-} from '../types/partner.ts'
+import { accountId, partnerToken } from '../types/ids.ts'
+import { type PartnerAuthorizeResponse, PartnerCapability } from '../types/partner.ts'
 import type { PartnerAccountInfo } from './account-info.ts'
-import { PartnerClient, type PartnerClientOptions } from './client.ts'
+import { PartnerClient } from './client.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
 import { PARTNER_TOKEN_REDACTED } from './redaction.ts'
 
-function requestJsonBody(request: HttpRequest): unknown {
-  if (typeof request.body !== 'string') throw new Error('expected JSON request body')
-  return JSON.parse(request.body) as unknown
-}
-
 function apiEndpointName(request: HttpRequest): string {
   return new URL(request.url).pathname.split('/').at(-1) ?? ''
-}
-
-function makeRecordingPartnerClient(options?: {
-  readonly sim?: B2SimulatorOptions
-  readonly client?: Partial<Omit<PartnerClientOptions, 'masterKeyId' | 'masterKey' | 'transport'>>
-}): {
-  readonly client: PartnerClient
-  readonly sim: B2Simulator
-  readonly seenRequests: HttpRequest[]
-} {
-  const sim = new B2Simulator({ partnerAuthorize: true, ...(options?.sim ?? {}) })
-  const inner = sim.transport()
-  const seenRequests: HttpRequest[] = []
-  const transport: HttpTransport = {
-    async send(request) {
-      seenRequests.push(request)
-      return inner.send(request)
-    },
-  }
-  return {
-    client: new PartnerClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      transport,
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-      ...(options?.client ?? {}),
-    }),
-    sim,
-    seenRequests,
-  }
 }
 
 function partnerAuthorizeResponse(
@@ -148,60 +105,6 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
 }
 
 describe('PartnerClient facade', () => {
-  it('authorizes and reads Partner API coordinates from PartnerAccountInfo', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
-
-    const auth = await client.authorize()
-    const page = await client.listGroups({ pageSize: 1 })
-
-    expect(client.raw).toBeDefined()
-    expect(client.partnerAccountInfo.getPartnerToken()).toBe(auth.authorizationToken)
-    expect(page.accountId).toBe(auth.accountId)
-    expect(page.groups).toHaveLength(1)
-
-    const listRequest = seenRequests.find(
-      (request) => apiEndpointName(request) === 'b2_list_groups',
-    )
-    if (listRequest === undefined) throw new Error('expected b2_list_groups request')
-    const query = new URL(listRequest.url).searchParams
-    expect(query.get('adminAccountId')).toBe(auth.accountId)
-    expect(query.get('maxGroupCount')).toBe('1')
-    expect(listRequest.headers).toMatchObject({ Authorization: auth.authorizationToken })
-  })
-
-  it('reuses Partner auth populated in a shared store after construction', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
-    const inner = sim.transport()
-    const seenRequests: HttpRequest[] = []
-    const transport: HttpTransport = {
-      async send(request) {
-        seenRequests.push(request)
-        return inner.send(request)
-      },
-    }
-    const partnerAccountInfo = new InMemoryPartnerAccountInfo()
-    const partner = new PartnerClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      partnerAccountInfo,
-      transport,
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-    })
-    const backup = new BackupClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      partnerAccountInfo,
-      transport,
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-    })
-
-    await backup.authorize()
-    const page = await partner.listGroups({ pageSize: 1 })
-
-    expect(page.groups).toHaveLength(1)
-    expect(seenRequests.map(apiEndpointName)).toEqual(['b2_authorize_account', 'b2_list_groups'])
-  })
-
   it('redacts credentials and tokens from JSON serialization paths', () => {
     const partnerAccountInfo = new InMemoryPartnerAccountInfo()
     partnerAccountInfo.setAuth(partnerAuthorizeResponse('partner-token-secret'))
@@ -275,166 +178,6 @@ describe('PartnerClient facade', () => {
     await expect(client.listGroups()).rejects.toThrow(B2PartnerAuthorizationError)
     await expect(client.listGroups()).rejects.toThrow('Partner authorization token was redacted')
     expect(seenRequests).toHaveLength(0)
-  })
-
-  it('paginates groups and group members through the simulator', async () => {
-    const { client } = makeRecordingPartnerClient()
-    await client.authorize()
-
-    const groups: PartnerGroup[] = []
-    for await (const group of client.paginateGroups({ pageSize: 1 })) {
-      groups.push(group)
-    }
-    expect(groups.map((group) => group.groupName)).toEqual([
-      'Simulator Group 1',
-      'Simulator Group 2',
-      'Simulator Group 3',
-    ])
-    const group = groups[0]
-    if (group === undefined) throw new Error('expected default simulator group')
-
-    const createdZ = await client.createGroupMember({
-      groupId: group.groupId,
-      memberEmail: 'z-facade-member@example.com',
-      region: Region.UsEast,
-    })
-    const createdA = await client.createGroupMember({
-      groupId: group.groupId,
-      memberEmail: 'a-facade-member@example.com',
-    })
-    const createdAMember = createdA.groupMember
-
-    expect(createdZ.groupMember).toMatchObject({
-      email: 'z-facade-member@example.com',
-      region: Region.UsEast,
-      s3Endpoint: 's3.us-east-001.backblazeb2.com',
-    })
-
-    const firstMembersPage = await client.listGroupMembers({
-      groupId: group.groupId,
-      pageSize: 1,
-    })
-    expect(firstMembersPage.groupMembers.map((member) => member.email)).toEqual([
-      'a-facade-member@example.com',
-    ])
-    expect(firstMembersPage.nextEmail).toBe('z-facade-member@example.com')
-
-    const members: ListedGroupMember[] = []
-    for await (const member of client.paginateGroupMembers({
-      groupId: group.groupId,
-      pageSize: 1,
-    })) {
-      members.push(member)
-    }
-    expect(members.map((member) => member.email)).toEqual([
-      'a-facade-member@example.com',
-      'z-facade-member@example.com',
-    ])
-
-    const ejected = await client.ejectGroupMember({
-      groupId: group.groupId,
-      memberAccountId: createdAMember.accountId,
-      email: 'a-facade-ejected@example.com',
-    })
-    expect(ejected.email).toBe('a-facade-ejected@example.com')
-
-    const remainingMembers: ListedGroupMember[] = []
-    for await (const member of client.paginateGroupMembers({ groupId: group.groupId })) {
-      remainingMembers.push(member)
-    }
-    expect(remainingMembers.map((member) => member.email)).toEqual(['z-facade-member@example.com'])
-  })
-
-  it('authorizes and calls Partner endpoints for loopback HTTP custom realms', async () => {
-    const sim = new B2Simulator({ partnerAuthorize: true })
-    const client = new PartnerClient({
-      masterKeyId: 'master-key-id',
-      masterKey: 'master-key',
-      realm: 'http://127.0.0.1:12345',
-      allowCustomAuthorizeRealm: true,
-      disableSsrfGuard: true,
-      transport: sim.transport(),
-      retry: { maxRetries: 0, initialRetryDelayMs: 1, maxRetryDelayMs: 1 },
-    })
-
-    const auth = await client.authorize()
-    const page = await client.listGroups({ pageSize: 1 })
-
-    expect(auth.groupsApiUrl).toBe('http://127.0.0.1:12345/partner')
-    expect(page.groups).toHaveLength(1)
-  })
-
-  it('passes documented null member options through to the raw layer', async () => {
-    const { client } = makeRecordingPartnerClient()
-    await client.authorize()
-    const group = groupId('group-id')
-    const memberAccountId = accountId('member-account')
-    const createSpy = vi.spyOn(client.raw, 'createGroupMember').mockResolvedValue({
-      applicationKey: 'application-key-secret',
-      applicationKeyId: applicationKeyId('application-key-id'),
-      groupMember: {
-        accountId: memberAccountId,
-        email: 'member@example.com',
-        groupId: group,
-        groupName: 'Example Group',
-        region: Region.UsWest,
-        s3Endpoint: 's3.us-west-001.backblazeb2.com',
-      },
-    })
-    const ejectSpy = vi.spyOn(client.raw, 'ejectGroupMember').mockResolvedValue({
-      accountId: memberAccountId,
-      email: 'member@example.com',
-      groupId: group,
-      groupName: 'Example Group',
-      region: Region.UsWest,
-      s3Endpoint: 's3.us-west-001.backblazeb2.com',
-    })
-
-    await client.createGroupMember({
-      groupId: group,
-      memberEmail: 'member@example.com',
-      region: null,
-    })
-    await client.ejectGroupMember({
-      groupId: group,
-      memberAccountId,
-      email: null,
-    })
-
-    expect(createSpy.mock.calls[0]?.[2]).toMatchObject({ region: null })
-    expect(ejectSpy.mock.calls[0]?.[2]).toMatchObject({ email: null })
-  })
-
-  it('reserves a trial account with a single-object wire body through the simulator', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
-    const controller = new AbortController()
-    await client.authorize()
-
-    const trial = await client.reserveTrialAccount(
-      {
-        email: 'facade-trial-one@example.com',
-        term: 15,
-        storage: 12,
-        region: Region.UsEast,
-      },
-      { signal: controller.signal },
-    )
-
-    expect(trial.email).toBe('facade-trial-one@example.com')
-    expect(Array.isArray(trial)).toBe(false)
-    const reserveRequests = seenRequests.filter(
-      (request) => apiEndpointName(request) === 'b2_reserve_trial_create_account',
-    )
-    expect(reserveRequests).toHaveLength(1)
-    const reserveRequest = reserveRequests[0]
-    if (reserveRequest === undefined) throw new Error('expected reserve trial request')
-    expect(requestJsonBody(reserveRequest)).toEqual({
-      email: 'facade-trial-one@example.com',
-      term: 15,
-      storage: 12,
-      region: Region.UsEast,
-    })
-    expect(reserveRequest.signal).toBe(controller.signal)
   })
 
   it('rejects calls when Partner authorization has no groups API suite', async () => {
@@ -798,19 +541,6 @@ describe('PartnerClient facade', () => {
       expect(listAuthorizations).toEqual(['partner-token-1'])
     },
   )
-
-  it('does not reauthorize for simulator partner validation 401 responses', async () => {
-    const { client, seenRequests } = makeRecordingPartnerClient()
-    await client.authorize()
-
-    await expect(client.listGroups({ startGroupId: groupId('missing-group') })).rejects.toThrow(
-      InvalidGroupIdError,
-    )
-
-    expect(
-      seenRequests.filter((request) => apiEndpointName(request) === 'b2_authorize_account'),
-    ).toHaveLength(1)
-  })
 
   it.each([
     ['off-realm HTTPS', { groupsApiUrl: 'https://attacker.example/partner' }],

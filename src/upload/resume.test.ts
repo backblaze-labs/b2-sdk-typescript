@@ -13,10 +13,9 @@ import {
 } from './resume.ts'
 
 /**
- * Unit tests targeting `findResumeCandidate` decision branches. The
- * integration-style tests exercise the happy path against the simulator, while
- * these tests drive the function directly with mocked `RawClient` and
- * `AccountInfo` so we can pin rejection and pagination behavior.
+ * Unit tests targeting `findResumeCandidate` decision branches. These tests
+ * drive the function directly with mocked `RawClient` and `AccountInfo` so we
+ * can pin rejection and pagination behavior.
  */
 
 function makeAccountInfo(): AccountInfo {

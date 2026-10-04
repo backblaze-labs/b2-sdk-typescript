@@ -48,6 +48,5 @@ The Worker runtime supports `fetch` directly: you don't strictly need the SDK to
 - Typed B2 errors with `.code` / `.retryable` / `.requestId` (huge for triage).
 - Built-in retry + backoff for 503/429 from B2 (rare but happens).
 - The same upload code that works in Node/browsers also works here: you can write upload-to-B2 Workers without rewriting client code.
-- The in-memory `B2Simulator` for unit tests (Workers tests via Miniflare).
 
 This example ships the bare-`fetch` proxy (`worker.ts`) shown above; the SDK-backed alternative is described here but not included as a separate file.

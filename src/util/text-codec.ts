@@ -2,7 +2,7 @@
  * Shared UTF-8 codec singletons.
  *
  * Every byte boundary in this SDK is UTF-8: JSON request and response bodies,
- * webhook payloads, simulator stream chunks, and B2 percent-encoding inputs.
+ * webhook payloads, HTTP stream chunks, and B2 percent-encoding inputs.
  * Allocating a fresh `TextEncoder` / `TextDecoder` per call is wasteful and
  * makes the encoding assumption invisible. Importing these constants makes
  * "we use UTF-8" explicit at every call site and avoids the per-call

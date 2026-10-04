@@ -61,7 +61,7 @@ export interface BackupClientOptions {
   /**
    * Explicitly disable the default SSRF guard after authorize.
    *
-   * Intended only for controlled simulator/private-proxy tests. Never enable
+   * Intended only for controlled private-proxy tests. Never enable
    * it for URLs derived from untrusted input or production credentials.
    */
   readonly disableSsrfGuard?: boolean

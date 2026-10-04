@@ -90,7 +90,7 @@ A long-lived token can be exfiltrated, so prefer trusted publishing wherever it'
 
 | Change type | Examples | `pnpm version` arg | Bump |
 |---|---|---|---|
-| Bug fix, no public-API change | retry math fix, simulator typo | `patch` | `0.1.0 -> 0.1.1` |
+| Bug fix, no public-API change | retry math fix, documentation typo | `patch` | `0.1.0 -> 0.1.1` |
 | Backwards-compatible feature | new bucket method, new error subclass, new subpath export | `minor` | `0.1.1 -> 0.2.0` |
 | Breaking change | renamed method, removed export, changed return shape | `major` | `0.2.0 -> 1.0.0` |
 
@@ -194,12 +194,8 @@ mkdir /tmp/b2-smoke && cd /tmp/b2-smoke && pnpm init -y
 pnpm add @backblaze-labs/b2-sdk@latest
 node --input-type=module -e "
   import { B2Client, VERSION } from '@backblaze-labs/b2-sdk'
-  import { B2Simulator } from '@backblaze-labs/b2-sdk/simulator'
   console.log('VERSION =', VERSION)
-  const sim = new B2Simulator()
-  const c = new B2Client({ applicationKeyId: 'k', applicationKey: 'k', transport: sim.transport() })
-  await c.authorize()
-  console.log('authorize OK, accountId =', c.accountInfo.getAccountId())
+  console.log('B2Client export =', typeof B2Client)
 "
 ```
 

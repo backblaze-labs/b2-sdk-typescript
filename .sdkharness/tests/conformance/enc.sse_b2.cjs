@@ -13,10 +13,10 @@
  *   Assert  the metadata reports SSE-B2 / AES256 and the download returns
  *           plaintext
  *
- *   This is the capability B2Simulator already caught a bug in -- SSE-B2 not
- *   applied by default -- so the bucket-default path is pinned here too: an
- *   upload that requests nothing into an SSE-B2-default bucket must come back
- *   encrypted.
+ *   This is the capability the embedded SDK test server already caught a bug
+ *   in -- SSE-B2 not applied by default -- so the bucket-default path is pinned
+ *   here too: an upload that requests nothing into an SSE-B2-default bucket
+ *   must come back encrypted.
  *
  * The expected value is B2's published contract. b2_upload_file's
  * X-Bz-Server-Side-Encryption: "B2 will encrypt the uploaded data before storing
