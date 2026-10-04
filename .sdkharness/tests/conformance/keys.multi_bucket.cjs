@@ -321,6 +321,8 @@ async function run() {
       throw new Failure('refuse the third bucket',
         'the key reached a bucket outside its two-bucket scope');
     }
+    // NOTE: the error type/status/code values below are derived from the simulator. Re-verify them against real
+    // B2 before using this assertion outside the simulator.
     const wrong = guard.explainMismatch(refusal, {
       names: ['BadAuthTokenError', 'AccessDeniedError'],
       statuses: [401, 403],

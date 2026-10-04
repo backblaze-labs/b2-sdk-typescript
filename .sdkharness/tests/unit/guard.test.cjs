@@ -175,8 +175,33 @@ test('importBuiltSdk: a module-not-found thrown by SDK code is still a FAIL', as
   );
 });
 
-test('importBuiltSdk: a subpath that is built but another subpath missing is amber only for that one', async () => {
+test('importBuiltSdk: dist/ present but this exports target file absent is a FAIL, not amber', async () => {
   const root = fakeCheckout({ withDist: true });
+  let called = false;
+  await assert.rejects(
+    guard.importBuiltSdk('@backblaze-labs/b2-sdk/s3', hooks, {
+      root,
+      importer: async () => {
+        called = true;
+        return {};
+      },
+    }),
+    (error) => error.verdict === 'fail' && /dist\/s3\/index\.js/.test(error.message),
+  );
+  assert.equal(called, false);
+});
+
+test('importBuiltSdk: a renamed build output (dist/ has other files, not the target) is a FAIL', async () => {
+  const root = fakeCheckout({ withDist: true });
+  fs.renameSync(path.join(root, 'dist', 'index.js'), path.join(root, 'dist', 'main.js'));
+  await assert.rejects(
+    guard.importBuiltSdk('@backblaze-labs/b2-sdk', hooks, { root, importer: async () => ({}) }),
+    (error) => error.verdict === 'fail',
+  );
+});
+
+test('importBuiltSdk: only an absent dist/ is amber, even for a subpath', async () => {
+  const root = fakeCheckout({ withDist: false });
   await assert.rejects(
     guard.importBuiltSdk('@backblaze-labs/b2-sdk/s3', hooks, { root, importer: async () => ({}) }),
     (error) => error.verdict === 'amber',

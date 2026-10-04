@@ -7,27 +7,48 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+// The dispatchers are shebang scripts (bash/node) that Windows cannot spawn directly.
+if (process.platform === 'win32') {
+  test('dispatcher tests need a POSIX shell; skipped on win32', { skip: 'sdkharness dispatchers are shebang scripts and are not spawnable on win32' }, () => {});
+  return;
+}
+
 const TESTS = path.resolve(__dirname, '..');
 const SLUG = 'b2-sdk-typescript';
 
 // run-resilience asks the control URL for /journal before it runs a check. spawnSync blocks this
 // process, so the stub fresh-simulator journal server runs in a child process.
-let journalStub;
-let journalUrl = 'http://127.0.0.1:10';
-test.before(async () => {
-  journalStub = spawn(
+// Start a loopback stub that answers every request with `body` as JSON; resolves to { url, stop }.
+async function startJournal(body) {
+  const stub = spawn(
     process.execPath,
     [
       '-e',
-      `require('node:http').createServer((q, r) => { r.setHeader('content-type', 'application/json'); r.end('{"entries":[]}'); })
+      `require('node:http').createServer((q, r) => { r.setHeader('content-type', 'application/json'); r.end(process.env.STUB_BODY); })
         .listen(0, '127.0.0.1', function () { console.log(this.address().port); });`,
     ],
-    { stdio: ['ignore', 'pipe', 'inherit'] },
+    { stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, STUB_BODY: body } },
   );
-  const port = await new Promise((resolve) => journalStub.stdout.once('data', (d) => resolve(String(d).trim())));
-  journalUrl = `http://127.0.0.1:${port}`;
+  const port = await new Promise((resolve) => stub.stdout.once('data', (d) => resolve(String(d).trim())));
+  return { url: `http://127.0.0.1:${port}`, stop: () => stub.kill() };
+}
+
+let freshJournal;
+let journalUrl;
+test.before(async () => {
+  freshJournal = await startJournal('{"entries":[]}');
+  journalUrl = freshJournal.url;
 });
-test.after(() => journalStub?.kill());
+test.after(() => freshJournal?.stop());
+
+async function withJournal(body, fn) {
+  const stub = await startJournal(body);
+  try {
+    return fn(stub.url);
+  } finally {
+    stub.stop();
+  }
+}
 
 // A copy of the real dispatchers and lib next to one fake leaf, so the real
 // scripts run unmodified against a leaf whose behavior the test dictates.
@@ -139,6 +160,27 @@ for (const level of ['conformance', 'resilience']) {
     assert.equal(result.outcome, 'PASS', result.stdout);
   });
 }
+
+test('resilience: a simulator that already served a request is refused before the leaf runs', async () => {
+  const dir = harness('resilience', 'fake.scenario', 'process.stdout.write("LEAF RAN\\n")');
+  await withJournal('{"entries":[{}]}', (url) => {
+    const result = run(dir, 'resilience', 'fake.scenario', { SDKHARNESS_SIMULATOR_CONTROL_URL: url });
+    assert.equal(result.outcome, 'FAIL');
+    assert.equal(result.detail.split(';')[0], 'configuration: the simulator already served 1 request(s)');
+    assert.equal(result.status, 1);
+    assert.ok(!result.stdout.includes('LEAF RAN'));
+  });
+});
+
+test('resilience: an unreachable journal is refused before the leaf runs', () => {
+  const dir = harness('resilience', 'fake.scenario', 'process.stdout.write("LEAF RAN\\n")');
+  // Port 9 (discard) has no listener on loopback.
+  const result = run(dir, 'resilience', 'fake.scenario', { SDKHARNESS_SIMULATOR_CONTROL_URL: 'http://127.0.0.1:9' });
+  assert.equal(result.outcome, 'FAIL');
+  assert.equal(result.detail, 'configuration: cannot read the simulator journal');
+  assert.equal(result.status, 1);
+  assert.ok(!result.stdout.includes('LEAF RAN'));
+});
 
 test('health-golden-path: refuses [::1], a non-fixed credential, and a missing credential before any build', () => {
   const script = path.join(TESTS, 'health-golden-path');
