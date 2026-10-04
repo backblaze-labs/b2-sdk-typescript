@@ -209,6 +209,44 @@ function explainMismatch(error, spec) {
   return oneLine(`unexpected ${problems.join(', ')}: ${describeError(seen)}`);
 }
 
+/**
+ * Refuse a simulator that already served requests. The resilience checks count
+ * the simulator's whole request journal (GET /journal) and the simulator has no
+ * journal reset, so on a simulator an earlier scenario used a check reads that
+ * scenario's requests as its own and reports a false SDK verdict (for example
+ * upload.cap_exceeded_403 with extra b2_upload_file calls). Start one --control
+ * simulator per scenario. Throws a GuardError when the journal is non-empty,
+ * unreachable, malformed, or slower than `timeoutMs`.
+ */
+async function requireFreshSimulator(controlUrl, { timeoutMs = 10_000 } = {}) {
+  const origin = requireLoopbackOrigin(controlUrl, 'SDKHARNESS_SIMULATOR_CONTROL_URL');
+  let entries;
+  try {
+    const response = await fetch(`${origin}/journal`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    ({ entries } = await response.json());
+  } catch {
+    throw new GuardError('cannot read the simulator journal');
+  }
+  if (!Array.isArray(entries)) throw new GuardError('cannot read the simulator journal');
+  if (entries.length > 0) {
+    throw new GuardError(
+      `the simulator already served ${entries.length} request(s); resilience scenarios need one fresh --control simulator per scenario`,
+    );
+  }
+}
+
+// Used by run-resilience: prints nothing and exits 0 when fresh, else prints the reason and exits 1.
+if (require.main === module) {
+  requireFreshSimulator(process.argv[2]).then(
+    () => process.exit(0),
+    (error) => {
+      console.log(error instanceof GuardError ? error.message : 'cannot read the simulator journal');
+      process.exit(1);
+    },
+  );
+}
+
 module.exports = {
   FIXED_KEY_ID,
   FIXED_KEY,
@@ -220,6 +258,7 @@ module.exports = {
   explainMismatch,
   importBuiltSdk,
   originFromEnv,
+  requireFreshSimulator,
   requireFixedCredential,
   requireLoopbackOrigin,
   scrubProxyEnv,

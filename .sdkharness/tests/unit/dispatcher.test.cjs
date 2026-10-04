@@ -5,10 +5,29 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const TESTS = path.resolve(__dirname, '..');
 const SLUG = 'b2-sdk-typescript';
+
+// run-resilience asks the control URL for /journal before it runs a check. spawnSync blocks this
+// process, so the stub fresh-simulator journal server runs in a child process.
+let journalStub;
+let journalUrl = 'http://127.0.0.1:10';
+test.before(async () => {
+  journalStub = spawn(
+    process.execPath,
+    [
+      '-e',
+      `require('node:http').createServer((q, r) => { r.setHeader('content-type', 'application/json'); r.end('{"entries":[]}'); })
+        .listen(0, '127.0.0.1', function () { console.log(this.address().port); });`,
+    ],
+    { stdio: ['ignore', 'pipe', 'inherit'] },
+  );
+  const port = await new Promise((resolve) => journalStub.stdout.once('data', (d) => resolve(String(d).trim())));
+  journalUrl = `http://127.0.0.1:${port}`;
+});
+test.after(() => journalStub?.kill());
 
 // A copy of the real dispatchers and lib next to one fake leaf, so the real
 // scripts run unmodified against a leaf whose behavior the test dictates.
@@ -20,7 +39,9 @@ function harness(level, scenario, leafBody) {
     fs.copyFileSync(path.join(TESTS, name), path.join(dir, name));
     fs.chmodSync(path.join(dir, name), 0o755);
   }
-  fs.copyFileSync(path.join(TESTS, 'lib', 'contract.sh'), path.join(dir, 'lib', 'contract.sh'));
+  for (const lib of ['contract.sh', 'guard.cjs']) {
+    fs.copyFileSync(path.join(TESTS, 'lib', lib), path.join(dir, 'lib', lib));
+  }
   const leaf = path.join(dir, level, `${scenario}.cjs`);
   fs.writeFileSync(leaf, `#!/usr/bin/env node\n${leafBody}\n`);
   fs.chmodSync(leaf, 0o755);
@@ -33,7 +54,7 @@ function run(dir, level, scenario, env = {}) {
     SDKHARNESS_TEST_LEVEL: level,
     SDKHARNESS_SCENARIO: scenario,
     SDKHARNESS_SIMULATOR_URL: 'http://127.0.0.1:9',
-    SDKHARNESS_SIMULATOR_CONTROL_URL: 'http://127.0.0.1:10',
+    SDKHARNESS_SIMULATOR_CONTROL_URL: journalUrl,
   };
   const result = spawnSync(path.join(dir, `run-${level}`), [], {
     env: { ...base, ...env },
