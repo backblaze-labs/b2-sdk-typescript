@@ -5,6 +5,7 @@ LEVEL=resilience
 SCENARIO="${SDKHARNESS_SCENARIO:-}"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"
 . "$HERE/lib/contract.sh"
+sdkharness_scrub_proxy_env
 result() { printf 'SDKHARNESS_RESULT\t%s\t%s\t%s\t%s\n' "$LEVEL" "$SCENARIO" "$1" "$2"; }
 
 [ "${SDKHARNESS_TEST_LEVEL:-}" = "$LEVEL" ] \
@@ -13,6 +14,9 @@ case "$SCENARIO" in ''|*[!A-Za-z0-9_.-]*) result FAIL 'configuration: invalid sc
 [ -n "${SDKHARNESS_SIMULATOR_URL:-}" ] && sdkharness_valid_loopback_origin "$SDKHARNESS_SIMULATOR_URL" \
   && [ -n "${SDKHARNESS_SIMULATOR_CONTROL_URL:-}" ] && sdkharness_valid_loopback_origin "$SDKHARNESS_SIMULATOR_CONTROL_URL" \
   || { result FAIL 'configuration: simulator and control URLs must be IPv4 loopback HTTP origins'; exit 1; }
+if [ -n "${SDKHARNESS_SIMULATOR_HTTPS_URL:-}" ] && ! sdkharness_valid_loopback_https_origin "$SDKHARNESS_SIMULATOR_HTTPS_URL"; then
+  result FAIL 'configuration: simulator TLS URL must be an IPv4 loopback HTTPS origin'; exit 1
+fi
 check="$HERE/resilience/$SCENARIO.cjs"
 [ -x "$check" ] || { result FAIL 'configuration: scenario executable is unavailable'; exit 1; }
 
@@ -34,6 +38,10 @@ verdict="$(grep -F "$prefix" "$log")"; verdict="${verdict#*: }"
 case "$verdict" in
   PASS) [ "$child_rc" = 0 ] || { result FAIL "contract: PASS exited $child_rc"; exit 1; }; result PASS - ;;
   'FAIL ('*')') reason="${verdict#FAIL (}"; result FAIL "${reason%)}"; exit 1 ;;
-  'COULD-NOT-RUN ('*')') reason="${verdict#COULD-NOT-RUN (}"; result SKIP "${reason%)}" ;;
+  'COULD-NOT-RUN ('*')')
+    # A leaf that reported amber but exited nonzero crashed or failed cleanup:
+    # that is a FAIL, never acceptable amber evidence.
+    [ "$child_rc" = 0 ] || { result FAIL "contract: COULD-NOT-RUN exited $child_rc"; exit 1; }
+    reason="${verdict#COULD-NOT-RUN (}"; result SKIP "${reason%)}" ;;
   *) result FAIL 'contract: malformed standing verdict'; exit 1 ;;
 esac
