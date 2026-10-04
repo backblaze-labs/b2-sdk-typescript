@@ -309,6 +309,8 @@ async function run() {
       throw new Failure('download without the key',
         'an SSE-C object was readable without presenting the customer key');
     }
+    // NOTE: the error type/status/code values below are derived from the simulator. Re-verify them against real
+    // B2 before using this assertion outside the simulator.
     const wrong = guard.explainMismatch(refusal, {
       names: ['BadRequestError'],
       statuses: [400],

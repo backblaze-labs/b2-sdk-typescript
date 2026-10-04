@@ -10,6 +10,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
+const WIN32_SKIP = 'sdkharness leaves are shebang scripts and are not spawnable on win32';
+
 const TESTS = path.resolve(__dirname, '..');
 const leaves = [];
 for (const dir of ['conformance', 'resilience']) {
@@ -83,19 +85,19 @@ function leafRun(distSource, env = {}) {
   return { status: result.status, verdict: line.replace(/^[^:]*: /, '') };
 }
 
-test('leaf run: no build at all is COULD-NOT-RUN, exit 0', () => {
+test('leaf run: no build at all is COULD-NOT-RUN, exit 0', { skip: process.platform === 'win32' && WIN32_SKIP }, () => {
   const { status, verdict } = leafRun(null);
   assert.equal(status, 0);
   assert.match(verdict, /^COULD-NOT-RUN \(missing-runtime -- .*build this exact checkout first/);
 });
 
-test('leaf run: a built SDK that throws on import is FAIL, exit 1', () => {
+test('leaf run: a built SDK that throws on import is FAIL, exit 1', { skip: process.platform === 'win32' && WIN32_SKIP }, () => {
   const { status, verdict } = leafRun("throw new Error('sdk exploded at import')");
   assert.equal(status, 1);
   assert.match(verdict, /^FAIL \(import -- .*sdk exploded at import/);
 });
 
-test('leaf run: a non-loopback simulator URL is refused before anything is dialed', () => {
+test('leaf run: a non-loopback simulator URL is refused before anything is dialed', { skip: process.platform === 'win32' && WIN32_SKIP }, () => {
   for (const url of ['https://nonexistent.invalid', 'http://[::1]:9', 'http://localhost:9']) {
     const { status, verdict } = leafRun('export class B2Client {}', { CONFORMANCE_SIMULATOR_URL: url });
     assert.equal(status, 1);

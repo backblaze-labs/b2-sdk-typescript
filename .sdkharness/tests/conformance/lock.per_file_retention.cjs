@@ -291,6 +291,8 @@ async function run() {
       throw new Failure('delete without bypass',
         'a version under governance retention was deleted without bypassGovernance');
     }
+    // NOTE: the error type/status/code values below are derived from the simulator. Re-verify them against real
+    // B2 before using this assertion outside the simulator.
     const wrong = guard.explainMismatch(refusal, {
       statuses: [400, 403],
       codes: ['file_lock_governance_protected'],

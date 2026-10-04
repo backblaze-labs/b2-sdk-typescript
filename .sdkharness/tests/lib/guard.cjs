@@ -11,8 +11,9 @@
  *   - the only credential is the simulator's fixed test pair;
  *   - proxy variables are scrubbed so a developer or CI proxy cannot turn a
  *     loopback request into something else;
- *   - an SDK that is built but throws on import is a FAIL. Only a missing
- *     build (no dist target on disk, nothing of the SDK has run) is amber;
+ *   - an SDK that is built but throws on import is a FAIL, and so is a dist/
+ *     that lacks the exports target file. Only a missing dist/ (nothing of the
+ *     SDK has run) is amber;
  *   - a "the SDK refused this" proof must name the specific expected error.
  *
  * Unit tests: tests/unit/guard.test.cjs. Run `pnpm run test:sdkharness`.
@@ -152,9 +153,10 @@ function distTarget(specifier, root) {
 /**
  * Import one specifier of this checkout's SDK.
  *
- * - The built file for the specifier is absent: nothing of the SDK has run,
- *   the question could not be asked. Returns `hooks.missing(detail)` thrown.
- * - Anything else that goes wrong (the file is there but throws on import, an
+ * - `dist/` itself is absent: nothing of the SDK has run, the question could
+ *   not be asked. Throws `hooks.missing(detail)`.
+ * - Anything else that goes wrong (dist/ exists but the exports target file is
+ *   gone, the file is there but throws on import, an
  *   internal module is missing, the export was removed) is an SDK defect and
  *   throws `hooks.broken(detail)`.
  *
@@ -172,6 +174,11 @@ async function importBuiltSdk(specifier, hooks, { root = REPO_ROOT, importer } =
     throw hooks.broken(`${specifier} is not exported by package.json (${target.key})`);
   }
   if (target.kind === 'file' && !fs.existsSync(target.file)) {
+    // A build exists (dist/ is there) but this export's file is not: a moved or renamed build output
+    // is a regression, not a question that could not be asked. Only an absent dist/ is amber.
+    if (fs.existsSync(path.join(root, 'dist'))) {
+      throw hooks.broken(`${specifier} is exported as ${path.relative(root, target.file)} but dist/ has no such file (build output moved or renamed?)`);
+    }
     throw hooks.missing(`${specifier} is unavailable -- build this exact checkout first (missing ${path.relative(root, target.file)})`);
   }
   try {
