@@ -16,6 +16,18 @@ case "$SCENARIO" in ''|*[!A-Za-z0-9_.-]*) result FAIL 'configuration: invalid sc
 check="$HERE/resilience/$SCENARIO.cjs"
 [ -x "$check" ] || { result FAIL 'configuration: scenario executable is unavailable'; exit 1; }
 
+# The checks count the simulator's whole request journal and it has no reset, so a simulator an
+# earlier scenario used makes a leaf read that scenario's requests as its own (for example
+# upload.cap_exceeded_403 reporting extra b2_upload_file calls). Start one --control simulator per scenario.
+served="$(node -e '
+fetch(process.argv[1] + "/journal").then((r) => r.json()).then((j) => console.log(j.entries.length), () => console.log("unreadable"));
+' "$SDKHARNESS_SIMULATOR_CONTROL_URL" 2>/dev/null)"
+case "$served" in
+  0) ;;
+  ''|*[!0-9]*) result FAIL 'configuration: cannot read the simulator journal'; exit 1 ;;
+  *) result FAIL "configuration: the simulator already served $served request(s); resilience scenarios need one fresh --control simulator per scenario"; exit 1 ;;
+esac
+
 log="$(mktemp "${TMPDIR:-/tmp}/sdkharness-typescript-resilience.XXXXXX")" \
   || { result FAIL 'setup: could not create child log'; exit 1; }
 trap 'rm -f "$log"' EXIT

@@ -24,3 +24,8 @@ from the same revision before they run. The `run-conformance` and
 `run-resilience` dispatchers validate the loopback-only simulator contract and
 translate each check's standing verdict into the five-field
 `SDKHARNESS_RESULT` record consumed by the orchestrator.
+
+Run each resilience scenario against a fresh `--control` simulator. The simulator keeps one
+request journal with no reset and the checks count it, so `run-resilience` reports a simulator
+that already served requests as a `configuration` FAIL instead of letting an earlier scenario's
+requests produce a false SDK verdict.
