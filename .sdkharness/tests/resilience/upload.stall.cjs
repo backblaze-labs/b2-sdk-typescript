@@ -45,8 +45,13 @@ const SLUG = 'b2-sdk-typescript';
 // The simulator's fixed test credential, which the runner also injects as
 // B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY. Not a secret, but the redactor
 // keeps it out of every detail string all the same.
-const SIM_KEY_ID = 'test-key-id';
-const SIM_KEY = 'test-key';
+const guard = require('../lib/guard.cjs');
+
+// Proxy variables must not reroute a loopback request.
+guard.scrubProxyEnv();
+
+const SIM_KEY_ID = guard.FIXED_KEY_ID;
+const SIM_KEY = guard.FIXED_KEY;
 const SECRETS = [SIM_KEY_ID, SIM_KEY];
 
 /** The question could not be asked. Reason must be in REASONS. */
@@ -70,9 +75,9 @@ class Failure extends Error {
 // A credential NEVER reaches a detail: only an error class and its message,
 // with every registered secret substituted out and the whole thing truncated.
 function redact(value) {
-  let text = value instanceof Error ? `${value.name}: ${value.message}` : String(value);
+  let text = value instanceof Error ? guard.describeError(value) : String(value);
   for (const secret of SECRETS) if (secret) text = text.split(secret).join('[redacted]');
-  return text.replace(/[\r\n\t]+/g, ' ').slice(0, 200);
+  return text.replace(/[\r\n\t]+/g, ' ').slice(0, 400);
 }
 
 function say(verdict) {
@@ -95,8 +100,16 @@ async function step(name, action) {
   }
 }
 
+/** The fault-control origin, held to the same loopback rule as the simulator. */
+function controlOrigin() {
+  const origin = guard.originFromEnv('RESILIENCE_CONTROL_URL',
+    (message) => new Failure('configuration', message));
+  if (!origin) throw new Failure('setup', 'RESILIENCE_CONTROL_URL is unset -- run under bin/run-resilience.sh');
+  return origin;
+}
+
 async function control(method, path, body) {
-  const response = await fetch(process.env.RESILIENCE_CONTROL_URL + path, {
+  const response = await fetch(controlOrigin() + path, {
     method,
     headers: { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -116,13 +129,15 @@ function after(entries, seq, endpoint, status) {
     && (status === undefined || e.status === status));
 }
 
-/** Import this checkout. An absent package is missing-runtime. */
+/**
+ * Import this checkout's built SDK. Only a missing build is amber; a built SDK
+ * that throws on import is a FAIL (an SDK regression, not an unanswerable question).
+ */
 async function load() {
-  try {
-    return await import('@backblaze-labs/b2-sdk');
-  } catch {
-    throw new Amber('missing-runtime', '@backblaze-labs/b2-sdk is unavailable -- build this exact checkout first');
-  }
+  return guard.importBuiltSdk('@backblaze-labs/b2-sdk', {
+    missing: (detail) => new Amber('missing-runtime', detail),
+    broken: (detail) => new Failure('import', detail),
+  });
 }
 
 /**
@@ -135,7 +150,8 @@ async function load() {
  */
 async function authorizedBucket(options = {}) {
   const sdk = await load();
-  const realm = process.env.RESILIENCE_SIMULATOR_URL;
+  const realm = guard.originFromEnv('RESILIENCE_SIMULATOR_URL',
+    (message) => new Failure('configuration', message));
   if (!realm) throw new Failure('setup', 'RESILIENCE_SIMULATOR_URL is unset -- run under bin/run-resilience.sh');
   const client = new sdk.B2Client({
     applicationKeyId: SIM_KEY_ID,

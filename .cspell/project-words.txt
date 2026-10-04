@@ -253,6 +253,7 @@ reupload
 runtime
 runtimes
 saturates
+sdkharness
 selfhost
 serverSideEncryption
 servside

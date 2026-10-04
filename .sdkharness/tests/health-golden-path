@@ -5,54 +5,60 @@ set -u
 
 LEVEL="${SDKHARNESS_TEST_LEVEL:-health}"
 SCENARIO="${SDKHARNESS_SCENARIO:-golden-path}"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+. "$HERE/lib/contract.sh"
+sdkharness_scrub_proxy_env
+
+# Why the last failure happened, shown in the result line (single line, no tabs).
+reason=''
+fail_with() { reason="$1"; return "$2"; }
 
 run_health() {
-  [ "$LEVEL" = health ] && [ "$SCENARIO" = golden-path ] || return 64
-  [ -n "${SDKHARNESS_SIMULATOR_URL:-}" ] || return 65
-  [ -n "${HEALTHCHECK_REALM_URL:-}" ] || return 65
-  [ "$SDKHARNESS_SIMULATOR_URL" = "$HEALTHCHECK_REALM_URL" ] || return 65
-  [ -n "${B2_TEST_APPLICATION_KEY_ID:-}" ] || return 65
-  [ -n "${B2_TEST_APPLICATION_KEY:-}" ] || return 65
-  [ -n "${B2_BUCKET_NAME:-}" ] || return 65
+  [ "$LEVEL" = health ] && [ "$SCENARIO" = golden-path ] || { fail_with 'unexpected level or scenario' 64; return; }
+  [ -n "${SDKHARNESS_SIMULATOR_URL:-}" ] || { fail_with 'SDKHARNESS_SIMULATOR_URL is unset' 65; return; }
+  [ -n "${HEALTHCHECK_REALM_URL:-}" ] || { fail_with 'HEALTHCHECK_REALM_URL is unset' 65; return; }
+  [ "$SDKHARNESS_SIMULATOR_URL" = "$HEALTHCHECK_REALM_URL" ] \
+    || { fail_with 'HEALTHCHECK_REALM_URL differs from SDKHARNESS_SIMULATOR_URL' 65; return; }
+  [ -n "${B2_BUCKET_NAME:-}" ] || { fail_with 'B2_BUCKET_NAME is unset' 65; return; }
 
-  node -e '
-const target = new URL(process.argv[1]);
-if (
-  target.protocol !== "http:" ||
-  (target.hostname !== "127.0.0.1" && target.hostname !== "[::1]") ||
-  target.port === "" ||
-  target.username !== "" ||
-  target.password !== "" ||
-  target.pathname !== "/" ||
-  target.search !== "" ||
-  target.hash !== ""
-) {
-  process.exit(1);
-}' "$SDKHARNESS_SIMULATOR_URL" || return 65
+  # The shared guard (lib/guard.cjs, the same one every conformance and
+  # resilience leaf uses): IPv4 loopback http origin only, and only the fixed
+  # simulator credential. A real-looking key is refused before anything is sent.
+  local guard_out
+  guard_out="$(SDKHARNESS_GUARD="$HERE/lib/guard.cjs" node -e '
+const guard = require(process.env.SDKHARNESS_GUARD)
+try {
+  guard.requireLoopbackOrigin(process.env.SDKHARNESS_SIMULATOR_URL, "SDKHARNESS_SIMULATOR_URL")
+  guard.requireFixedCredential(
+    process.env.B2_TEST_APPLICATION_KEY_ID,
+    process.env.B2_TEST_APPLICATION_KEY,
+  )
+} catch (error) {
+  process.stdout.write(error.message)
+  process.exit(1)
+}' 2>&1)" || { fail_with "configuration: $guard_out" 65; return; }
 
-  pnpm build || return 1
+  pnpm build || { fail_with 'pnpm build failed (see the build output above)' 1; return; }
 
-  node --input-type=module <<'NODE'
+  local err
+  err="$(mktemp "${TMPDIR:-/tmp}/sdkharness-typescript-health.XXXXXX")" \
+    || { fail_with 'could not create the health error log' 1; return; }
+  SDKHARNESS_GUARD="$HERE/lib/guard.cjs" node --input-type=module 2>"$err" <<'NODE'
 import { randomUUID } from 'node:crypto'
-import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+import { createRequire } from 'node:module'
+
+const guard = createRequire(`${process.cwd()}/`)(process.env.SDKHARNESS_GUARD)
 
 const realm = process.env.SDKHARNESS_SIMULATOR_URL
 const applicationKeyId = process.env.B2_TEST_APPLICATION_KEY_ID
 const applicationKey = process.env.B2_TEST_APPLICATION_KEY
 const bucketName = process.env.B2_BUCKET_NAME
 
-const client = new B2Client({
-  applicationKeyId,
-  applicationKey,
-  realm,
-  userAgent: 'b2-sdk-typescript-repository-health',
-  allowedHostSuffixes: [],
-})
-
 const objectName = `sdkharness-health-check/${randomUUID()}.txt`
 const expected = new TextEncoder().encode(`b2-sdk-typescript health check ${objectName}`)
 let object
 let uploadedFileId
+let failure
 
 async function bytes(download) {
   if (download instanceof Uint8Array) return download
@@ -79,6 +85,15 @@ async function bytes(download) {
 }
 
 try {
+  // A built SDK that throws on import is a health failure with its reason.
+  const { B2Client, BufferSource } = await import('@backblaze-labs/b2-sdk')
+  const client = new B2Client({
+    applicationKeyId,
+    applicationKey,
+    realm,
+    userAgent: 'b2-sdk-typescript-repository-health',
+    allowedHostSuffixes: [],
+  })
   await client.authorize()
   const bucket = await client.getBucket(bucketName)
   if (!bucket) throw new Error('pre-created bucket was not found')
@@ -107,19 +122,33 @@ try {
   if (afterDelete.files.some((file) => file.fileName === objectName)) {
     throw new Error('deleted object was still listed')
   }
+} catch (error) {
+  failure = error
 } finally {
   if (object && uploadedFileId) {
     await object.deleteVersion(uploadedFileId).catch(() => undefined)
   }
 }
+if (failure !== undefined) {
+  // One line with the underlying reason, never a bare exit code.
+  process.stderr.write(`health lifecycle failed: ${guard.describeError(failure)}\n`)
+  process.exitCode = 1
+}
 NODE
+  local rc=$?
+  if [ "$rc" != 0 ]; then
+    cat "$err" >&2
+    fail_with "$({ grep -m1 'health lifecycle failed' "$err" || tail -n 1 "$err"; } | tr '\t\r' '  ' | cut -c1-300)" "$rc"
+  fi
+  rm -f "$err"
+  return "$rc"
 }
 
 if run_health; then
   printf 'SDKHARNESS_RESULT\t%s\t%s\tPASS\t-\n' "$LEVEL" "$SCENARIO"
 else
   code=$?
-  printf 'SDKHARNESS_RESULT\t%s\t%s\tFAIL\trepository HTTP health failed with exit %s\n' \
-    "$LEVEL" "$SCENARIO" "$code"
+  printf 'SDKHARNESS_RESULT\t%s\t%s\tFAIL\trepository HTTP health failed with exit %s: %s\n' \
+    "$LEVEL" "$SCENARIO" "$code" "${reason:-no reason reported}"
   exit "$code"
 fi

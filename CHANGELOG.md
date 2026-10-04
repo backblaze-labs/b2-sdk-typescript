@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`.sdkharness` checks no longer turn failures into amber.** A conformance or resilience leaf that prints `COULD-NOT-RUN` but exits nonzero is now a `FAIL` in both dispatchers, and a built SDK that throws on import is a `FAIL` instead of `COULD-NOT-RUN` (only a missing `dist/` build is amber). The `enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold` and `lock.per_file_retention` checks now assert the specific refusal (type, status, code, message) rather than treating any thrown error as one.
+- **`.sdkharness` checks enforce the loopback contract themselves.** One shared guard (`.sdkharness/tests/lib/guard.cjs`) is used by every leaf and `health-golden-path`: simulator and control URLs must be `http://127.0.0.1:<port>` (`[::1]` is no longer accepted), only the fixed simulator credential is accepted (the health check refuses any other key), proxy variables are scrubbed, and failure messages carry the underlying reason. The README gains a "run one check locally" section and the guards have unit tests (`pnpm run test:sdkharness`). Known SDK findings the checks report (for example `large.multipart`, upload retries, `lock.bypass_governance`, `urls.native_download`) are unchanged and still fail.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.

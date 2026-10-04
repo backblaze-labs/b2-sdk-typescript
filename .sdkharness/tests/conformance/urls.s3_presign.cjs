@@ -66,8 +66,13 @@ const REASONS = new Set([
 // B2_APPLICATION_KEY_ID / B2_APPLICATION_KEY. Not a secret, but the redactor
 // keeps it -- and anything else registered below -- out of
 // every detail string all the same.
-const SIM_KEY_ID = 'test-key-id';
-const SIM_KEY = 'test-key';
+const guard = require('../lib/guard.cjs');
+
+// Proxy variables must not reroute a loopback request.
+guard.scrubProxyEnv();
+
+const SIM_KEY_ID = guard.FIXED_KEY_ID;
+const SIM_KEY = guard.FIXED_KEY;
 const SECRETS = [SIM_KEY_ID, SIM_KEY];
 
 /** The question could not be asked. Reason must be in REASONS. */
@@ -98,9 +103,9 @@ function neverPrint(value) {
 // A credential NEVER reaches a detail: only an error class and its message,
 // with every registered secret substituted out and the whole thing truncated.
 function redact(value) {
-  let text = value instanceof Error ? `${value.name}: ${value.message}` : String(value);
+  let text = value instanceof Error ? guard.describeError(value) : String(value);
   for (const secret of SECRETS) if (secret) text = text.split(secret).join('[redacted]');
-  return text.replace(/[\r\n\t]+/g, ' ').slice(0, 200);
+  return text.replace(/[\r\n\t]+/g, ' ').slice(0, 400);
 }
 
 /** The one result line. Exactly one, on stdout, at the start of a line. */
@@ -126,14 +131,16 @@ async function step(name, action) {
   }
 }
 
-/** Import one subpath of this checkout. An absent package is amber. */
+/**
+ * Import this checkout's built SDK. Only a missing build is amber; a built SDK
+ * that throws on import is a FAIL (an SDK regression, not an unanswerable question).
+ */
 async function load(subpath) {
   const specifier = subpath ? `@backblaze-labs/b2-sdk/${subpath}` : '@backblaze-labs/b2-sdk';
-  try {
-    return await import(specifier);
-  } catch (error) {
-    throw new Amber('missing-runtime', `${specifier} is unavailable -- build this exact checkout first`);
-  }
+  return guard.importBuiltSdk(specifier, {
+    missing: (detail) => new Amber('missing-runtime', detail),
+    broken: (detail) => new Failure('import', detail),
+  });
 }
 
 /**
@@ -168,7 +175,8 @@ async function simulatorClient(options = {}) {
 
 /** The harness simulator's URL. Without it this slug has no realm to ask. */
 function simulatorRealm() {
-  const realm = process.env.CONFORMANCE_SIMULATOR_URL;
+  const realm = guard.originFromEnv('CONFORMANCE_SIMULATOR_URL',
+    (message) => new Failure('configuration', message));
   if (!realm) {
     throw new Amber('no-realm-option',
       'CONFORMANCE_SIMULATOR_URL is unset -- this slug runs only under bin/run-conformance.sh --target simulator');
@@ -184,7 +192,8 @@ function simulatorRealm() {
  * trusted CA. Verification stays on; nothing else is trusted.
  */
 function simulatorHttpsRealm() {
-  const realm = process.env.CONFORMANCE_SIMULATOR_HTTPS_URL;
+  const realm = guard.originFromEnv('CONFORMANCE_SIMULATOR_HTTPS_URL',
+    (message) => new Failure('configuration', message), { scheme: 'https' });
   const ca = process.env.CONFORMANCE_SIMULATOR_CA;
   if (!realm || !ca) {
     throw new Amber('no-realm-option',
