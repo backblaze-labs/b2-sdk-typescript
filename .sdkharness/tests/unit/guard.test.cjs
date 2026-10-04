@@ -235,3 +235,72 @@ test('describeError: carries the cause chain', () => {
     'NetworkError <- Error [ECONNREFUSED]: connect ECONNREFUSED 127.0.0.1:1',
   );
 });
+
+// requireFreshSimulator: the resilience dispatcher's stale-journal refusal.
+function journalServer(handler) {
+  return new Promise((resolve) => {
+    const server = require('node:http').createServer(handler);
+    server.listen(0, '127.0.0.1', () => resolve({ server, url: `http://127.0.0.1:${server.address().port}` }));
+  });
+}
+const reply = (body, status = 200) => (_req, res) => {
+  res.statusCode = status;
+  res.end(body);
+};
+
+test('fresh journal: an empty journal passes through', async () => {
+  const { server, url } = await journalServer(reply('{"entries":[]}'));
+  try {
+    await guard.requireFreshSimulator(url);
+  } finally {
+    server.close();
+  }
+});
+
+test('fresh journal: a non-empty journal is refused with the served count', async () => {
+  const { server, url } = await journalServer(reply('{"entries":[{"seq":1},{"seq":2}]}'));
+  try {
+    await assert.rejects(
+      guard.requireFreshSimulator(url),
+      (error) => error instanceof guard.GuardError && /already served 2 request\(s\)/.test(error.message),
+    );
+  } finally {
+    server.close();
+  }
+});
+
+for (const [name, body, status] of [
+  ['malformed JSON', 'not json', 200],
+  ['no entries array', '{"entries":3}', 200],
+  ['an error status', '{"entries":[]}', 500],
+]) {
+  test(`fresh journal: ${name} is refused as unreadable`, async () => {
+    const { server, url } = await journalServer(reply(body, status));
+    try {
+      await assert.rejects(guard.requireFreshSimulator(url), /cannot read the simulator journal/);
+    } finally {
+      server.close();
+    }
+  });
+}
+
+test('fresh journal: an unreachable simulator is refused as unreadable', async () => {
+  await assert.rejects(guard.requireFreshSimulator('http://127.0.0.1:1'), /cannot read the simulator journal/);
+});
+
+test('fresh journal: a hung simulator times out as unreadable', async () => {
+  const { server, url } = await journalServer(() => {});
+  try {
+    await assert.rejects(
+      guard.requireFreshSimulator(url, { timeoutMs: 100 }),
+      /cannot read the simulator journal/,
+    );
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test('fresh journal: a non-loopback control URL is refused by the loopback guard', async () => {
+  await assert.rejects(guard.requireFreshSimulator('https://api.backblazeb2.com'), guard.GuardError);
+});
