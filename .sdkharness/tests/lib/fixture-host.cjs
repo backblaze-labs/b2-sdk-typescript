@@ -4,7 +4,7 @@ const dns = require('node:dns');
 
 // A zero-value test fixture: this name resolves to loopback only inside a
 // process that explicitly installs the patch below.
-const FIXTURE_HOST = 'sdkharness-loopback-fixture.backblaze.net';
+const FIXTURE_HOST = process.env.SDKHARNESS_SIMULATOR_FIXTURE_HOST || 'sdkharness-loopback-fixture.backblaze.net';
 
 function routeFixtureHostToLoopback() {
   const real = dns.lookup;
