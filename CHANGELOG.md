@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Updated transitive development dependencies to patched versions.
+
 ### Fixed
 
 - **`.sdkharness` checks no longer turn failures into amber.** A conformance or resilience leaf that prints `COULD-NOT-RUN` but exits nonzero is now a `FAIL` in both dispatchers, and a built SDK that throws on import is a `FAIL` instead of `COULD-NOT-RUN` (only a missing `dist/` build is amber). The `enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold` and `lock.per_file_retention` checks now assert the specific refusal (type, status, code, message) rather than treating any thrown error as one.
