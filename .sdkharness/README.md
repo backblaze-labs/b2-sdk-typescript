@@ -30,6 +30,17 @@ request journal with no reset and the checks count it, so `run-resilience` repor
 that already served requests as a `configuration` FAIL instead of letting an earlier scenario's
 requests produce a false SDK verdict.
 
+## Testing a published release
+
+A published package ships no sources, so `pnpm build` cannot run in it. To test a
+release, install it (`npm pack @backblaze-labs/b2-sdk@X`, extract,
+`npm install --omit=dev --ignore-scripts`), copy this `.sdkharness/` into the
+extracted tree and set `SDKHARNESS_SDK_PREBUILT=1`. The health checks then skip
+`pnpm build` if the files the `exports` map names for `.` exist, and fail with a
+clear message if they do not. With the variable unset the checks build exactly as
+before. `health/examples` also needs the repository's `examples/` and `tsx`, so it
+is not meaningful against a published tree.
+
 ## Guard rules
 
 Every check, the two dispatchers and `health-golden-path` share one guard,

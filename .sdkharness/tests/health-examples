@@ -3,6 +3,9 @@
 # by sdkharness. It uses the SDK's in-memory simulator, never real B2.
 set -u
 
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
+. "$HERE/lib/contract.sh"
+
 LEVEL="${SDKHARNESS_TEST_LEVEL:-health}"
 SCENARIO="${SDKHARNESS_SCENARIO:-examples}"
 WORK_DIR=""
@@ -36,7 +39,7 @@ run_smoke() {
   export B2_BACKUP_PASSPHRASE=smoke-pass
 
   printf '%s\n' '== build the distributable package'
-  pnpm build || return 1
+  sdkharness_build_or_prebuilt || return 1
   printf '%s\n' '== list buckets example'
   pnpm exec tsx examples/node-list-buckets.ts || return 1
   printf '%s\n' '== upload example'

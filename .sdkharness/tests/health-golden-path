@@ -38,7 +38,11 @@ try {
   process.exit(1)
 }' 2>&1)" || { fail_with "configuration: $guard_out" 65; return; }
 
-  pnpm build || { fail_with 'pnpm build failed (see the build output above)' 1; return; }
+  if [ "${SDKHARNESS_SDK_PREBUILT:-}" = 1 ]; then
+    sdkharness_build_or_prebuilt || { fail_with 'SDKHARNESS_SDK_PREBUILT=1 but the built output is missing (see the output above)' 1; return; }
+  else
+    pnpm build || { fail_with 'pnpm build failed (see the build output above)' 1; return; }
+  fi
 
   local err
   err="$(mktemp "${TMPDIR:-/tmp}/sdkharness-typescript-health.XXXXXX")" \

@@ -216,3 +216,75 @@ test('health-golden-path: refuses [::1], a non-fixed credential, and a missing c
     assert.ok(!/real-looking-secret|K0051234567890abcdef/.test(result.stdout + result.stderr));
   }
 });
+
+// SDKHARNESS_SDK_PREBUILT=1 lets the harness test a published release, which ships no sources to build.
+// `pnpm` here is a stub that records that it was called, so the tests prove build vs skip.
+function prebuiltFixture(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sdkharness-prebuilt-'));
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'pnpm'), `#!/bin/sh\necho "$@" >> "${dir}/pnpm-calls"\n`, { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({ exports: { '.': { import: { default: './dist/index.js' }, require: { default: './dist/index.cjs' } } } }),
+  );
+  for (const file of files) {
+    fs.mkdirSync(path.join(dir, path.dirname(file)), { recursive: true });
+    fs.writeFileSync(path.join(dir, file), '');
+  }
+  return { dir, bin, calls: () => (fs.existsSync(path.join(dir, 'pnpm-calls')) ? fs.readFileSync(path.join(dir, 'pnpm-calls'), 'utf8') : '') };
+}
+
+function runBuildHelper(fixture, env) {
+  return spawnSync('bash', ['-c', `. "${path.join(TESTS, 'lib', 'contract.sh')}"; sdkharness_build_or_prebuilt`], {
+    cwd: fixture.dir,
+    env: { PATH: `${fixture.bin}:${process.env.PATH}`, ...env },
+    encoding: 'utf8',
+  });
+}
+
+test('build helper: default (variable unset) runs pnpm build even when dist/ exists', () => {
+  const fx = prebuiltFixture(['dist/index.js', 'dist/index.cjs']);
+  const result = runBuildHelper(fx, {});
+  assert.equal(result.status, 0);
+  assert.equal(fx.calls().trim(), 'build');
+});
+
+test('build helper: SDKHARNESS_SDK_PREBUILT=1 with the built output present skips the build', () => {
+  const fx = prebuiltFixture(['dist/index.js', 'dist/index.cjs']);
+  const result = runBuildHelper(fx, { SDKHARNESS_SDK_PREBUILT: '1' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(fx.calls(), '');
+  assert.match(result.stdout, /skipping pnpm build/);
+});
+
+test('build helper: SDKHARNESS_SDK_PREBUILT=1 with a missing output fails loudly and never builds', () => {
+  const fx = prebuiltFixture(['dist/index.js']);
+  const result = runBuildHelper(fx, { SDKHARNESS_SDK_PREBUILT: '1' });
+  assert.equal(result.status, 1);
+  assert.equal(fx.calls(), '');
+  assert.match(result.stderr, /built output is missing: \.\/dist\/index\.cjs/);
+});
+
+test('health-golden-path: SDKHARNESS_SDK_PREBUILT=1 with no built output is a FAIL, not a build attempt', () => {
+  const fx = prebuiltFixture([]);
+  const result = spawnSync(path.join(TESTS, 'health-golden-path'), [], {
+    cwd: fx.dir,
+    env: {
+      PATH: `${fx.bin}:${process.env.PATH}`,
+      SDKHARNESS_TEST_LEVEL: 'health',
+      SDKHARNESS_SCENARIO: 'golden-path',
+      SDKHARNESS_SIMULATOR_URL: 'http://127.0.0.1:9',
+      HEALTHCHECK_REALM_URL: 'http://127.0.0.1:9',
+      B2_TEST_APPLICATION_KEY_ID: 'test-key-id',
+      B2_TEST_APPLICATION_KEY: 'test-key',
+      B2_BUCKET_NAME: 'b',
+      SDKHARNESS_SDK_PREBUILT: '1',
+    },
+    encoding: 'utf8',
+  });
+  const fields = (result.stdout.split('\n').find((l) => l.startsWith('SDKHARNESS_RESULT')) || '').split('\t');
+  assert.equal(fields[3], 'FAIL', result.stdout + result.stderr);
+  assert.match(fields[4], /SDKHARNESS_SDK_PREBUILT=1 but the built output is missing/);
+  assert.equal(fx.calls(), '');
+});
