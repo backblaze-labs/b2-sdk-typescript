@@ -1617,6 +1617,61 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
   })
 
+  it.each([
+    ['reset_before_response', 'connection reset before response'],
+    ['reset_mid_request', 'connection reset while sending request'],
+    ['stall', 'socket timed out waiting for response'],
+  ])('retries %s with a fresh upload URL by default', async (_scenario, message) => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const uploadUrls: string[] = []
+    let getUploadUrlCalls = 0
+    const retryEvents: UploadRetryEvent[] = []
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_get_upload_url')) {
+          getUploadUrlCalls += 1
+          const response = await inner.send(req)
+          const body = await response.json<UploadUrlBody>()
+          return jsonResponse({
+            ...body,
+            uploadUrl: `${body.uploadUrl}&connectionRetry=${getUploadUrlCalls}`,
+          })
+        }
+        if (req.url.includes('b2_upload_file?')) {
+          uploadUrls.push(req.url)
+          if (uploadUrls.length === 1) throw new NetworkError(message)
+        }
+        return inner.send(req)
+      },
+    }
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'connection-retry',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const result = await bucket.upload({
+      fileName: 'connection-retry.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
+
+    expect(result.fileName).toBe('connection-retry.txt')
+    expect(uploadUrls).toHaveLength(2)
+    expect(uploadUrls[0]).not.toBe(uploadUrls[1])
+    expect(getUploadUrlCalls).toBe(2)
+    expect(retryEvents).toHaveLength(1)
+    expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+    expect(await countFileVersions(bucket, result.fileName)).toBe(1)
+  })
+
   it('continues fresh-URL recovery when the upload retry observer throws', async () => {
     const sim = new B2Simulator()
     const harness = freshUrlRetryHarness(sim.transport(), 'file')
@@ -2345,7 +2400,7 @@ describe('upload fresh-URL retry', () => {
     expect(freshFetches).toBe(0)
   })
 
-  it('does not retry spoofable upload ECONNREFUSED errors after upload callback starts', async () => {
+  it('retries an upload connection failure even if the first attempt was stored', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
     let committedVersions = 0
@@ -2360,65 +2415,63 @@ describe('upload fresh-URL retry', () => {
       new TypeError('fetch failed', { cause: refusedCause }),
     )
 
-    await expect(
-      withFreshUploadUrlRetry({
-        fileName: 'connection-refused.txt',
-        partNumber: null,
-        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-        retryResponseBodyFailures: false,
-        checkout: () => firstEntry,
-        fetchFresh: () => {
-          freshFetches += 1
-          return Promise.resolve(secondEntry)
-        },
-        returnEntry: () => {},
-        evictEntry: () => {},
-        upload: () => {
-          uploadAttempts += 1
-          committedVersions += 1
-          return Promise.reject(networkError)
-        },
-        onUploadRetry: (event) => retryEvents.push(event),
-      }),
-    ).rejects.toBe(networkError)
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'connection-refused.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      checkout: () => firstEntry,
+      fetchFresh: () => {
+        freshFetches += 1
+        return Promise.resolve(secondEntry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        committedVersions += 1
+        return uploadAttempts === 1 ? Promise.reject(networkError) : Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(committedVersions).toBe(1)
-    expect(freshFetches).toBe(0)
-    expect(retryEvents).toHaveLength(0)
+    expect(result).toBe('uploaded')
+    expect(uploadAttempts).toBe(2)
+    expect(committedVersions).toBe(2)
+    expect(freshFetches).toBe(1)
+    expect(retryEvents).toHaveLength(1)
   })
 
-  it('does not replay generic single-request upload network errors by default', async () => {
+  it('retries generic single-request upload network errors by default', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
     const retryEvents: UploadRetryEvent[] = []
     const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
     const networkError = new NetworkError('socket closed')
 
-    await expect(
-      withFreshUploadUrlRetry({
-        fileName: 'ambiguous-network.txt',
-        partNumber: null,
-        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-        retryResponseBodyFailures: false,
-        checkout: () => entry,
-        fetchFresh: () => {
-          freshFetches += 1
-          return Promise.resolve(entry)
-        },
-        returnEntry: () => {},
-        evictEntry: () => {},
-        upload: () => {
-          uploadAttempts += 1
-          return Promise.reject(networkError)
-        },
-        onUploadRetry: (event) => retryEvents.push(event),
-      }),
-    ).rejects.toBe(networkError)
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'ambiguous-network.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      checkout: () => entry,
+      fetchFresh: () => {
+        freshFetches += 1
+        return Promise.resolve(entry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        return uploadAttempts === 1 ? Promise.reject(networkError) : Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(freshFetches).toBe(0)
-    expect(retryEvents).toHaveLength(0)
+    expect(result).toBe('uploaded')
+    expect(uploadAttempts).toBe(2)
+    expect(freshFetches).toBe(1)
+    expect(retryEvents).toHaveLength(1)
   })
 
   it('returns upload URLs before surfacing upload-layer rate limits', async () => {
@@ -2633,7 +2686,7 @@ describe('upload fresh-URL retry', () => {
     expect(retryEvents).toEqual([])
   })
 
-  it('does not retry a single-file upload POST network error by default', async () => {
+  it('retries a single-file upload POST network error by default', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2645,8 +2698,10 @@ describe('upload fresh-URL retry', () => {
         }
         if (req.url.includes('b2_upload_file?')) {
           uploadAttempts += 1
-          await inner.send(req)
-          throw new TypeError('socket closed after upload')
+          if (uploadAttempts === 1) {
+            await inner.send(req)
+            throw new TypeError('socket closed after upload')
+          }
         }
         return inner.send(req)
       },
@@ -2659,23 +2714,22 @@ describe('upload fresh-URL retry', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'network-default-no-retry',
+      bucketName: 'network-default-retry',
       bucketType: BucketType.AllPrivate,
     })
 
-    await expect(
-      bucket.upload({
-        fileName: 'network-default.txt',
-        source: new BufferSource(new Uint8Array([1, 2, 3])),
-      }),
-    ).rejects.toThrow(NetworkError)
+    const result = await bucket.upload({
+      fileName: 'network-default.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(getUploadUrlCalls).toBe(1)
-    expect(await countFileVersions(bucket, 'network-default.txt')).toBe(1)
+    expect(result.fileName).toBe('network-default.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'network-default.txt')).toBe(2)
   })
 
-  it('retries upload network failures with a fresh URL when explicitly enabled', async () => {
+  it('retries upload network failures with response-body retries disabled', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2715,7 +2769,7 @@ describe('upload fresh-URL retry', () => {
     const result = await bucket.upload({
       fileName: 'retry-network.txt',
       source: new BufferSource(new Uint8Array([1, 2, 3])),
-      retryResponseBodyFailures: true,
+      retryResponseBodyFailures: false,
     })
 
     expect(result.fileName).toBe('retry-network.txt')
@@ -2723,7 +2777,7 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(2)
   })
 
-  it('does not retry upload timeouts after the file may have been stored', async () => {
+  it('retries upload timeouts after the file may have been stored', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2757,20 +2811,19 @@ describe('upload fresh-URL retry', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'no-retry-timeout',
+      bucketName: 'retry-timeout',
       bucketType: BucketType.AllPrivate,
     })
 
-    await expect(
-      bucket.upload({
-        fileName: 'no-retry-timeout.txt',
-        source: new BufferSource(new Uint8Array([1, 2, 3])),
-      }),
-    ).rejects.toBeInstanceOf(NetworkError)
+    const result = await bucket.upload({
+      fileName: 'retry-timeout.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(getUploadUrlCalls).toBe(1)
-    expect(await countFileVersions(bucket, 'no-retry-timeout.txt')).toBe(1)
+    expect(result.fileName).toBe('retry-timeout.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'retry-timeout.txt')).toBe(2)
   })
 
   it('recovers expired upload tokens through fresh URL retry without reauth', async () => {

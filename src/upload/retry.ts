@@ -40,11 +40,10 @@ export interface UploadRetryOptions {
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
-   * Whether ambiguous failures after an upload POST should be retried,
-   * including response-body read failures and transport errors where B2 may
-   * have stored the payload before the success response was lost.
-   * Defaults to false. Set true only when duplicate versions or parts are
-   * acceptable.
+   * Whether ambiguous upload POST failures should trigger a retry: unreadable
+   * response bodies and multipart part connection failures after the POST starts.
+   * Single-file connection failures retry by default with a fresh upload URL.
+   * Defaults to false. Set true only when duplicate versions or parts are acceptable.
    */
   readonly retryResponseBodyFailures?: boolean | undefined
 }
@@ -304,7 +303,7 @@ function isUploadRetryable(
 ): err is B2Error | NetworkError {
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
-    if (!options.uploadStarted) return true
+    if (!options.uploadStarted || options.partNumber === null) return true
     return options.retryResponseBodyFailures === true
   }
   if (err instanceof BadAuthTokenError) return true
