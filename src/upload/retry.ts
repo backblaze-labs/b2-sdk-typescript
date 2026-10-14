@@ -40,10 +40,9 @@ export interface UploadRetryOptions {
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
-   * Whether ambiguous upload POST failures should trigger a retry: unreadable
-   * response bodies and multipart part connection failures after the POST starts.
-   * Single-file connection failures retry by default with a fresh upload URL.
-   * Defaults to false. Set true only when duplicate versions or parts are acceptable.
+   * Whether unreadable upload response bodies should trigger a retry. Connection
+   * failures retry by default with a fresh URL for single-file and part uploads.
+   * Defaults to false. Set true only when replaying an ambiguous response is acceptable.
    */
   readonly retryResponseBodyFailures?: boolean | undefined
 }
@@ -213,12 +212,9 @@ export function uploadPartWithFreshUrl(
  * Runs an upload operation with B2's documented retry flow: evict the failed
  * upload URL, back off, fetch a fresh upload URL, and retry there.
  *
- * For single-request file uploads, sending the POST again after a lost success
- * response can create a duplicate file version. Multipart retries re-send the
- * same part number instead. Response-body retry defaults are caller-specific:
- * single-request uploads keep them off by default, while multipart callers can
- * opt in with `retryResponseBodyFailures: true` when replaying the same part
- * number is acceptable.
+ * A repeated single-file POST can create a duplicate file version; a repeated
+ * multipart POST replaces the same part number. Unreadable success response
+ * bodies remain opt-in with `retryResponseBodyFailures: true` for both modes.
  *
  * @param options - URL checkout, upload, eviction, and retry callbacks.
  *
@@ -229,7 +225,6 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     let uploadEntry: UploadUrlEntry | undefined
-    let uploadStarted = false
 
     try {
       options.signal?.throwIfAborted()
@@ -238,7 +233,6 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
           ? (options.checkout() ?? (await options.fetchFresh()))
           : await options.fetchFresh()
 
-      uploadStarted = true
       const result = await options.upload(uploadEntry)
       options.returnEntry(uploadEntry)
       return result
@@ -257,10 +251,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (
-        !isUploadRetryable(retryError, { ...options, uploadStarted }) ||
-        attempt === retryOptions.maxRetries
-      ) {
+      if (!isUploadRetryable(retryError, options) || attempt === retryOptions.maxRetries) {
         throw retryError
       }
 
@@ -296,15 +287,12 @@ function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryE
 
 function isUploadRetryable(
   err: unknown,
-  options: UploadLayerRetryOptions & {
-    readonly partNumber: number | null
-    readonly uploadStarted: boolean
-  },
+  options: UploadLayerRetryOptions,
 ): err is B2Error | NetworkError {
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
-    if (!options.uploadStarted || options.partNumber === null) return true
-    return options.retryResponseBodyFailures === true
+    if (err.cause instanceof UploadResponseBodyError) return options.retryResponseBodyFailures
+    return true
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
