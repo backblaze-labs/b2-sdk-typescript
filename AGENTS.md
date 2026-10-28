@@ -12,9 +12,24 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Subpath exports, source layout, layering, and the key design decisions. **Read before touching `src/`.** |
 | [`docs/`](docs/README.md) | **System of record.** [core beliefs](docs/design-docs/core-beliefs.md), [design-docs/ADRs](docs/design-docs/index.md), [quality score](docs/QUALITY_SCORE.md), [exec-plans + tech-debt](docs/exec-plans/tech-debt-tracker.md), [references](docs/references/). |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev workflow, PR checklist, release steps. |
+| [`REVIEW.md`](REVIEW.md) | Review process: the one gate, recurring review lessons, reviewer checklist. |
+| [`intent/`](intent/TEMPLATE.md) | AI-native SDLC artifact chain per change (`intent.md` -> `spec.md` -> `plan.md`). |
+| [`.claude/skills/`](.claude/skills/ai-native-sdlc/SKILL.md) | The AI-native SDLC plays; start with `ai-native-sdlc`. |
 | [`CHANGELOG.md`](CHANGELOG.md) / [`MIGRATION.md`](MIGRATION.md) | Keep-a-Changelog history / v3→v4 upgrade guide. |
 | `api-docs/` | Generated TypeDoc reference (`pnpm docs`; not versioned). |
 | [`README.md`](README.md) | User-facing docs — governed by the docs policy below. |
+
+## AI-native SDLC
+
+Larger changes follow the AI-native SDLC artifact chain: `intent/<slug>/intent.md`
+(problem, in the originator's words) -> `spec.md` (numbered requirements) ->
+`plan.md` (files, order, proof), with a human approving each hand-off. The plays
+live in [`.claude/skills/`](.claude/skills/); start with `ai-native-sdlc`, which
+routes to the next `sdlc-*` skill from what exists. This repo already uses the
+harness layout, so specs and plans for larger work may also live under
+[`docs/exec-plans/`](docs/exec-plans/) with decisions as ADRs; use
+`sdlc-harness-translate` to map between the two. Small, low-blast-radius changes
+can go straight to a planned PR. Reviewers follow [`REVIEW.md`](REVIEW.md).
 
 ## Overview
 
