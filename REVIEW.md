@@ -22,12 +22,13 @@ should assume a PR ran it; CI re-runs the same gate on Linux + Windows + macOS
 These are the review comments that kept repeating. Check them before the deeper
 logic review.
 
-- **Changelog.** Every user-visible change updates `CHANGELOG.md` `[Unreleased]`.
-  Breaking changes start the bullet with `BREAKING:` and say what callers must
-  change. One bullet per change; keep each bullet a single line (Keep-a-Changelog
-  + the `cut-changelog` / `extract-changelog` release scripts depend on the
-  shape). Parallel PRs editing `[Unreleased]` conflict on rebase: see the
-  `intent/changelog-fragments/` proposal.
+- **Changelog.** Every user-visible change adds a changie fragment
+  (`pnpm run changelog:new`) under `.changes/unreleased/`; never hand-edit the
+  generated `CHANGELOG.md`. Breaking changes start the entry with `BREAKING:` and
+  say what callers must change. One entry per change, one line each. The
+  `changelog` check enforces this for non-test `src/` changes; reviewers catch
+  user-visible changes outside `src/` (such as `package.json` exports or engines).
+  See [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries).
 - **Tests fail when the fix is reverted.** A fix without a test that would catch
   its regression is not reviewable. Never skip or delete a failing test to go
   green.
@@ -63,8 +64,8 @@ layouts. Small, low-blast-radius changes can skip straight to a planned PR.
 ## Reviewer checklist
 
 1. Does `pnpm verify` pass (CI green)?
-2. Is there a `[Unreleased]` changelog entry, `BREAKING:`-tagged if it breaks
-   callers?
+2. Is there a `.changes/unreleased/` fragment, `BREAKING:`-tagged if it breaks
+   callers (or a justified `skip-changelog` label)?
 3. Do the tests fail when the change is reverted? Are new `**/*.test.ts`
    isomorphic?
 4. Do response-shape / simulator changes match the cited B2 docs?

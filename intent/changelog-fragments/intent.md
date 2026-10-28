@@ -1,5 +1,18 @@
 # Intent: Per-PR changelog fragments (evaluate changie)
-Author: gpenacastellanos, Applied AI. Status: proposal (needs code-owner decision).
+Author: gpenacastellanos, Applied AI. Status: accepted (changie), implemented in the SDLC adoption PR.
+
+## Decision
+Adopt changie, pinned to the same version as Backblaze/blazer (1.24.0) with the same
+`.changie.yaml` kinds, formats and layout, so every repo shares one changelog workflow.
+Alternatives considered: changesets (rejected: replaces the Keep a Changelog format
+and overlaps the custom `release.yml` publish), and extending `cut-changelog` with a
+homegrown fragment format (rejected: more custom code, no cross-repo reuse). changie
+comes from its official npm package as an exact-pinned devDependency (no install
+scripts; bundled binaries), and the existing pipeline is kept rather than replaced:
+`cut-changelog.mjs` now runs `changie batch` + `changie merge` from the `version`
+lifecycle script, `extract-changelog.mjs` still reads the generated `CHANGELOG.md`
+(prereleases render the pending fragments), and a `changelog` PR check mirrors
+Blazer's.
 
 ## Problem
 `CHANGELOG.md [Unreleased]` is a single hand-edited section, so parallel PRs
@@ -28,6 +41,6 @@ Contributors; the release pipeline: `scripts/cut-changelog.mjs`,
 - The `[Unreleased]`-to-version cut and the GitHub Release body must keep working.
 
 ## Open questions
-- changie, or keep-and-extend? Who owns the release pipeline sign-off?
-- Should the `changelog` / `fragment` check be a required check on `main`?
-- Create a `skip-changelog` label?
+- Resolved: changie (see Decision).
+- Should the `changelog` check be a required check on `main`? (repo admin)
+- Create the `skip-changelog` label. (repo admin)

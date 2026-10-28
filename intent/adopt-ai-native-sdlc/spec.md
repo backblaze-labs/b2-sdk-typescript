@@ -24,30 +24,45 @@ Skills applied: ai-native-sdlc, sdlc-intent, sdlc-spec, sdlc-harness-translate.
 - R7. A `make ci` target mirrors `pnpm verify` for cross-repo parity.
 - R8. The whole change passes `pnpm verify` (no new spelling, docs-consistency,
   or lint failures) and makes no `src/` behavior change.
+- R9. Changelog entries are changie fragments: `.changie.yaml` matches Blazer's
+  (kinds, formats, newlines; changie 1.24.0), released history is migrated into
+  `.changes/v*.md` with every released bullet byte-identical, pending
+  `[Unreleased]` entries become `.changes/unreleased/*.yaml`, and the generated
+  `CHANGELOG.md` keeps the `## [<version>] - <date>` headings.
+- R10. The release pipeline keeps working: `pnpm version` batches + merges via
+  `cut-changelog.mjs` (prereleases leave fragments alone; an empty release warns),
+  `extract-changelog.mjs` still returns a version's section and renders pending
+  fragments for prereleases, and `verify:metadata` still finds the version heading.
+- R11. Enforcement: `pnpm run changelog:lint` (in `pnpm verify`) fails on
+  unparseable fragments or a hand-edited `CHANGELOG.md`; a `changelog` PR workflow
+  (Dependabot-guarded, `skip-changelog` label) fails a non-test `src/` change with
+  no fragment.
 
 ## Design
-All new files are docs, skills, templates, and a Makefile. No `src/`, no runtime
-behavior, no release-pipeline change. The playbook's generic `intent/<slug>/`
-chain is offered alongside, not instead of, the existing `docs/exec-plans/`
-harness layout; `sdlc-harness-translate` is the bridge. The changelog-tooling and
-review-tiering decisions are deferred to owner-reviewed proposal intents because
-they touch the release pipeline and branch-protection policy respectively.
+Docs, skills, templates, a Makefile, and the changie changelog tooling. No `src/`
+or runtime behavior change. The playbook's generic `intent/<slug>/` chain is
+offered alongside, not instead of, the existing `docs/exec-plans/` harness layout;
+`sdlc-harness-translate` is the bridge. changie slots into the existing release
+scripts (R9-R11) rather than replacing them. Review tiering is deferred to an
+owner-reviewed proposal intent because it touches branch-protection policy.
 
 ## How each constraint in the intent is met
 | Constraint | Met by |
 | :---- | :---- |
-| Do not break the release pipeline | No `CHANGELOG.md` tooling change here; changie deferred to `intent/changelog-fragments/` (R5) |
+| Do not break the release pipeline | changie slots into the existing `version` script and `extract-changelog`; rehearsed end to end (R10) |
 | Stay green under `pnpm verify` | R8; docs-only + skills + templates, run the full gate before PR |
 | Do not duplicate guidance | R6: one new section in `AGENTS.md`, `CLAUDE.md` still imports it |
 
 ## Open questions from the intent
-- changie vs keep-and-extend: carried forward as `intent/changelog-fragments/`
-  (concern 1).
+- changie vs keep-and-extend: resolved, changie (`intent/changelog-fragments/`,
+  concern 1).
 - Review tiers and automated gates: carried forward as `intent/review-tiering/`
   (concern 2).
 
 ## Areas of concern
 1. Changelog tooling migration touches `cut-changelog` / `extract-changelog` /
-   `verify:metadata` / `release.yml`. Owner: release manager / code owners.
+   `verify:metadata` / `release.yml`. Resolved: changie approved; the pipeline is
+   kept and rehearsed (R9-R11). Remaining admin items: create the `skip-changelog`
+   label and decide whether `changelog` is a required check.
 2. Review tiering needs branch-protection and required-check changes only a repo
    admin can make. Owner: code owners / repo admin.
