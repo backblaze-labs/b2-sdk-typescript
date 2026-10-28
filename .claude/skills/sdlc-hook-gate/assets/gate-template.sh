@@ -11,8 +11,9 @@ decide() {   # decide <allow|ask|deny> <reason>
   jq -n --arg decision "$1" --arg reason "$2" '{hookSpecificOutput: {
     hookEventName: "PreToolUse",
     permissionDecision: $decision,
-    permissionDecisionReason: $reason}}'
-  exit 0
+    permissionDecisionReason: $reason}}' && exit 0
+  echo "gate: could not encode the decision; blocking." >&2
+  exit 2   # fail closed: exit 2 blocks the tool call
 }
 
 case "$tool" in

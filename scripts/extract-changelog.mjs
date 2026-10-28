@@ -9,7 +9,7 @@
 // (exclusive), trimmed. Exits non-zero if the section isn't found so the
 // release workflow fails loudly rather than publishing an empty-bodied release.
 
-import { promises as fs } from 'node:fs'
+import { existsSync, promises as fs, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runChangie } from './changie.mjs'
@@ -49,8 +49,16 @@ if ((body === null || body === '') && isPrerelease) {
 }
 
 function unreleasedNotes(v) {
-  const { status, stdout } = runChangie(['batch', `v${v}`, '--dry-run'], { capture: true })
-  if (status !== 0) return ''
+  const dir = join(repo, '.changes', 'unreleased')
+  if (!existsSync(dir) || !readdirSync(dir).some((f) => f.endsWith('.yaml'))) return ''
+  // Fragments exist, so a changie failure (e.g. a malformed fragment) must fail the release.
+  const { status, stdout, stderr } = runChangie(['batch', `v${v}`, '--dry-run'], { capture: true })
+  if (status !== 0) {
+    console.error(
+      `extract-changelog: changie could not render the unreleased fragments.\n${stderr}`,
+    )
+    process.exit(status)
+  }
   return stdout
     .split('\n')
     .filter((line) => !/^## \[/.test(line) && !/^\[[^\]]+\]: /.test(line))
