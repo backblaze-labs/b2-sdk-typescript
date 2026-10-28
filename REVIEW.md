@@ -20,7 +20,8 @@ should assume a PR ran it; CI re-runs the same gate on Linux + Windows + macOS
 ## Recurring lessons (check these first)
 
 These are the review comments that kept repeating. Check them before the deeper
-logic review.
+logic review. The full catalog, mined from every review thread on every merged
+PR, is [`docs/references/review-lessons.md`](docs/references/review-lessons.md).
 
 - **Changelog.** Every user-visible change adds a changie fragment
   (`pnpm run changelog:new`) under `.changes/unreleased/`; never hand-edit the
@@ -69,8 +70,18 @@ layouts. Small, low-blast-radius changes can skip straight to a planned PR.
 3. Do the tests fail when the change is reverted? Are new `**/*.test.ts`
    isomorphic?
 4. Do response-shape / simulator changes match the cited B2 docs?
-5. Are cited doc numbers still true (`verify:docs-consistency`)?
-6. Is the change scoped (no unrelated edits), with a Conventional-Commits
+5. Are cited doc numbers still true (`verify:docs-consistency`)? Do JSDoc,
+   README, contributor docs, the fragment and the PR body still match the final
+   behavior?
+6. Does every new await honor the caller's `AbortSignal`, and does every early
+   exit release bodies, handles, timers and iterators without masking the root
+   error?
+7. Are public types back-compatible (optional new fields, overloads or
+   deprecated aliases) and do they match runtime validation and the wire shape
+   (`null` vs `undefined`)?
+8. Are untrusted inputs validated (numbers, paths, keys, realm URLs,
+   `Object.create(null)` dictionaries) and nothing secret logged?
+9. Is the change scoped (no unrelated edits), with a Conventional-Commits
    subject and no AI attribution?
 
 ## Scaling review by risk
