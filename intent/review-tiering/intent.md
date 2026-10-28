@@ -1,5 +1,18 @@
 # Intent: Scale human review by risk
-Author: gpenacastellanos, Applied AI. Status: proposal (needs code-owner decision).
+Author: gpenacastellanos, Applied AI. Status: accepted, implemented in the SDLC adoption PR
+(repo-admin settings pending).
+
+## Decision
+Adopt the layered model from Anthropic's "solving code review" write-up, documented in
+`docs/review-process.md`: path-based risk tiers enforced by the `review-risk` check
+(`.github/review-policy.json`; low 0, medium 1, high 2 human approvals, +1 for untrusted
+authors, approvals count only on the head commit and never from bots), `CODEOWNERS` for
+paths that always need a person, an AI review and a security review on every same-repo
+PR (`ai-review.yml`), the REVIEW.md reviewer contract (severity tags, evidence, nit cap,
+round cap, no reposts), a PR template with Testing / Risk / How to revert, and a weekly
+`review-metrics` report with the revert share as the guardrail. Branch protection,
+required checks, conversation resolution, stale-approval dismissal, the merge queue and
+the API key remain repo-admin items (checklist in `docs/review-process.md`).
 
 ## Problem
 Most PRs are agent-written and the review queue cannot scale by adding more human
@@ -31,6 +44,8 @@ rulesets on `main`, required status checks.
   docs-only or Dependabot PRs.
 
 ## Open questions
-- Which paths are "protected" and who owns each?
-- Is a merge queue wanted now or later?
-- Which metrics define whether the policy is working (leading and lagging)?
+- Resolved: protected paths are the `high` rules in `.github/review-policy.json` and the
+  `CODEOWNERS` entries; owners should add a second person per area.
+- Merge queue: optional, admin decision.
+- Resolved: metrics are human approvals, human comments and wait time per PR, automated
+  review rounds, and the revert share as the guardrail (`scripts/review-metrics.mjs`).

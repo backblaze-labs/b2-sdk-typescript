@@ -37,6 +37,14 @@ Skills applied: ai-native-sdlc, sdlc-intent, sdlc-spec, sdlc-harness-translate.
   unparseable fragments or a hand-edited `CHANGELOG.md`; a `changelog` PR workflow
   (Dependabot-guarded, `skip-changelog` label) fails a non-test `src/` change with
   no fragment.
+- R12. Layered review per `docs/review-process.md`: `REVIEW.md` states what
+  failure looks like and the AI reviewer contract; a `review-risk` check enforces
+  path-based tiers from `.github/review-policy.json` (human approvals on the head
+  commit only, bots never count) run from the base branch; `CODEOWNERS` covers
+  always-human paths; `ai-review.yml` runs a Claude review and a security review on
+  same-repo PRs and no-ops without `ANTHROPIC_API_KEY`; the PR template asks for
+  Testing, Risk and How to revert; `review-metrics` reports weekly; a format hook
+  and a `reviewer` subagent cover the pre-PR layer.
 
 ## Design
 Docs, skills, templates, a Makefile, and the changie changelog tooling. No `src/`
@@ -64,5 +72,6 @@ owner-reviewed proposal intent because it touches branch-protection policy.
    `verify:metadata` / `release.yml`. Resolved: changie approved; the pipeline is
    kept and rehearsed (R9-R11). Remaining admin items: create the `skip-changelog`
    label and decide whether `changelog` is a required check.
-2. Review tiering needs branch-protection and required-check changes only a repo
-   admin can make. Owner: code owners / repo admin.
+2. Review tiering: implemented in-repo (R12). Branch protection, required checks,
+   conversation resolution, stale-approval dismissal, the merge queue and the API
+   key still need a repo admin (checklist in `docs/review-process.md`).

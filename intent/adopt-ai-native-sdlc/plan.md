@@ -33,6 +33,11 @@
    rewire `cut-changelog` / `extract-changelog`, add the check + workflow, update
    the release and contributor docs (R9-R11).
 6. Rehearse a release in a scratch copy and re-run `pnpm verify` (R10).
+7. Add the review layers: `REVIEW.md` contract, `docs/review-process.md`,
+   `.github/review-policy.json` + `scripts/review-risk.mjs` + `review-risk.yml`,
+   `CODEOWNERS`, `ai-review.yml` + security instructions, PR template sections,
+   `scripts/review-metrics.mjs` + `review-metrics.yml`, `.claude/settings.json`
+   format hook, `.claude/agents/reviewer.md` (R12).
 
 ## Risks
 - `pnpm verify`'s `lint:spelling` and `verify:docs-consistency` may reject new
@@ -55,3 +60,7 @@
   cleanup, extraction, double-run guard, empty-release warning).
 - R11: `scripts/check-changelog.test.mjs`; negative runs (hand-edited
   `CHANGELOG.md`, unknown kind) fail; actionlint + zizmor clean on the workflow.
+- R12: `pnpm run review:test` (tier classification, head-commit-only human
+  approvals); a dry run of `review-risk.mjs` against this PR reports `high`, 0/2;
+  `review-metrics.mjs` over 120 days reports real rounds; the format hook rewrites
+  a probe file; actionlint + zizmor clean on the new workflows.
