@@ -164,7 +164,11 @@
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
     "clean": "rm -rf dist api-docs",
-    "version": "node scripts/cut-changelog.mjs && git add CHANGELOG.md",
+    "version": "node scripts/cut-changelog.mjs && git add -A CHANGELOG.md .changes",
+    "changelog:new": "changie new",
+    "changelog:next": "changie next auto",
+    "changelog:lint": "node --test scripts/check-changelog.test.mjs && node scripts/check-changelog.mjs --lint",
+    "changelog:check": "node scripts/check-changelog.mjs",
     "prepublishOnly": "pnpm run clean && pnpm run build:release && pnpm run verify:release-channel -- --published && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:exports",
     "verify:metadata": "node --test scripts/verify-package-metadata.test.mjs && node scripts/verify-package-metadata.mjs",
     "verify:release": "node scripts/verify-release-workflow.mjs",
@@ -175,7 +179,7 @@
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "smoke:published": "node scripts/smoke-published-package.mjs",
     "test:smoke-published": "node --test scripts/smoke-published-package.test.mjs",
-    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run changelog:lint && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
@@ -185,6 +189,7 @@
     "@vitest/browser": "^4.1.10",
     "@vitest/browser-playwright": "^4.1.10",
     "@vitest/coverage-v8": "^4.1.10",
+    "changie": "1.24.0",
     "cspell": "^10.3.0",
     "eslint": "^10.10.0",
     "eslint-plugin-jsdoc": "^64.3.6",
