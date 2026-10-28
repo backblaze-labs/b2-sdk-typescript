@@ -1,6 +1,7 @@
 #!/bin/bash
 # Grades one eval run. Usage: check.sh <eval.json> <result.json>
-# Run from the root of the checkout the agent worked in. Needs jq and git.
+# Run from the root of the checkout the agent worked in. Needs jq, git and diff.
+# Set BASELINE to a root-owned copy of the tracked tree taken before the run.
 set -u
 eval_file=$1
 result_file=$2
@@ -17,16 +18,55 @@ run_check() {
   fi
 }
 
-# Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
-# The run controls .git, so git runs unprivileged with fsmonitor off, and a checkout
-# that cannot be inspected is reported instead of read as clean.
-strays() {
-  local listing
-  if ! listing=$(run_check 'git -c core.fsmonitor=false status --porcelain --untracked-files=all' 2>&1); then
-    echo "       could not inspect the checkout: $(head -1 <<<"$listing")"
+# Tracked files that differ from $BASELINE, a root-owned copy of the tree taken
+# before the run. The run controls .git (index, HEAD, config), so content changes
+# are judged against this copy, not git. Read without following symlinks.
+changed() {
+  [ -n "${BASELINE:-}" ] || return 0
+  local listing rc
+  listing=$(${CHECK_AS:+sudo} diff -rq --no-dereference "$BASELINE" . 2>&1)
+  rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "<could not compare against the baseline: $(head -1 <<<"$listing")>"
     return
   fi
-  cut -c4- <<<"$listing" | while read -r path; do
+  sed -n \
+    -e "s|^Only in $BASELINE/\(.*\): \(.*\)$|\1/\2|p" \
+    -e "s|^Only in $BASELINE: \(.*\)$|\1|p" \
+    -e "s|^Files $BASELINE/\(.*\) and \./.* differ$|\1|p" \
+    -e "s|^Symbolic links $BASELINE/\(.*\) and \./.* differ$|\1|p" \
+    -e "s|^File $BASELINE/\(.*\) is a .* while file \./.*$|\1|p" <<<"$listing"
+}
+
+# New files that are not Git-ignored. With $BASELINE, git uses a fresh, empty
+# git dir so nothing the run wrote to .git is read; without it, the run's own
+# status is used. A checkout that cannot be inspected is reported.
+untracked() {
+  local listing gitdir
+  if [ -n "${BASELINE:-}" ]; then
+    gitdir=$(mktemp -d) && git init -q --bare "$gitdir"
+    if ! listing=$(${CHECK_AS:+sudo} git -c safe.directory='*' -c core.fsmonitor=false \
+      --git-dir="$gitdir" --work-tree=. ls-files --others --exclude-standard 2>&1); then
+      rm -rf "$gitdir"
+      echo "<could not list new files: $(head -1 <<<"$listing")>"
+      return
+    fi
+    rm -rf "$gitdir"
+    while read -r path; do
+      [ -n "$path" ] && ! [ -e "$BASELINE/$path" ] && ! [ -L "$BASELINE/$path" ] && echo "$path"
+    done <<<"$listing"
+    return
+  fi
+  if ! listing=$(run_check 'git -c core.fsmonitor=false status --porcelain --untracked-files=all' 2>&1); then
+    echo "<could not inspect the checkout: $(head -1 <<<"$listing")>"
+    return
+  fi
+  cut -c4- <<<"$listing"
+}
+
+# Files changed outside the folders/files the eval allows.
+strays() {
+  { changed; untracked; } | sort -u | while read -r path; do
     [ -n "$path" ] || continue
     jq -e --arg p "$path" \
       'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \

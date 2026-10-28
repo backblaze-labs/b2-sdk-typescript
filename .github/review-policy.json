@@ -4,6 +4,7 @@
   "untrustedAuthorExtraApprovals": 1,
   "needsHumanLabel": "needs-human-review",
   "trustedAuthors": ["EduPav", "ffumero2003", "goanpeca", "jeronimodeleon", "sophiecarreras"],
+  "authorizedReviewers": ["EduPav", "ffumero2003", "goanpeca", "jeronimodeleon", "sophiecarreras"],
   "rules": [
     {
       "tier": "high",

@@ -114,7 +114,7 @@ endpoints reject non-master application keys.
 ## CI
 
 Every pull-request-triggered workflow (`ci`, `examples`, `security`,
-`integration`, `quality-run-demo`, `changelog`, `review-risk`, `ai-review`) is guarded with
+`integration`, `quality-run-demo`, `changelog`, `review-risk`, `review-submitted`, `ai-review`) is guarded with
 `if: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}` so
 Dependabot PRs skip all CI (dependency bumps are consolidated manually). **When
 you add a job to a PR-triggered workflow, add the same guard** (AND it into any

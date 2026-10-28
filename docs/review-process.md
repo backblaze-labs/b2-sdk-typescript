@@ -25,9 +25,11 @@ the [setup checklist](#repo-admin-setup).
 
 ## Risk tiers
 
-The change sets the tier, not the author. The `review-risk` check
-([`scripts/review-risk.mjs`](../scripts/review-risk.mjs)) runs from the base
-branch, classifies every changed path with the first matching rule in
+The change sets the tier, not the author. The `review-risk` commit status
+([`scripts/review-risk.mjs`](../scripts/review-risk.mjs)) is posted on the PR head
+by `review-risk.yml`, which runs only from trusted triggers (`pull_request_target`,
+and `workflow_run` after each review), so a PR cannot replace the gate. It reads
+the policy from the base branch, classifies every changed path with the first matching rule in
 [`.github/review-policy.json`](../.github/review-policy.json), and takes the PR's
 riskiest file:
 
@@ -40,8 +42,9 @@ riskiest file:
 - Authors outside `trustedAuthors` need one more approval.
 - The `needs-human-review` label (applied when the AI reviewer answers
   `Needs human review: yes`, or by anyone) forces at least one.
-- Only human approvals count: bot, Copilot and agent approvals never do, and
-  neither does the author's own. The person who prompted an agent-written PR is
+- Only approvals from the policy's `authorizedReviewers` count (and only their
+  change requests block): bot, Copilot and agent approvals never do, and neither
+  does the author's own. The person who prompted an agent-written PR is
   its author for this purpose and owns the outcome.
 - An approval covers one commit. A new push needs a fresh approval; a human
   "changes requested" blocks until it is dismissed or replaced.
@@ -64,11 +67,14 @@ for merged PRs:
 
 - human approvals per PR and human comments per PR (median, p95);
 - hours waiting on the first human review;
-- automated review rounds per PR and the share needing five or more;
+- automated review rounds per PR (one automated reviewer on one commit, counting
+  clean passes by their `Round N, reviewed <sha>` summary) and the share needing
+  five or more;
 - the revert share, the guardrail: if it rises, human time was moved, not saved.
 
-Baseline when this was adopted (120 days to October 2026, 108 merged PRs): a
-median of 4 automated review rounds per PR, 39% of PRs needing 5 or more, and
+Baseline when this was adopted (120 days to October 2026, 108 merged PRs,
+counting each bot review as a round): a median of 4 automated review rounds per
+PR, 39% of PRs needing 5 or more, and
 almost no human approvals. The last 15 merged PRs had no review at all.
 
 ## Improving the reviewer
@@ -94,15 +100,18 @@ These need repo or organization admin rights:
       enable managed Code Review for Claude Code on this repo and pick its depth
       (Deep for `src/auth`, `src/http`, `src/raw`).
 - [ ] Ruleset on `main`: require a pull request; require status checks (`ci`
-      jobs, `changelog`, `review-risk`, `security`); require conversation
+      jobs, `changelog`, the `review-risk` status, `security`); require conversation
       resolution (every finding answered); dismiss stale approvals on new
       commits; require code-owner review; block force pushes.
 - [ ] Require approval for workflow runs from outside contributors (PR content is
-      untrusted input to the AI reviewers).
+      untrusted input to the AI reviewers, and a PR workflow could post a
+      look-alike check); never approve runs for a PR that edits `.github/workflows/`
+      without reading it.
 - [ ] Create the `skip-changelog` and `needs-human-review` labels.
 - [ ] Optionally enable the merge queue, and re-enable the Copilot review ruleset
       or rely on `ai-review.yml` alone.
-- [ ] Keep `trustedAuthors` in the policy and owners in `CODEOWNERS` current.
+- [ ] Keep `trustedAuthors` and `authorizedReviewers` in the policy and owners in
+      `CODEOWNERS` current.
 
 Not adopted yet: an LLM classifier for tiers (paths are used instead), nightly
 review agents over existing code, circuit breakers that tighten approvals when the

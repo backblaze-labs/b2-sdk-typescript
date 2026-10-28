@@ -41,7 +41,7 @@ test('approvals per tier, plus one for untrusted authors or a needs-human label'
   )
 })
 
-test('only human, non-author approvals of the head commit count', () => {
+test('only authorized, non-author human approvals of the head commit count', () => {
   const head = 'bbb'
   const review = (login, state, commit_id = head, type = 'User') => ({
     user: { login, type },
@@ -59,12 +59,22 @@ test('only human, non-author approvals of the head commit count', () => {
       review('carol', 'COMMENTED'),
       review('dave', 'APPROVED'),
       review('dave', 'CHANGES_REQUESTED'),
+      review('drive-by', 'APPROVED'),
+      review('drive-by-2', 'CHANGES_REQUESTED'),
       { user: null, state: 'APPROVED', commit_id: head },
     ],
-    { author: 'author', headSha: head },
+    {
+      author: 'author',
+      headSha: head,
+      reviewers: ['Alice', 'bob', 'carol', 'dave', 'author', 'claude'],
+    },
   )
   assert.deepEqual(approvers.sort(), ['alice', 'carol'])
   assert.deepEqual(blockers, ['dave'])
   assert.equal(isAgent({ login: 'github-actions[bot]' }), true)
   assert.equal(isAgent({ login: 'alice', type: 'User' }), false)
+})
+
+test('the policy lists who may approve', () => {
+  assert.ok(Array.isArray(policy.authorizedReviewers) && policy.authorizedReviewers.length > 0)
 })

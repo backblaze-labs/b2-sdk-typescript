@@ -4,10 +4,12 @@
 //   node scripts/review-risk.mjs
 //     The `review-risk` PR check. Classifies the PR's changed files with
 //     .github/review-policy.json, then requires that many human approvals on the
-//     current head commit. Bot and agent approvals never count, nor does the
-//     author's own; an approval of an older commit does not cover new commits.
-//     Needs GH_TOKEN, GITHUB_REPOSITORY and PR_NUMBER. The workflow runs this
-//     file from the base branch, so a PR cannot loosen its own gate.
+//     current head commit. Only reviewers on the policy's authorizedReviewers list
+//     count, never bots, agents or the author; an approval of an older commit does
+//     not cover new commits. Needs GH_TOKEN, GITHUB_REPOSITORY and PR_NUMBER. With
+//     STATUS_CONTEXT set it posts the result as that commit status on the head
+//     commit instead of failing. The workflow runs this file from the base branch
+//     under trusted triggers, so a PR cannot loosen or replace its own gate.
 
 import { execFileSync } from 'node:child_process'
 import { appendFileSync, readFileSync } from 'node:fs'
@@ -81,18 +83,22 @@ export function isAgent(user) {
 }
 
 /**
- * Human approvals that cover the head commit.
+ * Authorized human approvals that cover the head commit.
  *
  * @param {Array<{ user: { login: string, type?: string } | null, state: string, commit_id: string }>} reviews
  *   - PR reviews in submission order.
- * @param {{ author: string, headSha: string }} pr - PR author and head commit.
- * @returns {{ approvers: string[], blockers: string[] }} human logins whose latest
- *   review approves the head commit, and those whose latest review requests changes.
+ * @param {{ author: string, headSha: string, reviewers: string[] }} pr - PR author,
+ *   head commit, and the logins whose reviews count (policy authorizedReviewers).
+ * @returns {{ approvers: string[], blockers: string[] }} authorized logins whose
+ *   latest review approves the head commit, and those whose latest review requests
+ *   changes.
  */
-export function countApprovals(reviews, { author, headSha }) {
+export function countApprovals(reviews, { author, headSha, reviewers }) {
+  const allowed = new Set(reviewers.map((r) => r.toLowerCase()))
   const latest = new Map()
   for (const r of reviews) {
     if (!r.user || isAgent(r.user) || r.user.login === author) continue
+    if (!allowed.has(r.user.login.toLowerCase())) continue
     if (r.state === 'COMMENTED' || r.state === 'PENDING') continue
     latest.set(r.user.login, r)
   }
@@ -127,7 +133,11 @@ function main() {
   const labels = pr.labels.map((l) => l.name)
   const { tier, required, reasons } = classify(files, { author, labels }, policy)
   const reviews = ghJson(`repos/${repo}/pulls/${number}/reviews?per_page=100`)
-  const { approvers, blockers } = countApprovals(reviews, { author, headSha: pr.head.sha })
+  const { approvers, blockers } = countApprovals(reviews, {
+    author,
+    headSha: pr.head.sha,
+    reviewers: policy.authorizedReviewers,
+  })
 
   const ok = approvers.length >= required && blockers.length === 0
   const lines = [
@@ -144,7 +154,32 @@ function main() {
   console.log(lines.join('\n'))
   if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`)
-  if (!ok) process.exit(1)
+  const context = process.env.STATUS_CONTEXT
+  if (!context) {
+    if (!ok) process.exit(1)
+    return
+  }
+  const description = blockers.length
+    ? `${tier}: changes requested by ${blockers.join(', ')}`
+    : `${tier}: ${approvers.length}/${required} human approvals`
+  const runUrl = process.env.GITHUB_RUN_ID
+    ? `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
+    : undefined
+  execFileSync(
+    'gh',
+    [
+      'api',
+      `repos/${repo}/statuses/${pr.head.sha}`,
+      '-f',
+      `state=${ok ? 'success' : 'failure'}`,
+      '-f',
+      `context=${context}`,
+      '-f',
+      `description=${description.slice(0, 140)}`,
+      ...(runUrl ? ['-f', `target_url=${runUrl}`] : []),
+    ],
+    { stdio: ['ignore', 'ignore', 'inherit'] },
+  )
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main()

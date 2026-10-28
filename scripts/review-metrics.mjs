@@ -17,9 +17,9 @@ const QUERY = `query($q: String!, $endCursor: String) {
     pageInfo { hasNextPage endCursor }
     nodes { ... on PullRequest {
       number title createdAt mergedAt author { login }
-      reviews(first: 100) { nodes { state submittedAt author { login __typename } } }
-      comments(first: 100) { nodes { author { login __typename } } }
-      reviewThreads(first: 100) { nodes { comments(first: 50) { nodes { author { login __typename } } } } }
+      reviews(first: 100) { totalCount nodes { state submittedAt commit { oid } author { login __typename } } }
+      comments(first: 100) { totalCount nodes { body author { login __typename } } }
+      reviewThreads(first: 100) { totalCount nodes { comments(first: 50) { totalCount nodes { author { login __typename } } } } }
     } }
   }
 }`
@@ -37,6 +37,35 @@ export function isAgent(actor) {
     /\[bot\]$/i.test(actor.login) ||
     /^copilot/i.test(actor.login)
   )
+}
+
+// The REVIEW.md summary line that marks one automated review round, clean or not.
+const ROUND_MARKER = /^Round \d+, reviewed ([0-9a-f]{7,40})\b/im
+
+/**
+ * Whether GraphQL truncated any nested connection of a PR node.
+ *
+ * @param {object} pr - a PullRequest node from QUERY.
+ * @returns {{ reviews: boolean, comments: boolean, threads: boolean }} which
+ *   connections hold fewer nodes than their totalCount.
+ */
+export function truncated(pr) {
+  const short = (c) => c.nodes.length < c.totalCount
+  return {
+    reviews: short(pr.reviews),
+    comments: short(pr.comments),
+    threads: short(pr.reviewThreads) || pr.reviewThreads.nodes.some((t) => short(t.comments)),
+  }
+}
+
+/**
+ * Convert a REST user to the GraphQL actor shape.
+ *
+ * @param {{ login: string, type?: string } | null} user - REST `user` field.
+ * @returns {{ login: string, __typename: string } | null} the actor.
+ */
+export function restActor(user) {
+  return user && { login: user.login, __typename: user.type === 'Bot' ? 'Bot' : 'User' }
 }
 
 /**
@@ -77,7 +106,17 @@ export function measure(pr) {
     .sort((a, b) => a - b)[0]
   const waitHours =
     firstHuman === undefined ? null : (firstHuman - Date.parse(pr.createdAt)) / 3_600_000
-  const aiRounds = reviews.filter((r) => isAgent(r.author)).length
+  // A round is one automated reviewer on one commit: formal reviews plus the
+  // summary comment a clean pass leaves.
+  const rounds = new Set()
+  for (const r of reviews.filter((r) => isAgent(r.author))) {
+    rounds.add(`${r.author?.login}@${r.commit?.oid.slice(0, 7) ?? r.submittedAt}`)
+  }
+  for (const c of pr.comments.nodes.filter((c) => isAgent(c.author))) {
+    const sha = ROUND_MARKER.exec(c.body ?? '')?.[1]
+    if (sha) rounds.add(`${c.author?.login}@${sha.slice(0, 7)}`)
+  }
+  const aiRounds = rounds.size
   return { approvals, humanComments, waitHours, aiRounds, revert: /^revert\b/i.test(pr.title) }
 }
 
@@ -112,6 +151,41 @@ export function report(rows, days) {
   ].join('\n')
 }
 
+function restAll(path) {
+  const out = execFileSync('gh', ['api', '--paginate', '--slurp', path], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  })
+  return JSON.parse(out).flat()
+}
+
+// Refetch, over paginated REST, any connection GraphQL cut short.
+function complete(pr, repo) {
+  const cut = truncated(pr)
+  if (cut.reviews) {
+    pr.reviews.nodes = restAll(`repos/${repo}/pulls/${pr.number}/reviews?per_page=100`).map(
+      (r) => ({
+        state: r.state,
+        submittedAt: r.submitted_at,
+        commit: r.commit_id ? { oid: r.commit_id } : null,
+        author: restActor(r.user),
+      }),
+    )
+  }
+  if (cut.comments) {
+    pr.comments.nodes = restAll(`repos/${repo}/issues/${pr.number}/comments?per_page=100`).map(
+      (c) => ({ body: c.body, author: restActor(c.user) }),
+    )
+  }
+  if (cut.threads) {
+    const nodes = restAll(`repos/${repo}/pulls/${pr.number}/comments?per_page=100`).map((c) => ({
+      author: restActor(c.user),
+    }))
+    pr.reviewThreads.nodes = [{ comments: { nodes } }]
+  }
+  return pr
+}
+
 function main() {
   const repo = process.env.GITHUB_REPOSITORY
   if (!repo) throw new Error('GITHUB_REPOSITORY is required')
@@ -133,7 +207,10 @@ function main() {
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
   const prs = JSON.parse(out).flatMap((page) => page.data.search.nodes)
-  const text = report(prs.map(measure), days)
+  const text = report(
+    prs.map((pr) => measure(complete(pr, repo))),
+    days,
+  )
   console.log(text)
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`)
 }

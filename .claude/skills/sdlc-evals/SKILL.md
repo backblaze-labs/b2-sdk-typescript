@@ -46,7 +46,7 @@ Prefer behavior checks (run the code, inspect logs or output) over text greps, s
 - The checker and the evals are copied to a root-owned, read-only snapshot before any run, and the agent and its checks run as an unprivileged `sandbox` user (`CHECK_AS`). The agent under test, or code it writes, must not be able to rewrite its own grader.
 - Copy the canonical instructions (`AGENTS.md` as well as the `CLAUDE.md` pointer) into each run, or the agent reads the historical version.
 - An eval with no checks, or a run that ended in an error, never passes.
-- `check.sh` fails any run that changed files outside `may_change` (Git-ignored files excepted), so the agent cannot pass by editing the Makefile or the checks.
+- `check.sh` fails any run that changed files outside `may_change` (Git-ignored files excepted), so the agent cannot pass by editing the Makefile or the checks. It compares against `BASELINE`, a root-owned copy of the tree taken before the run, never the run's own `.git`, which the agent can rewrite (for example by committing the edited Makefile).
 - Do not pass `--bare` to `claude -p` in the workflow: it skips `CLAUDE.md`, skills and hooks, which are the things under test.
 - Keep the suite's API spend visible and capped; run the full suite on a schedule and a changed-config subset on PRs if cost demands.
 

@@ -94,8 +94,9 @@ them.
 8. **Summary first line is a count**, for example
    `2 Important, 1 Nit, 0 Pre-existing`, or `No issues found.` when nothing
    needs fixing. Then one line `Needs human review: yes|no` with a reason when
-   yes (design direction, a pattern others will copy, or a risky area). Then the
-   round number and the reviewed commit.
+   yes (design direction, a pattern others will copy, or a risky area). Then
+   `Round N, reviewed <sha>` with the reviewed commit, which the review metrics
+   count as one round even when there are no findings.
 9. **Findings, never approvals.** An agent's approval never counts toward a
    required human approval.
 
@@ -140,8 +141,8 @@ classifies the changed paths with [`.github/review-policy.json`](.github/review-
 automated checks are green, **medium** (ordinary source and tooling) needs one,
 **high** (CI, release tooling, `package.json`, auth, HTTP, raw wire, S3 signing,
 Partner, Backup) needs two. Authors outside the trusted list need one more, and
-the `needs-human-review` label forces at least one. Only human approvals of the
-current head commit count. Details in
+the `needs-human-review` label forces at least one. Only approvals of the current
+head commit from the policy's authorized reviewers count. Details in
 [`docs/review-process.md`](docs/review-process.md).
 
 ## How a change flows
