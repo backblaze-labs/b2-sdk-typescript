@@ -18,7 +18,7 @@ Evals are the stage-gate QA of an AI-native SDLC: a suite that runs whenever the
 3. Pick the commit to start from (`from`): the last commit before the original change, so each run sees the code as it stood then.
 4. Copy `assets/check.sh` to `evals/check.sh` and `assets/agent-evals.yml` to `.github/workflows/agent-evals.yml` (adapt paths, runner and tools). Put helper scripts for checks beside the eval files; `check.sh` exports `$EVALS` so checks can call them.
 5. Run one eval locally before turning on CI: confirm it passes against the known-good change and fails against a deliberately bad one.
-6. Gate configuration changes on the result: the workflow runs on PRs touching `CLAUDE.md`, `.claude/**`, `evals/**` and on a nightly schedule. Make it a required check. The default threshold is every eval passing; a suite of 20 to 50 may set a lower one.
+6. Gate configuration changes on the result: the workflow reports on every PR (a `paths` filter would leave a required check pending) and runs the suite only when `AGENTS.md`, `CLAUDE.md`, `.claude/**` or `evals/**` changed, plus nightly. Make it a required check. The default threshold is every eval passing; a suite of 20 to 50 may set a lower one.
 7. Every production incident gets an eval, written by the team that owned it. Use `sdlc-close-the-loop` to turn the incident into the prompt.
 
 ## Eval schema
@@ -43,7 +43,9 @@ Prefer behavior checks (run the code, inspect logs or output) over text greps, s
 
 ## Integrity rules
 
-- The checker and the evals are copied out before any run and run from the copy. The agent under test must not be able to rewrite its own grader.
+- The checker and the evals are copied to a root-owned, read-only snapshot before any run, and the agent and its checks run as an unprivileged `sandbox` user (`CHECK_AS`). The agent under test, or code it writes, must not be able to rewrite its own grader.
+- Copy the canonical instructions (`AGENTS.md` as well as the `CLAUDE.md` pointer) into each run, or the agent reads the historical version.
+- An eval with no checks, or a run that ended in an error, never passes.
 - `check.sh` fails any run that changed files outside `may_change` (Git-ignored files excepted), so the agent cannot pass by editing the Makefile or the checks.
 - Do not pass `--bare` to `claude -p` in the workflow: it skips `CLAUDE.md`, skills and hooks, which are the things under test.
 - Keep the suite's API spend visible and capped; run the full suite on a schedule and a changed-config subset on PRs if cost demands.

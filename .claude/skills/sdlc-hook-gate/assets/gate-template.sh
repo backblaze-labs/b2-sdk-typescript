@@ -26,7 +26,8 @@ case "$tool" in
     [[ "$ticket" =~ ^CHG-[0-9]+$ && "$version" =~ ^[0-9a-f]{7,40}$ ]] ||
       decide deny "Production needs an approved change ticket. $route"
     # Replace with your change system's CLI; it must emit JSON with .state, .version and .approver.
-    if approver=$(change-ticket show --ticket "$ticket" --format json 2>/dev/null |
+    # pipefail: a failed lookup denies even if it printed a matching record.
+    if approver=$(set -o pipefail; change-ticket show --ticket "$ticket" --format json 2>/dev/null |
         jq -er --arg v "$version" 'select(.state == "approved" and .version == $v) | .approver'); then
       decide allow "$ticket approved by $approver"
     fi

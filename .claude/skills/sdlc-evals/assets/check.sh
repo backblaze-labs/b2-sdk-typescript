@@ -10,11 +10,20 @@ export EVALS=$(cd "$(dirname "$eval_file")" && pwd)   # checks may call helpers 
 
 # Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
 strays() {
-  git status --porcelain | cut -c4- | while read -r path; do
+  git status --porcelain --untracked-files=all | cut -c4- | while read -r path; do
     jq -e --arg p "$path" \
       'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
       "$eval_file" >/dev/null || echo "       $path"
   done
+}
+
+# Runs a check as $CHECK_AS when set, so evaluated code cannot reach the grader.
+run_check() {
+  if [ -n "${CHECK_AS:-}" ]; then
+    sudo -u "$CHECK_AS" -H env EVALS="$EVALS" bash -c "$1"
+  else
+    bash -c "$1"
+  fi
 }
 
 total=$(jq '.checks | length' "$eval_file")
@@ -26,10 +35,10 @@ if [ "$(jq -r '.is_error' "$result_file" 2>/dev/null)" != "false" ]; then
 elif [ -n "$(strays)" ]; then
   report="     the run changed files this eval does not allow:"$'\n'"$(strays)"$'\n'
 else
-  for i in $(seq 0 $((total - 1))); do
+  for ((i = 0; i < total; i++)); do
     label=$(jq -r ".checks[$i].name" "$eval_file")
     cmd=$(jq -r ".checks[$i].run" "$eval_file")
-    if out=$(bash -c "$cmd" 2>&1 </dev/null); then
+    if out=$(run_check "$cmd" 2>&1 </dev/null); then
       passed=$((passed + 1))
     else
       report+="     failed: $label"$'\n'
@@ -43,7 +52,10 @@ else
   fi
 fi
 
-if [ "$passed" -eq "$total" ]; then
+# An eval with no checks proves nothing, so it never passes.
+[ "$total" -gt 0 ] || report+="     the eval defines no checks"$'\n'
+
+if [ "$total" -gt 0 ] && [ "$passed" -eq "$total" ]; then
   echo "PASS $name ($passed/$total checks)"
 else
   echo "FAIL $name ($passed/$total checks)"
