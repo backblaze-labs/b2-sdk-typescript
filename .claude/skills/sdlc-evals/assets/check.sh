@@ -8,15 +8,6 @@ result_file=$2
 name=$(jq -r '.name' "$eval_file")
 export EVALS=$(cd "$(dirname "$eval_file")" && pwd)   # checks may call helpers kept beside the evals
 
-# Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
-strays() {
-  git status --porcelain --untracked-files=all | cut -c4- | while read -r path; do
-    jq -e --arg p "$path" \
-      'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
-      "$eval_file" >/dev/null || echo "       $path"
-  done
-}
-
 # Runs a check as $CHECK_AS when set, so evaluated code cannot reach the grader.
 run_check() {
   if [ -n "${CHECK_AS:-}" ]; then
@@ -24,6 +15,23 @@ run_check() {
   else
     bash -c "$1"
   fi
+}
+
+# Files changed outside the folders/files the eval allows (Git-ignored files don't show up).
+# The run controls .git, so git runs unprivileged with fsmonitor off, and a checkout
+# that cannot be inspected is reported instead of read as clean.
+strays() {
+  local listing
+  if ! listing=$(run_check 'git -c core.fsmonitor=false status --porcelain --untracked-files=all' 2>&1); then
+    echo "       could not inspect the checkout: $(head -1 <<<"$listing")"
+    return
+  fi
+  cut -c4- <<<"$listing" | while read -r path; do
+    [ -n "$path" ] || continue
+    jq -e --arg p "$path" \
+      'any(.may_change[]; . as $ok | $p == $ok or ($p | startswith($ok + "/")))' \
+      "$eval_file" >/dev/null || echo "       $path"
+  done
 }
 
 total=$(jq '.checks | length' "$eval_file")
