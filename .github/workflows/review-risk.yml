@@ -1,0 +1,62 @@
+name: Review risk
+
+# Risk-tiered human approval (docs/review-process.md). Only trusted triggers run
+# this file: pull_request_target and workflow_run always use the default-branch
+# definition, so a PR cannot replace the gate with a no-op. The result is the
+# `review-risk` commit status on the PR head, re-evaluated on every push and, via
+# the Review submitted workflow, every review. No PR code is checked out or run.
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, labeled, unlabeled]
+  workflow_run:
+    workflows: [Review submitted]
+    types: [completed]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  evaluate:
+    name: review-risk evaluate
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' && (github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == 'main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read # base-branch checkout of the policy
+      pull-requests: read # changed files and reviews
+      statuses: write # the review-risk status on the PR head
+    steps:
+      # The policy and the script come from the base branch, never the PR head.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.22.2
+      - name: Post the review-risk status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          REVIEWED_SHA: ${{ github.event.workflow_run.head_sha }}
+          STATUS_CONTEXT: review-risk
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/review-risk.mjs ]; then
+            echo "Review policy is not on the base branch yet; nothing to enforce." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          prs=$EVENT_PR
+          if [ -z "$prs" ]; then
+            # workflow_run: find the open PRs whose head is the reviewed commit.
+            prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "$REVIEWED_SHA" \
+              --json number,headRefOid --jq ".[] | select(.headRefOid == \"$REVIEWED_SHA\") | .number")
+          fi
+          for pr in $prs; do
+            PR_NUMBER=$pr node scripts/review-risk.mjs
+          done

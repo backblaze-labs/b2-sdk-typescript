@@ -54,6 +54,10 @@ jobs:
         if: ${{ needs.changes.outputs.code == 'true' }}
       - run: pnpm lint:spelling
         if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
+      - run: pnpm run changelog:lint
+        if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
+      - run: pnpm run review:test
+        if: ${{ needs.changes.outputs.code == 'true' || needs.changes.outputs.docs == 'true' }}
       - run: pnpm typecheck
         if: ${{ needs.changes.outputs.code == 'true' }}
       - run: pnpm run docs
