@@ -7,6 +7,8 @@ description: Create, trim or audit a repo's CLAUDE.md so it holds exactly what a
 
 `CLAUDE.md` is the context a new joiner would need, read by the agent at the start of every session. It is version controlled and reviewed like code. Keep it under a page: Claude reads all of it every session, and stale lines waste context.
 
+**Resolve the canonical file first.** In this repo `AGENTS.md` is the single source of truth and `CLAUDE.md` / `GEMINI.md` are thin pointers to it. Every create, audit and maintenance step below writes to `AGENTS.md`; leave the pointer files as they are and never duplicate instructions into them.
+
 ## Create
 
 1. Survey the repo: build files, `Makefile`/package scripts, CI config, README, directory layout, test setup.
@@ -55,7 +57,7 @@ If artifacts live in `intent/`, add a line saying `intent/` holds `intent.md`, `
 
 ## Maintenance rule
 
-When Claude makes the same mistake twice, the correction goes into `CLAUDE.md` in the same PR. PR review should also flag changes that make `CLAUDE.md` outdated (`sdlc-pr-review`). Trimming changes agent behavior, so run the evals when you have them (`sdlc-evals`).
+When Claude makes the same mistake twice, the correction goes into the canonical file (`AGENTS.md` here) in the same PR. PR review should also flag changes that make it outdated (`sdlc-pr-review`). Trimming changes agent behavior, so run the evals when you have them (`sdlc-evals`).
 
 ## Measure
 

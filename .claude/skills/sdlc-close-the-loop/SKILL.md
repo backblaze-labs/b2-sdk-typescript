@@ -24,10 +24,11 @@ A band is a range around a metric's normal level: the mean of the last 30 days o
    ```bash
    tier=$(python3 ops/detect.py < readings.json | jq -r .tier)
    # look up $tier in bands.yaml, then e.g. for diagnose:
-   claude -p "Diagnose the breach in breach.json. Write intent.md." \
-     --allowedTools "Read,Grep,Bash(gh run view *)" --permission-mode dontAsk
+   claude -p "Diagnose the breach in breach.json. Print the intent as Markdown on stdout." \
+     --allowedTools "Read,Grep,Bash(gh run view *)" --permission-mode dontAsk \
+     --output-format json | jq -r .result > "$out/intent.md"
    ```
-5. The agent writes `intent/<slug>/intent.md` in the Stage 1 format (below) and commits or opens a PR. From there the finding flows through the normal stages.
+5. Diagnosis stays read-only: the agent only prints the intent (Stage 1 format, below), and the trusted runner saves it. A separately authorized step then publishes it as `intent/<slug>/intent.md` by commit or PR. From there the finding flows through the normal stages.
 6. The service owner or on-call engineer triages the queue: fix now, schedule, or dismiss. Dismissals tune the bands.
 7. When a fix ships, add an eval for the incident (`sdlc-evals`) so the class of issue is guarded against going forward.
 

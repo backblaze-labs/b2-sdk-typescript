@@ -52,8 +52,8 @@ When tagged on a comment, make the fix, push, and reply on the thread so it reco
 
 ## Feedback into the system
 
-- A mistake flagged a second time goes into `CLAUDE.md` in that PR (`sdlc-claude-md`).
-- Flag when a change makes `CLAUDE.md` outdated.
+- A mistake flagged a second time goes into `AGENTS.md` (the canonical file; `CLAUDE.md` only points to it) in that PR (`sdlc-claude-md`).
+- Flag when a change makes `AGENTS.md` outdated.
 - Monthly: rate findings, cap noisy categories in `REVIEW.md`.
 
 ## Measure
