@@ -12,6 +12,10 @@ on:
         description: Window in days
         default: '30'
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -21,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read # checkout of the metrics script
+      pull-requests: read # merged PRs, reviews and comments
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

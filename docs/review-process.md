@@ -97,8 +97,8 @@ These need repo or organization admin rights:
       jobs, `changelog`, `review-risk`, `security`); require conversation
       resolution (every finding answered); dismiss stale approvals on new
       commits; require code-owner review; block force pushes.
-- [ ] Require approval for workflow runs from outside contributors (the security
-      review action is not hardened against prompt injection).
+- [ ] Require approval for workflow runs from outside contributors (PR content is
+      untrusted input to the AI reviewers).
 - [ ] Create the `skip-changelog` and `needs-human-review` labels.
 - [ ] Optionally enable the merge queue, and re-enable the Copilot review ruleset
       or rely on `ai-review.yml` alone.

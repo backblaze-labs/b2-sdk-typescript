@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      contents: read
-      pull-requests: read
+      contents: read # base-branch checkout of the policy
+      pull-requests: read # changed files and reviews
     steps:
       # The policy and the script come from the base branch, never the PR head.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
