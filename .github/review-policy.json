@@ -1,0 +1,67 @@
+{
+  "$comment": "Risk tiers for human approval, enforced by scripts/review-risk.mjs. The first matching rule wins per file; a PR takes its highest file tier. See docs/review-process.md.",
+  "approvals": { "low": 0, "medium": 1, "high": 2 },
+  "untrustedAuthorExtraApprovals": 1,
+  "needsHumanLabel": "needs-human-review",
+  "trustedAuthors": ["EduPav", "ffumero2003", "goanpeca", "jeronimodeleon", "sophiecarreras"],
+  "rules": [
+    {
+      "tier": "high",
+      "why": "CI, review policy and release tooling",
+      "paths": [
+        ".github/workflows/**",
+        ".github/actions/**",
+        ".github/CODEOWNERS",
+        ".github/review-policy.json",
+        ".github/zizmor.yml",
+        ".github/audit-allowlist.txt",
+        "scripts/review-risk.mjs",
+        "scripts/cut-changelog.mjs",
+        "scripts/extract-changelog.mjs",
+        "scripts/changie.mjs",
+        "scripts/verify-release*.mjs",
+        "scripts/audit-dependencies.mjs",
+        ".changie.yaml",
+        "package.json"
+      ]
+    },
+    {
+      "tier": "low",
+      "why": "tests only",
+      "paths": ["src/**/*.test.ts", "src/test-utils/**", "tests/**"]
+    },
+    {
+      "tier": "high",
+      "why": "credentials, wire protocol and signing",
+      "paths": [
+        "src/auth/**",
+        "src/http/**",
+        "src/raw/**",
+        "src/s3/**",
+        "src/partner/**",
+        "src/backup/**"
+      ]
+    },
+    {
+      "tier": "low",
+      "why": "docs, examples and changelog fragments",
+      "paths": [
+        "docs/**",
+        "intent/**",
+        "examples/**",
+        ".changes/**",
+        ".cspell/**",
+        "README.md",
+        "CONTRIBUTING.md",
+        "MIGRATION.md",
+        "SECURITY.md",
+        "CODE_OF_CONDUCT.md",
+        "CHANGELOG.md",
+        "RELEASE.md",
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/PULL_REQUEST_TEMPLATE.md"
+      ]
+    },
+    { "tier": "medium", "why": "SDK source, tooling and agent configuration", "paths": ["**"] }
+  ]
+}

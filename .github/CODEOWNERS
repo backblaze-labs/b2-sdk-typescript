@@ -1,0 +1,21 @@
+# Paths that always need a person (docs/review-process.md, Layer 5). Enforced once
+# branch protection requires code-owner review. Later rules override earlier ones.
+
+*                                   @goanpeca
+
+# CI, review policy and release tooling
+/.github/                           @goanpeca @sophiecarreras
+/scripts/                           @goanpeca
+/package.json                       @goanpeca
+/.changie.yaml                      @goanpeca
+
+# Credentials, wire protocol and signing
+/src/auth/                          @goanpeca
+/src/http/                          @goanpeca
+/src/raw/                           @goanpeca
+/src/s3/                            @goanpeca
+/src/partner/                       @goanpeca
+/src/backup/                        @goanpeca
+
+# Local filesystem writes and deletes
+/src/sync/                          @goanpeca
