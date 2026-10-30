@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
+  own property, so `{ ...client }`, `Object.keys(client)`,
+  `Object.assign({}, client)`, `Object.hasOwn(client, 'accountInfo')`, and
+  `Object.getOwnPropertyDescriptor(client, 'accountInfo')` no longer see it.
+  Assigning `client.accountInfo` throws in strict mode, and a subclass
+  redeclaring `accountInfo` as a field fails with TypeScript `TS2610`.
+  `client.accountInfo` and `'accountInfo' in client` still work. Read
+  `client.accountInfo` directly, and pass a custom store through the
+  constructor's `accountInfo` option.
+
 ### Security
+
+- **SDK objects hide application keys and authorization tokens in diagnostics.**
+  Logging, inspecting, or serializing clients, bucket and file handles, auth
+  stores, and upload URL pools no longer prints stored credentials. Explicit
+  `authorize()` and `getAuth()` responses still contain the real token, and file
+  auth caches still persist it.
+  Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
+  now throw `Cannot read private member`, the same constraint as the Partner
+  client. Keep these SDK instances outside
+  reactive proxy wrappers.
 
 - Updated transitive development dependencies to patched versions.
 
