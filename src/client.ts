@@ -7,6 +7,8 @@ import { DEFAULT_RETRY_OPTIONS, type RetryOptions } from './http/retry.ts'
 import type { HttpTransport } from './http/transport.ts'
 import { FetchTransport, RetryTransport } from './http/transport.ts'
 import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
+import { redactUrlForError } from './internal/url-redaction.ts'
+import { APPLICATION_KEY_REDACTED } from './partner/redaction-placeholders.ts'
 import { RawClient } from './raw/index.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
@@ -93,6 +95,22 @@ export interface B2ClientAuthorizeOptions {
   readonly signal?: AbortSignal
 }
 
+/** Redacted JSON diagnostic shape emitted by {@link B2Client.toJSON}. */
+export interface B2ClientJson {
+  /** Object kind for log consumers. */
+  readonly type: 'B2Client'
+  /** Application key identifier, without its secret. */
+  readonly applicationKeyId: string
+  /** Redacted application key credential placeholder. */
+  readonly credentials: string
+  /** Realm URL with userinfo, query, fragment, and path segments removed. */
+  readonly realm: string
+  /** Whether this client currently has authorization state. */
+  readonly authorized: boolean
+  /** Default URL guard suffixes, or null when a custom transport owns guarding. */
+  readonly urlGuardAllowedSuffixes: readonly string[] | null
+}
+
 /**
  * High-level B2 client providing ergonomic access to buckets, files, and keys.
  *
@@ -109,8 +127,16 @@ export interface B2ClientAuthorizeOptions {
 export class B2Client {
   /** Low-level client for direct B2 API calls. */
   readonly raw: RawClient
-  /** Authorization state storage (tokens, URLs, capabilities). */
-  readonly accountInfo: AccountInfo
+  /**
+   * Authorization state storage (tokens, URLs, capabilities). Custom stores
+   * should keep secrets out of enumerable properties so direct diagnostics and
+   * object spread do not expose them.
+   *
+   * @returns The configured authorization state store.
+   */
+  get accountInfo(): AccountInfo {
+    return this.#accountInfo
+  }
   /**
    * SSRF allow-list applied by the default {@link FetchTransport}. `null` when
    * a custom transport was supplied — in that case the SDK does not own the
@@ -118,7 +144,8 @@ export class B2Client {
    */
   readonly urlGuard: UrlGuard | null
   private readonly applicationKeyId: string
-  private readonly applicationKey: string
+  readonly #applicationKey: string
+  readonly #accountInfo: AccountInfo
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
   private readonly resolvedUploadRetryOptions: RetryOptions
@@ -130,10 +157,10 @@ export class B2Client {
    */
   constructor(options: B2ClientOptions) {
     this.applicationKeyId = options.applicationKeyId
-    this.applicationKey = options.applicationKey
+    this.#applicationKey = options.applicationKey
     this.realmUrl = getRealmUrl(options.realm ?? 'production')
-    this.accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
-    bindAccountInfoAuthContext(this.accountInfo, this.realmUrl, this.applicationKeyId)
+    this.#accountInfo = options.accountInfo ?? new InMemoryAccountInfo()
+    bindAccountInfoAuthContext(this.#accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     this.resolvedUploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
     this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
@@ -160,7 +187,7 @@ export class B2Client {
       onReauth: (signal) => this.reauthorize(signal),
     })
 
-    const cachedAuth = this.accountInfo.getAuth()
+    const cachedAuth = this.#accountInfo.getAuth()
     if (cachedAuth !== null) this.lockUrlGuard(cachedAuth)
 
     this.raw = new RawClient({ transport: retryTransport })
@@ -177,14 +204,39 @@ export class B2Client {
     throwIfSignalAborted(options?.signal)
     const auth = await this.raw.authorizeAccount(
       this.applicationKeyId,
-      this.applicationKey,
+      this.#applicationKey,
       this.realmUrl,
       options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
     throwIfSignalAborted(options?.signal)
-    this.accountInfo.setAuth(auth)
+    this.#accountInfo.setAuth(auth)
     this.lockUrlGuard(auth)
     return auth
+  }
+
+  /**
+   * Hides credentials and stored tokens from JSON diagnostics.
+   *
+   * @returns A safe summary without walking the account store or transport.
+   */
+  toJSON(): B2ClientJson {
+    return {
+      type: 'B2Client',
+      applicationKeyId: this.applicationKeyId,
+      credentials: APPLICATION_KEY_REDACTED,
+      realm: redactUrlForError(this.realmUrl),
+      authorized: this.#accountInfo.getAuth() !== null,
+      urlGuardAllowedSuffixes: this.urlGuard?.getAllowedSuffixes() ?? null,
+    }
+  }
+
+  /**
+   * Hides credentials and stored tokens from Node's `util.inspect`.
+   *
+   * @returns The same safe summary used by JSON diagnostics.
+   */
+  [Symbol.for('nodejs.util.inspect.custom')](): B2ClientJson {
+    return this.toJSON()
   }
 
   private lockUrlGuard(auth: AuthorizeAccountResponse): void {
@@ -276,11 +328,11 @@ export class B2Client {
       ...(fileLockEnabled !== undefined ? { fileLockEnabled } : {}),
       ...(lifecycleRules !== undefined ? { lifecycleRules } : {}),
       ...(replicationConfiguration !== undefined ? { replicationConfiguration } : {}),
-      accountId: accountId(this.accountInfo.getAccountId()),
+      accountId: accountId(this.#accountInfo.getAccountId()),
     }
     const info = await this.raw.createBucket(
-      this.accountInfo.getApiUrl(),
-      this.accountInfo.getAuthToken(),
+      this.#accountInfo.getApiUrl(),
+      this.#accountInfo.getAuthToken(),
       request,
     )
     return new Bucket(this, info, this.resolvedUploadRetryOptions)
@@ -301,10 +353,10 @@ export class B2Client {
     bucketTypes?: BucketTypesFilter
   }): Promise<Bucket[]> {
     const resp = await this.raw.listBuckets(
-      this.accountInfo.getApiUrl(),
-      this.accountInfo.getAuthToken(),
+      this.#accountInfo.getApiUrl(),
+      this.#accountInfo.getAuthToken(),
       {
-        accountId: accountId(this.accountInfo.getAccountId()),
+        accountId: accountId(this.#accountInfo.getAccountId()),
         ...options,
       },
     )
@@ -333,8 +385,8 @@ export class B2Client {
    * @returns The deleted bucket metadata.
    */
   async deleteBucket(id: BucketId): Promise<BucketInfo> {
-    return this.raw.deleteBucket(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
-      accountId: accountId(this.accountInfo.getAccountId()),
+    return this.raw.deleteBucket(this.#accountInfo.getApiUrl(), this.#accountInfo.getAuthToken(), {
+      accountId: accountId(this.#accountInfo.getAccountId()),
       bucketId: id,
     })
   }
@@ -346,8 +398,8 @@ export class B2Client {
    * @returns The full key including the secret (only returned at creation time).
    */
   async createKey(options: CreateKeyOptions): Promise<FullApplicationKey> {
-    return this.raw.createKey(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
-      accountId: accountId(this.accountInfo.getAccountId()),
+    return this.raw.createKey(this.#accountInfo.getApiUrl(), this.#accountInfo.getAuthToken(), {
+      accountId: accountId(this.#accountInfo.getAccountId()),
       ...options,
     })
   }
@@ -367,8 +419,8 @@ export class B2Client {
     /** Start listing at this key ID, usually from `nextApplicationKeyId`. */
     startApplicationKeyId?: ApplicationKeyId
   }): Promise<ListKeysResponse> {
-    return this.raw.listKeys(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
-      accountId: accountId(this.accountInfo.getAccountId()),
+    return this.raw.listKeys(this.#accountInfo.getApiUrl(), this.#accountInfo.getAuthToken(), {
+      accountId: accountId(this.#accountInfo.getAccountId()),
       ...(options?.pageSize !== undefined ? { maxKeyCount: options.pageSize } : {}),
       ...(options?.startApplicationKeyId !== undefined
         ? { startApplicationKeyId: options.startApplicationKeyId }
@@ -413,7 +465,7 @@ export class B2Client {
    * @returns The deleted application key metadata.
    */
   async deleteKey(applicationKeyId: ApplicationKeyId): Promise<ApplicationKey> {
-    return this.raw.deleteKey(this.accountInfo.getApiUrl(), this.accountInfo.getAuthToken(), {
+    return this.raw.deleteKey(this.#accountInfo.getApiUrl(), this.#accountInfo.getAuthToken(), {
       applicationKeyId,
     })
   }
@@ -431,7 +483,7 @@ export class B2Client {
    * @throws If {@link authorize} has not been called yet.
    */
   hasCapabilities(needed: readonly Capability[]): CapabilityCheckResult {
-    const auth = this.accountInfo.getAuth()
+    const auth = this.#accountInfo.getAuth()
     if (!auth) throw new Error('Not authorized. Call authorize() first.')
     const available = new Set<string>(auth.apiInfo.storageApi.allowed.capabilities)
     const missing = needed.filter((cap) => !available.has(cap as string))

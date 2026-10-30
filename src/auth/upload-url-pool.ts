@@ -7,7 +7,7 @@ import type { UploadUrlEntry } from './account-info.ts'
  */
 export class UploadUrlPool {
   /** Map from key (bucket ID or file ID) to a stack of available entries. */
-  private readonly pools = new Map<string, UploadUrlEntry[]>()
+  readonly #pools = new Map<string, UploadUrlEntry[]>()
 
   /**
    * Take an upload URL from the pool, or return null if none are available.
@@ -17,7 +17,7 @@ export class UploadUrlPool {
    * @returns An upload URL entry, or null if the pool is empty for the given key.
    */
   checkout(key: string): UploadUrlEntry | null {
-    const pool = this.pools.get(key)
+    const pool = this.#pools.get(key)
     if (!pool || pool.length === 0) return null
     return pool.pop() ?? null
   }
@@ -29,10 +29,10 @@ export class UploadUrlPool {
    * @param entry - The upload URL entry to return to the pool.
    */
   checkin(key: string, entry: UploadUrlEntry): void {
-    let pool = this.pools.get(key)
+    let pool = this.#pools.get(key)
     if (!pool) {
       pool = []
-      this.pools.set(key, pool)
+      this.#pools.set(key, pool)
     }
     pool.push(entry)
   }
@@ -44,7 +44,7 @@ export class UploadUrlPool {
    * @param entry - The failed upload URL entry to remove.
    */
   evict(key: string, entry: UploadUrlEntry): void {
-    const pool = this.pools.get(key)
+    const pool = this.#pools.get(key)
     if (!pool) return
     const idx = pool.findIndex((e) => e.uploadUrl === entry.uploadUrl)
     if (idx !== -1) {
@@ -54,6 +54,6 @@ export class UploadUrlPool {
 
   /** Remove all entries from every key in the pool. */
   clear(): void {
-    this.pools.clear()
+    this.#pools.clear()
   }
 }
