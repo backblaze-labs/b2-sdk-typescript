@@ -13,7 +13,7 @@ export type {
   AuthContextAwareAccountInfo,
   UploadUrlEntry,
 } from './auth/account-info.ts'
-export { InMemoryAccountInfo } from './auth/in-memory.ts'
+export { InMemoryAccountInfo, type InMemoryAccountInfoJson } from './auth/in-memory.ts'
 export {
   Bucket,
   type BucketListFileNamesBaseOptions,
@@ -46,6 +46,7 @@ export {
 export {
   B2Client,
   type B2ClientAuthorizeOptions,
+  type B2ClientJson,
   type B2ClientOptions,
   type CapabilityCheckResult,
 } from './client.ts'

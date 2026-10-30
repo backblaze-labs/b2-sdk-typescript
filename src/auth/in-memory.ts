@@ -3,18 +3,24 @@ import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
 import { UploadUrlPool } from './upload-url-pool.ts'
 
+/** Safe diagnostic summary emitted by {@link InMemoryAccountInfo.toJSON}. */
+export interface InMemoryAccountInfoJson {
+  /** Whether an authorization response is currently stored. */
+  readonly authorized: boolean
+}
+
 /**
  * In-memory implementation of {@link AccountInfo}.
- * Stores the authorization response and upload URL pools in plain object fields.
+ * Keeps the authorization response and upload URL pools in private fields.
  * Suitable for short-lived processes or tests; state is lost when the process exits.
  */
 export class InMemoryAccountInfo implements AccountInfo {
   /** Cached authorization response, or null before authorize() is called. */
-  private auth: AuthorizeAccountResponse | null = null
+  #auth: AuthorizeAccountResponse | null = null
   /** Pool of reusable small-file upload URLs, keyed by bucket ID. */
-  private readonly uploadUrls = new UploadUrlPool()
+  readonly #uploadUrls = new UploadUrlPool()
   /** Pool of reusable large-file part upload URLs, keyed by file ID. */
-  private readonly partUploadUrls = new UploadUrlPool()
+  readonly #partUploadUrls = new UploadUrlPool()
 
   /**
    * Store a fresh authorization response, replacing any previous state.
@@ -22,9 +28,9 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param auth - The authorize account response to store.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
-    this.auth = auth
-    this.uploadUrls.clear()
-    this.partUploadUrls.clear()
+    this.#auth = auth
+    this.#uploadUrls.clear()
+    this.#partUploadUrls.clear()
   }
 
   /**
@@ -33,14 +39,14 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @returns The cached authorization response, or null if not yet authorized.
    */
   getAuth(): AuthorizeAccountResponse | null {
-    return this.auth
+    return this.#auth
   }
 
   /** Discard all cached authorization state and upload URLs. */
   clear(): void {
-    this.auth = null
-    this.uploadUrls.clear()
-    this.partUploadUrls.clear()
+    this.#auth = null
+    this.#uploadUrls.clear()
+    this.#partUploadUrls.clear()
   }
 
   /**
@@ -169,7 +175,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @returns A reusable upload URL entry, or null if none are available.
    */
   checkoutUploadUrl(bucketId: BucketId): UploadUrlEntry | null {
-    return this.uploadUrls.checkout(bucketId as string)
+    return this.#uploadUrls.checkout(bucketId as string)
   }
 
   /**
@@ -179,7 +185,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param entry - The upload URL entry to return to the pool.
    */
   returnUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
-    this.uploadUrls.checkin(bucketId as string, entry)
+    this.#uploadUrls.checkin(bucketId as string, entry)
   }
 
   /**
@@ -189,7 +195,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param entry - The upload URL entry to remove from the pool.
    */
   evictUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
-    this.uploadUrls.evict(bucketId as string, entry)
+    this.#uploadUrls.evict(bucketId as string, entry)
   }
 
   /**
@@ -200,7 +206,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @returns A reusable part upload URL entry, or null if none are available.
    */
   checkoutPartUploadUrl(fileId: string): UploadUrlEntry | null {
-    return this.partUploadUrls.checkout(fileId)
+    return this.#partUploadUrls.checkout(fileId)
   }
 
   /**
@@ -210,7 +216,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param entry - The part upload URL entry to return to the pool.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
-    this.partUploadUrls.checkin(fileId, entry)
+    this.#partUploadUrls.checkin(fileId, entry)
   }
 
   /**
@@ -220,7 +226,25 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param entry - The part upload URL entry to remove from the pool.
    */
   evictPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
-    this.partUploadUrls.evict(fileId, entry)
+    this.#partUploadUrls.evict(fileId, entry)
+  }
+
+  /**
+   * Hides authorization and upload tokens from JSON diagnostics.
+   *
+   * @returns Whether authorization state is stored, without walking it.
+   */
+  toJSON(): InMemoryAccountInfoJson {
+    return { authorized: this.#auth !== null }
+  }
+
+  /**
+   * Hides authorization and upload tokens from Node's `util.inspect`.
+   *
+   * @returns The same safe summary used by JSON diagnostics.
+   */
+  [Symbol.for('nodejs.util.inspect.custom')](): InMemoryAccountInfoJson {
+    return this.toJSON()
   }
 
   /**
@@ -231,7 +255,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @throws Error if authorize() has not been called.
    */
   private requireAuth(): AuthorizeAccountResponse {
-    if (!this.auth) throw new Error('Not authorized. Call authorize() first.')
-    return this.auth
+    if (!this.#auth) throw new Error('Not authorized. Call authorize() first.')
+    return this.#auth
   }
 }
