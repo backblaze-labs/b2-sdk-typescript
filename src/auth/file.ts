@@ -173,6 +173,12 @@ function authEndpointsMatchRealm(auth: AuthorizeAccountResponse, realmUrl: strin
   }
 }
 
+/** Safe diagnostic summary emitted by {@link FileAccountInfo.toJSON}. */
+export interface FileAccountInfoJson {
+  /** Whether an authorization response is currently stored. */
+  readonly authorized: boolean
+}
+
 /**
  * Node-only {@link AccountInfo} backend that persists the authorization
  * response to a JSON file. Upload URL pools remain in memory because URLs are
@@ -194,7 +200,7 @@ function authEndpointsMatchRealm(auth: AuthorizeAccountResponse, realmUrl: strin
  * This module imports `node:fs/promises`; do not load it in browser bundles.
  */
 export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo {
-  private readonly inner = new InMemoryAccountInfo()
+  readonly #inner = new InMemoryAccountInfo()
   private writeQueue: Promise<void> = Promise.resolve()
   private realmUrl: string | undefined
   private loadedAuthRealmUrl: string | null | undefined
@@ -226,7 +232,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
       const text = await readFile(this.path, 'utf8')
       const parsed = readPersistedAuthState(JSON.parse(text) as unknown)
       if (parsed === null) return
-      this.inner.setAuth(parsed.auth)
+      this.#inner.setAuth(parsed.auth)
       this.loadedAuthRealmUrl = parsed.realmUrl
       this.loadedAuthApplicationKeyId = parsed.applicationKeyId
       this.discardMismatchedAuth()
@@ -260,13 +266,13 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
   }
 
   private discardMismatchedAuth(): void {
-    const auth = this.inner.getAuth()
+    const auth = this.#inner.getAuth()
     if (auth === null) return
 
     const reason = this.mismatchReason(auth)
     if (reason === null) return
 
-    this.inner.clear()
+    this.#inner.clear()
     this.options.onDiscard?.({
       path: this.path,
       reason,
@@ -305,7 +311,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns A promise that resolves when the write completes.
    */
   private flush(): Promise<void> {
-    const auth = this.inner.getAuth()
+    const auth = this.#inner.getAuth()
     const next = this.writeQueue.then(async () => {
       if (auth === null) {
         try {
@@ -358,7 +364,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @param auth - The authorize-account response to persist.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
-    this.inner.setAuth(auth)
+    this.#inner.setAuth(auth)
     this.loadedAuthRealmUrl = this.realmUrl ?? null
     this.loadedAuthApplicationKeyId = this.applicationKeyId ?? null
     void this.flush()
@@ -370,12 +376,12 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The cached authorization response, or `null` if not authorized.
    */
   getAuth(): AuthorizeAccountResponse | null {
-    return this.inner.getAuth()
+    return this.#inner.getAuth()
   }
 
   /** Discards in-memory state and clears the on-disk file. */
   clear(): void {
-    this.inner.clear()
+    this.#inner.clear()
     this.loadedAuthRealmUrl = undefined
     this.loadedAuthApplicationKeyId = undefined
     void this.flush()
@@ -387,7 +393,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The base URL for B2 API calls.
    */
   getApiUrl(): string {
-    return this.inner.getApiUrl()
+    return this.#inner.getApiUrl()
   }
 
   /**
@@ -396,7 +402,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The base URL for file downloads.
    */
   getDownloadUrl(): string {
-    return this.inner.getDownloadUrl()
+    return this.#inner.getDownloadUrl()
   }
 
   /**
@@ -405,7 +411,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The current authorization token.
    */
   getAuthToken(): string {
-    return this.inner.getAuthToken()
+    return this.#inner.getAuthToken()
   }
 
   /**
@@ -414,7 +420,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The authorized account ID.
    */
   getAccountId(): string {
-    return this.inner.getAccountId()
+    return this.#inner.getAccountId()
   }
 
   /**
@@ -423,7 +429,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The recommended part size in bytes.
    */
   getRecommendedPartSize(): number {
-    return this.inner.getRecommendedPartSize()
+    return this.#inner.getRecommendedPartSize()
   }
 
   /**
@@ -432,7 +438,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The absolute minimum part size in bytes.
    */
   getAbsoluteMinimumPartSize(): number {
-    return this.inner.getAbsoluteMinimumPartSize()
+    return this.#inner.getAbsoluteMinimumPartSize()
   }
 
   /**
@@ -441,7 +447,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The base URL for the S3-compatible API.
    */
   getS3ApiUrl(): string {
-    return this.inner.getS3ApiUrl()
+    return this.#inner.getS3ApiUrl()
   }
 
   /**
@@ -450,7 +456,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The restricted bucket ID, or `null` if the key is unrestricted.
    */
   getAllowedBucketId(): BucketId | null {
-    return this.inner.getAllowedBucketId()
+    return this.#inner.getAllowedBucketId()
   }
 
   /**
@@ -459,7 +465,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns The restricted bucket IDs, or `null` if the key is unrestricted.
    */
   getAllowedBucketIds(): readonly BucketId[] | null {
-    return this.inner.getAllowedBucketIds()
+    return this.#inner.getAllowedBucketIds()
   }
 
   /**
@@ -470,7 +476,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns A reusable upload URL entry, or `null` if none are pooled.
    */
   checkoutUploadUrl(bucketId: BucketId): UploadUrlEntry | null {
-    return this.inner.checkoutUploadUrl(bucketId)
+    return this.#inner.checkoutUploadUrl(bucketId)
   }
 
   /**
@@ -480,7 +486,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @param entry - Upload URL entry to return.
    */
   returnUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
-    this.inner.returnUploadUrl(bucketId, entry)
+    this.#inner.returnUploadUrl(bucketId, entry)
   }
 
   /**
@@ -490,7 +496,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @param entry - Upload URL entry to evict.
    */
   evictUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
-    this.inner.evictUploadUrl(bucketId, entry)
+    this.#inner.evictUploadUrl(bucketId, entry)
   }
 
   /**
@@ -501,7 +507,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @returns A reusable part upload URL entry, or `null` if none are pooled.
    */
   checkoutPartUploadUrl(fileId: string): UploadUrlEntry | null {
-    return this.inner.checkoutPartUploadUrl(fileId)
+    return this.#inner.checkoutPartUploadUrl(fileId)
   }
 
   /**
@@ -511,7 +517,7 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @param entry - Part upload URL entry to return.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
-    this.inner.returnPartUploadUrl(fileId, entry)
+    this.#inner.returnPartUploadUrl(fileId, entry)
   }
 
   /**
@@ -521,7 +527,25 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * @param entry - Part upload URL entry to evict.
    */
   evictPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
-    this.inner.evictPartUploadUrl(fileId, entry)
+    this.#inner.evictPartUploadUrl(fileId, entry)
+  }
+
+  /**
+   * Hides authorization and upload tokens from JSON diagnostics.
+   *
+   * @returns Whether authorization state is stored, without walking it.
+   */
+  toJSON(): FileAccountInfoJson {
+    return { authorized: this.#inner.getAuth() !== null }
+  }
+
+  /**
+   * Hides authorization and upload tokens from Node's `util.inspect`.
+   *
+   * @returns The same safe summary used by JSON diagnostics.
+   */
+  [Symbol.for('nodejs.util.inspect.custom')](): FileAccountInfoJson {
+    return this.toJSON()
   }
 
   /**
