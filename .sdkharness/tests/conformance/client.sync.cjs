@@ -344,6 +344,45 @@ async function run() {
     if (fs.readFileSync(path.join(down, 'one.txt'), 'utf8') !== MODIFIED) {
       throw new Failure('sync down', 'the round trip returned the pre-modification copy');
     }
+
+    // Leg: an invalid delete policy is refused and deletes nothing. Untyped callers
+    // (JavaScript, JSON or env config) can pass a misspelled or missing keepMode, or a
+    // non-finite keepDays; the SDK must fail closed instead of treating it as "delete every destination-only
+    // file". Not a B2 contract: the SDK's own safety semantics.
+    const { BufferSource } = await load();
+    const ORPHAN = PREFIX + 'orphan-only-on-b2.txt';
+    await step('invalid keep policy: seed destination-only file', () =>
+      bucket.upload({ fileName: ORPHAN, source: new BufferSource(Buffer.from('destination only')) }));
+    const BAD_POLICIES = [
+      ['misspelled keepMode', { keepMode: 'delet' }],
+      ['missing keepMode', {}],
+      ['keep-days with NaN keepDays', { keepMode: 'keep-days', keepDays: Number.NaN }],
+    ];
+    for (const [label, policy] of BAD_POLICIES) {
+      const leg = 'invalid keep policy (' + label + ')';
+      let refused = false;
+      try {
+        for await (const event of synchronize({
+          source: new LocalFolder(up),
+          dest: new B2Folder(bucket, PREFIX),
+          bucket,
+          prefix: PREFIX,
+          options: { compareMode: 'size', ...policy },
+        })) {
+          if (event.type === 'error') refused = true;
+        }
+      } catch {
+        refused = true;
+      }
+      const left = await step(leg, () => bucket.listFileNames({ prefix: PREFIX }));
+      const present = left.files.some((file) => file.fileName === ORPHAN);
+      if (!present) {
+        throw new Failure(leg, 'the sync deleted or hid a destination-only file instead of refusing the invalid policy');
+      }
+      if (!refused) {
+        throw new Failure(leg, 'the sync accepted the invalid policy without an error');
+      }
+    }
   } finally {
     await destroy(bucket);
     for (const dir of [up, down]) {

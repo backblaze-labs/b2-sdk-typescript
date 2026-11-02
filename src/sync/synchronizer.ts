@@ -42,7 +42,7 @@ import {
   readyComparePair,
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
-import { generateActions } from './policies/index.ts'
+import { assertValidKeepPolicy, generateActions } from './policies/index.ts'
 import { asRawB2KeyPrefix, b2KeyToRelativePathUnderPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
@@ -231,6 +231,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
   const keepDays = options.keepDays ?? 0
+  assertValidKeepPolicy(options.keepMode, keepDays)
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()
   const localRootContexts = await resolveLocalRootContexts(config)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { sha1Hex } from '../streams/hash.ts'
 import { formatHashError, readLocalSha1File } from './local-sha1.ts'
 import type { LocalFileIdentity, LocalSyncPath } from './types.ts'
@@ -135,9 +135,45 @@ describe('readLocalSha1File', () => {
     const controller = new AbortController()
     controller.abort()
 
+    // a bare toThrow() also passes when the missing path fails with ENOENT,
+    // so pin the abort reason itself.
     await expect(
       readLocalSha1File(makeLocalPath('aborted.txt', '/not/read', 0), controller.signal),
-    ).rejects.toThrow()
+    ).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('clamps idle timeouts above the 32-bit timer limit', async () => {
+    const { tmpdir } = await import('node:os')
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-sha1-clamp-'))
+    const delays: number[] = []
+    const realSetTimeout = globalThis.setTimeout
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: () => void,
+      delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof delay === 'number') delays.push(delay)
+      return realSetTimeout(handler, delay, ...args)
+    }) as unknown as typeof setTimeout)
+    try {
+      const data = new TextEncoder().encode('abc')
+      const filePath = join(root, 'file.txt')
+      await writeFile(filePath, data)
+
+      await readLocalSha1File(makeLocalPath('file.txt', filePath, data.byteLength), undefined, {
+        timeoutMillis: 3_000_000_000,
+      })
+
+      // Node fires any timer above 2^31 - 1 ms after 1 ms, which would make a
+      // huge configured timeout stall-fail almost immediately.
+      expect(delays.length).toBeGreaterThan(0)
+      expect(Math.max(...delays)).toBeLessThanOrEqual(2_147_483_647)
+    } finally {
+      spy.mockRestore()
+      await rm(root, { recursive: true, force: true })
+    }
   })
 })
 

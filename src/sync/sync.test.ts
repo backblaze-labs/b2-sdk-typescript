@@ -1521,3 +1521,84 @@ describe('generateActions', () => {
     expect(actions[0]?.type).toBe('skip')
   })
 })
+
+describe('generateActions destination-only policy (recording factory)', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const now = Date.now()
+
+  /** Factory that records which destructive factory method was invoked. */
+  function makeRecordingFactory(calls: string[]): ActionFactory {
+    return {
+      ...makeNoopFactory(),
+      removeOrphan: (s: B2SyncPath) => {
+        calls.push(`removeOrphan:${s.relativePath}`)
+        return new SkipAction(s.relativePath, 'recorded-remove-orphan')
+      },
+      deleteLocal: (s: LocalSyncPath) => {
+        calls.push(`deleteLocal:${s.relativePath}`)
+        return new SkipAction(s.relativePath, 'recorded-delete-local')
+      },
+    }
+  }
+
+  const run = (
+    pair: Parameters<typeof generateActions>[0],
+    direction: Parameters<typeof generateActions>[1],
+    keepMode: unknown,
+    keepDays: number,
+  ): string[] => {
+    const calls: string[] = []
+    ;[
+      ...generateActions(
+        pair,
+        direction,
+        'modtime',
+        keepMode as Parameters<typeof generateActions>[3],
+        keepDays,
+        now,
+        makeRecordingFactory(calls),
+        0,
+      ),
+    ]
+    return calls
+  }
+
+  it("keepMode 'delete' removes a destination-only B2 file (local-to-b2)", () => {
+    const dest = makeB2SyncPath('gone.txt', now, 50)
+    expect(run([null, dest], 'local-to-b2', 'delete', 0)).toEqual(['removeOrphan:gone.txt'])
+  })
+
+  it("keepMode 'delete' removes a destination-only local file (b2-to-local)", () => {
+    const dest = makeLocalSyncPath('gone.txt', now, 50)
+    expect(run([null, dest], 'b2-to-local', 'delete', 0)).toEqual(['deleteLocal:gone.txt'])
+  })
+
+  it("keepMode 'no-delete' never calls a destructive factory method", () => {
+    const b2 = makeB2SyncPath('keep.txt', now, 50)
+    const local = makeLocalSyncPath('keep.txt', now, 50)
+    expect(run([null, b2], 'local-to-b2', 'no-delete', 0)).toEqual([])
+    expect(run([null, local], 'b2-to-local', 'no-delete', 0)).toEqual([])
+  })
+
+  it("keepMode 'keep-days' keeps a file younger than keepDays", () => {
+    const dest = makeB2SyncPath('recent.txt', now - 1 * DAY, 50)
+    expect(run([null, dest], 'local-to-b2', 'keep-days', 7)).toEqual([])
+  })
+
+  it("keepMode 'keep-days' removes a file older than keepDays", () => {
+    const dest = makeB2SyncPath('old.txt', now - 10 * DAY, 50)
+    expect(run([null, dest], 'local-to-b2', 'keep-days', 7)).toEqual(['removeOrphan:old.txt'])
+  })
+
+  it('fails closed on an unknown or missing keepMode instead of deleting', () => {
+    const dest = makeB2SyncPath('victim.txt', now, 50)
+    expect(() => run([null, dest], 'local-to-b2', 'bogus', 0)).toThrow()
+    expect(() => run([null, dest], 'local-to-b2', undefined, 0)).toThrow()
+  })
+
+  it("fails closed on keepMode 'keep-days' with a non-finite or negative keepDays", () => {
+    const dest = makeB2SyncPath('victim.txt', now, 50)
+    expect(() => run([null, dest], 'local-to-b2', 'keep-days', Number.NaN)).toThrow()
+    expect(() => run([null, dest], 'local-to-b2', 'keep-days', -1)).toThrow()
+  })
+})

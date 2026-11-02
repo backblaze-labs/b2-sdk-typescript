@@ -4,6 +4,9 @@ export const DEFAULT_SHA1_IDLE_TIMEOUT_MILLIS = 30_000
 /** Default absolute deadline for one untrusted B2 SHA-1 verification read. */
 export const DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS = 300_000
 
+/** Largest delay `setTimeout` honours; larger values fire after 1 ms. */
+const MAX_TIMER_MILLIS = 2_147_483_647
+
 /**
  * Normalizes a user-provided SHA-1 timeout value.
  *
@@ -19,5 +22,5 @@ export function normalizeSha1TimeoutMillis(
   if (value === undefined || !Number.isFinite(value) || value < 1) {
     return defaultValue
   }
-  return Math.floor(value)
+  return Math.min(Math.floor(value), MAX_TIMER_MILLIS)
 }
