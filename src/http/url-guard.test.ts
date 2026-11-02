@@ -24,6 +24,7 @@ describe('UrlGuard', () => {
     const guard = new UrlGuard()
     expect(() => guard.check('http://anywhere.example/x')).not.toThrow()
     expect(() => guard.check('http://169.254.169.254/latest/meta-data/')).not.toThrow()
+    expect(() => guard.check('http://localhost:8180/simulator')).not.toThrow()
   })
 
   it('allows hosts matching a configured suffix', () => {
@@ -32,6 +33,17 @@ describe('UrlGuard', () => {
     expect(() => guard.check('https://api.backblazeb2.com/x')).not.toThrow()
     expect(() => guard.check('https://s3.us-west-004.backblazeb2.com/bucket/key')).not.toThrow()
     expect(() => guard.check('https://backblazeb2.com')).not.toThrow()
+  })
+
+  it('rejects HTTP URLs even on a configured allowed host', () => {
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(['backblazeb2.com'])
+    const check = () => guard.check('http://api.backblazeb2.com/x')
+    expect(check).toThrow(B2SsrfError)
+    expect(check).toThrow(
+      'non-HTTPS URL not allowed by SSRF guard: http:; use an HTTPS URL or a custom transport.',
+    )
+    expect(() => guard.check('https://api.backblazeb2.com/x')).not.toThrow()
   })
 
   it('rejects hosts outside the allow-list', () => {
