@@ -141,6 +141,8 @@ describe('uploadLargeFile cancellation', () => {
     const data = deterministicBytes(500)
     const controller = new AbortController()
     controller.abort()
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
 
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
@@ -149,7 +151,10 @@ describe('uploadLargeFile cancellation', () => {
         source: new BufferSource(data),
         signal: controller.signal,
       }),
-    ).rejects.toThrow()
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    // an already-aborted signal must stop before any request is made.
+    expect(startLargeFile).not.toHaveBeenCalled()
+    expect(uploadPart).not.toHaveBeenCalled()
 
     const unfinished = await client.raw.listUnfinishedLargeFiles(
       client.accountInfo.getApiUrl(),
@@ -363,6 +368,38 @@ describe('uploadSmallFile edge cases', () => {
     expect(result.fileName).toBe('locked.txt')
   })
 
+  it('puts SSE, retention, legal hold, fileInfo and lastModified in the b2_upload_file request', async () => {
+    const uploadFile = vi.spyOn(client.raw, 'uploadFile')
+    const fileRetention = {
+      mode: RetentionMode.Compliance,
+      retainUntilTimestamp: daysFromNow(1),
+    }
+    const serverSideEncryption = {
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    } as const
+    await uploadSmallFile(client.raw, client.accountInfo, {
+      bucketId: bucket.id,
+      fileName: 'wire.txt',
+      source: new BufferSource(new TextEncoder().encode('wire')),
+      serverSideEncryption,
+      fileRetention,
+      legalHold: LegalHoldValue.On,
+      fileInfo: { owner: 'alice' },
+      lastModifiedMillis: 1_700_000_000_000,
+    })
+
+    expect(uploadFile).toHaveBeenCalledTimes(1)
+    expect(uploadFile.mock.calls[0]?.[1]).toMatchObject({
+      fileName: 'wire.txt',
+      serverSideEncryption,
+      fileRetention,
+      legalHold: LegalHoldValue.On,
+      fileInfo: { owner: 'alice' },
+      lastModifiedMillis: 1_700_000_000_000,
+    })
+  })
+
   it('reuses upload URLs across multiple uploads', async () => {
     const r1 = await uploadSmallFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
@@ -416,6 +453,10 @@ describe('Bucket.upload() routing', () => {
   it('routes to large file upload when source exceeds recommended part size', async () => {
     vi.spyOn(client.accountInfo, 'getRecommendedPartSize').mockReturnValue(10)
 
+    // the result alone cannot tell the multipart route from the single-call one.
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadFile = vi.spyOn(client.raw, 'uploadFile')
+
     const data = deterministicBytes(50)
     const result = await bucket.upload({
       fileName: 'force-large.bin',
@@ -424,6 +465,8 @@ describe('Bucket.upload() routing', () => {
 
     expect(result.fileName).toBe('force-large.bin')
     expect(result.contentLength).toBe(50)
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(uploadFile).not.toHaveBeenCalled()
 
     vi.restoreAllMocks()
   })

@@ -24,5 +24,12 @@ describe('InMemoryPartnerAccountInfo Node inspection', () => {
 
     expect(inspect(accountInfo)).not.toContain('partner-token')
     expect(inspect(accountInfo.getAuth())).not.toContain('partner-token')
+    // "does not contain the token" also passes for an empty or broken dump,
+    // so require the redaction marker and the surviving non-secret fields.
+    expect(inspect(accountInfo)).toContain('[redacted Partner token]')
+    expect(inspect(accountInfo.getAuth())).toContain(
+      "authorizationToken: '[redacted Partner token]'",
+    )
+    expect(inspect(accountInfo.getAuth())).toContain("accountId: 'partner-account'")
   })
 })

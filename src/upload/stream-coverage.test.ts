@@ -8,6 +8,7 @@ import type { RawClient } from '../raw/index.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { deferred, deterministicBytes, makeClient } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
+import { EncryptionAlgorithm, EncryptionMode } from '../types/encryption.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { createWriteStream } from './stream.ts'
@@ -61,6 +62,34 @@ describe('createWriteStream branch coverage', () => {
 
     expect(result.fileName).toBe('no-part-size.bin')
     expect(result.contentLength).toBe(data.byteLength)
+  })
+
+  it('sends SSE-C on b2_start_large_file and on every part request', async () => {
+    const sseC = {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+      customerKeyMd5: 'y4HAEFCYWuvAXWFTtA1Qpg==',
+    } as const
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+
+    const { writable, done } = bucket.file('sse-stream.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      serverSideEncryption: sseC,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(200_000))
+    await writer.close()
+    await done
+
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ serverSideEncryption: sseC })
+    expect(uploadPart).toHaveBeenCalledTimes(2)
+    for (const call of uploadPart.mock.calls) {
+      expect(call[1]).toMatchObject({ serverSideEncryption: sseC })
+    }
   })
 
   it('passes customUploadTimestamp through createWriteStream', async () => {
@@ -313,6 +342,80 @@ describe('createWriteStream branch coverage', () => {
 
     expect(uploadPartCalls).toBe(0)
     expect(cancelCalls).toBeLessThanOrEqual(1)
+  })
+
+  // Skipped pending an owner decision: when the start request ignores the abort signal
+  // and its response arrives after abort, the engine never cancels the file the server
+  // created (cancelCalls stays 0 and the large file remains unfinished). The test above
+  // only asserts `<= 1`, which hides that. Un-skip once the owner decides whether
+  // the raw layer should hand late file ids back for cancellation.
+  it.skip('cancels the large file created by a start whose response arrives after abort', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const inner = sim.transport()
+    let startSeen!: () => void
+    let releaseStart!: () => void
+    const startSeenPromise = new Promise<void>((resolve) => {
+      startSeen = resolve
+    })
+    const releaseStartPromise = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    let cancelCalls = 0
+    let uploadPartCalls = 0
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        if (req.url.includes('b2_start_large_file')) {
+          startSeen()
+          await releaseStartPromise
+        }
+        if (req.url.includes('b2_upload_part?')) {
+          uploadPartCalls++
+        }
+        if (req.url.includes('b2_cancel_large_file')) {
+          cancelCalls++
+        }
+        if (req.url.includes('b2_start_large_file')) {
+          const { signal: _signal, ...withoutSignal } = req
+          return inner.send(withoutSignal)
+        }
+        return inner.send(req)
+      },
+    }
+    const raceClient = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport,
+      retry: { maxRetries: 0 },
+    })
+    await raceClient.authorize()
+    const raceBucket = await raceClient.createBucket({
+      bucketName: 'abort-start-late',
+      bucketType: BucketType.AllPrivate,
+    })
+
+    const { writable, done } = raceBucket.file('abort-start-late.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await startSeenPromise
+
+    const abortPromise = writer.abort(new Error('abort while starting'))
+    const abortResult = await Promise.race([
+      abortPromise.then(() => 'aborted' as const),
+      delay(1_000).then(() => 'timed-out' as const),
+    ])
+    expect(abortResult).toBe('aborted')
+    releaseStart()
+    await abortPromise
+    await expect(done).rejects.toThrow('abort while starting')
+
+    expect(uploadPartCalls).toBe(0)
+    for (let attempt = 0; attempt < 100 && cancelCalls === 0; attempt += 1) {
+      await delay(5)
+    }
+    expect(cancelCalls).toBe(1)
   })
 
   it('passes the abort signal to stalled startLargeFile requests', async () => {
@@ -609,6 +712,37 @@ describe('createWriteStream branch coverage', () => {
     await expect(done).rejects.toThrow('abort with cleanup callback')
     expect(cancelLargeFile).toHaveBeenCalledTimes(1)
     expect(onCleanupFailure).not.toHaveBeenCalled()
+  })
+
+  // the success-path test above never shows the callback firing, so a
+  // callback that was not wired through to the cancel call would go unnoticed.
+  it('reports a failed cancel through onCleanupFailure when aborting a started write stream', async () => {
+    const uploadPartStarted = deferred<void>()
+    const originalUploadPart = client.raw.uploadPart.bind(client.raw)
+    vi.spyOn(client.raw, 'uploadPart').mockImplementation(async (...args) => {
+      uploadPartStarted.resolve(undefined)
+      return originalUploadPart(...args)
+    })
+    const cancelError = new Error('cancel exploded')
+    const cancelLargeFile = vi.spyOn(client.raw, 'cancelLargeFile').mockRejectedValue(cancelError)
+    const onCleanupFailure = vi.fn()
+    const { writable, done } = bucket.file('abort-cancel-fails.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+      onCleanupFailure,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(100_000))
+    await uploadPartStarted.promise
+
+    await writer.abort(new Error('abort with failing cancel'))
+
+    await expect(done).rejects.toThrow('abort with failing cancel')
+    expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(onCleanupFailure).toHaveBeenCalledTimes(1)
+    expect(onCleanupFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: 'cancel-failed', error: cancelError }),
+    )
   })
 
   it('waits for in-flight write-stream parts before cancelling on abort', async () => {

@@ -210,6 +210,43 @@ describe('synchronize', () => {
       expect(events).toEqual([])
     })
 
+    // the three tests above only use empty folders, so they pass even if
+    // the direction picks the wrong action. One source-only file per direction
+    // pins which action type each direction produces.
+    it.each([
+      ['local-to-b2', 'upload-done'],
+      ['b2-to-local', 'download-done'],
+      ['b2-to-b2', 'copy-done'],
+    ] as const)('%s turns a source-only file into a %s event', async (direction, doneType) => {
+      const sourceType = direction === 'local-to-b2' ? 'local' : 'b2'
+      const destType = direction === 'b2-to-local' ? 'local' : 'b2'
+      const sourceFile =
+        sourceType === 'local'
+          ? makeLocalSyncPath('only.txt', 1000, 10)
+          : makeB2SyncPath('only.txt', 1000, 10)
+      const source = makeMemoryFolder([sourceFile], sourceType)
+      const dest = makeMemoryFolder([], destType)
+      const bucket = makeMockBucket() as unknown as Bucket
+      const config = {
+        source: {
+          ...source,
+          type: sourceType,
+          ...(sourceType === 'local' ? { root: '/tmp' } : {}),
+        },
+        dest: { ...dest, type: destType, ...(destType === 'local' ? { root: '/tmp/dest' } : {}) },
+        options: { compareMode: 'modtime', keepMode: 'no-delete', concurrency: 1, dryRun: true },
+        bucket,
+        ...(direction === 'b2-to-local' ? {} : { prefix: '' }),
+      } as unknown as SynchronizerConfig
+
+      const events = await collectEvents(config)
+
+      expect(events.map((event) => event.type).filter((type) => type !== 'compare')).toEqual([
+        doneType,
+      ])
+      expect(events.find((event) => event.type === doneType)).toMatchObject({ path: 'only.txt' })
+    })
+
     it('throws on unsupported direction (local-to-local)', async () => {
       const source = makeMemoryFolder([], 'local')
       const dest = makeMemoryFolder([], 'local')
@@ -2517,13 +2554,13 @@ describe('synchronize', () => {
         const controller = new AbortController()
         const data = new Uint8Array([4, 5, 6])
         const mockBucket = makeMockBucket({ 'fid_remote.txt': data })
+        let seenSignal: AbortSignal | undefined
+        let abortedAtCall: boolean | undefined
         mockBucket.downloadById.mockImplementation(
           (_fileId: string, callOptions?: { readonly signal?: AbortSignal }) => {
-            expect(callOptions?.signal).toEqual(expect.any(AbortSignal))
-            expect(callOptions?.signal).not.toBe(controller.signal)
-            expect(callOptions?.signal?.aborted).toBe(false)
+            seenSignal = callOptions?.signal
+            abortedAtCall = callOptions?.signal?.aborted
             controller.abort()
-            expect(callOptions?.signal?.aborted).toBe(true)
             return { body: streamFromBytes(data) }
           },
         )
@@ -2540,6 +2577,10 @@ describe('synchronize', () => {
         }
 
         const events = await collectEvents(config)
+        expect(seenSignal).toBeInstanceOf(AbortSignal)
+        expect(seenSignal).not.toBe(controller.signal)
+        expect(abortedAtCall).toBe(false)
+        expect(seenSignal?.aborted).toBe(true)
         expect(events.some((event) => event.type === 'download-done')).toBe(false)
         expect(events.some((event) => event.type === 'error')).toBe(true)
       } finally {
@@ -6758,41 +6799,58 @@ describe('synchronize', () => {
       expect(events.some((event) => event.type === 'copy-done')).toBe(true)
     })
 
-    it('skips action execution when signal aborts after scan completes', async () => {
-      const controller = new AbortController()
-      const mockBucket = makeMockBucket()
-      const sourceFile = makeLocalSyncPath('late.txt', 1000, 10)
-      const source = makeMemoryFolder([sourceFile], 'local')
-      const dest = makeMemoryFolder([], 'b2')
+    it.skipIf(!isNode)(
+      'skips action execution when signal aborts after scan completes',
+      async () => {
+        const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-abort-after-scan-'))
+        try {
+          // A real file so the upload would reach bucket.upload if abort were ignored.
+          await writeFile(join(root, 'late.txt'), '0123456789')
+          const run = async (abort: boolean) => {
+            const controller = new AbortController()
+            const mockBucket = makeMockBucket()
+            const localFile: LocalSyncPath = {
+              ...makeLocalSyncPath('late.txt', 1000, 10),
+              absolutePath: join(root, 'late.txt'),
+            }
+            const source = makeMemoryFolder([localFile], 'local')
+            const dest = makeMemoryFolder([], 'b2')
+            const config: SynchronizerUpConfig = {
+              source: { ...source, type: 'local', root },
+              dest: { ...dest, type: 'b2' },
+              options: { compareMode: 'modtime', keepMode: 'no-delete', signal: controller.signal },
+              bucket: mockBucket as unknown as Bucket,
+              prefix: '',
+            }
+            const gen = synchronize(config)
+            const first = await gen.next()
+            expect(first.done).toBe(false)
+            if (abort) controller.abort()
+            const rest: SyncEvent[] = []
+            while (true) {
+              const next = await gen.next()
+              if (next.done) break
+              rest.push(next.value)
+            }
+            return { mockBucket, rest }
+          }
 
-      const config: SynchronizerUpConfig = {
-        source: { ...source, type: 'local', root: '/tmp' },
-        dest: { ...dest, type: 'b2' },
-        options: {
-          compareMode: 'modtime',
-          keepMode: 'no-delete',
-          signal: controller.signal,
-        },
-        bucket: mockBucket as unknown as Bucket,
-        prefix: '',
-      }
+          // Positive control: without abort the same config uploads once.
+          const control = await run(false)
+          expect(control.mockBucket.upload).toHaveBeenCalledTimes(1)
 
-      // Kick off the generator, then abort before consuming events that would trigger execution.
-      const gen = synchronize(config)
-      // Pull the compare event first (scan stage).
-      const first = await gen.next()
-      expect(first.done).toBe(false)
-      controller.abort()
-      const rest: SyncEvent[] = []
-      while (true) {
-        const next = await gen.next()
-        if (next.done) break
-        rest.push(next.value)
-      }
-      expect(mockBucket.upload).not.toHaveBeenCalled()
-      const uploads = rest.filter((e) => e.type === 'upload-done')
-      expect(uploads).toHaveLength(0)
-    })
+          const aborted = await run(true)
+          expect(aborted.mockBucket.upload).not.toHaveBeenCalled()
+          expect(aborted.rest.filter((e) => e.type === 'upload-done')).toHaveLength(0)
+          expect(aborted.rest.filter((e) => e.type === 'error')).toHaveLength(0)
+        } finally {
+          await rm(root, { recursive: true, force: true })
+        }
+      },
+    )
   })
 
   describe('empty source and destination', () => {

@@ -79,6 +79,8 @@ interface FetchRangeWithRetryParams {
  * @param options - Parallel download parameters (file ID, size, concurrency).
  *
  * @returns A `ReadableStream` that yields file bytes in order.
+ *
+ * @throws If `concurrency` is not a positive number, or `rangeSize` is not a positive number.
  */
 export function createParallelDownloadStream(
   raw: RawClient,
@@ -88,6 +90,11 @@ export function createParallelDownloadStream(
   const rangeSize = options.rangeSize ?? DEFAULT_DOWNLOAD_RANGE_SIZE
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
+  // concurrency <= 0 gives a zero-sized window: nothing is scheduled and the
+  // stream would close "successfully" with no bytes. Reject it up front.
+  if (!(concurrency > 0)) {
+    throw new RangeError(`concurrency must be a positive number, got ${concurrency}`)
+  }
   const serverSideEncryption =
     options.serverSideEncryption !== undefined
       ? redactSseCKeyMaterial(options.serverSideEncryption, { label: 'SseCDownloadKey' })

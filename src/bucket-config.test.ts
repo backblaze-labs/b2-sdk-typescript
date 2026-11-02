@@ -327,6 +327,30 @@ describe('Bucket.lifecycle helpers', () => {
     expect(after.lifecycleRules.map((r) => r.fileNamePrefix)).toEqual(['tmp/', 'logs/'])
   })
 
+  // (owner decision): addLifecycleRule is a read-modify-write with no
+  // `ifRevisionIs`, so two writers that read the same rule set overwrite each other.
+  // Skipped pending an owner decision on how to expose the bucket revision. The test
+  // asserts the DESIRED behaviour (both rules survive) and fails today; un-skip it
+  // once that decision is made. Do not "fix" it by changing the assertion.
+  it.skip('addLifecycleRule keeps the rule written by a concurrent writer', async () => {
+    const [a, b] = await Promise.allSettled([
+      bucket.addLifecycleRule({
+        daysFromHidingToDeleting: 7,
+        daysFromUploadingToHiding: null,
+        fileNamePrefix: 'tmp/',
+      }),
+      bucket.addLifecycleRule({
+        daysFromHidingToDeleting: 30,
+        daysFromUploadingToHiding: 90,
+        fileNamePrefix: 'logs/',
+      }),
+    ])
+    expect(a.status).toBe('fulfilled')
+    expect(b.status).toBe('fulfilled')
+    const rules = await bucket.getLifecycleRules()
+    expect(rules.map((r) => r.fileNamePrefix).sort()).toEqual(['logs/', 'tmp/'])
+  })
+
   it('addLifecycleRule replaces an existing rule with the same prefix (idempotent)', async () => {
     await bucket.addLifecycleRule({
       daysFromHidingToDeleting: 7,

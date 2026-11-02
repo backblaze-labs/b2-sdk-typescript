@@ -198,4 +198,22 @@ describe('mapConcurrent', () => {
 
     expect(settled[0]?.status).toBe('rejected')
   })
+
+  // the test above only checks that the call rejects. With concurrency 1 the
+  // slot must be handed back after a throw, or every later item queues forever.
+  it('still starts later items after the first item throws at concurrency 1', async () => {
+    const started: number[] = []
+
+    await expect(
+      mapConcurrent([1, 2, 3], 1, async (item) => {
+        started.push(item)
+        if (item === 1) throw new Error('first fails')
+        return item
+      }),
+    ).rejects.toThrow('first fails')
+
+    // Let the queued tasks run to completion after the rejection surfaced.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(started).toEqual([1, 2, 3])
+  })
 })

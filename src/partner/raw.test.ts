@@ -1628,6 +1628,18 @@ describe('PartnerRawClient reserve trial endpoint', () => {
 
     expect(result.bucketId).toEqual(bucketId(result.bucketId))
     expect(result.applicationKeyId).toEqual(applicationKeyId(result.applicationKeyId))
+    // The two assertions above compare a value with itself; pin the real
+    // simulator-minted shapes, and that the one-time secret stays readable
+    // for the caller while serialization hides it.
+    expect(result.bucketId).toMatch(/^b2_bucket_/)
+    expect(result.applicationKeyId).toMatch(/^sim_key_/)
+    expect(result.accountId).toMatch(/^sim_trial_account_/)
+    expect(result.email).toBe('trial-shape@example.com')
+    const secret = result.applicationKey
+    expect(secret).toMatch(/^sim_secret_/)
+    expect(JSON.stringify(result)).not.toContain(secret)
+    expect(JSON.stringify(result)).toContain(APPLICATION_KEY_REDACTED)
+    expect(String(result)).not.toContain(secret)
   })
 })
 

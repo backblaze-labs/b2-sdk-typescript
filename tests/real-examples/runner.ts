@@ -74,12 +74,11 @@ function isUnparseableRealExampleBucket(name: string): boolean {
  *
  * @returns A promise that resolves when the child exits cleanly.
  */
-async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
+async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<string> {
   const maxAttempts = 3
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      await runOnce(argv, env)
-      return
+      return await runOnce(argv, env)
     } catch (err) {
       if (attempt === maxAttempts) throw err
       console.warn(
@@ -90,18 +89,26 @@ async function run(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<voi
   }
 }
 
-function runOnce(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+/** Runs a command, echoing its stdout live and resolving with the captured stdout. */
+function runOnce(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
     const [cmd, ...args] = argv
     if (!cmd) {
       reject(new Error('empty argv'))
       return
     }
     console.log(`\n$ ${argv.join(' ')}`)
-    const child = spawn(cmd, args, { stdio: 'inherit', env })
+    const child = spawn(cmd, args, { stdio: ['inherit', 'pipe', 'inherit'], env })
+    let stdout = ''
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+      process.stdout.write(chunk)
+    })
     child.on('error', reject)
-    child.on('exit', (code) =>
-      code === 0 ? resolve() : reject(new Error(`${argv.join(' ')} exited with code ${code}`)),
+    child.on('close', (code) =>
+      code === 0
+        ? resolve(stdout)
+        : reject(new Error(`${argv.join(' ')} exited with code ${code}`)),
     )
   })
 }
@@ -216,7 +223,15 @@ async function main(): Promise<void> {
     // 4. Upload with a progress bar (proves the SDK's onProgress wiring works
     //    against real B2; the bar will spin to 100% near-instantly for a tiny
     //    file but the assertion is "the script exits 0", not the bar shape).
-    await run(['npx', 'tsx', 'examples/node-with-progress.ts', bucket.name, samplePath], env)
+    const progressOutput = await run(
+      ['npx', 'tsx', 'examples/node-with-progress.ts', bucket.name, samplePath],
+      env,
+    )
+    if (!progressOutput.includes('100.0%') || !progressOutput.includes('✓ sample.txt')) {
+      throw new Error(
+        `node-with-progress exited 0 but never reported completed progress.\nOutput: ${JSON.stringify(progressOutput)}`,
+      )
+    }
 
     // 5. Encrypted backup snapshot.
     await run(

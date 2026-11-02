@@ -3,7 +3,7 @@
  * not exercised by client.test.ts. Each test uses the in-memory
  * B2Simulator so no network I/O is needed.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { B2Client } from './client.ts'
 import { BufferSource } from './streams/source.ts'
 import { makeClient, readStream } from './test-utils/index.ts'
@@ -649,10 +649,15 @@ describe('B2Object download and stream coverage', () => {
     })
 
     const content = new TextEncoder().encode('this exceeds the simulator part size')
+    // assert the route taken, not only the outcome.
+    const startLargeFile = vi.spyOn(largeRouteClient.raw, 'startLargeFile')
+    const uploadFile = vi.spyOn(largeRouteClient.raw, 'uploadFile')
     const obj = bucket.file('large-route.bin')
     const result = await obj.upload({ source: new BufferSource(content) })
 
     expect(result.fileName).toBe('large-route.bin')
     expect(result.contentLength).toBe(content.byteLength)
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(uploadFile).not.toHaveBeenCalled()
   })
 })

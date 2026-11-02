@@ -1693,6 +1693,47 @@ describe('findResumeCandidate', () => {
     expect(listPartCalls).toBe(1)
   })
 
+  it('rejects with the caller-supplied abort reason between listParts pages', async () => {
+    const controller = new AbortController()
+    const reason = new Error('caller-cancelled-resume')
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts() {
+        controller.abort(reason)
+        return {
+          parts: [{ partNumber: 1, contentSha1: 'target-p1', contentLength: 100 }],
+          nextPartNumber: 2,
+        }
+      },
+    } as unknown as RawClient
+
+    await expect(
+      findResumeCandidate(raw, makeAccountInfo(), bucketId('bucket1'), 'target.bin', {
+        contentType: 'application/octet-stream',
+        fileInfo: {},
+        sourceSize: 200,
+        partSize: 100,
+        parts: [
+          { partNumber: 1, length: 100 },
+          { partNumber: 2, length: 100 },
+        ],
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+  })
+
   it('bounds part listing for candidates with more parts than the local plan', async () => {
     const listPartRequests: Array<{ maxPartCount?: number; startPartNumber?: number }> = []
     const rejected: string[] = []
@@ -2136,6 +2177,50 @@ describe('findResumeCandidate', () => {
     ).rejects.toMatchObject({ name: 'TimeoutError' })
   })
 
+  it('still times out a stalled unfinished-file listing when a caller signal is also supplied', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return new Promise<never>(() => {})
+      },
+    } as unknown as RawClient
+    const callerAbort = new AbortController()
+
+    const outcome = await Promise.race([
+      findResumeCandidate(raw, makeAccountInfo(), bucketId('bucket1'), 'target.bin', {
+        ...defaultResumeCriteria(),
+        signal: callerAbort.signal,
+        discoveryTimeoutMs: 1,
+      }).then(
+        () => 'resolved' as const,
+        (error: unknown) => error,
+      ),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 500)),
+    ])
+
+    // A never-aborted caller signal must not disable the documented
+    // SDK-enforced discovery timeout.
+    expect(outcome).toMatchObject({ name: 'TimeoutError' })
+  })
+
+  it('a caller abort still wins over a long discovery timeout', async () => {
+    const raw = {
+      async listUnfinishedLargeFiles() {
+        return new Promise<never>(() => {})
+      },
+    } as unknown as RawClient
+    const callerAbort = new AbortController()
+    const reason = new Error('caller gave up')
+
+    const pending = findResumeCandidate(raw, makeAccountInfo(), bucketId('bucket1'), 'target.bin', {
+      ...defaultResumeCriteria(),
+      signal: callerAbort.signal,
+      discoveryTimeoutMs: 60_000,
+    })
+    callerAbort.abort(reason)
+
+    await expect(pending).rejects.toBe(reason)
+  })
+
   it('times out a stalled part listing when no signal is supplied', async () => {
     const raw = {
       async listUnfinishedLargeFiles() {
@@ -2331,5 +2416,105 @@ describe('findResumeCandidate', () => {
         value: originalDomException,
       })
     }
+  })
+})
+
+describe('findResumeCandidate listParts cursor', () => {
+  function makeRaw(
+    pages: Array<{ parts: Array<{ partNumber: number }>; nextPartNumber: number | null }>,
+    requests: Array<{ startPartNumber?: number }>,
+  ): RawClient {
+    let call = 0
+    return {
+      async listUnfinishedLargeFiles() {
+        return {
+          files: [
+            {
+              fileId: 'target-id',
+              fileName: 'target.bin',
+              contentType: 'application/octet-stream',
+              fileInfo: {},
+            },
+          ],
+          nextFileId: null,
+        }
+      },
+      async listParts(_apiUrl: string, _authToken: string, req: { startPartNumber?: number }) {
+        requests.push(req)
+        const page = pages[Math.min(call++, pages.length - 1)]
+        if (page === undefined) throw new Error('no page configured')
+        return {
+          parts: page.parts.map((part) => ({
+            partNumber: part.partNumber,
+            contentSha1: `p${part.partNumber}`,
+            contentLength: 100,
+          })),
+          nextPartNumber: page.nextPartNumber,
+        }
+      },
+    } as unknown as RawClient
+  }
+
+  it('forwards nextPartNumber as startPartNumber and merges two pages', async () => {
+    const requests: Array<{ startPartNumber?: number }> = []
+    const raw = makeRaw(
+      [
+        { parts: [{ partNumber: 1 }], nextPartNumber: 2 },
+        { parts: [{ partNumber: 2 }], nextPartNumber: null },
+      ],
+      requests,
+    )
+
+    const result = await findResumeCandidate(
+      raw,
+      makeAccountInfo(),
+      bucketId('bucket1'),
+      'target.bin',
+      defaultResumeCriteria(),
+    )
+
+    expect(requests).toHaveLength(2)
+    expect(requests[0]?.startPartNumber).toBeUndefined()
+    expect(requests[1]?.startPartNumber).toBe(2)
+    expect(result?.uploadedPartSha1s.get(1)).toBe('p1')
+    expect(result?.uploadedPartSha1s.get(2)).toBe('p2')
+  })
+
+  it('aborts resume when listParts returns a non-advancing nextPartNumber', async () => {
+    const requests: Array<{ startPartNumber?: number }> = []
+    // Page 2 repeats cursor 2, which would loop forever without the guard.
+    const raw = makeRaw(
+      [
+        { parts: [{ partNumber: 1 }], nextPartNumber: 2 },
+        { parts: [{ partNumber: 2 }], nextPartNumber: 2 },
+      ],
+      requests,
+    )
+
+    await expect(
+      findResumeCandidate(
+        raw,
+        makeAccountInfo(),
+        bucketId('bucket1'),
+        'target.bin',
+        defaultResumeCriteria(),
+      ),
+    ).rejects.toThrow(/non-advancing nextPartNumber/)
+    expect(requests).toHaveLength(2)
+  })
+
+  it('rejects a first-page cursor below 1', async () => {
+    const requests: Array<{ startPartNumber?: number }> = []
+    const raw = makeRaw([{ parts: [{ partNumber: 1 }], nextPartNumber: 0 }], requests)
+
+    await expect(
+      findResumeCandidate(
+        raw,
+        makeAccountInfo(),
+        bucketId('bucket1'),
+        'target.bin',
+        defaultResumeCriteria(),
+      ),
+    ).rejects.toThrow(/non-advancing nextPartNumber/)
   })
 })

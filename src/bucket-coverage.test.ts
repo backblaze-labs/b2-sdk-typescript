@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from './bucket.ts'
 import { B2Client } from './client.ts'
 import { B2Simulator } from './simulator/index.ts'
@@ -116,6 +116,36 @@ describe('Bucket.copyLargeFile branch coverage', () => {
       concurrency: 1,
     })
     expect(result.fileName).toBe('everything.bin')
+  })
+
+  it('sends destination SSE on start and every part, and source SSE on every part', async () => {
+    const src = await uploadSource('src-sse-wire.bin')
+    const startSpy = vi.spyOn(client.raw, 'startLargeFile')
+    const copyPartSpy = vi.spyOn(client.raw, 'copyPart')
+    const destinationServerSideEncryption = {
+      mode: EncryptionMode.SseB2,
+      algorithm: EncryptionAlgorithm.Aes256,
+    } as const
+    const sourceServerSideEncryption = { mode: EncryptionMode.None } as const
+    await sourceBucket.copyLargeFile({
+      sourceFileId: src.fileId,
+      fileName: 'sse-wire.bin',
+      destinationServerSideEncryption,
+      sourceServerSideEncryption,
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    expect(startSpy.mock.calls[0]?.[2]).toMatchObject({
+      serverSideEncryption: destinationServerSideEncryption,
+    })
+    expect(copyPartSpy).toHaveBeenCalledTimes(2)
+    for (const call of copyPartSpy.mock.calls) {
+      expect(call[2]).toMatchObject({
+        destinationServerSideEncryption,
+        sourceServerSideEncryption,
+      })
+    }
   })
 
   it('aborts the multipart copy when the signal fires before dispatch', async () => {

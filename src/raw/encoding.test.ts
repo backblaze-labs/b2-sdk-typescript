@@ -216,6 +216,19 @@ describe('parseFileInfoHeaders', () => {
     })
   })
 
+  it('does not throw on a malformed percent-escape in a server-supplied value', () => {
+    // A file-info value written through another client or the S3 API can hold a
+    // stray '%'. One bad value must not make the whole download fail.
+    const headers = new Headers({ 'x-bz-info-note': '100%', 'x-bz-info-author': 'alice' })
+    expect(() => parseFileInfoHeaders(headers)).not.toThrow()
+    expect(parseFileInfoHeaders(headers)).toEqual({ note: '100%', author: 'alice' })
+  })
+
+  it('does not throw on a malformed percent-escape in a server-supplied key', () => {
+    const headers = new Headers({ 'x-bz-info-bad%gg': 'v' })
+    expect(() => parseFileInfoHeaders(headers)).not.toThrow()
+  })
+
   it('handles case-insensitive header names', () => {
     const headers = new Headers()
     // Headers normalizes to lowercase internally, but we test that

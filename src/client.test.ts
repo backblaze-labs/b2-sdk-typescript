@@ -16,7 +16,7 @@ import { Capability } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { SSE_B2 } from './types/encryption.ts'
 import { FileAction, HIDE_MARKER_CONTENT_TYPE } from './types/file.ts'
-import type { LargeFileId } from './types/ids.ts'
+import { bucketId, type LargeFileId } from './types/ids.ts'
 import { LegalHoldValue, RetentionMode } from './types/lock.ts'
 import { type EventNotificationRule, EventType } from './types/notifications.ts'
 
@@ -570,6 +570,66 @@ describe('B2Client SSRF guard', () => {
       expect(() => innerTransport?.check('http://169.254.169.254/latest/meta-data/')).toThrow(
         B2SsrfError,
       )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it('rejects a transport send to a foreign host after authorize without calling fetch', async () => {
+    const { vi } = await import('vitest')
+    const { B2SsrfError } = await import('./errors/index.ts')
+    const originalFetch = globalThis.fetch
+    const fetchedUrls: string[] = []
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const u = typeof url === 'string' ? url : url.toString()
+      fetchedUrls.push(u)
+      if (!u.startsWith('https://api.backblazeb2.com/b2api/v4/b2_authorize_account')) {
+        throw new Error(`unexpected fetch: ${u}`)
+      }
+      return new Response(
+        JSON.stringify({
+          accountId: 'a',
+          authorizationToken: 't',
+          apiInfo: {
+            storageApi: {
+              apiUrl: 'https://api.us-west-004.backblazeb2.com',
+              downloadUrl: 'https://f004.backblazeb2.com',
+              s3ApiUrl: 'https://s3.us-west-004.backblazeb2.com',
+              absoluteMinimumPartSize: 5_000_000,
+              recommendedPartSize: 100_000_000,
+              capabilities: [Capability.ReadFiles, Capability.WriteFiles],
+              bucketId: null,
+              bucketName: null,
+              namePrefix: null,
+            },
+          },
+          applicationKeyExpirationTimestamp: null,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )
+    })
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+
+    try {
+      const client = new B2Client({ applicationKeyId: 'test-key-id', applicationKey: 'test-key' })
+      await client.authorize()
+      expect(fetchedUrls).toHaveLength(1)
+
+      // The request goes through the real transport chain (retry + fetch),
+      // carrying the account token to a host outside the allowed suffixes.
+      await expect(
+        client.raw.listFileNames('http://169.254.169.254', client.accountInfo.getAuthToken(), {
+          bucketId: bucketId('bucket-1'),
+        }),
+      ).rejects.toBeInstanceOf(B2SsrfError)
+      await expect(
+        client.raw.listFileNames('https://evil.example', client.accountInfo.getAuthToken(), {
+          bucketId: bucketId('bucket-1'),
+        }),
+      ).rejects.toBeInstanceOf(B2SsrfError)
+
+      // Only the authorize call ever reached fetch.
+      expect(fetchedUrls).toHaveLength(1)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1918,6 +1978,35 @@ describe('file retention and legal hold', () => {
       bypassGovernance: true,
     })
     expect(result.fileRetention.mode).toBe('governance')
+  })
+
+  it('shortening governance retention needs bypassGovernance on the wire', async () => {
+    const bucket = await client.createBucket({
+      bucketName: 'bypass-effect-test',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const uploaded = await bucket.upload({
+      fileName: 'bypass-effect.txt',
+      source: new BufferSource(new TextEncoder().encode('bypass me')),
+    })
+    const longRetention = { mode: 'governance' as const, retainUntilTimestamp: daysFromNow(2) }
+    const shorterRetention = { mode: 'governance' as const, retainUntilTimestamp: daysFromNow(1) }
+    await bucket.updateFileRetention('bypass-effect.txt', uploaded.fileId, longRetention)
+
+    // Negative control: without the flag the simulator (like B2) refuses to shorten.
+    await expect(
+      bucket.updateFileRetention('bypass-effect.txt', uploaded.fileId, shorterRetention),
+    ).rejects.toThrow()
+
+    // With the flag the shortening is applied, so the flag must reach the request.
+    const result = await bucket.updateFileRetention(
+      'bypass-effect.txt',
+      uploaded.fileId,
+      shorterRetention,
+      { bypassGovernance: true },
+    )
+    expect(result.fileRetention.retainUntilTimestamp).toBe(shorterRetention.retainUntilTimestamp)
   })
 })
 

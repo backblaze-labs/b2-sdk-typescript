@@ -448,6 +448,9 @@ describe('uploadLargeFile cleanup paths', () => {
     // Two full parts so we definitely hit `b2_upload_part` twice.
     const data = deterministicBytes(partSize * 2)
 
+    const evictPart = vi.spyOn(client.accountInfo, 'evictPartUploadUrl')
+    const returnPart = vi.spyOn(client.accountInfo, 'returnPartUploadUrl')
+
     await expect(
       uploadLargeFile(client.raw, client.accountInfo, {
         bucketId: bucket.id,
@@ -466,6 +469,10 @@ describe('uploadLargeFile cleanup paths', () => {
       { bucketId: bucket.id },
     )
     expect(unfinished.files.find((f) => f.fileName === 'boom.bin')).toBeUndefined()
+
+    // The failed part URL must be evicted, never handed back to the pool.
+    expect(evictPart).toHaveBeenCalledTimes(1)
+    expect(returnPart).not.toHaveBeenCalled()
   })
 
   it('does not cancel an explicit resume file ID after upload failure', async () => {
@@ -1572,6 +1579,9 @@ describe('upload fresh-URL retry', () => {
     })
     const returnEntry = vi.fn()
     const evictEntry = vi.fn()
+    const upload = vi.fn(async () => {
+      throw rateLimitError
+    })
 
     await expect(
       withFreshUploadUrlRetry({
@@ -1583,14 +1593,14 @@ describe('upload fresh-URL retry', () => {
         fetchFresh: async () => entry,
         returnEntry,
         evictEntry,
-        upload: async () => {
-          throw rateLimitError
-        },
+        upload,
       }),
     ).rejects.toBe(rateLimitError)
 
     expect(returnEntry).toHaveBeenCalledWith(entry)
     expect(evictEntry).not.toHaveBeenCalled()
+    // maxRetries is 1, so a retry would show up as a second payload upload.
+    expect(upload).toHaveBeenCalledTimes(1)
   })
 
   it('retries a transient small-file upload failure with a fresh upload URL', async () => {
@@ -3113,23 +3123,28 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   it('forwards fileRetention when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const fileRetention = {
+      mode: RetentionMode.Governance,
+      retainUntilTimestamp: daysFromNow(1),
+    }
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucketId as never,
       fileName: 'resume-retention.bin',
       source: new BufferSource(data),
       partSize,
       concurrency: 1,
-      fileRetention: {
-        mode: RetentionMode.Governance,
-        retainUntilTimestamp: daysFromNow(1),
-      },
+      fileRetention,
     })
     expect(result.fileName).toBe('resume-retention.bin')
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ fileRetention })
   })
 
   it('forwards legalHold when starting a large file', async () => {
     const partSize = 100_000
     const data = new Uint8Array(partSize * 2)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucketId as never,
       fileName: 'resume-hold.bin',
@@ -3139,6 +3154,8 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
+    expect(startLargeFile).toHaveBeenCalledTimes(1)
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ legalHold: LegalHoldValue.On })
   })
 
   it('records the whole-file SHA-1 in large_file_sha1 metadata', async () => {
@@ -4443,12 +4460,16 @@ describe('uploadSmallFile cleanup path', () => {
       bucketType: BucketType.AllPrivate,
     })
 
+    const evictUpload = vi.spyOn(client.accountInfo, 'evictUploadUrl')
+    const returnUpload = vi.spyOn(client.accountInfo, 'returnUploadUrl')
     await expect(
       bucket.upload({
         fileName: 'small-boom.txt',
         source: new BufferSource(new Uint8Array([1, 2, 3])),
       }),
     ).rejects.toThrow(/simulated upload_file failure/)
+    expect(evictUpload).toHaveBeenCalledTimes(1)
+    expect(returnUpload).not.toHaveBeenCalled()
   })
 
   it('emits a ProgressEvent on small-file upload completion', async () => {
@@ -4871,6 +4892,65 @@ describe('uploadSmallFile cleanup path', () => {
       serverSideEncryption: { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 },
     })
     expect(result.fileName).toBe('sse-stream.bin')
+  })
+
+  it('sends SSE-C on start and on each part of a streaming-source upload, and SSE-B2 only on start', async () => {
+    const { client } = makeClient({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'stream-sse-wire',
+      bucketType: BucketType.AllPrivate,
+    })
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+    const partSize = 100_000
+    const makeSource = (): StreamSource => {
+      const payload = deterministicBytes(partSize * 2)
+      return new StreamSource(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(payload)
+            controller.close()
+          },
+        }),
+        payload.byteLength,
+      )
+    }
+
+    // SSE-C: customer key goes on b2_start_large_file and every b2_upload_part.
+    const sseC = {
+      mode: EncryptionMode.SseC,
+      algorithm: EncryptionAlgorithm.Aes256,
+      customerKey: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=',
+      customerKeyMd5: 'y4HAEFCYWuvAXWFTtA1Qpg==',
+    } as const
+    await bucket.upload({
+      fileName: 'sse-c-stream.bin',
+      source: makeSource(),
+      partSize,
+      serverSideEncryption: sseC,
+    })
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ serverSideEncryption: sseC })
+    expect(uploadPart).toHaveBeenCalledTimes(2)
+    for (const call of uploadPart.mock.calls) {
+      expect(call[1]).toMatchObject({ serverSideEncryption: sseC })
+    }
+
+    // SSE-B2: configured on start only (b2_upload_part accepts customer keys only).
+    startLargeFile.mockClear()
+    uploadPart.mockClear()
+    const sseB2 = { mode: EncryptionMode.SseB2, algorithm: EncryptionAlgorithm.Aes256 } as const
+    await bucket.upload({
+      fileName: 'sse-b2-stream.bin',
+      source: makeSource(),
+      partSize,
+      serverSideEncryption: sseB2,
+    })
+    expect(startLargeFile.mock.calls[0]?.[2]).toMatchObject({ serverSideEncryption: sseB2 })
+    expect(uploadPart).toHaveBeenCalledTimes(2)
+    for (const call of uploadPart.mock.calls) {
+      expect(call[1]).not.toHaveProperty('serverSideEncryption')
+    }
   })
 
   it('evicts the part-upload URL and rethrows when b2_upload_part fails on the streaming path', async () => {

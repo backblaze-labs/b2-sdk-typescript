@@ -139,7 +139,9 @@ export async function copyLargeFile(
         bucketId: destBucketId,
         fileName: options.fileName,
         contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
+        // Mirror the single-call COPY directive: inherit the source's custom
+        // metadata unless the caller supplies a replacement.
+        fileInfo: options.fileInfo ?? sourceInfo.fileInfo ?? {},
         ...(options.destinationServerSideEncryption !== undefined
           ? { serverSideEncryption: options.destinationServerSideEncryption }
           : {}),

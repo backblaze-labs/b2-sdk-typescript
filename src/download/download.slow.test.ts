@@ -214,5 +214,9 @@ describe('createParallelDownloadStream per-range retry', () => {
     })
 
     await expect(readStream(stream)).rejects.toThrow()
+    // rejects.toThrow() also passes with zero retries. maxRetries 2 means one
+    // initial attempt plus exactly two retries of the failing range: 3 of the 10
+    // scripted failures consumed.
+    expect(failures.get('bytes=0-29')).toBe(7)
   })
 })

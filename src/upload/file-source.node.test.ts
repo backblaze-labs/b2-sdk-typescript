@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
 import { type ContentSource, FileSource } from '../streams/source.ts'
@@ -32,12 +32,20 @@ describe.skipIf(process.platform === 'win32')('FileSource uploads', () => {
     const data = deterministicBytes(250)
     await writeFile(path, data)
 
+    // a round trip passes even if parts were read through a whole-file path,
+    // so record the ranges the upload engine actually asked the source for.
+    const sliceSpy = vi.spyOn(FileSource.prototype, 'slice')
     const result = await bucket.upload({
       fileName: 'payload.bin',
       source: new FileSource(path),
       partSize: 100,
       concurrency: 2,
     })
+    // Each part range is requested (more than once: hashing and sending); only
+    // the part ranges may appear, never one whole-file slice.
+    const ranges = [...new Set(sliceSpy.mock.calls.map(([start, end]) => `${start}-${end}`))]
+    sliceSpy.mockRestore()
+    expect(ranges.sort()).toEqual(['0-100', '100-200', '200-250'])
 
     expect(result.fileName).toBe('payload.bin')
     expect(result.contentLength).toBe(data.byteLength)

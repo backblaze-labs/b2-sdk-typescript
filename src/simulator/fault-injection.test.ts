@@ -32,6 +32,14 @@ describe('B2Simulator.injectFailure', () => {
     ).rejects.toThrow(/simulated failure/)
   })
 
+  // the message alone does not prove the synthesized status and code.
+  it('synthesizes status 503 and code service_unavailable by default', async () => {
+    sim.injectFailure({ on: 'b2_create_bucket' })
+    await expect(
+      client.createBucket({ bucketName: 'fault-default', bucketType: BucketType.AllPrivate }),
+    ).rejects.toMatchObject({ status: 503, code: 'service_unavailable' })
+  })
+
   it('honors a custom status + code + message', async () => {
     sim.injectFailure({
       on: 'b2_create_bucket',
@@ -41,7 +49,11 @@ describe('B2Simulator.injectFailure', () => {
     })
     await expect(
       client.createBucket({ bucketName: 'fault-2', bucketType: BucketType.AllPrivate }),
-    ).rejects.toThrow(/simulated bad name/)
+    ).rejects.toMatchObject({
+      status: 400,
+      code: 'bad_bucket_name',
+      message: expect.stringContaining('simulated bad name'),
+    })
   })
 
   it('decrements count and retires after the budget is spent', async () => {

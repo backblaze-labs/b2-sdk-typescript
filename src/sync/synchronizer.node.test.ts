@@ -335,6 +335,48 @@ describe('synchronize download safety', () => {
     }
   })
 
+  it('keeps the existing destination when an abort lands after a size-matching body', async () => {
+    // The advertised size equals the streamed bytes, so only abort handling
+    // (not the short-download size check) can stop the replacement.
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-abort-exact-'))
+    try {
+      const destRoot = join(root, 'dest')
+      await mkdir(destRoot)
+      const destPath = join(destRoot, 'keep.txt')
+      await writeFile(destPath, 'valid')
+      const controller = new AbortController()
+      const payload = new TextEncoder().encode('replacement')
+
+      const bucket = makeMockDownloadBucket(
+        vi.fn().mockImplementation(() =>
+          Promise.resolve({
+            body: new ReadableStream<Uint8Array>({
+              start(streamController) {
+                streamController.enqueue(payload)
+                controller.abort()
+                streamController.close()
+              },
+            }),
+          }),
+        ),
+      )
+
+      const config: SynchronizerDownConfig = {
+        source: makeB2MemoryFolder([makeB2Path('keep.txt', payload.byteLength)]),
+        dest: new LocalFolder(destRoot),
+        options: { compareMode: 'size', keepMode: 'no-delete', signal: controller.signal },
+        bucket,
+      }
+
+      const events = await collectEvents(config)
+      expect(events.some((event) => event.type === 'error')).toBe(true)
+      expect(new TextDecoder().decode(await readFile(destPath))).toBe('valid')
+      expect((await readdir(destRoot)).filter((name) => name.includes('.partial'))).toEqual([])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('keeps the existing destination when checksum verification rejects at end', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-sync-dl-checksum-'))
     try {

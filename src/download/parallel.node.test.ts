@@ -93,3 +93,33 @@ describe('createParallelDownloadStream Node diagnostics', () => {
     expect(calls).toBe(0)
   })
 })
+
+describe('createParallelDownloadStream option validation', () => {
+  const raw = {
+    async downloadFileById() {
+      throw new Error('no range request should be needed for an invalid option')
+    },
+  } as unknown as RawClient
+  const accountInfo = {
+    getDownloadUrl: () => 'http://mock:0',
+    getAuthToken: () => 'mock_token',
+  } as unknown as AccountInfo
+
+  it.each([0, -1, Number.NaN])(
+    'does not report a successful empty stream for a non-empty file when concurrency is %s',
+    async (concurrency) => {
+      const read = async () =>
+        readStream(
+          createParallelDownloadStream(raw, accountInfo, {
+            fileId: 'parallel_bad_concurrency' as FileId,
+            totalSize: 25,
+            rangeSize: 25,
+            concurrency,
+          }),
+        )
+      // Must be rejected (at construction or on read). Silently resolving with
+      // zero bytes would present a truncated download as success.
+      await expect(read()).rejects.toThrow()
+    },
+  )
+})

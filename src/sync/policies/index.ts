@@ -89,6 +89,7 @@ export function* generateActions(
   compareThreshold: number,
 ): Generator<SyncAction> {
   assertSupportedCompareMode(compareMode)
+  assertValidKeepPolicy(keepMode, keepDays)
 
   const [source, dest] = pair
 
@@ -188,5 +189,25 @@ function* actionsForBoth(
       yield action
       break
     }
+  }
+}
+
+/**
+ * Throws unless `keepMode` is a supported value and, for `keep-days`,
+ * `keepDays` is a finite non-negative number. Fails closed so a bad option
+ * can never turn into deleting every destination-only file.
+ *
+ * @param keepMode - The requested destination-only policy.
+ * @param keepDays - Age threshold in days, used only by `keep-days`.
+ *
+ * @throws If `keepMode` is not a supported value (`TypeError`).
+ * @throws If `keepMode` is `keep-days` and `keepDays` is not a finite number of at least 0 (`RangeError`).
+ */
+export function assertValidKeepPolicy(keepMode: unknown, keepDays: number): void {
+  if (keepMode !== 'no-delete' && keepMode !== 'delete' && keepMode !== 'keep-days') {
+    throw new TypeError(`Unsupported keepMode: ${String(keepMode)}`)
+  }
+  if (keepMode === 'keep-days' && !(Number.isFinite(keepDays) && keepDays >= 0)) {
+    throw new RangeError('keepDays must be a finite number >= 0 when keepMode is keep-days')
   }
 }
