@@ -38,6 +38,12 @@ test('an unrelated refusal is not the governance refusal', () => {
   }
 });
 
+test('lock.per_file_retention uses the shared refusal rule', () => {
+  const leaf = readFileSync(path.join(root, 'conformance', 'lock.per_file_retention.cjs'), 'utf8');
+  assert.match(leaf, /isGovernanceRefusal\(refusal\)/);
+  assert.match(leaf, /refused for the wrong reason/);
+});
+
 test('lock.bypass_governance uses the shared refusal rule', () => {
   const leaf = readFileSync(path.join(root, 'conformance', 'lock.bypass_governance.cjs'), 'utf8');
   assert.match(leaf, /isGovernanceRefusal\(refusal\)/);

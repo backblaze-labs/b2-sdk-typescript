@@ -64,6 +64,7 @@ const REASONS = new Set([
 // keeps it -- and anything else registered below -- out of
 // every detail string all the same.
 const guard = require('../lib/guard.cjs');
+const { isGovernanceRefusal } = require('../lib/governance-refusal.cjs');
 
 // Proxy variables must not reroute a loopback request.
 guard.scrubProxyEnv();
@@ -291,15 +292,18 @@ async function run() {
       throw new Failure('delete without bypass',
         'a version under governance retention was deleted without bypassGovernance');
     }
-    // NOTE: the error type/status/code values below are derived from the simulator. Re-verify them against real
-    // B2 before using this assertion outside the simulator.
-    const wrong = guard.explainMismatch(refusal, {
-      statuses: [400, 403],
-      codes: ['file_lock_governance_protected'],
-      message: /governance/i,
-    });
-    if (wrong) {
-      throw new Failure('delete without bypass', 'refused for the wrong reason: ' + wrong);
+    // The refusal is either one naming governance retention or B2's documented
+    // 401 access_denied (lib/governance-refusal.cjs, shared with
+    // lock.bypass_governance). Anything else -- a bad token, a 5xx, a network
+    // error -- is the wrong reason. The exact code and message are not verified against real B2.
+    if (!isGovernanceRefusal(refusal)) {
+      const wrong = guard.explainMismatch(refusal, {
+        statuses: [400, 403],
+        codes: ['file_lock_governance_protected'],
+        message: /governance/i,
+      });
+      throw new Failure('delete without bypass',
+        'refused for the wrong reason: ' + (wrong || redact(refusal)));
     }
   } finally {
     await destroy(bucket);
