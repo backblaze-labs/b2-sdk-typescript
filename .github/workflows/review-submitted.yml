@@ -1,0 +1,25 @@
+name: Review submitted
+
+# Trigger only: a review or dismissal starts the trusted Review risk workflow via
+# workflow_run, which re-evaluates the PR head. This run is PR-controlled, so it
+# does nothing and holds no permissions.
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  notify:
+    name: notify
+    if: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.user.login != 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: echo "Review on $HEAD_SHA; Review risk re-evaluates it."

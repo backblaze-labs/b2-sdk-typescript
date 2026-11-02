@@ -7,16 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Security
-
-- Updated transitive development dependencies to patched versions.
-
-### Fixed
-
-- **`.sdkharness` checks no longer turn failures into amber.** A conformance or resilience leaf that prints `COULD-NOT-RUN` but exits nonzero is now a `FAIL` in both dispatchers, and a built SDK that throws on import is a `FAIL` instead of `COULD-NOT-RUN` (only a missing `dist/` build is amber). The `enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold` and `lock.per_file_retention` checks now assert the specific refusal (type, status, code, message) rather than treating any thrown error as one.
-- **`.sdkharness` checks enforce the loopback contract themselves.** One shared guard (`.sdkharness/tests/lib/guard.cjs`) is used by every leaf and `health-golden-path`: simulator and control URLs must be `http://127.0.0.1:<port>` (`[::1]` is no longer accepted), only the fixed simulator credential is accepted (the health check refuses any other key), proxy variables are scrubbed, and failure messages carry the underlying reason. The README gains a "run one check locally" section and the guards have unit tests (`pnpm run test:sdkharness`). Known SDK findings the checks report (for example `large.multipart`, upload retries, `lock.bypass_governance`, `urls.native_download`) are unchanged and still fail.
-- **`.sdkharness` `run-resilience` refuses a simulator that already served requests.** The resilience checks count the simulator's whole request journal, which has no reset, so on a simulator shared by several scenarios `upload.cap_exceeded_403` and `api.retry_after_503` read earlier scenarios' requests as their own and failed with a false SDK verdict. The dispatcher now fails with a `configuration` reason (`requireFreshSimulator` in `.sdkharness/tests/lib/guard.cjs`); the harness already starts a fresh simulator per scenario, so its results are unchanged.
-- **`.sdkharness` guard follow-ups.** A `dist/` that exists but lacks the file `package.json` exports for an import is now a `FAIL` (a moved or renamed build output is a regression); only an absent `dist/` is `COULD-NOT-RUN`. The `run-resilience` fresh-simulator guard now has dispatcher-level tests (used simulator, unreachable journal), and the dispatcher and leaf unit tests skip on Windows, where they cannot spawn shebang scripts, so `pnpm verify` stays portable. The four refusal assertions (`enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold`, `lock.per_file_retention`) note that their error type, status and code values are simulator-derived and must be re-verified against real B2 before use outside the simulator. No verdict for a known SDK finding changes.
+Unreleased entries live in [`.changes/unreleased/`](.changes/unreleased/) until the next release. Add one with `pnpm run changelog:new` (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog-entries)).
 
 ## [0.4.0] - 2026-09-01
 
@@ -61,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upload retries no longer replay spoofable post-start network errors.** High-level uploads still retry network failures before an upload POST is attempted, but a post-start `NetworkError` with nested `ECONNREFUSED` no longer bypasses the default protection against ambiguous single-request replay. Set `retryResponseBodyFailures: true` only when duplicate versions or replayed parts are acceptable.
 - **SSE-B2 large-file uploads no longer repeat encryption headers on each part.** SSE-B2 (B2-managed) encryption is configured once on `b2_start_large_file`; `b2_upload_part` only accepts customer-key headers, so the SDK no longer sends the SSE-B2 `serverSideEncryption` setting on each part upload. SSE-C customer keys are still applied per part.
 
+[0.4.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.3.0...v0.4.0
+
 ## [0.3.0] - 2026-08-18
 
 ### Added
@@ -100,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **B2Simulator object-lock update fidelity.** `b2_update_file_retention` and `b2_update_file_legal_hold` now enforce retention and legal-hold update rules, governance-bypass requirements, and retention-clock validation, matching real B2. Closes #122.
 - **B2Simulator download authorization fidelity.** `b2_get_download_authorization` tokens are now enforced on download: bucket/prefix scope validation, header normalization, and by-id download-auth source restriction. Closes #121.
 - **B2Simulator notification-rule validation.** `b2_set_bucket_notification_rules` now validates event-notification rule shapes before accepting them. Closes #123.
+
+[0.3.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.2.0...v0.3.0
 
 ## [0.2.0] - 2026-07-08
 
@@ -204,6 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Ambiguous `b2_finish_large_file` response-body failures no longer trigger cleanup.** If the finish request may have committed but its JSON body cannot be read, high-level upload/copy paths throw `FinishLargeFileResponseBodyError` and do not cancel the large file, avoiding a blind re-upload that could create duplicate versions. The error carries `fileId` plus high-level `bucketId`/`fileName` when available, and the cleanup observer is notified with `reason: "finish-ambiguous"` so operators can reconcile the possible orphan or committed file.
 - **Correct browser SHA-1 for buffer-backed views.** `sha1Hex`'s WebCrypto path hashed `data.buffer` (the whole backing `ArrayBuffer`) instead of the `Uint8Array` view's `byteOffset`/`byteLength`, so a subarray (e.g. a carved multipart part) produced a wrong digest in browsers and other non-Node runtimes. It now hashes the view directly. (`IncrementalSha1`'s WebCrypto fallback was already correct, since it copies chunks into an exact-sized buffer before hashing; it now passes that buffer directly too, for consistency.) The Node `crypto` path was always correct.
 - **`B2Simulator` now verifies upload SHA-1 and persists `fileInfo` across all upload paths.** `b2_upload_file` and `b2_upload_part` recompute the body's SHA-1 and reject a mismatch with `400 bad_request` ("Sha1 did not match data received"), honoring the `none` / `do_not_verify` / `unverified:<hex>` sentinels and the `hex_digits_at_end` trailing-digest mode (the trailing 40 bytes are verified and stripped, not stored as content). `finishLargeFile` verifies each `partSha1Array` entry against the stored part's SHA-1 (rejecting a mismatch with `400 bad_request`). Uploaded `fileInfo` is now persisted for both single-file and multipart (`finishLargeFile`) uploads and returned by `getFileInfo`, list, and `download` (serialized as `X-Bz-Info-*` headers using the same B2 `encodeFileName` encoding the download parser decodes with). Closes gaps where the test backend accepted any hash and silently discarded metadata. `B2Simulator.handleUpload` is now `async`.
+
+[0.2.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...v0.2.0
 
 ## [0.1.0] - 2026-05-28
 
@@ -315,8 +312,4 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
 
-[Unreleased]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.4.0...HEAD
-[0.4.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.3.0...v0.4.0
-[0.3.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/backblaze-labs/b2-sdk-typescript/releases/tag/v0.1.0

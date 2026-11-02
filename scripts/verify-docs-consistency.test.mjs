@@ -23,9 +23,11 @@ function markdownFiles() {
   const git = (args) => execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
   const tracked = git(['ls-files', '*.md'])
   const untracked = git(['ls-files', '--others', '--exclude-standard', '*.md'])
+  // .changes/ holds changie inputs; the CHANGELOG.md they generate is what gets checked.
+  const skip = ['api-docs/', 'node_modules/', '.changes/']
   return [...tracked.split('\n'), ...untracked.split('\n')]
     .filter(Boolean)
-    .filter((f) => !f.startsWith('api-docs/') && !f.startsWith('node_modules/'))
+    .filter((f) => !skip.some((p) => f.startsWith(p)))
     .sort()
 }
 const MD = markdownFiles()
