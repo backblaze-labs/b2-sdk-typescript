@@ -2,3 +2,4 @@
 # Keep this list empty unless an advisory has an explicit, expiring risk acceptance.
 # Format:
 # GHSA-xxxx-xxxx-xxxx expires=2099-01-31 approver=@handle reason="not reachable"
+GHSA-g3hv-75wg-m249 expires=2027-02-02 approver=@ffumero2003 reason="dev-only docs tool typedoc pins minimatch and needs its matchOne API; forcing minimatch>=11.0.1 breaks typedoc so there is no upstream fix; not shipped in the published package and the ReDoS is not reachable at runtime"
