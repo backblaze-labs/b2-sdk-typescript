@@ -253,6 +253,47 @@ describe('copyLargeFile (slow)', () => {
     expect(startBodies[0]?.['serverSideEncryption']).toBeUndefined()
   })
 
+  it('inherits source fileInfo when no override is supplied', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const startBodies: Record<string, unknown>[] = []
+    const transport = {
+      async send(req: Parameters<typeof inner.send>[0]) {
+        if (typeof req.body === 'string' && req.url.includes('b2_start_large_file')) {
+          startBodies.push(JSON.parse(req.body) as Record<string, unknown>)
+        }
+        return inner.send(req)
+      },
+    }
+    const c = new B2Client({ applicationKeyId: 'k', applicationKey: 'k', transport })
+    await c.authorize()
+    const bucket = await c.createBucket({
+      bucketName: 'copy-inherit-info',
+      bucketType: BucketType.AllPrivate,
+    })
+    const sourceInfo = { owner: 'alice', src_last_modified_millis: '1700000000000' }
+    const uploaded = await bucket.upload({
+      fileName: 'inherit-info-src.bin',
+      source: new BufferSource(deterministicBytes(10_000_000)),
+      partSize: 5_000_000,
+      concurrency: 1,
+      fileInfo: sourceInfo,
+    })
+    startBodies.length = 0
+
+    // The single-request copy path keeps the source fileInfo (B2 COPY directive)
+    // when no fileInfo override is given; the multipart path must agree.
+    await copyLargeFile(c.raw, c.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'inherit-info-dst.bin',
+      partSize: 5_000_000,
+      concurrency: 1,
+    })
+
+    expect(startBodies).toHaveLength(1)
+    expect(startBodies[0]?.['fileInfo']).toMatchObject(sourceInfo)
+  })
+
   it('multipart-copies with default concurrency when none is specified', async () => {
     // Uses a small-part simulator so this default-concurrency branch test
     // stays under the ~60 s vitest IPC RPC budget when v8 coverage
@@ -453,6 +494,7 @@ describe('copyLargeFile (slow)', () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let copyPartCalls = 0
+    let cancelAttempts = 0
     const transport = {
       async send(req: Parameters<typeof inner.send>[0]) {
         if (req.url.includes('b2_copy_part')) {
@@ -460,6 +502,7 @@ describe('copyLargeFile (slow)', () => {
           if (copyPartCalls > 1) throw new Error('forced copy_part failure')
         }
         if (req.url.includes('b2_cancel_large_file')) {
+          cancelAttempts++
           throw new Error('forced cancel failure')
         }
         return inner.send(req)
@@ -484,6 +527,8 @@ describe('copyLargeFile (slow)', () => {
       concurrency: 1,
     })
 
+    const cleanupEvents: { reason: string }[] = []
+
     // The orchestrator must surface the original copy_part error,
     // not the secondary failure from the best-effort cancel call.
     await expect(
@@ -492,7 +537,16 @@ describe('copyLargeFile (slow)', () => {
         fileName: 'cancel-fail.bin',
         partSize: 5_000_000,
         concurrency: 1,
+        onCleanupFailure: (event) => {
+          cleanupEvents.push(event)
+        },
       }),
     ).rejects.toThrow(/copy_part failure/)
+
+    // the cancel must actually have been attempted (and reported), otherwise
+    // "swallowed" is indistinguishable from "never tried".
+    expect(cancelAttempts).toBe(1)
+    expect(cleanupEvents).toHaveLength(1)
+    expect(cleanupEvents[0]).toMatchObject({ reason: 'cancel-failed' })
   })
 })

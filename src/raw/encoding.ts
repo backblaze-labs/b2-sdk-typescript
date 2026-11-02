@@ -74,6 +74,23 @@ export function decodeFileName(encoded: string): string {
 }
 
 /**
+ * Lenient variant of {@link decodeFileName} for server-supplied metadata:
+ * a malformed percent escape returns the raw text instead of throwing, so one
+ * bad `x-bz-info-*` header cannot fail an otherwise readable download.
+ *
+ * @param encoded - The possibly percent-encoded header text.
+ *
+ * @returns The decoded text, or `encoded` unchanged if it is not valid percent-encoding.
+ */
+function decodeFileInfoText(encoded: string): string {
+  try {
+    return decodeURIComponent(encoded)
+  } catch {
+    return encoded
+  }
+}
+
+/**
  * Converts a file-info map into `X-Bz-Info-*` HTTP headers.
  *
  * Keys use B2 file-name encoding. Values use stricter B2 file-info value
@@ -110,8 +127,8 @@ export function parseFileInfoHeaders(headers: Headers): Record<string, string> {
   headers.forEach((value, key) => {
     const lower = key.toLowerCase()
     if (lower.startsWith('x-bz-info-')) {
-      const infoKey = decodeFileName(lower.slice('x-bz-info-'.length))
-      info[infoKey] = decodeFileName(value)
+      const infoKey = decodeFileInfoText(lower.slice('x-bz-info-'.length))
+      info[infoKey] = decodeFileInfoText(value)
     }
   })
   return info

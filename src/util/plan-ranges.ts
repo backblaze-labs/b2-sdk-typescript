@@ -41,8 +41,15 @@ export interface RangePlan {
  * @param chunkSize - Target size of each range in bytes (last range may be smaller).
  *
  * @returns Ordered, non-overlapping range plans. Empty array when `totalSize === 0`.
+ *
+ * @throws If `chunkSize` is not a positive number (`RangeError`).
  */
 export function planRanges(totalSize: number, chunkSize: number): RangePlan[] {
+  // A non-positive or NaN chunk never advances `offset`, so the loop below
+  // would push forever (or walk backwards) instead of finishing.
+  if (!(chunkSize > 0)) {
+    throw new RangeError(`planRanges: chunkSize must be a positive number, got ${chunkSize}`)
+  }
   const plans: RangePlan[] = []
   let offset = 0
   let index = 0

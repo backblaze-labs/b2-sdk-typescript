@@ -549,27 +549,21 @@ interface ResumeDiscoverySignal {
 }
 
 function createResumeDiscoverySignal(criteria: ResumeCandidateCriteria): ResumeDiscoverySignal {
-  if (criteria.signal !== undefined) {
-    return {
-      signal: criteria.signal,
-      dispose() {},
-    }
-  }
-
-  if (criteria.discoveryTimeoutMs === undefined) {
-    return {
-      dispose() {},
-    }
-  }
-
+  const callerSignal = criteria.signal
   const timeoutMs = criteria.discoveryTimeoutMs
-  if (timeoutMs === Number.POSITIVE_INFINITY) {
-    return {
-      dispose() {},
-    }
+  if (timeoutMs === undefined || timeoutMs === Number.POSITIVE_INFINITY) {
+    return callerSignal === undefined ? { dispose() {} } : { signal: callerSignal, dispose() {} }
   }
 
+  // Combine the SDK-enforced discovery timeout with the caller's signal so
+  // that supplying a signal does not silently disable the timeout.
   const controller = new AbortController()
+  const onCallerAbort = () => controller.abort(callerSignal?.reason)
+  if (callerSignal?.aborted === true) {
+    onCallerAbort()
+  } else {
+    callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
+  }
   const timeout = setTimeout(
     () => {
       controller.abort(resumeDiscoveryTimeoutReason(timeoutMs))
@@ -581,6 +575,7 @@ function createResumeDiscoverySignal(criteria: ResumeCandidateCriteria): ResumeD
     signal: controller.signal,
     dispose() {
       clearTimeout(timeout)
+      callerSignal?.removeEventListener('abort', onCallerAbort)
     },
   }
 }
