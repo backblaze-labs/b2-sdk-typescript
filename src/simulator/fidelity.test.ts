@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { B2Client } from '../client.ts'
 import type { HttpResponse } from '../http/transport.ts'
 import { sha1Hex } from '../streams/hash.ts'
@@ -817,6 +817,53 @@ describe('B2Simulator bucket configuration validation', () => {
     })
     await expect(
       accepted.deleteFileVersion('accepted-retention.bin', retained.fileId),
+    ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
+  })
+
+  // Skipped pending an owner decision on simulator Object Lock handling: the
+  // single-request upload path ignores Object Lock headers and the bucket default
+  // retention, while the large-file path honours both (test above), so a locked object
+  // can be deleted in the simulator. Un-skip once the simulator is changed. Single-request
+  // copy (b2_copy_file) is not covered here.
+  it.skip('single-request upload with explicit retention cannot be deleted', async () => {
+    const lockClient = makeClient().client
+    await lockClient.authorize()
+    const locked = await lockClient.createBucket({
+      bucketName: 'ret-single-explicit',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+    })
+    const uploaded = await locked.upload({
+      fileName: 'single-retained.bin',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+      fileRetention: {
+        mode: RetentionMode.Governance,
+        retainUntilTimestamp: Date.now() + 86_400_000,
+      },
+    })
+    await expect(
+      locked.deleteFileVersion('single-retained.bin', uploaded.fileId),
+    ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
+  })
+
+  it.skip('single-request upload inherits bucket default retention', async () => {
+    const lockClient = makeClient().client
+    await lockClient.authorize()
+    const locked = await lockClient.createBucket({
+      bucketName: 'ret-single-default',
+      bucketType: BucketType.AllPrivate,
+      fileLockEnabled: true,
+      defaultRetention: {
+        mode: BucketRetentionMode.Governance,
+        period: { duration: 1, unit: 'days' },
+      },
+    })
+    const uploaded = await locked.upload({
+      fileName: 'single-default.bin',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
+    await expect(
+      locked.deleteFileVersion('single-default.bin', uploaded.fileId),
     ).rejects.toMatchObject({ status: 400, code: 'file_lock_governance_protected' })
   })
 
@@ -5620,6 +5667,13 @@ describe('B2Simulator server-side encryption fidelity', () => {
     const valid = await validSseCustomerSetting(3)
     const oversized = 'A'.repeat(65_536)
     const data = new TextEncoder().encode('oversized sse-c input')
+    const realAtob = globalThis.atob
+    const decodedLengths: number[] = []
+    const atobSpy = vi.spyOn(globalThis, 'atob').mockImplementation((input: string) => {
+      decodedLengths.push(input.length)
+      return realAtob(input)
+    })
+    onTestFinished(() => atobSpy.mockRestore())
 
     await expect(
       rawUpload('oversized-key.txt', data, await sha1Hex(data), {
@@ -5638,6 +5692,10 @@ describe('B2Simulator server-side encryption fidelity', () => {
         customerKeyMd5: oversized,
       }),
     ).rejects.toMatchObject({ status: 400 })
+
+    // The oversized value must be rejected on length alone: it is never
+    // handed to atob (token decoding only sees short inputs).
+    expect(decodedLengths.every((length) => length < oversized.length)).toBe(true)
   })
 
   it('rejects SSE-C upload headers with mismatched MD5', async () => {

@@ -223,6 +223,9 @@ describe('copyLargeFile', () => {
     const originalCopyPart = c.raw.copyPart.bind(c.raw)
     const originalCancelLargeFile = c.raw.cancelLargeFile.bind(c.raw)
     let secondCopyAborted = false
+    // an expect() inside the mock is swallowed by the best-effort cleanup,
+    // so record the observation here and assert it after the copy settles.
+    let abortedWhenCancelCalled: boolean | undefined
     const copyPart = vi.spyOn(c.raw, 'copyPart').mockImplementation(async (...args) => {
       const callNumber = copyPart.mock.calls.length
       if (callNumber === 1) {
@@ -249,7 +252,7 @@ describe('copyLargeFile', () => {
     const cancelLargeFile = vi
       .spyOn(c.raw, 'cancelLargeFile')
       .mockImplementation(async (...args) => {
-        expect(secondCopyAborted).toBe(true)
+        abortedWhenCancelCalled = secondCopyAborted
         return originalCancelLargeFile(...args)
       })
 
@@ -263,6 +266,7 @@ describe('copyLargeFile', () => {
 
     await expect(copy).rejects.toThrow('forced first copy_part failure')
     expect(cancelLargeFile).toHaveBeenCalledTimes(1)
+    expect(abortedWhenCancelCalled).toBe(true)
   })
 
   it('reports reconciliation metadata when aborting while multipart-copy finish is pending', async () => {

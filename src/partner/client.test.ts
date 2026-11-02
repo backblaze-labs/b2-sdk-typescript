@@ -28,7 +28,7 @@ import {
 import type { PartnerAccountInfo } from './account-info.ts'
 import { PartnerClient, type PartnerClientOptions } from './client.ts'
 import { InMemoryPartnerAccountInfo } from './in-memory.ts'
-import { PARTNER_TOKEN_REDACTED } from './redaction.ts'
+import { APPLICATION_KEY_REDACTED, PARTNER_TOKEN_REDACTED } from './redaction.ts'
 
 function requestJsonBody(request: HttpRequest): unknown {
   if (typeof request.body !== 'string') throw new Error('expected JSON request body')
@@ -230,6 +230,30 @@ describe('PartnerClient facade', () => {
     expect(rendered).not.toContain('partner-token-secret')
     expect(rendered).not.toContain('application-key-secret')
     expect(rendered).toContain('[redacted')
+  })
+
+  it('redacts the one-time application key of a facade createGroupMember result', async () => {
+    const { client } = makeRecordingPartnerClient()
+    await client.authorize()
+    const page = await client.listGroups({ pageSize: 1 })
+    const group = page.groups[0]
+    if (group === undefined) throw new Error('expected default simulator group')
+
+    const created = await client.createGroupMember({
+      groupId: group.groupId,
+      memberEmail: 'redaction-facade-member@example.com',
+    })
+
+    // The secret exists and stays readable for the caller who needs it once...
+    const secret = created.applicationKey
+    expect(secret.length).toBeGreaterThan(0)
+    // ...but JSON and string rendering hide it. (An object spread copies the
+    // plain enumerable field by design, so it is not asserted here.)
+    const rendered = [JSON.stringify(created), JSON.stringify({ created }), String(created)].join(
+      '\n',
+    )
+    expect(rendered).not.toContain(secret)
+    expect(rendered).toContain(APPLICATION_KEY_REDACTED)
   })
 
   it('rejects cached auth rehydrated from redacted JSON before requests', async () => {

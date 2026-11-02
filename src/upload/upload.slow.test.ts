@@ -208,6 +208,8 @@ describe('uploadLargeFile resume', () => {
       client.accountInfo.getAuthToken(),
       { bucketId: bucket.id, fileName: 'explicit.bin', contentType: 'application/octet-stream' },
     )
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    const listParts = vi.spyOn(client.raw, 'listParts')
 
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
@@ -220,5 +222,10 @@ describe('uploadLargeFile resume', () => {
     })
 
     expect(result.fileName).toBe('explicit.bin')
+    // The explicit ID is resumed, not replaced by a second large file.
+    expect(startLargeFile).not.toHaveBeenCalled()
+    expect(listParts.mock.calls.map((call) => call[2])).toContainEqual(
+      expect.objectContaining({ fileId: start.fileId }),
+    )
   })
 })

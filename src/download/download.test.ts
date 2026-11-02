@@ -304,6 +304,10 @@ describe('downloadById', () => {
     expect(last?.totalBytes).toBe(payload.byteLength)
     expect(last?.partsCompleted).toBe(1)
     expect(last?.totalParts).toBe(1)
+    // Exactly one event may report the part as completed, and none may
+    // report it before the body has been fully drained.
+    expect(events.filter((e) => e.partsCompleted === 1)).toHaveLength(1)
+    expect(events.slice(0, -1).every((e) => e.partsCompleted === 0)).toBe(true)
   })
 
   it('cancels progress-wrapped downloads while a read is pending', async () => {
@@ -2279,7 +2283,15 @@ describe('downloadById HEAD method and response-header overrides', () => {
       b2CacheControl: 'public, max-age=3600',
       b2Expires: 'Thu, 01 Jan 2099 00:00:00 GMT',
     })
-    expect(result.headers.contentType).toBe('text/csv')
+    // contentType alone would pass with five of the six overrides dropped.
+    expect(result.headers).toMatchObject({
+      contentType: 'text/csv',
+      contentDisposition: 'inline',
+      contentEncoding: 'gzip',
+      contentLanguage: 'fr-CA',
+      cacheControl: 'public, max-age=3600',
+      expires: 'Thu, 01 Jan 2099 00:00:00 GMT',
+    })
   })
 
   it('HEAD + b2Content* overrides combine: empty body, overridden headers', async () => {

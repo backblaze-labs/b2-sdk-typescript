@@ -159,6 +159,7 @@
     "test:audit:deps": "node --test scripts/audit-dependencies.test.mjs",
     "test:sdkharness": "node --test \".sdkharness/tests/unit/*.test.cjs\"",
     "test:release-channel": "node --test scripts/verify-release-channel.test.mjs",
+    "test:release-workflow": "node --test scripts/verify-release-workflow.test.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
     "docs": "typedoc",
@@ -175,7 +176,7 @@
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "smoke:published": "node scripts/smoke-published-package.mjs",
     "test:smoke-published": "node --test scripts/smoke-published-package.test.mjs",
-    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run test:release-workflow && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",

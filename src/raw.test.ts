@@ -203,6 +203,18 @@ describe('RawClient list request controls', () => {
         contentType: 'application/json',
       },
     ])
+
+    // pin the wire body too; a dropped bypassGovernance or legalHold field
+    // would otherwise go unnoticed.
+    expect(requests.map((request) => JSON.parse(String(request.body)))).toEqual([
+      {
+        fileName: 'locked.txt',
+        fileId: 'file',
+        fileRetention: { mode: 'governance', retainUntilTimestamp: 123_456 },
+        bypassGovernance: true,
+      },
+      { fileName: 'locked.txt', fileId: 'file', legalHold: 'on' },
+    ])
   })
 
   it('normalizes the deprecated createKey bucketId alias to bucketIds', async () => {

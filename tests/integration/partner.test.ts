@@ -49,6 +49,7 @@ import {
   skipFeature,
   skipUnlessMasterKey,
 } from '../helpers/live-b2.ts'
+import { findGroupMember } from '../helpers/partner-members.ts'
 
 const realm = env('B2_REALM')
 const allowDestructivePartner = process.env['B2_INTEGRATION_ALLOW_DESTRUCTIVE_PARTNER'] === '1'
@@ -127,7 +128,7 @@ describe.skipIf(skipUnlessMasterKey)('Partner live endpoint integration contract
     expectListGroupsResponseShape(groups)
   })
 
-  it('lists group members as an array with string B2 stats counters', async (ctx) => {
+  it('lists group members as a single object with string B2 stats counters', async (ctx) => {
     const livePartner = requireAuthorizedPartner(ctx)
     if (livePartner === null) return
 
@@ -250,6 +251,37 @@ describe('Partner live assertion redaction guards', () => {
 
     expect(createFailure).not.toContain(secret)
     expect(reserveFailure).not.toContain(secret)
+  })
+
+  it('keeps the secret out of field-level shape failures on object responses', () => {
+    const secret = 'fake-live-application-key-secret'
+    const wrongEmail = assertionFailureMessage(() =>
+      expectCreateGroupMemberResponseShape(
+        fakeCreateGroupMemberResult(secret, 'one') as CreateGroupMemberResponse,
+        { groupId: groupIdOf('group-id'), memberEmail: 'other@example.test' },
+      ),
+    )
+    const wrongGroup = assertionFailureMessage(() =>
+      expectCreateGroupMemberResponseShape(
+        fakeCreateGroupMemberResult(secret, 'one') as CreateGroupMemberResponse,
+        { groupId: groupIdOf('other-group'), memberEmail: 'created@example.test' },
+      ),
+    )
+    const wrongTrialEmail = assertionFailureMessage(() =>
+      expectReserveTrialCreateAccountResponseShape(
+        fakeReserveTrialResult(secret, 'one') as ReserveTrialCreateAccountResponse,
+        'other-trial@example.test',
+      ),
+    )
+
+    // Positive control: the failures come from the field assertions, not from
+    // the array guard, so the message is built from real field values.
+    expect(wrongEmail).toContain('other@example.test')
+    expect(wrongGroup).toContain('other-group')
+    expect(wrongTrialEmail).toContain('other-trial@example.test')
+    for (const message of [wrongEmail, wrongGroup, wrongTrialEmail]) {
+      expect(message).not.toContain(secret)
+    }
   })
 })
 
@@ -662,28 +694,6 @@ async function findGroupMemberByEmail(
   email: string,
 ): Promise<ListedGroupMember | null> {
   return findGroupMember(livePartner, groupId, (member) => member.email === email)
-}
-
-async function findGroupMember(
-  livePartner: PartnerClient,
-  groupId: GroupId,
-  predicate: (member: ListedGroupMember) => boolean,
-): Promise<ListedGroupMember | null> {
-  let startEmail: string | undefined
-  for (;;) {
-    const page = await livePartner.listGroupMembers({
-      groupId,
-      pageSize: 1000,
-      ...(startEmail !== undefined ? { startEmail } : {}),
-    })
-    const result = page[0]
-    const member = result?.groupMembers.find(predicate)
-    if (member !== undefined) return member
-
-    const nextEmail = result?.nextEmail
-    if (nextEmail === undefined || nextEmail === null) return null
-    startEmail = nextEmail
-  }
 }
 
 function logReserveTrialCreated(

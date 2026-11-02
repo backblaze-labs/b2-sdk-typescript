@@ -168,14 +168,20 @@ describe('FileAccountInfo', () => {
     })
     await client.authorize()
     await accountInfo.flushed()
+    const token = accountInfo.getAuthToken()
+    // positive control, so "empty" below cannot be an unwritten file.
+    expect(await readFile(storePath, 'utf8')).toContain(token)
 
     accountInfo.clear()
     await accountInfo.flushed()
 
     expect(accountInfo.getAuth()).toBeNull()
-    // File still exists but should be empty.
-    const onDisk = await readFile(storePath, 'utf8').catch(() => '')
+    // The file must exist and be empty: no credentials left, and no read error
+    // (such as ENOENT or EACCES) silently treated as "empty".
+    expect((await stat(storePath)).isFile()).toBe(true)
+    const onDisk = await readFile(storePath, 'utf8')
     expect(onDisk).toBe('')
+    expect(onDisk).not.toContain(token)
   })
 
   it('writes the cache file with owner-only permissions on POSIX platforms', async () => {

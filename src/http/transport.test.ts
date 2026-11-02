@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   B2Error,
   B2RedirectError,
@@ -1182,6 +1182,63 @@ describe('RetryTransport', () => {
   })
 
   // --------------------------------------------------------------------------
+  // Delays handed to the sleep implementation between attempts
+  // --------------------------------------------------------------------------
+
+  describe('retry delays', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('doubles the delay per retry and caps it at maxRetryDelayMs', async () => {
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+      const error503 = mockResponse(503, {
+        status: 503,
+        code: 'service_unavailable',
+        message: 'Down',
+      })
+      const okResponse = mockResponse(200, { ok: true })
+      innerTransport.send
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(error503)
+        .mockResolvedValueOnce(okResponse)
+      const sleepSpy = vi.fn().mockResolvedValue(undefined)
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 4, initialRetryDelayMs: 10, maxRetryDelayMs: 50 },
+        sleepImpl: sleepSpy,
+      })
+
+      await transport.send(baseRequest)
+
+      // 10, 20, 40, then 80 capped to 50.
+      expect(sleepSpy.mock.calls.map((call) => call[0])).toEqual([10, 20, 40, 50])
+    })
+
+    it('caps a large Retry-After at maxRetryDelayMs', async () => {
+      const error429 = mockResponse(
+        429,
+        { status: 429, code: 'too_many_requests', message: 'Slow down' },
+        { 'Retry-After': '3600' },
+      )
+      const okResponse = mockResponse(200, { ok: true })
+      innerTransport.send.mockResolvedValueOnce(error429).mockResolvedValueOnce(okResponse)
+      const sleepSpy = vi.fn().mockResolvedValue(undefined)
+      const transport = new RetryTransport({
+        transport: innerTransport,
+        retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+        sleepImpl: sleepSpy,
+      })
+
+      await transport.send(baseRequest)
+
+      expect(sleepSpy.mock.calls.map((call) => call[0])).toEqual([100])
+    })
+  })
+
+  // --------------------------------------------------------------------------
   // Reauth on 401 expired_auth_token
   // --------------------------------------------------------------------------
 
@@ -1458,6 +1515,10 @@ describe('RetryTransport', () => {
       // Without onReauth, expired_auth_token is still retryable, so it retries until maxRetries
       // then throws on the last attempt
       await expect(transport.send(baseRequest)).rejects.toThrow(ExpiredAuthTokenError)
+      // pin the actual retry count. The comment above says the token error is
+      // retried in place without onReauth; maxRetries 3 means 4 attempts, no more.
+      // This characterizes the existing retry-until-budget behaviour; it does not choose it.
+      expect(innerTransport.send).toHaveBeenCalledTimes(4)
     })
   })
 
@@ -2081,6 +2142,32 @@ describe('RetryTransport', () => {
   // --------------------------------------------------------------------------
 
   describe('reauth does not consume a retry attempt', () => {
+    it('still allows maxRetries retries after reauth when every attempt then fails', async () => {
+      const error401 = mockResponse(401, {
+        status: 401,
+        code: 'expired_auth_token',
+        message: 'Token expired',
+      })
+      const error503 = mockResponse(503, {
+        status: 503,
+        code: 'service_unavailable',
+        message: 'Down',
+      })
+      const onReauth = vi.fn().mockResolvedValue('refreshed-token')
+      innerTransport.send.mockResolvedValueOnce(error401).mockResolvedValue(error503)
+
+      const transport = makeRetryTransport({
+        transport: innerTransport,
+        onReauth,
+        retry: { maxRetries: 2, initialRetryDelayMs: 10, maxRetryDelayMs: 100 },
+      })
+
+      await expect(transport.send(baseRequest)).rejects.toThrow('Down')
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      // 1 reauth attempt + (1 initial + maxRetries) attempts.
+      expect(innerTransport.send).toHaveBeenCalledTimes(4)
+    })
+
     it('onReauth + continue allows the full retry budget afterward', async () => {
       const authError = { status: 401, code: 'expired_auth_token', message: 'Token expired' }
       const error401 = mockResponse(401, authError)

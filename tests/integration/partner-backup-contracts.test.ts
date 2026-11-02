@@ -71,7 +71,7 @@ function recordingFetchTransport(): {
 const realmOption = realm !== undefined && realm !== '' ? { realm } : {}
 
 describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () => {
-  it('authorizes Partner on v3 and reads groups on v4', async () => {
+  it('authorizes Partner on v3 and reads groups on v4', async (ctx) => {
     const recorder = recordingFetchTransport()
     const partner = new PartnerClient({
       masterKeyId,
@@ -85,7 +85,9 @@ describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () 
 
     if (auth.groupsApiUrl === undefined) {
       // The key authorized but the Partner groups suite is not provisioned;
-      // the v3 authorize confirmation above still holds.
+      // the v3 authorize confirmation above still holds. Report the v4
+      // groups pin as skipped rather than silently passing.
+      ctx.skip('Partner groups suite is not provisioned for this key')
       return
     }
 
@@ -99,7 +101,7 @@ describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () 
     }
   })
 
-  it('authorizes Backup and lists computers on v1', async () => {
+  it('authorizes Backup and lists computers on v1', async (ctx) => {
     const recorder = recordingFetchTransport()
     const backup = new BackupClient({
       masterKeyId,
@@ -111,6 +113,7 @@ describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () 
     const auth = await backup.authorize()
     if (auth.backupApiUrl === undefined) {
       // The key authorized but the Computer Backup suite is not provisioned.
+      ctx.skip('Computer Backup suite is not provisioned for this key')
       return
     }
 
@@ -120,6 +123,7 @@ describe.skipIf(skipUnlessMasterKey)('Partner/Backup live API version pins', () 
       if (hasB2ErrorCode(err, 'access_denied')) {
         // Authorized for Backup but the account is not entitled to list
         // computers; the v1 route can only be asserted once the call succeeds.
+        ctx.skip('account is not entitled to list computers')
         return
       }
       throw err

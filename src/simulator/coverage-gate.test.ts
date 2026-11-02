@@ -113,6 +113,22 @@ async function authorizeWithKey(
   return client
 }
 
+/** Download the stored object back through the simulator transport. */
+async function downloadStoredBytes(
+  sim: B2Simulator,
+  client: B2Client,
+  uploadResponse: Awaited<ReturnType<ReturnType<B2Simulator['transport']>['send']>>,
+): Promise<Uint8Array> {
+  const { fileId } = (await uploadResponse.json()) as { fileId: string }
+  const download = await sim.transport().send({
+    method: 'GET',
+    url: `http://localhost:0/b2api/v4/b2_download_file_by_id?fileId=${fileId}`,
+    headers: { Authorization: client.accountInfo.getAuthToken() },
+  })
+  expect(download.status).toBe(200)
+  return new Uint8Array(await download.arrayBuffer())
+}
+
 async function uploadUrlFixture() {
   const { client, sim } = makeClient({ client: { retry: { maxRetries: 0 } } })
   await client.authorize()
@@ -299,7 +315,7 @@ describe('B2Simulator coverage gate: upload parser edges', () => {
     ['single chunk stream', 'single-stream.txt', [new Uint8Array([1])]],
     ['multi chunk stream', 'multi-stream.txt', [new Uint8Array([1]), new Uint8Array([2])]],
   ])('stores an upload body from a %s', async (_, fileName, chunks) => {
-    const { sim, upload } = await uploadUrlFixture()
+    const { client, sim, upload } = await uploadUrlFixture()
     const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
     const response = await sim.transport().send({
       method: 'POST',
@@ -320,10 +336,15 @@ describe('B2Simulator coverage gate: upload parser edges', () => {
     })
 
     expect(response.status).toBe(200)
+    // status alone passes even if the stored body is empty or truncated.
+    const expected = Uint8Array.from(chunks.flatMap((chunk) => [...chunk]))
+    expect(Array.from(await downloadStoredBytes(sim, client, response))).toEqual(
+      Array.from(expected),
+    )
   })
 
   it('copies Blob upload bodies after checking their declared length', async () => {
-    const { sim, upload } = await uploadUrlFixture()
+    const { client, sim, upload } = await uploadUrlFixture()
     const response = await sim.transport().send({
       method: 'POST',
       url: upload.uploadUrl,
@@ -338,6 +359,7 @@ describe('B2Simulator coverage gate: upload parser edges', () => {
     })
 
     expect(response.status).toBe(200)
+    expect(new TextDecoder().decode(await downloadStoredBytes(sim, client, response))).toBe('blob')
   })
 
   it('rejects malformed part-upload requests at the part handler boundary', async () => {
@@ -1067,6 +1089,53 @@ describe('B2Simulator coverage gate: hook dispatch edges', () => {
     })
     await expect(fault.text()).resolves.toContain('fault-reader')
     await expect(fault.arrayBuffer()).resolves.toHaveProperty('byteLength')
+  })
+})
+
+describe('B2Simulator coverage gate: webhook event type filtering', () => {
+  it('does not deliver an upload event to a rule that only listens for copy events', async () => {
+    const delivered: string[] = []
+    const { client, sim } = makeClient({
+      sim: {
+        onWebhookDeliver: async ({ fileVersion }) => {
+          delivered.push(fileVersion.fileName)
+        },
+      },
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'webhook-non-matching',
+      bucketType: BucketType.AllPrivate,
+    })
+    await client.raw.setBucketNotificationRules(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        eventNotificationRules: [
+          {
+            eventTypes: ['b2:ObjectCreated:Copy'],
+            isEnabled: true,
+            isSuspended: false,
+            name: 'copy-only',
+            objectNamePrefix: '',
+            suspensionReason: '',
+            targetConfiguration: {
+              targetType: 'webhook',
+              url: 'https://example.com/hook',
+              hmacSha256SigningSecret: 'secret',
+            },
+          },
+        ],
+      },
+    )
+    await bucket.upload({
+      fileName: 'plain-upload.txt',
+      source: new BufferSource(new Uint8Array([1])),
+    })
+    await sim.flushHooks()
+
+    expect(delivered).toEqual([])
   })
 })
 

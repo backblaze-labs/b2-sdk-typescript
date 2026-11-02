@@ -947,6 +947,50 @@ describe('writeLocalStreamInsideRoot', () => {
     }
   }, 15_000)
 
+  it('does not walk or reap marked staging entries above the entry cap', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-cap-'))
+    const activityEntryLimit = 4
+    try {
+      localFileIoTestHooks.downloadStagingActivityEntryLimit = activityEntryLimit
+      const managedDirectory = join(root, DOWNLOAD_STAGING_DIRECTORY_NAME)
+      await mkdir(managedDirectory, { recursive: true })
+      const old = new Date(Date.now() - 25 * 60 * 60 * 1000)
+      const populate = async (name: string, files: number) => {
+        const directory = join(managedDirectory, `${name}.download`)
+        await mkdir(directory)
+        const marker = join(directory, DOWNLOAD_STAGING_MARKER_NAME)
+        await writeFile(marker, '')
+        await utimes(marker, old, old)
+        for (let index = 0; index < files; index++) {
+          const payload = join(directory, `payload-${index}.bin`)
+          await writeFile(payload, 'stale')
+          await utimes(payload, old, old)
+        }
+        await utimes(directory, old, old)
+        return directory
+      }
+      // Marked entries with far more children than the cap must be left alone ...
+      const huge = await Promise.all([0, 1, 2].map((index) => populate(`huge-${index}`, 40)))
+      // ... while a marked stale entry within the cap is reaped, so the cap is the only difference.
+      const small = await populate('small', 1)
+
+      await writeLocalStreamInsideRoot(
+        root,
+        'file.txt',
+        streamFromBytes(textEncoder.encode('abc')),
+        { expectedBytes: 3, idleTimeoutMillis: 1000 },
+      )
+
+      await expect(readFile(join(small, 'payload-0.bin'))).rejects.toThrow()
+      for (const directory of huge) {
+        await expect(readFile(join(directory, 'payload-39.bin'), 'utf8')).resolves.toBe('stale')
+      }
+    } finally {
+      delete localFileIoTestHooks.downloadStagingActivityEntryLimit
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('treats oversized managed staging entries as active during cleanup', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-local-file-staging-oversized-'))
     const activityEntryLimit = 8

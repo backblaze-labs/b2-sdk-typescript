@@ -104,13 +104,26 @@ describe('finishLargeFileWithAbortReconciliation', () => {
         throw err
       })
 
-      await expect(finish(raw)).rejects.toMatchObject({
+      const failure = await finish(raw).catch((e: unknown) => e)
+      // callers decide whether a retry is safe from the error type, so pin it.
+      expect(failure).toBeInstanceOf(FinishLargeFileResponseBodyError)
+      expect(failure).toMatchObject({
         fileId: largeFileId('4_z_unfinished'),
         bucketId: bucketId('bucket'),
         fileName: 'finished.bin',
         cause: err,
       })
+      expect(raw.finishLargeFile).toHaveBeenCalledTimes(1)
     }
+  })
+
+  it('rethrows definite failures untouched so they are not reported as ambiguous', async () => {
+    const definite = new TypeError('bad request shape')
+    const raw = rawThatFinishes(async () => {
+      throw definite
+    })
+
+    await expect(finish(raw)).rejects.toBe(definite)
   })
 
   it('adds reconciliation metadata to raw finish response body errors', async () => {

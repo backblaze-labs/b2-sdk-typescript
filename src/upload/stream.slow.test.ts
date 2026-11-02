@@ -69,6 +69,20 @@ describe('B2Object.createWriteStream', () => {
     const last = events[events.length - 1]
     expect(last?.bytesTransferred).toBe(data.byteLength)
     expect(last?.partsCompleted).toBe(2)
+
+    // Each part completion emits exactly one event: partsCompleted rises by
+    // one per step, never skips or repeats, and no snapshot is emitted twice.
+    let previous = 0
+    let completions = 0
+    for (const e of events) {
+      expect(e.partsCompleted - previous).toBeLessThanOrEqual(1)
+      expect(e.partsCompleted).toBeGreaterThanOrEqual(previous)
+      if (e.partsCompleted > previous) completions++
+      previous = e.partsCompleted
+    }
+    expect(completions).toBe(2)
+    const keys = events.map((e) => `${e.bytesTransferred}:${e.partsCompleted}`)
+    expect(new Set(keys).size).toBe(keys.length)
   })
 
   it('rejects when the writable is closed without any data', async () => {
@@ -110,6 +124,55 @@ describe('B2Object.createWriteStream', () => {
     // The large file may or may not have been started before abort fired;
     // either way it should not remain unfinished.
     expect(unfinished.files.find((f) => f.fileName === 'aborted.bin')).toBeUndefined()
+  })
+
+  // the test above writes 100 bytes against a 5 MB part size, so no large file
+  // is ever started and its "should not remain unfinished" check holds vacuously.
+  it('abort after a full part has started the large file cancels it on the server', async () => {
+    const sim = new B2Simulator()
+    const inner = sim.transport()
+    const requestedUrls: string[] = []
+    const recording: HttpTransport = {
+      send(req: HttpRequest): Promise<HttpResponse> {
+        requestedUrls.push(req.url)
+        return inner.send(req)
+      },
+    }
+    const recClient = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: recording,
+      retry: { maxRetries: 0 },
+    })
+    await recClient.authorize()
+    const recBucket = await recClient.createBucket({
+      bucketName: 'abort-started',
+      bucketType: 'allPrivate',
+    })
+    const controller = new AbortController()
+    const { writable, done } = recBucket.file('abort-started.bin').createWriteStream({
+      partSize: 5_000_000,
+      concurrency: 1,
+      signal: controller.signal,
+    })
+    done.catch(() => {})
+
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(5_000_010))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(requestedUrls.some((url) => url.includes('b2_start_large_file'))).toBe(true)
+
+    controller.abort(new Error('stop'))
+    await writer.close().catch(() => {})
+    await expect(done).rejects.toBeDefined()
+
+    expect(requestedUrls.some((url) => url.includes('b2_cancel_large_file'))).toBe(true)
+    const unfinished = await recClient.raw.listUnfinishedLargeFiles(
+      recClient.accountInfo.getApiUrl(),
+      recClient.accountInfo.getAuthToken(),
+      { bucketId: recBucket.id },
+    )
+    expect(unfinished.files).toEqual([])
   })
 
   it('merges multiple buffered chunks into a single final part at close', async () => {
@@ -378,8 +441,10 @@ describe('B2Object.createWriteStream', () => {
     // reject done with the original error.
     const sim = new B2Simulator()
     const inner = sim.transport()
+    const requestedUrls: string[] = []
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
+        requestedUrls.push(req.url)
         const failingPaths = ['b2_upload_part', 'b2_cancel_large_file']
         if (failingPaths.some((p) => req.url.includes(p))) {
           const errorBody = JSON.stringify({
@@ -430,7 +495,14 @@ describe('B2Object.createWriteStream', () => {
       pipeError = err
     }
     expect(pipeError).toBeDefined()
-    await expect(done).rejects.toBeDefined()
+    // the original part failure must surface, not the cancel failure,
+    // and the cancel must actually have been attempted (then swallowed).
+    await expect(done).rejects.toMatchObject({
+      message: expect.stringContaining('simulated failure'),
+    })
+    expect(
+      requestedUrls.filter((url) => url.includes('b2_cancel_large_file')).length,
+    ).toBeGreaterThanOrEqual(1)
   })
 
   it('swallows cancelLargeFile failures during the abort hook', async () => {
@@ -439,8 +511,10 @@ describe('B2Object.createWriteStream', () => {
     // cleanup error and still reject done with the abort reason.
     const sim = new B2Simulator()
     const inner = sim.transport()
+    const requestedUrls: string[] = []
     const failing: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
+        requestedUrls.push(req.url)
         if (req.url.includes('b2_cancel_large_file')) {
           const errorBody = JSON.stringify({
             status: 400,
@@ -489,7 +563,11 @@ describe('B2Object.createWriteStream', () => {
     await new Promise((r) => setTimeout(r, 200))
 
     await writer.abort(new Error('boom'))
-    await expect(done).rejects.toBeDefined()
+    // abort reason surfaces and the failing cancel was attempted.
+    await expect(done).rejects.toMatchObject({ message: 'boom' })
+    expect(
+      requestedUrls.filter((url) => url.includes('b2_cancel_large_file')).length,
+    ).toBeGreaterThanOrEqual(1)
   })
 
   it('close() rethrows the errored latch and cancels the unfinished large file', async () => {
