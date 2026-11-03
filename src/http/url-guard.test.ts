@@ -41,8 +41,25 @@ describe('UrlGuard', () => {
     const check = () => guard.check('http://api.backblazeb2.com/x')
     expect(check).toThrow(B2SsrfError)
     expect(check).toThrow(
-      'non-HTTPS URL not allowed by SSRF guard: http:; use an HTTPS URL or a custom transport.',
+      'non-HTTPS URL not allowed by SSRF guard: http: on api.backblazeb2.com; use an HTTPS URL or a custom transport.',
     )
+    expect(() => guard.check('https://api.backblazeb2.com/x')).not.toThrow()
+  })
+
+  it('normalizes uppercase schemes before enforcing HTTPS', () => {
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(['backblazeb2.com'])
+
+    expect(() => guard.check('HTTP://api.backblazeb2.com/x')).toThrow(B2SsrfError)
+    expect(() => guard.check('HTTPS://api.backblazeb2.com/x')).not.toThrow()
+  })
+
+  it('allows only HTTPS among schemes on an allowed host', () => {
+    const guard = new UrlGuard()
+    guard.setAllowedSuffixes(['backblazeb2.com'])
+
+    expect(() => guard.check('ftp://api.backblazeb2.com/x')).toThrow(B2SsrfError)
+    expect(() => guard.check('file://api.backblazeb2.com/x')).toThrow(B2SsrfError)
     expect(() => guard.check('https://api.backblazeb2.com/x')).not.toThrow()
   })
 

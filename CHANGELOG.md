@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`UrlGuard` now requires HTTPS for allowed hosts.** Plain-HTTP `apiUrl` or `downloadUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
+- **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
 
 ### Security
 

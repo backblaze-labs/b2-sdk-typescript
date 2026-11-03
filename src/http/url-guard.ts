@@ -108,7 +108,7 @@ export class UrlGuard {
 
     if (parsed.protocol !== 'https:') {
       throw new B2SsrfError(
-        `non-HTTPS URL not allowed by SSRF guard: ${parsed.protocol}; use an HTTPS URL or a custom transport.`,
+        `non-HTTPS URL not allowed by SSRF guard: ${parsed.protocol} on ${host}; use an HTTPS URL or a custom transport.`,
         rawUrl,
       )
     }
