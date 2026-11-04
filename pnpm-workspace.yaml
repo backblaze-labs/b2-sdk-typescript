@@ -5,7 +5,7 @@ overrides:
   brace-expansion: 5.0.12
   fast-uri: 3.1.9
   linkify-it: 5.0.2
-  markdown-it: 14.3.2
+  markdown-it: 14.3.3
   postcss: 8.5.23
   smol-toml: 1.9.0
   source-map-js: 1.2.2
