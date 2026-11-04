@@ -627,6 +627,25 @@ describe('FetchTransport', () => {
     )
   })
 
+  it('rejects HTTP redirect targets when same-origin redirects are enabled', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response('move', {
+        status: 302,
+        headers: { Location: 'http://f001.backblazeb2.com/file/bucket/object' },
+      }),
+    )
+
+    const transport = new FetchTransport({ followSameOriginRedirects: true })
+    await expect(
+      transport.send({
+        url: 'https://f001.backblazeb2.com/file/bucket/old-object',
+        method: 'GET',
+      }),
+    ).rejects.toBeInstanceOf(B2RedirectError)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('can opt out of following same-origin GET redirects', async () => {
     fetchSpy.mockResolvedValue(
       new Response('move', {

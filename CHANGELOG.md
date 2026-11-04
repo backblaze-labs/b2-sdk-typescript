@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
+
 ### Security
 
 - Updated transitive development dependencies to patched versions.
