@@ -63,6 +63,40 @@ option that disables only upload POST connection-failure retries.
 and controls replay after an unreadable success response body; setting it to
 `false` does not disable connection-fault retries.
 
+## v0.5.0: SDK objects reject `Proxy` wrappers (credential redaction)
+
+`BREAKING`. Application keys and authorization tokens now live in private (`#`)
+fields on `B2Client`, `Bucket`, `B2Object`, `InMemoryAccountInfo`,
+`FileAccountInfo`, and the upload URL pools, so logging, inspecting, or
+serializing them no longer exposes secrets. A side effect: calling a method on
+any of these instances through a `Proxy` wrapper throws
+`TypeError: Cannot read private member`. Code that worked in v0.4.0 now throws.
+
+### Before
+
+```ts
+const client = reactive(new B2Client(options)) // Vue
+await client.authorize()
+await client.listBuckets()
+```
+
+### After
+
+Keep the SDK instance out of the reactive proxy and call its methods on the raw
+instance; wrap only your own plain state in `reactive()`.
+
+```ts
+const client = new B2Client(options)
+await client.authorize()
+const buckets = await client.listBuckets()
+```
+
+`client.accountInfo` and `'accountInfo' in client` still work on the raw
+instance. `accountInfo` is now a read-only prototype accessor — it has no setter
+and a subclass cannot redeclare it as a field (TypeScript `TS2610`) — so pass a
+custom store through the constructor's `accountInfo` option instead of assigning
+it.
+
 ## Wire routes: `/b2api/v3` → `/b2api/v4` (no action required)
 
 All SDK-built native storage URLs now use the published `/b2api/v4` route, built
