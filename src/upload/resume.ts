@@ -76,7 +76,7 @@ export type ResumeCandidateRejectedListener = (event: ResumeCandidateRejectedEve
 export interface ResumeCandidateCriteria {
   /** Effective MIME type for the upload, including SDK defaults. */
   readonly contentType: string
-  /** Caller-owned file info. Legacy SDK resume keys on candidates are ignored separately. */
+  /** Effective file info, including a computed or caller-provided whole-file SHA-1 when available. */
   readonly fileInfo: Record<string, string>
   /** Source size in bytes, checked against legacy SDK metadata when a candidate carries it. */
   readonly sourceSize: number
@@ -348,6 +348,13 @@ function candidateMetadataRejectReason(
 
   const candidateInfo = splitResumeFileInfo(candidate.fileInfo ?? {})
   const criteriaInfo = splitResumeFileInfo(criteria.fileInfo)
+  if (
+    candidateInfo.largeFileSha1 !== undefined &&
+    criteriaInfo.largeFileSha1 !== undefined &&
+    candidateInfo.largeFileSha1 !== criteriaInfo.largeFileSha1
+  ) {
+    return 'file-info-mismatch'
+  }
   if (!recordEquals(candidateInfo.fileInfo, criteriaInfo.fileInfo)) return 'file-info-mismatch'
   if (
     candidateInfo.sourceSize !== undefined &&
@@ -452,20 +459,22 @@ interface SplitResumeFileInfo {
   readonly fileInfo: Record<string, string>
   readonly sourceSize?: string
   readonly partSize?: string
+  readonly largeFileSha1?: string
 }
 
 function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileInfo {
   const userFileInfo: Record<string, string> = Object.create(null) as Record<string, string>
   let sourceSize: string | undefined
   let partSize: string | undefined
+  let largeFileSha1: string | undefined
   for (const [key, value] of Object.entries(fileInfo)) {
     if (key === RESUME_SOURCE_SIZE_INFO_KEY) {
       sourceSize = value
     } else if (key === RESUME_PART_SIZE_INFO_KEY) {
       partSize = value
     } else if (key === 'large_file_sha1') {
-      // Whole-file SHA-1 is deterministic content metadata, not caller-owned
-      // upload identity. It may be present on one side of a resume comparison.
+      // Compare known digests, but allow legacy uploads that lack one.
+      largeFileSha1 = value
     } else {
       userFileInfo[key] = value
     }
@@ -474,6 +483,7 @@ function splitResumeFileInfo(fileInfo: Record<string, string>): SplitResumeFileI
     fileInfo: userFileInfo,
     ...(sourceSize !== undefined ? { sourceSize } : {}),
     ...(partSize !== undefined ? { partSize } : {}),
+    ...(largeFileSha1 !== undefined ? { largeFileSha1 } : {}),
   }
 }
 
