@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
+### Changed
+
+- **Upload POST connection failures now retry by default.** BEHAVIOR CHANGE: single-file and multipart-part uploads retry connection faults with a fresh upload URL. If the first single-file POST reached B2 before the connection failed, retrying can create duplicate versions, including in versioned or Object Lock buckets. Set `retry: { maxRetries: 0 }` on an upload to disable retries, including the 503, `BadAuthTokenError`, and bad-upload-URL retries that v0.4.0 already performed. Setting it on the client also disables client-level retries. There is no narrower connection-fault-only opt-out. `retryResponseBodyFailures` remains `false` by default and separately controls replay after an unreadable success response body. See [MIGRATION.md](./MIGRATION.md).
+
+### Fixed
+
+- **Large-file uploads record whole-file SHA-1 metadata and preserve resume integrity.** Sliceable sources get a computed `large_file_sha1` unless the caller supplies a value. Resume matching compares computed and caller-provided digests, rejects differing known values with `file-info-mismatch`, and remains compatible when either side lacks the digest. Prehash reads honor cancellation before each slice and during pending reads.
+
+### Security
+
+- Updated development tooling and transitive dependencies, with an expiring allowlist entry for the dev-only minimatch advisory.
+
 ## [0.4.0] - 2026-09-01
 
 > Upgrading across the v4 native-API changes below? See [MIGRATION.md](./MIGRATION.md) for per-change migration steps.
