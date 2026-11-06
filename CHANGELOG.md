@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Targeted single-file upload connection-fault retry opt-out.** `retryUploadConnectionFaults` defaults to `true` on client and per-upload options; per-call values take precedence. Set it to `false` to surface single-file POST network faults and pre-response-header timeouts while retaining server/auth/upload-URL retries and backoff. A replay can create duplicate versions retained by Object Lock. Multipart parts still replace the same part number and retain their existing retry policy. Success-body failures and body-read timeouts remain independently controlled by `retryResponseBodyFailures` (default `false`).
+
 ### Changed
 
 - **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.

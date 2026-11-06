@@ -136,12 +136,14 @@ export class B2Object {
   readonly #client: B2Client
   private readonly bucket: Bucket
   private readonly uploadRetryOptions: RetryOptions
+  readonly #retryUploadConnectionFaults: boolean
 
   /**
    * @param client - The parent B2Client instance.
    * @param bucket - The parent Bucket this object belongs to.
    * @param fileName - The file path within the bucket.
    * @param uploadRetryOptions - Resolved client upload retry defaults.
+   * @param retryUploadConnectionFaults - Client default for single-file POST connection retries.
    *
    * @internal
    */
@@ -150,11 +152,13 @@ export class B2Object {
     bucket: Bucket,
     fileName: string,
     uploadRetryOptions: RetryOptions,
+    retryUploadConnectionFaults = true,
   ) {
     this.#client = client
     this.bucket = bucket
     this.fileName = fileName
     this.uploadRetryOptions = uploadRetryOptions
+    this.#retryUploadConnectionFaults = retryUploadConnectionFaults
   }
 
   /**
@@ -198,6 +202,8 @@ export class B2Object {
       bucketId: this.bucket.id,
       fileName: this.fileName,
       retry: uploadRetryOptions,
+      retryUploadConnectionFaults:
+        options.retryUploadConnectionFaults ?? this.#retryUploadConnectionFaults,
     })
   }
 
