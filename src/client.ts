@@ -67,6 +67,19 @@ export interface B2ClientOptions {
   readonly transport?: HttpTransport
   /** Override retry behavior (max retries, backoff, and per-attempt timeout). */
   readonly retry?: Partial<RetryOptions>
+  /**
+   * Whether high-level single-file upload POST connection faults retry.
+   * Defaults to true; a per-upload value overrides this client setting.
+   * Includes network errors, wrapped `TypeError`/`DOMException` failures, and
+   * timeouts before response headers arrive.
+   * Replaying a stored POST can create duplicate versions retained by Object Lock.
+   * Set false to surface these faults while retaining server/auth/URL retries
+   * and backoff. Upload-URL acquisition failures retain their retry policy.
+   * Multipart parts and write streams ignore this setting.
+   * Independent of `retryResponseBodyFailures`: success-body read failures,
+   * including body-read timeouts, follow that option and can still replay when true.
+   */
+  readonly retryUploadConnectionFaults?: boolean
   /** Custom user-agent string prepended to the SDK default. */
   readonly userAgent?: string
   /**
@@ -158,6 +171,7 @@ export class B2Client {
   private readonly realmUrl: string
   private readonly userAllowedSuffixes: readonly string[] | undefined
   private readonly resolvedUploadRetryOptions: RetryOptions
+  readonly #retryUploadConnectionFaults: boolean
   private readonly reauthCoalescer: ReauthCoalescer<string>
 
   /**
@@ -172,6 +186,7 @@ export class B2Client {
     bindAccountInfoAuthContext(this.#accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     this.resolvedUploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
+    this.#retryUploadConnectionFaults = options.retryUploadConnectionFaults ?? true
     this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
 
     let baseTransport: HttpTransport
@@ -344,7 +359,12 @@ export class B2Client {
       this.#accountInfo.getAuthToken(),
       request,
     )
-    return new Bucket(this, info, this.resolvedUploadRetryOptions)
+    return new Bucket(
+      this,
+      info,
+      this.resolvedUploadRetryOptions,
+      this.#retryUploadConnectionFaults,
+    )
   }
 
   /**
@@ -369,7 +389,10 @@ export class B2Client {
         ...options,
       },
     )
-    return resp.buckets.map((info) => new Bucket(this, info, this.resolvedUploadRetryOptions))
+    return resp.buckets.map(
+      (info) =>
+        new Bucket(this, info, this.resolvedUploadRetryOptions, this.#retryUploadConnectionFaults),
+    )
   }
 
   /**

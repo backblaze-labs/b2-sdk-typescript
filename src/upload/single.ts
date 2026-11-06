@@ -104,6 +104,7 @@ export async function uploadSmallFile(
       retry: options.retry,
       signal: options.signal,
       onUploadRetry: options.onUploadRetry,
+      retryUploadConnectionFaults: options.retryUploadConnectionFaults,
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
       ),
