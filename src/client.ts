@@ -30,6 +30,7 @@ import type {
   ListKeysResponse,
 } from './types/key.ts'
 import type { ReplicationConfiguration } from './types/replication.ts'
+import { resolveRetryUploadConnectionFaults } from './upload/retry.ts'
 import { throwIfSignalAborted } from './util/abort.ts'
 import { DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -186,7 +187,9 @@ export class B2Client {
     bindAccountInfoAuthContext(this.#accountInfo, this.realmUrl, this.applicationKeyId)
     this.userAllowedSuffixes = options.allowedHostSuffixes
     this.resolvedUploadRetryOptions = { ...DEFAULT_RETRY_OPTIONS, ...options.retry }
-    this.#retryUploadConnectionFaults = options.retryUploadConnectionFaults ?? true
+    this.#retryUploadConnectionFaults = resolveRetryUploadConnectionFaults(
+      options.retryUploadConnectionFaults,
+    )
     this.reauthCoalescer = new ReauthCoalescer((signal) => this.doReauthorize(signal))
 
     let baseTransport: HttpTransport

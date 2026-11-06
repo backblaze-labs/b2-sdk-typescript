@@ -11,6 +11,7 @@ import { DEFAULT_CONTENT_TYPE } from '../util/defaults.ts'
 import {
   fetchFreshUploadUrl,
   resolveRetryResponseBodyFailures,
+  resolveRetryUploadConnectionFaults,
   type UploadRetryOptions,
   withFreshUploadUrlRetry,
 } from './retry.ts'
@@ -104,7 +105,9 @@ export async function uploadSmallFile(
       retry: options.retry,
       signal: options.signal,
       onUploadRetry: options.onUploadRetry,
-      retryUploadConnectionFaults: options.retryUploadConnectionFaults,
+      retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+        options.retryUploadConnectionFaults,
+      ),
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
       ),

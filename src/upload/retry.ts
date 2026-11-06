@@ -60,8 +60,10 @@ export interface UploadRetryOptions {
   readonly retryResponseBodyFailures?: boolean | undefined
 }
 
-interface UploadLayerRetryOptions extends Omit<UploadRetryOptions, 'retryResponseBodyFailures'> {
+interface UploadLayerRetryOptions
+  extends Omit<UploadRetryOptions, 'retryResponseBodyFailures' | 'retryUploadConnectionFaults'> {
   readonly retryResponseBodyFailures: boolean
+  readonly retryUploadConnectionFaults: boolean
   /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
   readonly signal?: AbortSignal | undefined
 }
@@ -89,6 +91,19 @@ const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
  */
 export function resolveRetryResponseBodyFailures(value: boolean | undefined): boolean {
   return value ?? false
+}
+
+/**
+ * Resolves the public default for `retryUploadConnectionFaults`. Connection
+ * faults retry by default; false disables only single-file POST connection
+ * retries, leaving multipart and upload-URL acquisition retries unchanged.
+ *
+ * @param value - Caller-provided override, if any.
+ *
+ * @returns The boolean value passed to the upload retry helper.
+ */
+export function resolveRetryUploadConnectionFaults(value: boolean | undefined): boolean {
+  return value ?? true
 }
 
 /**
@@ -197,6 +212,7 @@ export function uploadPartWithFreshUrl(
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
     retryResponseBodyFailures: options.retryResponseBodyFailures,
+    retryUploadConnectionFaults: options.retryUploadConnectionFaults,
     checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
     returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
@@ -313,7 +329,7 @@ function isUploadRetryable(
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
     if (err.cause instanceof UploadResponseBodyError) return options.retryResponseBodyFailures
-    return !singleFilePostFault || options.retryUploadConnectionFaults !== false
+    return !singleFilePostFault || options.retryUploadConnectionFaults
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true

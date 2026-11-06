@@ -20,6 +20,7 @@ import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import {
   resolveRetryResponseBodyFailures,
+  resolveRetryUploadConnectionFaults,
   type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
@@ -200,6 +201,9 @@ export function createWriteStream(
       onUploadRetry: options.onUploadRetry,
       retryResponseBodyFailures: resolveRetryResponseBodyFailures(
         options.retryResponseBodyFailures,
+      ),
+      retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+        options.retryUploadConnectionFaults,
       ),
       ...(options.serverSideEncryption !== undefined
         ? { serverSideEncryption: options.serverSideEncryption }
