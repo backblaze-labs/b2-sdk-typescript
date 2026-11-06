@@ -66,8 +66,9 @@ interface FreshUrlRetryOptions<T> extends UploadLayerRetryOptions {
 const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
 
 /**
- * Resolves the public default for `retryResponseBodyFailures`. Callers must
- * opt into replaying ambiguous upload POST failures for every upload mode.
+ * Resolves the public default for `retryResponseBodyFailures`. Replaying an
+ * unreadable success response body is opt-in for every upload mode; upload
+ * POST connection failures retry by default with a fresh URL.
  *
  * @param value - Caller-provided override, if any.
  *
