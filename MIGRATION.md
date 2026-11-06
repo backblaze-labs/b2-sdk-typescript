@@ -1,5 +1,58 @@
 # Migration guide
 
+## Single-file upload connection-fault retry opt-out (unreleased)
+
+Upload POST connection faults retry by default with a fresh upload URL. If a
+single-file POST reached B2 before the connection dropped, replay can create
+duplicate versions. Object Lock retention or legal hold can prevent deleting
+those duplicates. Multipart retries replace the same part number instead.
+
+Previously, `retry: { maxRetries: 0 }` stopped connection-fault retries only by
+also disabling the existing server, auth-token, and upload-URL retries. Use
+`retryUploadConnectionFaults: false` to disable just the single-file POST
+connection-fault retry while keeping those recovery paths and backoff:
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithConnectionFaultOptOut(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+    retryUploadConnectionFaults: false,
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+  })
+}
+
+uploadWithConnectionFaultOptOut().catch(console.error)
+```
+
+Replace the credentials and bucket name before running. You can also set the
+option directly on `Bucket.upload()` or `B2Object.upload()`. A per-call value
+overrides the client default, including `true` on a client configured with
+`false`. Omitting the option retains the current default-on behavior.
+
+The option covers upload-callback network faults, including wrapped
+`TypeError`/`DOMException` errors and `requestTimeoutMs` timeouts **before
+response headers arrive**. Upload-URL acquisition failures keep retrying under
+their existing policy. Multipart uploads and write streams ignore the new
+setting and retain their existing retry policy.
+
+Failures while reading a successful response body, including body-read
+timeouts, still follow `retryResponseBodyFailures`. Its default is `false`;
+setting it to `true` can replay a stored single-file POST even when
+`retryUploadConnectionFaults` is `false`. This option is not an exactly-once
+guarantee. Keeping both options `false` avoids these two automatic single-file
+replay paths without disabling server/auth/upload-URL retries.
+
+## v4 response-shape migrations
+
 This guide covers the breaking changes introduced while aligning the SDK's
 TypeScript surface with Backblaze B2's **v4** native API (the `v0.4.0` line,
 tracked in [#193](https://github.com/backblaze-labs/b2-sdk-typescript/issues/193)).

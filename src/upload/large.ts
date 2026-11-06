@@ -28,6 +28,7 @@ import {
 } from './resume.ts'
 import {
   resolveRetryResponseBodyFailures,
+  resolveRetryUploadConnectionFaults,
   type UploadRetryOptions,
   uploadPartWithFreshUrl,
 } from './retry.ts'
@@ -466,6 +467,9 @@ export async function uploadLargeFile(
           retryResponseBodyFailures: resolveRetryResponseBodyFailures(
             options.retryResponseBodyFailures,
           ),
+          retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+            options.retryUploadConnectionFaults,
+          ),
           ...(options.serverSideEncryption !== undefined
             ? { serverSideEncryption: options.serverSideEncryption }
             : {}),
@@ -642,6 +646,9 @@ async function uploadPartsSequentially(
         onUploadRetry: options.onUploadRetry,
         retryResponseBodyFailures: resolveRetryResponseBodyFailures(
           options.retryResponseBodyFailures,
+        ),
+        retryUploadConnectionFaults: resolveRetryUploadConnectionFaults(
+          options.retryUploadConnectionFaults,
         ),
         ...(options.serverSideEncryption !== undefined
           ? { serverSideEncryption: options.serverSideEncryption }
