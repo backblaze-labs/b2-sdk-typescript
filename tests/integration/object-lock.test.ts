@@ -25,6 +25,7 @@ import {
   emptyObjectLockBucket,
   isObjectLockUnavailableError,
   keyId,
+  liveRealmOptions,
   logFeatureSkip,
   makeBucketName,
   requireB2IntegrationCredentials,
@@ -172,6 +173,7 @@ describe.skipIf(skip)('B2 Object Lock integration', () => {
     const liveClient = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
+      ...liveRealmOptions,
     })
     await setupStep('authorize', () => liveClient.authorize())
 

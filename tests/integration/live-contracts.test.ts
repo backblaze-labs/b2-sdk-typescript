@@ -28,6 +28,7 @@ import {
   expectBytesEqual,
   fetchBytesWithDeadline,
   keyId,
+  liveRealmOptions,
   makeBucketName,
   makeBytes,
   readAllBytes,
@@ -277,6 +278,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     client = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
+      ...liveRealmOptions,
     })
     await setupStep('authorize', () => client.authorize())
 
