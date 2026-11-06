@@ -265,6 +265,20 @@ export async function uploadLargeFile(
   if (options.lastModifiedMillis !== undefined) {
     fileInfo['src_last_modified_millis'] = String(options.lastModifiedMillis)
   }
+  if (fileInfo['large_file_sha1'] === undefined && options.source.canSlice) {
+    const wholeFileSha1 = new IncrementalSha1()
+    for (const part of parts) {
+      options.signal?.throwIfAborted()
+      const data = new Uint8Array(
+        await options.source
+          .slice(part.offset, part.offset + part.length)
+          .toArrayBuffer(options.signal !== undefined ? { signal: options.signal } : {}),
+      )
+      await wholeFileSha1.update(data)
+    }
+    fileInfo['large_file_sha1'] = await wholeFileSha1.digest()
+  }
+  const resumeFileInfo = { ...fileInfo }
 
   // Construct the `b2_start_large_file` request body once so the two
   // non-resume branches below (no `resume`, resume-but-no-candidate)
@@ -285,7 +299,7 @@ export async function uploadLargeFile(
   }
   const resumeCandidateCriteria = createResumeCandidateCriteria(
     options,
-    startLargeFileRequest,
+    { ...startLargeFileRequest, fileInfo: resumeFileInfo },
     totalSize,
     partSize,
     parts,

@@ -1,14 +1,67 @@
 # Migration guide
 
-This guide covers the breaking changes introduced while aligning the SDK's
-TypeScript surface with Backblaze B2's **v4** native API (the `v0.4.0` line,
+This guide covers the v0.5.0 upload retry behavior change and the breaking changes
+introduced while aligning the SDK's TypeScript surface with Backblaze B2's **v4**
+native API (the `v0.4.0` line,
 tracked in [#193](https://github.com/backblaze-labs/b2-sdk-typescript/issues/193)).
 
 Because the SDK is pre-1.0 with no stable external compatibility guarantee yet,
 the v4 response-shape corrections shipped as **direct breaking changes** rather
 than deprecated `v3`-shaped mirrors. Each section below explains what changed and
-how to update your code. Every breaking change is also flagged `BREAKING` in
+how to update your code. The v4 breaking changes are also flagged `BREAKING` in
 [`CHANGELOG.md`](./CHANGELOG.md).
+
+## v0.5.0: Upload POST connection failures retry by default
+
+### Before
+
+In v0.4.0, upload POST connection faults were not replayed by default. Uploads
+already retried eligible 503, `BadAuthTokenError`, and bad-upload-URL failures.
+
+### After
+
+Single-file and multipart-part upload POST connection faults now retry with a
+fresh upload URL by default. If the first single-file POST reached B2 before
+the connection failed, replay can create duplicate versions, including in
+versioned or Object Lock buckets. Each duplicate can inherit retention or a
+legal hold that prevents deletion. Re-uploading a multipart part replaces the
+same part number.
+
+To disable connection-fault retries for an upload, set its retry budget to zero:
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithoutRetries(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+    retry: { maxRetries: 0 },
+  })
+}
+
+uploadWithoutRetries().catch(console.error)
+```
+
+Replace the application key and existing bucket name before running the example.
+
+This also disables that upload's 503, `BadAuthTokenError`, and bad-upload-URL
+retries that v0.4.0 performed by default. It does not restore the complete
+v0.4.0 retry policy. Setting `retry: { maxRetries: 0 }` on `B2Client` also
+disables client-level retries for all calls. There is no narrower per-fault
+option that disables only upload POST connection-failure retries.
+
+`retryResponseBodyFailures` is a separate option. It remains `false` by default
+and controls replay after an unreadable success response body; setting it to
+`false` does not disable connection-fault retries.
 
 ## Wire routes: `/b2api/v3` → `/b2api/v4` (no action required)
 

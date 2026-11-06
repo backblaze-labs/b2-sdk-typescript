@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Bucket } from '../bucket.ts'
 import type { B2Client } from '../client.ts'
+import { sha1Hex } from '../streams/hash.ts'
 import type { ContentSource } from '../streams/source.ts'
 import { BufferSource, StreamSource } from '../streams/source.ts'
 import { daysFromNow, deterministicBytes, makeClient, readStream } from '../test-utils/index.ts'
@@ -97,6 +98,7 @@ describe('uploadLargeFile (single-part, data < minPartSize)', () => {
     })
     expect(result.fileInfo).toEqual({
       src_last_modified_millis: String(lastModifiedMillis),
+      large_file_sha1: await sha1Hex(data),
     })
   })
 
