@@ -1562,6 +1562,42 @@ function rejectOnAbort<T>(signal: AbortSignal | undefined, message: string): Pro
   })
 }
 
+const CONNECTION_FAILURE_PHASES = ['pre-send', 'mid-request', 'post-send'] as const
+
+async function failUploadAtPhase(
+  inner: HttpTransport,
+  request: HttpRequest,
+  phase: (typeof CONNECTION_FAILURE_PHASES)[number],
+  failure: NetworkError,
+  recordPartialBody: (bytes: number) => void,
+): Promise<never> {
+  if (phase === 'pre-send') throw failure
+  if (phase === 'post-send') {
+    await inner.send(request)
+    throw failure
+  }
+
+  const bytes = new Uint8Array(await new Response(request.body).arrayBuffer())
+  let sentPrefix = false
+  const interruptedBody = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (sentPrefix) {
+          controller.error(failure)
+        } else {
+          sentPrefix = true
+          const prefix = bytes.subarray(0, Math.floor(bytes.byteLength / 2))
+          recordPartialBody(prefix.byteLength)
+          controller.enqueue(prefix)
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  await inner.send({ ...request, body: interruptedBody })
+  throw new Error('The interrupted upload body should fail before it is stored')
+}
+
 describe('upload fresh-URL retry', () => {
   it('returns rate-limited upload URLs to the pool without retrying the payload', async () => {
     const entry = { uploadUrl: 'https://upload.example/file', authorizationToken: 'upload-token' }
@@ -1620,126 +1656,174 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
   })
 
-  it.each([
-    ['reset_before_response', 'connection reset before response'],
-    ['reset_mid_request', 'connection reset while sending request'],
-    ['stall', 'socket timed out waiting for response'],
-  ])('retries %s with a fresh upload URL by default', async (_scenario, message) => {
-    const sim = new B2Simulator()
-    const inner = sim.transport()
-    const uploadUrls: string[] = []
-    let getUploadUrlCalls = 0
-    const retryEvents: UploadRetryEvent[] = []
-    const transport: HttpTransport = {
-      async send(req: HttpRequest): Promise<HttpResponse> {
-        if (req.url.includes('b2_get_upload_url')) {
-          getUploadUrlCalls += 1
-          const response = await inner.send(req)
-          const body = await response.json<UploadUrlBody>()
-          return jsonResponse({
-            ...body,
-            uploadUrl: `${body.uploadUrl}&connectionRetry=${getUploadUrlCalls}`,
-          })
-        }
-        if (req.url.includes('b2_upload_file?')) {
-          uploadUrls.push(req.url)
-          if (uploadUrls.length === 1) throw new NetworkError(message)
-        }
-        return inner.send(req)
-      },
-    }
-    const client = new B2Client({
-      applicationKeyId: 'k',
-      applicationKey: 'k',
-      transport,
-      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-    })
-    await client.authorize()
-    const bucket = await client.createBucket({
-      bucketName: 'connection-retry',
-      bucketType: BucketType.AllPrivate,
-    })
+  it.each(CONNECTION_FAILURE_PHASES)(
+    'retries %s with a fresh upload URL by default',
+    async (phase) => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      const send = vi.spyOn(inner, 'send')
+      const storedUploads = vi.spyOn(sim, 'handleUpload')
+      const uploadUrls: string[] = []
+      let getUploadUrlCalls = 0
+      let partialBodyBytes = 0
+      const retryEvents: UploadRetryEvent[] = []
+      const transport: HttpTransport = {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_get_upload_url')) {
+            getUploadUrlCalls += 1
+            const response = await inner.send(req)
+            const body = await response.json<UploadUrlBody>()
+            return jsonResponse({
+              ...body,
+              uploadUrl: `${body.uploadUrl}&connectionRetry=${getUploadUrlCalls}`,
+            })
+          }
+          if (req.url.includes('b2_upload_file?')) {
+            uploadUrls.push(req.url)
+            if (uploadUrls.length === 1) {
+              return failUploadAtPhase(
+                inner,
+                req,
+                phase,
+                new NetworkError(`${phase} connection fault`),
+                (bytes) => {
+                  partialBodyBytes += bytes
+                },
+              )
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      })
+      await client.authorize()
+      const bucket = await client.createBucket({
+        bucketName: 'connection-retry',
+        bucketType: BucketType.AllPrivate,
+      })
 
-    const result = await bucket.upload({
-      fileName: 'connection-retry.txt',
-      source: new BufferSource(new Uint8Array([1, 2, 3])),
-      onUploadRetry: (event) => retryEvents.push(event),
-    })
+      const result = await bucket.upload({
+        fileName: 'connection-retry.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        onUploadRetry: (event) => retryEvents.push(event),
+      })
 
-    expect(result.fileName).toBe('connection-retry.txt')
-    expect(uploadUrls).toHaveLength(2)
-    expect(uploadUrls[0]).not.toBe(uploadUrls[1])
-    expect(getUploadUrlCalls).toBe(2)
-    expect(retryEvents).toHaveLength(1)
-    expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
-    expect(await countFileVersions(bucket, result.fileName)).toBe(1)
-  })
+      expect(result.fileName).toBe('connection-retry.txt')
+      expect(uploadUrls).toHaveLength(2)
+      expect(uploadUrls[0]).not.toBe(uploadUrls[1])
+      expect(getUploadUrlCalls).toBe(2)
+      expect(retryEvents).toHaveLength(1)
+      expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+      expect(send.mock.calls.some(([request]) => request.url === uploadUrls[0])).toBe(
+        phase !== 'pre-send',
+      )
+      if (phase === 'mid-request') {
+        expect(partialBodyBytes).toBeGreaterThan(0)
+        expect(partialBodyBytes).toBeLessThan(3)
+      } else {
+        expect(partialBodyBytes).toBe(0)
+      }
+      expect(storedUploads).toHaveBeenCalledTimes(phase === 'post-send' ? 2 : 1)
+      expect(await countFileVersions(bucket, result.fileName)).toBe(phase === 'post-send' ? 2 : 1)
+      const downloaded = await bucket.download(result.fileName)
+      expect(await readStream(downloaded.body)).toEqual(new Uint8Array([1, 2, 3]))
+    },
+  )
 
-  it.each([
-    ['reset_before_response', 'connection reset before part response'],
-    ['reset_mid_request', 'connection reset while sending part'],
-    ['stall', 'part socket timed out waiting for response'],
-  ])('retries part %s with a fresh part URL by default', async (_scenario, message) => {
-    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
-    const inner = sim.transport()
-    const partUrls: string[] = []
-    const partNumbers: string[] = []
-    const flow: string[] = []
-    let getUploadPartUrlCalls = 0
-    const retryEvents: UploadRetryEvent[] = []
-    const transport: HttpTransport = {
-      async send(req: HttpRequest): Promise<HttpResponse> {
-        if (req.url.includes('b2_get_upload_part_url')) {
-          getUploadPartUrlCalls += 1
-          flow.push(`url:${getUploadPartUrlCalls}`)
-          const response = await inner.send(req)
-          const body = await response.json<UploadUrlBody>()
-          return jsonResponse({
-            ...body,
-            uploadUrl: `${body.uploadUrl}&partConnectionRetry=${getUploadPartUrlCalls}`,
-          })
-        }
-        if (req.url.includes('b2_upload_part?')) {
-          const partNumber = req.headers?.['X-Bz-Part-Number'] ?? ''
-          partUrls.push(req.url)
-          partNumbers.push(partNumber)
-          flow.push(`part:${partNumber}`)
-          if (partUrls.length === 1) throw new NetworkError(message)
-        }
-        return inner.send(req)
-      },
-    }
-    const client = new B2Client({
-      applicationKeyId: 'k',
-      applicationKey: 'k',
-      transport,
-      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-    })
-    await client.authorize()
-    const bucket = await client.createBucket({
-      bucketName: 'part-connection-retry',
-      bucketType: BucketType.AllPrivate,
-    })
+  it.each(CONNECTION_FAILURE_PHASES)(
+    'retries part %s with a fresh part URL by default',
+    async (phase) => {
+      const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+      const inner = sim.transport()
+      const send = vi.spyOn(inner, 'send')
+      const storedUploads = vi.spyOn(sim, 'handleUpload')
+      const partUrls: string[] = []
+      const partNumbers: string[] = []
+      const flow: string[] = []
+      let getUploadPartUrlCalls = 0
+      let partialBodyBytes = 0
+      const retryEvents: UploadRetryEvent[] = []
+      const transport: HttpTransport = {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_get_upload_part_url')) {
+            getUploadPartUrlCalls += 1
+            flow.push(`url:${getUploadPartUrlCalls}`)
+            const response = await inner.send(req)
+            const body = await response.json<UploadUrlBody>()
+            return jsonResponse({
+              ...body,
+              uploadUrl: `${body.uploadUrl}&partConnectionRetry=${getUploadPartUrlCalls}`,
+            })
+          }
+          if (req.url.includes('b2_upload_part?')) {
+            const partNumber = req.headers?.['X-Bz-Part-Number'] ?? ''
+            partUrls.push(req.url)
+            partNumbers.push(partNumber)
+            flow.push(`part:${partNumber}`)
+            if (partUrls.length === 1) {
+              return failUploadAtPhase(
+                inner,
+                req,
+                phase,
+                new NetworkError(`${phase} part connection fault`),
+                (bytes) => {
+                  partialBodyBytes += bytes
+                },
+              )
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      })
+      await client.authorize()
+      const bucket = await client.createBucket({
+        bucketName: 'part-connection-retry',
+        bucketType: BucketType.AllPrivate,
+      })
 
-    const result = await bucket.upload({
-      fileName: 'part-connection-retry.bin',
-      source: new BufferSource(deterministicBytes(200_000)),
-      partSize: 100_000,
-      concurrency: 1,
-      onUploadRetry: (event) => retryEvents.push(event),
-    })
+      const result = await bucket.upload({
+        fileName: 'part-connection-retry.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        onUploadRetry: (event) => retryEvents.push(event),
+      })
 
-    expect(result.fileName).toBe('part-connection-retry.bin')
-    expect(partNumbers).toEqual(['1', '1', '2'])
-    expect(flow).toEqual(['url:1', 'part:1', 'url:2', 'part:1', 'part:2'])
-    expect(partUrls).toHaveLength(3)
-    expect(partUrls[0]).not.toBe(partUrls[1])
-    expect(getUploadPartUrlCalls).toBe(2)
-    expect(retryEvents).toHaveLength(1)
-    expect(retryEvents[0]?.partNumber).toBe(1)
-    expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
-    expect(await countFileVersions(bucket, result.fileName)).toBe(1)
-  })
+      expect(result.fileName).toBe('part-connection-retry.bin')
+      expect(partNumbers).toEqual(['1', '1', '2'])
+      expect(flow).toEqual(['url:1', 'part:1', 'url:2', 'part:1', 'part:2'])
+      expect(partUrls).toHaveLength(3)
+      expect(partUrls[0]).not.toBe(partUrls[1])
+      expect(getUploadPartUrlCalls).toBe(2)
+      expect(retryEvents).toHaveLength(1)
+      expect(retryEvents[0]?.partNumber).toBe(1)
+      expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+      expect(send.mock.calls.some(([request]) => request.url === partUrls[0])).toBe(
+        phase !== 'pre-send',
+      )
+      if (phase === 'mid-request') {
+        expect(partialBodyBytes).toBeGreaterThan(0)
+        expect(partialBodyBytes).toBeLessThan(100_000)
+      } else {
+        expect(partialBodyBytes).toBe(0)
+      }
+      expect(storedUploads).toHaveBeenCalledTimes(phase === 'post-send' ? 3 : 2)
+      expect(await countFileVersions(bucket, result.fileName)).toBe(1)
+      const downloaded = await bucket.download(result.fileName)
+      expect(await readStream(downloaded.body)).toEqual(deterministicBytes(200_000))
+    },
+  )
 
   it('continues fresh-URL recovery when the upload retry observer throws', async () => {
     const sim = new B2Simulator()
