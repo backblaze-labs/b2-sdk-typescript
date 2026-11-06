@@ -3422,6 +3422,92 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     expect(startLargeFile).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { digest: 'computed', mode: 'automatic' },
+    { digest: 'computed', mode: 'explicit' },
+    { digest: 'caller-supplied', mode: 'automatic' },
+    { digest: 'caller-supplied', mode: 'explicit' },
+  ] as const)(
+    'rejects $mode resume with a different $digest whole-file SHA-1',
+    async (scenario) => {
+      const partSize = 100_000
+      const original = deterministicBytes(partSize * 2)
+      const changed = original.slice()
+      changed[0] = changed[0] === 0 ? 1 : 0
+      const originalSha1 =
+        scenario.digest === 'computed' ? await sha1Hex(original) : 'caller-original'
+      const changedSha1 = scenario.digest === 'computed' ? await sha1Hex(changed) : 'caller-changed'
+      const fileName = `digest-${scenario.digest}-${scenario.mode}.bin`
+      const start = await client.raw.startLargeFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          bucketId: bucket.id,
+          fileName,
+          contentType: 'application/octet-stream',
+          fileInfo: { large_file_sha1: originalSha1 },
+        },
+      )
+      const partUrl = await client.raw.getUploadPartUrl(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { fileId: start.fileId },
+      )
+      const originalPart = original.slice(0, partSize)
+      await client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: originalPart.byteLength,
+          contentSha1: await sha1Hex(originalPart),
+        },
+        originalPart,
+      )
+      const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+      const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+      const listParts = vi.spyOn(client.raw, 'listParts')
+      const rejected: string[] = []
+      const upload = uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName,
+        contentType: 'application/octet-stream',
+        source: new BufferSource(changed),
+        partSize,
+        concurrency: 1,
+        ...(scenario.digest === 'caller-supplied'
+          ? { fileInfo: { large_file_sha1: changedSha1 } }
+          : {}),
+        ...(scenario.mode === 'automatic' ? { resume: true } : { resumeFileId: start.fileId }),
+        onResumeCandidateRejected: (event) => rejected.push(event.reason),
+      })
+
+      if (scenario.mode === 'explicit') {
+        await expect(upload).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+        expect(startLargeFile).not.toHaveBeenCalled()
+        expect(uploadPart).not.toHaveBeenCalled()
+      } else {
+        const result = await upload
+        expect(result.fileId).not.toBe(start.fileId)
+        expect(result.fileInfo['large_file_sha1']).toBe(changedSha1)
+        expect(startLargeFile).toHaveBeenCalledOnce()
+        const downloaded = await bucket.download(fileName)
+        expect(await readStream(downloaded.body)).toEqual(changed)
+      }
+      expect(rejected).toEqual(['file-info-mismatch'])
+      expect(listParts).not.toHaveBeenCalled()
+
+      const unfinished = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      expect(
+        unfinished.files.find((file) => file.fileId === start.fileId)?.fileInfo['large_file_sha1'],
+      ).toBe(originalSha1)
+    },
+  )
+
   it('preserves a caller-supplied large_file_sha1', async () => {
     const data = deterministicBytes(200_000)
     const result = await uploadLargeFile(client.raw, client.accountInfo, {
@@ -4475,6 +4561,88 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       { fileId: foreign.fileId },
     )
     expect(parts.parts).toEqual([])
+  })
+})
+
+describe('uploadLargeFile whole-file SHA-1 aborts', () => {
+  it('does not read prehash slices when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    const reason = new Error('prehash already aborted')
+    controller.abort(reason)
+    const source = new BufferSource(deterministicBytes(4))
+    const slice = vi.spyOn(source, 'slice')
+
+    await expect(
+      uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+        bucketId: bucketId('bucket'),
+        fileName: 'prehash-abort.bin',
+        source,
+        partSize: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+
+    expect(slice).not.toHaveBeenCalled()
+  })
+
+  it('checks cancellation between whole-file prehash slices', async () => {
+    const controller = new AbortController()
+    const reason = new Error('stop after first prehash slice')
+    const source = new BufferSource(deterministicBytes(4))
+    const slice = vi.spyOn(source, 'slice').mockImplementation((start, end) => {
+      const part = new BufferSource(deterministicBytes(4).slice(start, end))
+      vi.spyOn(part, 'toArrayBuffer').mockImplementation(async () => {
+        controller.abort(reason)
+        return new ArrayBuffer(end - start)
+      })
+      return part
+    })
+
+    await expect(
+      uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+        bucketId: bucketId('bucket'),
+        fileName: 'prehash-between-slices.bin',
+        source,
+        partSize: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+
+    expect(slice).toHaveBeenCalledTimes(1)
+    expect(slice).toHaveBeenCalledWith(0, 2)
+  })
+
+  it('passes the signal to a pending whole-file prehash read', async () => {
+    const controller = new AbortController()
+    const reason = new Error('stop pending prehash read')
+    const started = deferred<void>()
+    const pendingRead = deferred<ArrayBuffer>()
+    const source = new BufferSource(deterministicBytes(4))
+    const part = new BufferSource(deterministicBytes(2))
+    vi.spyOn(source, 'slice').mockReturnValue(part)
+    const read = vi.spyOn(part, 'toArrayBuffer').mockImplementation((options) => {
+      options?.signal?.addEventListener('abort', () => pendingRead.reject(reason), { once: true })
+      started.resolve()
+      return pendingRead.promise
+    })
+    const upload = uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+      bucketId: bucketId('bucket'),
+      fileName: 'prehash-pending-read.bin',
+      source,
+      partSize: 2,
+      signal: controller.signal,
+    })
+    const settled = upload.catch((error: unknown) => error)
+
+    try {
+      await started.promise
+      expect(read).toHaveBeenCalledWith({ signal: controller.signal })
+      controller.abort(reason)
+      expect(await settled).toBe(reason)
+    } finally {
+      pendingRead.reject(reason)
+      await settled
+    }
   })
 })
 
