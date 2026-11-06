@@ -9,7 +9,7 @@ import { BufferSource } from '../streams/source.ts'
 import { daysFromNow, jsonErrorResponse, jsonResponse, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { RetentionMode } from '../types/lock.ts'
-import { withFreshUploadUrlRetry } from './retry.ts'
+import { resolveRetryUploadConnectionFaults, withFreshUploadUrlRetry } from './retry.ts'
 import { uploadSmallFile } from './single.ts'
 
 type Failure =
@@ -96,6 +96,14 @@ async function harness(clientDefault?: boolean, failure: Failure = 'connection')
 }
 
 describe('single-file connection-fault retry policy', () => {
+  it.each([
+    { value: undefined, expected: true },
+    { value: true, expected: true },
+    { value: false, expected: false },
+  ])('resolves connection-fault retry default: $value', ({ value, expected }) => {
+    expect(resolveRetryUploadConnectionFaults(value)).toBe(expected)
+  })
+
   for (const facade of ['bucket', 'file'] as const) {
     it.each([
       { name: 'default on', clientValue: undefined, callValue: undefined, retries: true },
