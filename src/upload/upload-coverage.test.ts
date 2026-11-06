@@ -3466,6 +3466,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       )
       const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
       const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+      const listParts = vi.spyOn(client.raw, 'listParts')
       const rejected: string[] = []
       const upload = uploadLargeFile(client.raw, client.accountInfo, {
         bucketId: bucket.id,
@@ -3487,13 +3488,14 @@ describe('uploadLargeFile fresh multipart metadata', () => {
         expect(uploadPart).not.toHaveBeenCalled()
       } else {
         const result = await upload
-        expect(rejected).toEqual(['file-info-mismatch'])
         expect(result.fileId).not.toBe(start.fileId)
         expect(result.fileInfo['large_file_sha1']).toBe(changedSha1)
         expect(startLargeFile).toHaveBeenCalledOnce()
         const downloaded = await bucket.download(fileName)
         expect(await readStream(downloaded.body)).toEqual(changed)
       }
+      expect(rejected).toEqual(['file-info-mismatch'])
+      expect(listParts).not.toHaveBeenCalled()
 
       const unfinished = await client.raw.listUnfinishedLargeFiles(
         client.accountInfo.getApiUrl(),
