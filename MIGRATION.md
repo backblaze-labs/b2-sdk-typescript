@@ -30,12 +30,28 @@ same part number.
 To disable connection-fault retries for an upload, set its retry budget to zero:
 
 ```ts
-await bucket.upload({
-  fileName: 'data.bin',
-  source,
-  retry: { maxRetries: 0 },
-})
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithoutRetries(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+    retry: { maxRetries: 0 },
+  })
+}
+
+uploadWithoutRetries().catch(console.error)
 ```
+
+Replace the application key and existing bucket name before running the example.
 
 This also disables that upload's 503, `BadAuthTokenError`, and bad-upload-URL
 retries that v0.4.0 performed by default. It does not restore the complete
