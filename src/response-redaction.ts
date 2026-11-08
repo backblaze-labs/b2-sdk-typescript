@@ -91,7 +91,9 @@ function responseForPersistence<T extends AuthorizationTokenResponse>(
  *
  * @param response - Authorize response to render consistently in diagnostics.
  *
- * @returns The response with non-enumerable diagnostic hooks installed.
+ * @returns The response with non-enumerable diagnostic hooks installed. Under Bun, the response
+ * has a one-level prototype wrapper that carries an inherited non-enumerable `toJSON` hook;
+ * Node and browser prototypes are unchanged.
  *
  * @internal
  */
@@ -107,7 +109,9 @@ export function redactAuthorizeAccountResponse(
  *
  * @param response - Download-authorization response to render consistently in diagnostics.
  *
- * @returns The response with non-enumerable diagnostic hooks installed.
+ * @returns The response with non-enumerable diagnostic hooks installed. Under Bun, the response
+ * has a one-level prototype wrapper that carries an inherited non-enumerable `toJSON` hook;
+ * Node and browser prototypes are unchanged.
  *
  * @internal
  */
@@ -123,7 +127,9 @@ export function redactDownloadAuthorizationResponse(
  *
  * @param response - Upload-URL response to render consistently in diagnostics.
  *
- * @returns The response with non-enumerable diagnostic hooks installed.
+ * @returns The response with non-enumerable diagnostic hooks installed. Under Bun, the response
+ * has a one-level prototype wrapper that carries an inherited non-enumerable `toJSON` hook;
+ * Node and browser prototypes are unchanged.
  *
  * @internal
  */

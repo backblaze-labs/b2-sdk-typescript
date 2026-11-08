@@ -142,50 +142,87 @@ describe('credential redaction Node diagnostics', () => {
       'authorize',
       ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.authorize,
+      false,
     ],
     [
       'download authorization',
       ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.downloadAuthorization,
+      false,
     ],
     [
       'upload URL',
       ['bucketId', 'uploadUrl', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
+      false,
     ],
     [
       'raw authorize',
       ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.rawAuthorize,
+      false,
     ],
     [
       'raw download authorization',
       ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.rawDownloadAuthorization,
+      false,
+    ],
+    [
+      'upload URL under simulated Bun',
+      ['bucketId', 'uploadUrl', 'authorizationToken'],
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
+      true,
     ],
   ] as const)(
     '%s response JSON and inspect redact its authorization token',
-    async (_name, expectedKeys, select) => {
-      const response = select(await tokenResponseFixture())
-      const token = response.authorizationToken
+    async (_name, expectedKeys, select, simulateBun) => {
+      const previousBun = Object.getOwnPropertyDescriptor(globalThis, 'Bun')
+      if (simulateBun) Object.defineProperty(globalThis, 'Bun', { value: {}, configurable: true })
 
-      expect(response.authorizationToken).toBe(token)
-      expect(JSON.stringify(response)).not.toContain(token)
-      expect(inspect(response)).not.toContain(token)
-      expect(JSON.stringify(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
-      expect(inspect(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
-      expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
-      expect(
-        Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
-          ?.enumerable,
-      ).toBe(false)
-      expect(Object.getPrototypeOf(response)).toBe(Object.prototype)
-      expect(Object.keys(response)).toEqual(expectedKeys)
-      expect(Object.keys({ ...response })).toEqual(expectedKeys)
-      expect({ ...response }).toHaveProperty('authorizationToken', token)
-      expect(() => deepStrictEqual(response, { ...response })).not.toThrow()
+      try {
+        const response = select(await tokenResponseFixture())
+        const token = response.authorizationToken
+
+        expect(response.authorizationToken).toBe(token)
+        expect(JSON.stringify(response)).not.toContain(token)
+        expect(inspect(response)).not.toContain(token)
+        expect(JSON.stringify(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+        expect(inspect(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+        expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
+        expect(
+          Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
+            ?.enumerable,
+        ).toBe(false)
+        const prototype = Object.getPrototypeOf(response)
+        if ('Bun' in globalThis) {
+          const inheritedToJson = Object.getOwnPropertyDescriptor(prototype, 'toJSON')
+          const inheritedToJsonValue = inheritedToJson?.value
+
+          expect(prototype).not.toBe(Object.prototype)
+          expect(inheritedToJson?.enumerable).toBe(false)
+          expect(inheritedToJsonValue).toBeTypeOf('function')
+          const inheritedJson = JSON.stringify((inheritedToJsonValue as () => unknown)())
+          expect(inheritedJson).not.toContain(token)
+          expect(inheritedJson).toContain(AUTHORIZATION_TOKEN_REDACTED)
+        } else {
+          expect(prototype).toBe(Object.prototype)
+          expect(() => deepStrictEqual(response, { ...response })).not.toThrow()
+        }
+        expect(Object.keys(response)).toEqual(expectedKeys)
+        expect(Object.keys({ ...response })).toEqual(expectedKeys)
+        expect({ ...response }).toHaveProperty('authorizationToken', token)
+      } finally {
+        if (simulateBun) {
+          if (previousBun === undefined) {
+            delete (globalThis as Record<string, unknown>)['Bun']
+          } else {
+            Object.defineProperty(globalThis, 'Bun', previousBun)
+          }
+        }
+      }
     },
   )
 
