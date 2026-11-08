@@ -20,6 +20,7 @@ export const CREDENTIAL_BEARING_EXPORTS: Readonly<Record<string, readonly string
 export const REVIEWED_EXPORTS: Readonly<Record<string, readonly string[]>> = {
   '.': [
     'AccessDeniedError',
+    'B2AuthorizationTokenRedactedError',
     'B2BucketConfigurationError',
     'B2Client',
     'B2Error',
@@ -180,6 +181,7 @@ export const REVIEWED_EXPORTS: Readonly<Record<string, readonly string[]>> = {
   ],
   './errors': [
     'AccessDeniedError',
+    'B2AuthorizationTokenRedactedError',
     'B2BucketConfigurationError',
     'B2Error',
     'B2InsufficientCapabilityError',

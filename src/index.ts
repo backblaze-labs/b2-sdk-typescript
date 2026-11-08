@@ -54,6 +54,7 @@ export type { DownloadResult, HeadResult } from './download/single.ts'
 export type { B2BucketConfigurationErrorField, B2ErrorOptions } from './errors/index.ts'
 export {
   AccessDeniedError,
+  B2AuthorizationTokenRedactedError,
   B2BucketConfigurationError,
   B2Error,
   B2InsufficientCapabilityError,

@@ -30,9 +30,11 @@ export class InMemoryAccountInfo implements AccountInfo {
    * values retain their existing references.
    *
    * @param auth - The authorize account response to store.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `auth` was rebuilt from diagnostic JSON.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
-    assertAuthorizationTokenCanBeRehydrated(auth, 'Authorize response')
+    assertAuthorizationTokenCanBeRehydrated(auth, 'authorizeAccountResponseForPersistence')
     this.#auth = { ...auth }
     this.#uploadUrls.clear()
     this.#partUploadUrls.clear()
@@ -219,9 +221,11 @@ export class InMemoryAccountInfo implements AccountInfo {
    *
    * @param fileId - The large file the part upload URL belongs to.
    * @param entry - The part upload URL entry to return to the pool.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
-    assertAuthorizationTokenCanBeRehydrated(entry, 'Upload part URL response')
+    assertAuthorizationTokenCanBeRehydrated(entry, 'getUploadPartUrlResponseForPersistence')
     this.#partUploadUrls.checkin(fileId, entry)
   }
 

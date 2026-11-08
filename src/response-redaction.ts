@@ -1,3 +1,4 @@
+import { B2AuthorizationTokenRedactedError } from './errors/index.ts'
 import type { AuthorizeAccountResponse } from './types/auth.ts'
 import type { DownloadAuthorizationResponse } from './types/download.ts'
 import type { GetUploadPartUrlResponse, GetUploadUrlResponse } from './types/upload.ts'
@@ -60,31 +61,31 @@ function redactAuthorizationTokenResponse<T extends AuthorizationTokenResponse>(
  * Rejects a response reconstructed from diagnostic JSON before it can be reused.
  *
  * @param response - Response that carries an authorization token.
- * @param responseName - Name used in the diagnostic error message.
+ * @param persistenceHelperName - Persistence helper to name in the diagnostic error message.
  *
- * @throws TypeError when the response carries the diagnostic placeholder.
+ * @throws B2AuthorizationTokenRedactedError when the response carries the diagnostic placeholder.
  *
  * @internal
  */
 export function assertAuthorizationTokenCanBeRehydrated(
   response: AuthorizationTokenResponse,
-  responseName: string,
+  persistenceHelperName: string,
 ): void {
   // Diagnostic JSON carries a placeholder, not a valid B2 bearer token. Reject it
   // before it produces a confusing authorization failure, matching the Partner
   // clone path in `src/partner/auth-clone.ts`.
   if (response.authorizationToken === AUTHORIZATION_TOKEN_REDACTED) {
-    throw new TypeError(
-      `${responseName} has a redacted authorization token; use its persistence helper before serializing`,
+    throw new B2AuthorizationTokenRedactedError(
+      `${persistenceHelperName} cannot rehydrate a redacted authorization token; use the original response with ${persistenceHelperName} before serializing, or reauthorize.`,
     )
   }
 }
 
 function responseForPersistence<T extends AuthorizationTokenResponse>(
   response: T,
-  responseName: string,
+  persistenceHelperName: string,
 ): T {
-  assertAuthorizationTokenCanBeRehydrated(response, responseName)
+  assertAuthorizationTokenCanBeRehydrated(response, persistenceHelperName)
   return { ...response }
 }
 
@@ -163,34 +164,40 @@ export function redactGetUploadPartUrlResponse(
  * The result preserves the real authorization token and can be serialized,
  * parsed, and passed to `AccountInfo.setAuth()`.
  *
+ * The returned value is raw bearer-token material. Store it only in encrypted
+ * or otherwise credential-grade durable storage, and never log it.
+ *
  * @param response - Authorize response to persist.
  *
  * @returns A plain authorize response with the real token preserved.
  *
- * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
- * rebuilt from diagnostic JSON.
+ * @throws B2AuthorizationTokenRedactedError if the response token is the diagnostic placeholder,
+ * such as on a response rebuilt from diagnostic JSON.
  */
 export function authorizeAccountResponseForPersistence(
   response: AuthorizeAccountResponse,
 ): AuthorizeAccountResponse {
-  return responseForPersistence(response, 'Authorize response')
+  return responseForPersistence(response, 'authorizeAccountResponseForPersistence')
 }
 
 /**
  * Returns a hook-free download-authorization response suitable for trusted persistence.
  * The result preserves the real authorization token.
  *
+ * The returned value is raw bearer-token material. Store it only in encrypted
+ * or otherwise credential-grade durable storage, and never log it.
+ *
  * @param response - Download-authorization response to persist.
  *
  * @returns A plain download-authorization response with the real token preserved.
  *
- * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
- * rebuilt from diagnostic JSON.
+ * @throws B2AuthorizationTokenRedactedError if the response token is the diagnostic placeholder,
+ * such as on a response rebuilt from diagnostic JSON.
  */
 export function downloadAuthorizationResponseForPersistence(
   response: DownloadAuthorizationResponse,
 ): DownloadAuthorizationResponse {
-  return responseForPersistence(response, 'Download authorization response')
+  return responseForPersistence(response, 'downloadAuthorizationResponseForPersistence')
 }
 
 /**
@@ -198,17 +205,20 @@ export function downloadAuthorizationResponseForPersistence(
  * The result preserves the real authorization token and can be returned to an
  * upload URL pool.
  *
+ * The returned value is raw bearer-token material. Store it only in encrypted
+ * or otherwise credential-grade durable storage, and never log it.
+ *
  * @param response - Upload-URL response to persist.
  *
  * @returns A plain upload-URL response with the real token preserved.
  *
- * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
- * rebuilt from diagnostic JSON.
+ * @throws B2AuthorizationTokenRedactedError if the response token is the diagnostic placeholder,
+ * such as on a response rebuilt from diagnostic JSON.
  */
 export function getUploadUrlResponseForPersistence(
   response: GetUploadUrlResponse,
 ): GetUploadUrlResponse {
-  return responseForPersistence(response, 'Upload URL response')
+  return responseForPersistence(response, 'getUploadUrlResponseForPersistence')
 }
 
 /**
@@ -216,15 +226,18 @@ export function getUploadUrlResponseForPersistence(
  * The result preserves the real authorization token and can be returned to an
  * upload URL pool.
  *
+ * The returned value is raw bearer-token material. Store it only in encrypted
+ * or otherwise credential-grade durable storage, and never log it.
+ *
  * @param response - Upload-part-URL response to persist.
  *
  * @returns A plain upload-part-URL response with the real token preserved.
  *
- * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
- * rebuilt from diagnostic JSON.
+ * @throws B2AuthorizationTokenRedactedError if the response token is the diagnostic placeholder,
+ * such as on a response rebuilt from diagnostic JSON.
  */
 export function getUploadPartUrlResponseForPersistence(
   response: GetUploadPartUrlResponse,
 ): GetUploadPartUrlResponse {
-  return responseForPersistence(response, 'Upload part URL response')
+  return responseForPersistence(response, 'getUploadPartUrlResponseForPersistence')
 }

@@ -14,6 +14,7 @@ import { BackupClient } from './backup/index.ts'
 import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
 import {
   authorizeAccountResponseForPersistence,
+  B2AuthorizationTokenRedactedError,
   B2Client,
   B2Object,
   Bucket,
@@ -305,18 +306,40 @@ describe('credential redaction Node diagnostics', () => {
     ) as typeof downloadAuthorization
     const redactedUploadUrl = JSON.parse(JSON.stringify(uploadUrl)) as typeof uploadUrl
     const redactedPartUploadUrl = JSON.parse(JSON.stringify(partUploadUrl)) as typeof partUploadUrl
-    expect(() => new InMemoryAccountInfo().setAuth(redactedAuthorize)).toThrow(TypeError)
-    expect(() => downloadAuthorizationResponseForPersistence(redactedDownload)).toThrow(TypeError)
-    expect(() => new UploadUrlPool().checkin(uploadUrl.bucketId, redactedUploadUrl)).toThrow(
-      TypeError,
+    for (const [helperName, attempt] of [
+      [
+        'authorizeAccountResponseForPersistence',
+        () => authorizeAccountResponseForPersistence(redactedAuthorize),
+      ],
+      [
+        'downloadAuthorizationResponseForPersistence',
+        () => downloadAuthorizationResponseForPersistence(redactedDownload),
+      ],
+      [
+        'getUploadUrlResponseForPersistence',
+        () => getUploadUrlResponseForPersistence(redactedUploadUrl),
+      ],
+      [
+        'getUploadPartUrlResponseForPersistence',
+        () => getUploadPartUrlResponseForPersistence(redactedPartUploadUrl),
+      ],
+    ] as const) {
+      expect(attempt).toThrow(B2AuthorizationTokenRedactedError)
+      expect(attempt).toThrow(helperName)
+    }
+
+    expect(() => new InMemoryAccountInfo().setAuth(redactedAuthorize)).toThrow(
+      B2AuthorizationTokenRedactedError,
     )
-    expect(() => getUploadPartUrlResponseForPersistence(redactedPartUploadUrl)).toThrow(TypeError)
+    expect(() => new UploadUrlPool().checkin(uploadUrl.bucketId, redactedUploadUrl)).toThrow(
+      B2AuthorizationTokenRedactedError,
+    )
     expect(() =>
       new InMemoryAccountInfo().returnPartUploadUrl(
         redactedPartUploadUrl.fileId,
         redactedPartUploadUrl,
       ),
-    ).toThrow(/Upload part URL response/)
+    ).toThrow(B2AuthorizationTokenRedactedError)
   })
 
   it('file-backed authorization persists the real token returned by authorize', async () => {

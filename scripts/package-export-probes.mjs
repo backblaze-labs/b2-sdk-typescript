@@ -58,6 +58,10 @@ export const publicExportProbes = [
     subpath: './errors',
     checks: [
       ["typeof entry.B2Error === 'function'", 'B2Error runtime export missing'],
+      [
+        "typeof entry.B2AuthorizationTokenRedactedError === 'function'",
+        'redacted authorization token error export missing',
+      ],
       ["typeof entry.classifyError === 'function'", 'classifyError runtime export missing'],
     ],
   },
