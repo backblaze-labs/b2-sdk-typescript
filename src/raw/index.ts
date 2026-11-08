@@ -91,6 +91,13 @@ export {
   assertValidBucketInfo,
   assertValidCorsRules,
 } from '../bucket-validation.ts'
+/** Hook-free authorization-token response copies, importable from the raw package entry. */
+export {
+  authorizeAccountResponseForPersistence,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+} from '../response-redaction.ts'
 export {
   BUCKET_INFO_KEY_MAX_BYTES,
   BUCKET_INFO_KEY_MIN_BYTES,
@@ -361,8 +368,8 @@ export class RawClient {
    *
    * @returns The authorization response with API URLs and credentials.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `authorizeAccountResponseForPersistence()`
-   * before serializing it for persistence.
+   * diagnostic placeholder. Import `authorizeAccountResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    */
   async authorizeAccount(
     applicationKeyId: string,
@@ -465,8 +472,8 @@ export class RawClient {
    *
    * @returns The upload URL and authorization token.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `getUploadUrlResponseForPersistence()` before
-   * serializing it for persistence.
+   * diagnostic placeholder. Import `getUploadUrlResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    *
    * @deprecated Use the options-bag overload: `getUploadUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -486,8 +493,8 @@ export class RawClient {
    *
    * @returns The upload URL and authorization token.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `getUploadUrlResponseForPersistence()` before
-   * serializing it for persistence.
+   * diagnostic placeholder. Import `getUploadUrlResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -888,8 +895,8 @@ export class RawClient {
    *
    * @returns The upload part URL and authorization token.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `getUploadPartUrlResponseForPersistence()` before
-   * serializing it for persistence.
+   * diagnostic placeholder. Import `getUploadPartUrlResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    *
    * @deprecated Use the options-bag overload: `getUploadPartUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -909,8 +916,8 @@ export class RawClient {
    *
    * @returns The upload part URL and authorization token.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `getUploadPartUrlResponseForPersistence()` before
-   * serializing it for persistence.
+   * diagnostic placeholder. Import `getUploadPartUrlResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    */
   async getUploadPartUrl(
     apiUrl: string,
@@ -1227,8 +1234,8 @@ export class RawClient {
    *
    * @returns The download authorization token for the specified file prefix.
    * `JSON.stringify()` and Node inspection replace its authorization token with a
-   * diagnostic placeholder. Call `downloadAuthorizationResponseForPersistence()`
-   * before serializing it for persistence.
+   * diagnostic placeholder. Import `downloadAuthorizationResponseForPersistence()` from
+   * `@backblaze-labs/b2-sdk/raw` before serializing it for persistence.
    */
   async getDownloadAuthorization(
     apiUrl: string,

@@ -34,7 +34,25 @@ export const publicExportProbes = [
   },
   {
     subpath: './raw',
-    checks: [["typeof entry.RawClient === 'function'", 'RawClient runtime export missing']],
+    checks: [
+      ["typeof entry.RawClient === 'function'", 'RawClient runtime export missing'],
+      [
+        "typeof entry.authorizeAccountResponseForPersistence === 'function'",
+        'authorize response persistence helper export missing',
+      ],
+      [
+        "typeof entry.downloadAuthorizationResponseForPersistence === 'function'",
+        'download authorization persistence helper export missing',
+      ],
+      [
+        "typeof entry.getUploadUrlResponseForPersistence === 'function'",
+        'upload URL persistence helper export missing',
+      ],
+      [
+        "typeof entry.getUploadPartUrlResponseForPersistence === 'function'",
+        'upload part URL persistence helper export missing',
+      ],
+    ],
   },
   {
     subpath: './errors',

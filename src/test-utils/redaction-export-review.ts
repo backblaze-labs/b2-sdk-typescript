@@ -169,9 +169,13 @@ export const REVIEWED_EXPORTS: Readonly<Record<string, readonly string[]>> = {
     'assertValidBucketConfiguration',
     'assertValidBucketInfo',
     'assertValidCorsRules',
+    'authorizeAccountResponseForPersistence',
     'buildFileInfoHeaders',
     'decodeFileName',
+    'downloadAuthorizationResponseForPersistence',
     'encodeFileName',
+    'getUploadPartUrlResponseForPersistence',
+    'getUploadUrlResponseForPersistence',
     'parseFileInfoHeaders',
   ],
   './errors': [
