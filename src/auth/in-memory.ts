@@ -1,3 +1,4 @@
+import { assertAuthorizationTokenCanBeRehydrated } from '../response-redaction.ts'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
@@ -28,6 +29,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param auth - The authorize account response to store.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
+    assertAuthorizationTokenCanBeRehydrated(auth, 'Authorize response')
     this.#auth = auth
     this.#uploadUrls.clear()
     this.#partUploadUrls.clear()

@@ -9,6 +9,7 @@ import {
 import type { RetryOptions } from './http/retry.ts'
 import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
+import { redactDownloadAuthorizationResponse } from './response-redaction.ts'
 import type {
   BucketDefaultRetention,
   BucketDefaultServerSideEncryption,
@@ -1240,11 +1241,12 @@ export class Bucket {
     fileNamePrefix: string,
     validDurationInSeconds: number,
   ): Promise<DownloadAuthorizationResponse> {
-    return this.#client.raw.getDownloadAuthorization(
+    const response = await this.#client.raw.getDownloadAuthorization(
       this.#client.accountInfo.getApiUrl(),
       this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id, fileNamePrefix, validDurationInSeconds },
     )
+    return redactDownloadAuthorizationResponse(response)
   }
 
   /**

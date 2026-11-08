@@ -17,6 +17,7 @@ import { assertValidBucketConfiguration } from '../bucket-validation.ts'
 import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
+import { redactGetUploadUrlResponse } from '../response-redaction.ts'
 import type {
   AllowedBucket,
   ApplicationKey,
@@ -495,13 +496,14 @@ export class RawClient {
     optionsOrSignal?: RawRequestOptions | AbortSignal,
     retry?: Partial<RetryOptions>,
   ): Promise<GetUploadUrlResponse> {
-    return this.postJson<GetUploadUrlResponse>(
+    const response = await this.postJson<GetUploadUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_url',
       request,
       normalizeRawRequestOptions(optionsOrSignal, retry),
     )
+    return redactGetUploadUrlResponse(response)
   }
 
   /**

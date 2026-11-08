@@ -11,8 +11,17 @@ import { FileAccountInfo } from './auth/file.ts'
 import { UploadUrlPool } from './auth/index.ts'
 import { BackupClient } from './backup/index.ts'
 import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
-import { B2Client, B2Object, Bucket, InMemoryAccountInfo } from './index.ts'
+import {
+  authorizeAccountResponseForPersistence,
+  B2Client,
+  B2Object,
+  Bucket,
+  downloadAuthorizationResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+  InMemoryAccountInfo,
+} from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
+import { AUTHORIZATION_TOKEN_REDACTED } from './response-redaction.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
 import {
@@ -59,6 +68,27 @@ async function fixture(store: AccountInfo = new InMemoryAccountInfo()) {
   return { auth, store, client, bucket, object: bucket.file('diagnostic.txt') }
 }
 
+async function tokenResponseFixture() {
+  const sim = new B2Simulator()
+  const client = new B2Client({
+    applicationKeyId: 'token-response-key-id',
+    applicationKey: 'token-response-key',
+    transport: sim.transport(),
+  })
+  const authorize = await client.authorize()
+  const bucket = await client.createBucket({
+    bucketName: 'token-response-diagnostics',
+    bucketType: BucketType.AllPrivate,
+  })
+  const downloadAuthorization = await bucket.getDownloadAuthorization('diagnostic/', 60)
+  const uploadUrl = await client.raw.getUploadUrl(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    { bucketId: bucket.id },
+  )
+  return { authorize, downloadAuthorization, uploadUrl }
+}
+
 function assertNoSecrets(rendered: string): void {
   for (const secret of SECRETS) expect(rendered).not.toContain(secret)
 }
@@ -97,6 +127,80 @@ function poolTokens(store: AccountInfo): void {
 }
 
 describe('credential redaction Node diagnostics', () => {
+  it.each([
+    [
+      'authorize',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.authorize,
+    ],
+    [
+      'download authorization',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
+        responses.downloadAuthorization,
+    ],
+    [
+      'upload URL',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
+    ],
+  ] as const)(
+    '%s response JSON and inspect redact its authorization token',
+    async (_name, select) => {
+      const response = select(await tokenResponseFixture())
+      const token = response.authorizationToken
+
+      expect(response.authorizationToken).toBe(token)
+      expect(JSON.stringify(response)).not.toContain(token)
+      expect(inspect(response)).not.toContain(token)
+      expect(JSON.stringify(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+      expect(inspect(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+      expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
+      expect(
+        Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
+          ?.enumerable,
+      ).toBe(false)
+      expect(Object.keys(response)).toEqual(Object.keys({ ...response }))
+      expect({ ...response }).toHaveProperty('authorizationToken', token)
+    },
+  )
+
+  it('response persistence helpers preserve real tokens and reject diagnostic placeholders', async () => {
+    const { authorize, downloadAuthorization, uploadUrl } = await tokenResponseFixture()
+    const persistedAuthorize = authorizeAccountResponseForPersistence(authorize)
+    const persistedDownload = downloadAuthorizationResponseForPersistence(downloadAuthorization)
+    const persistedUploadUrl = getUploadUrlResponseForPersistence(uploadUrl)
+
+    expect(JSON.parse(JSON.stringify(persistedAuthorize)).authorizationToken).toBe(
+      authorize.authorizationToken,
+    )
+    expect(JSON.parse(JSON.stringify(persistedDownload)).authorizationToken).toBe(
+      downloadAuthorization.authorizationToken,
+    )
+    expect(JSON.parse(JSON.stringify(persistedUploadUrl)).authorizationToken).toBe(
+      uploadUrl.authorizationToken,
+    )
+
+    const redactedAuthorize = JSON.parse(JSON.stringify(authorize)) as typeof authorize
+    const redactedDownload = JSON.parse(
+      JSON.stringify(downloadAuthorization),
+    ) as typeof downloadAuthorization
+    const redactedUploadUrl = JSON.parse(JSON.stringify(uploadUrl)) as typeof uploadUrl
+    expect(() => new InMemoryAccountInfo().setAuth(redactedAuthorize)).toThrow(TypeError)
+    expect(() => downloadAuthorizationResponseForPersistence(redactedDownload)).toThrow(TypeError)
+    expect(() => new UploadUrlPool().checkin(uploadUrl.bucketId, redactedUploadUrl)).toThrow(
+      TypeError,
+    )
+  })
+
+  it('file-backed authorization persists the real token returned by authorize', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture(store)
+    const response = await client.authorize()
+
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(
+      response.authorizationToken,
+    )
+  })
+
   it.each(surfaces)(
     'client summary isolates custom enumerable AccountInfo via %s',
     async (_name, render) => {

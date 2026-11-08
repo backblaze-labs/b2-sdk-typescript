@@ -126,6 +126,12 @@ export {
   type RawRequestOptions,
   type SseCDownloadKey,
 } from './raw/index.ts'
+/** Hook-free copies for persisting authorization-token response data. */
+export {
+  authorizeAccountResponseForPersistence,
+  downloadAuthorizationResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+} from './response-redaction.ts'
 export { IncrementalSha1, IncrementalSha256, sha1Hex, sha256Hex } from './streams/hash.ts'
 export type { ProgressEvent, ProgressListener } from './streams/progress.ts'
 export type { ContentSource, FileSourcePath } from './streams/source.ts'

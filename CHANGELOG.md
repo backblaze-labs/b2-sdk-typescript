@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `JSON.stringify()` now redacts `authorizationToken` on the result of `B2Client.authorize()`. Use `authorizeAccountResponseForPersistence()` when serializing that response for persistence.
+- Authorization, download-authorization, and upload-URL responses now use consistent authorization-token redaction in JSON and inspection diagnostics.
 - **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
 - **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,

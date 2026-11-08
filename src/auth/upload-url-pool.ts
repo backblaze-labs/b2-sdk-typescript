@@ -1,3 +1,4 @@
+import { assertAuthorizationTokenCanBeRehydrated } from '../response-redaction.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 
 /**
@@ -29,6 +30,7 @@ export class UploadUrlPool {
    * @param entry - The upload URL entry to return to the pool.
    */
   checkin(key: string, entry: UploadUrlEntry): void {
+    assertAuthorizationTokenCanBeRehydrated(entry, 'Upload URL response')
     let pool = this.#pools.get(key)
     if (!pool) {
       pool = []

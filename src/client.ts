@@ -10,6 +10,7 @@ import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 import { redactUrlForError } from './internal/url-redaction.ts'
 import { APPLICATION_KEY_REDACTED } from './partner/redaction-placeholders.ts'
 import { RawClient } from './raw/index.ts'
+import { redactAuthorizeAccountResponse } from './response-redaction.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
   BucketDefaultServerSideEncryptionSetting,
@@ -211,7 +212,7 @@ export class B2Client {
     throwIfSignalAborted(options?.signal)
     this.#accountInfo.setAuth(auth)
     this.lockUrlGuard(auth)
-    return auth
+    return redactAuthorizeAccountResponse({ ...auth })
   }
 
   /**
