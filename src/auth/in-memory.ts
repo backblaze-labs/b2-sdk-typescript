@@ -218,6 +218,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    * @param entry - The part upload URL entry to return to the pool.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
+    assertAuthorizationTokenCanBeRehydrated(entry, 'Upload part URL response')
     this.#partUploadUrls.checkin(fileId, entry)
   }
 

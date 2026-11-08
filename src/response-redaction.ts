@@ -1,6 +1,6 @@
 import type { AuthorizeAccountResponse } from './types/auth.ts'
 import type { DownloadAuthorizationResponse } from './types/download.ts'
-import type { GetUploadUrlResponse } from './types/upload.ts'
+import type { GetUploadPartUrlResponse, GetUploadUrlResponse } from './types/upload.ts'
 
 /** Placeholder used when an authorization token appears in diagnostic output. */
 export const AUTHORIZATION_TOKEN_REDACTED = '[redacted authorization token]'
@@ -138,6 +138,24 @@ export function redactGetUploadUrlResponse(response: GetUploadUrlResponse): GetU
 }
 
 /**
+ * Adds non-enumerable JSON and Node inspection hooks to an upload-part-URL response.
+ * Direct `authorizationToken` access continues to return the real token.
+ *
+ * @param response - Upload-part-URL response to render consistently in diagnostics.
+ *
+ * @returns The response with non-enumerable diagnostic hooks installed. Under Bun, the response
+ * has a one-level prototype wrapper that carries an inherited non-enumerable `toJSON` hook;
+ * Node and browser prototypes are unchanged.
+ *
+ * @internal
+ */
+export function redactGetUploadPartUrlResponse(
+  response: GetUploadPartUrlResponse,
+): GetUploadPartUrlResponse {
+  return redactAuthorizationTokenResponse(response)
+}
+
+/**
  * Returns a hook-free authorize response suitable for trusted persistence.
  * The result preserves the real authorization token and can be serialized,
  * parsed, and passed to `AccountInfo.setAuth()`.
@@ -179,4 +197,19 @@ export function getUploadUrlResponseForPersistence(
   response: GetUploadUrlResponse,
 ): GetUploadUrlResponse {
   return responseForPersistence(response, 'Upload URL response')
+}
+
+/**
+ * Returns a hook-free upload-part-URL response suitable for trusted persistence.
+ * The result preserves the real authorization token and can be returned to an
+ * upload URL pool.
+ *
+ * @param response - Upload-part-URL response to persist.
+ *
+ * @returns A plain upload-part-URL response with the real token preserved.
+ */
+export function getUploadPartUrlResponseForPersistence(
+  response: GetUploadPartUrlResponse,
+): GetUploadPartUrlResponse {
+  return responseForPersistence(response, 'Upload part URL response')
 }

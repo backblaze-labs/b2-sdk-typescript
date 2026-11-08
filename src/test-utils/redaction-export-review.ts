@@ -134,6 +134,7 @@ export const REVIEWED_EXPORTS: Readonly<Record<string, readonly string[]>> = {
     'downloadAuthorizationResponseForPersistence',
     'fileId',
     'getTransportUrlGuard',
+    'getUploadPartUrlResponseForPersistence',
     'getUploadUrlResponseForPersistence',
     'groupId',
     'keyId',

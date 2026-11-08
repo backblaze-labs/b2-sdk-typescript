@@ -18,6 +18,7 @@ import {
   B2Object,
   Bucket,
   downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
   getUploadUrlResponseForPersistence,
   InMemoryAccountInfo,
 } from './index.ts'
@@ -87,6 +88,20 @@ async function tokenResponseFixture() {
     client.accountInfo.getAuthToken(),
     { bucketId: bucket.id },
   )
+  const largeFile = await client.raw.startLargeFile(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    {
+      bucketId: bucket.id,
+      fileName: 'token-response-diagnostics.bin',
+      contentType: 'application/octet-stream',
+    },
+  )
+  const partUploadUrl = await client.raw.getUploadPartUrl(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    { fileId: largeFile.fileId },
+  )
   const rawAuthorize = await client.raw.authorizeAccount(
     'token-response-key-id',
     'token-response-key',
@@ -96,7 +111,14 @@ async function tokenResponseFixture() {
     client.accountInfo.getAuthToken(),
     { bucketId: bucket.id, fileNamePrefix: 'raw-diagnostic/', validDurationInSeconds: 60 },
   )
-  return { authorize, downloadAuthorization, uploadUrl, rawAuthorize, rawDownloadAuthorization }
+  return {
+    authorize,
+    downloadAuthorization,
+    uploadUrl,
+    partUploadUrl,
+    rawAuthorize,
+    rawDownloadAuthorization,
+  }
 }
 
 function assertNoSecrets(rendered: string): void {
@@ -155,6 +177,12 @@ describe('credential redaction Node diagnostics', () => {
       'upload URL',
       ['bucketId', 'uploadUrl', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
+      false,
+    ],
+    [
+      'upload part URL',
+      ['fileId', 'uploadUrl', 'authorizationToken'],
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.partUploadUrl,
       false,
     ],
     [
@@ -251,10 +279,12 @@ describe('credential redaction Node diagnostics', () => {
   })
 
   it('response persistence helpers preserve real tokens and reject diagnostic placeholders', async () => {
-    const { authorize, downloadAuthorization, uploadUrl } = await tokenResponseFixture()
+    const { authorize, downloadAuthorization, uploadUrl, partUploadUrl } =
+      await tokenResponseFixture()
     const persistedAuthorize = authorizeAccountResponseForPersistence(authorize)
     const persistedDownload = downloadAuthorizationResponseForPersistence(downloadAuthorization)
     const persistedUploadUrl = getUploadUrlResponseForPersistence(uploadUrl)
+    const persistedPartUploadUrl = getUploadPartUrlResponseForPersistence(partUploadUrl)
 
     expect(JSON.parse(JSON.stringify(persistedAuthorize)).authorizationToken).toBe(
       authorize.authorizationToken,
@@ -265,17 +295,28 @@ describe('credential redaction Node diagnostics', () => {
     expect(JSON.parse(JSON.stringify(persistedUploadUrl)).authorizationToken).toBe(
       uploadUrl.authorizationToken,
     )
+    expect(JSON.parse(JSON.stringify(persistedPartUploadUrl)).authorizationToken).toBe(
+      partUploadUrl.authorizationToken,
+    )
 
     const redactedAuthorize = JSON.parse(JSON.stringify(authorize)) as typeof authorize
     const redactedDownload = JSON.parse(
       JSON.stringify(downloadAuthorization),
     ) as typeof downloadAuthorization
     const redactedUploadUrl = JSON.parse(JSON.stringify(uploadUrl)) as typeof uploadUrl
+    const redactedPartUploadUrl = JSON.parse(JSON.stringify(partUploadUrl)) as typeof partUploadUrl
     expect(() => new InMemoryAccountInfo().setAuth(redactedAuthorize)).toThrow(TypeError)
     expect(() => downloadAuthorizationResponseForPersistence(redactedDownload)).toThrow(TypeError)
     expect(() => new UploadUrlPool().checkin(uploadUrl.bucketId, redactedUploadUrl)).toThrow(
       TypeError,
     )
+    expect(() => getUploadPartUrlResponseForPersistence(redactedPartUploadUrl)).toThrow(TypeError)
+    expect(() =>
+      new InMemoryAccountInfo().returnPartUploadUrl(
+        redactedPartUploadUrl.fileId,
+        redactedPartUploadUrl,
+      ),
+    ).toThrow(/Upload part URL response/)
   })
 
   it('file-backed authorization persists the real token returned by authorize', async () => {

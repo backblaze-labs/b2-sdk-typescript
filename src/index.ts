@@ -130,6 +130,7 @@ export {
 export {
   authorizeAccountResponseForPersistence,
   downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
   getUploadUrlResponseForPersistence,
 } from './response-redaction.ts'
 export { IncrementalSha1, IncrementalSha256, sha1Hex, sha256Hex } from './streams/hash.ts'

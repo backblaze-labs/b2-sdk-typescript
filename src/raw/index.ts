@@ -20,6 +20,7 @@ import type { HttpTransport } from '../http/transport.ts'
 import {
   redactAuthorizeAccountResponse,
   redactDownloadAuthorizationResponse,
+  redactGetUploadPartUrlResponse,
   redactGetUploadUrlResponse,
 } from '../response-redaction.ts'
 import type {
@@ -886,6 +887,9 @@ export class RawClient {
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload part URL and authorization token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `getUploadPartUrlResponseForPersistence()` before
+   * serializing it for persistence.
    *
    * @deprecated Use the options-bag overload: `getUploadPartUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -904,6 +908,9 @@ export class RawClient {
    * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The upload part URL and authorization token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `getUploadPartUrlResponseForPersistence()` before
+   * serializing it for persistence.
    */
   async getUploadPartUrl(
     apiUrl: string,
@@ -928,13 +935,14 @@ export class RawClient {
     optionsOrSignal?: RawRequestOptions | AbortSignal,
     retry?: Partial<RetryOptions>,
   ): Promise<GetUploadPartUrlResponse> {
-    return this.postJson<GetUploadPartUrlResponse>(
+    const response = await this.postJson<GetUploadPartUrlResponse>(
       apiUrl,
       authToken,
       'b2_get_upload_part_url',
       request,
       normalizeRawRequestOptions(optionsOrSignal, retry),
     )
+    return redactGetUploadPartUrlResponse(response)
   }
 
   /**
