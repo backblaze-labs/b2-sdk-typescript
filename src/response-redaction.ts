@@ -22,17 +22,7 @@ function redactedAuthorizationTokenJson<T extends AuthorizationTokenResponse>(
   return { ...response, authorizationToken: AUTHORIZATION_TOKEN_REDACTED }
 }
 
-// Bun/WebKit only honor object toJSON hooks when they are inherited, while Node
-// honors own hooks. Install both shapes for consistent diagnostic serialization.
-function installPortableJsonHook<T extends object>(target: T, toJson: () => unknown): void {
-  const originalPrototype = Object.getPrototypeOf(target)
-  const redactionPrototype = Object.create(originalPrototype) as object
-  Object.defineProperty(redactionPrototype, 'toJSON', {
-    value: toJson,
-    enumerable: false,
-    configurable: true,
-  })
-  Object.setPrototypeOf(target, redactionPrototype)
+function installJsonHook<T extends object>(target: T, toJson: () => unknown): void {
   Object.defineProperty(target, 'toJSON', {
     value: toJson,
     enumerable: false,
@@ -45,7 +35,7 @@ function redactAuthorizationTokenResponse<T extends AuthorizationTokenResponse>(
   const toRedactedJson = (): RedactedAuthorizationTokenResponseJson<T> =>
     redactedAuthorizationTokenJson(target)
 
-  installPortableJsonHook(target, toRedactedJson)
+  installJsonHook(target, toRedactedJson)
   Object.defineProperty(target, inspectSymbol, {
     value: toRedactedJson,
     enumerable: false,

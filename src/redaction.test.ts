@@ -79,7 +79,16 @@ async function tokenResponseFixture() {
     client.accountInfo.getAuthToken(),
     { bucketId: bucket.id },
   )
-  return { authorize, downloadAuthorization, uploadUrl }
+  const rawAuthorize = await client.raw.authorizeAccount(
+    'token-response-key-id',
+    'token-response-key',
+  )
+  const rawDownloadAuthorization = await client.raw.getDownloadAuthorization(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    { bucketId: bucket.id, fileNamePrefix: 'raw-diagnostic/', validDurationInSeconds: 60 },
+  )
+  return { authorize, downloadAuthorization, uploadUrl, rawAuthorize, rawDownloadAuthorization }
 }
 
 function assertNoSecrets(rendered: string): void {
@@ -105,6 +114,15 @@ describe('credential redaction JSON and spread', () => {
     [
       'upload URL',
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
+    ],
+    [
+      'raw authorize',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.rawAuthorize,
+    ],
+    [
+      'raw download authorization',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
+        responses.rawDownloadAuthorization,
     ],
   ] as const)(
     '%s response JSON redacts its authorization token without changing enumerable data',

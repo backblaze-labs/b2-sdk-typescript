@@ -1,3 +1,4 @@
+import { deepStrictEqual } from 'node:assert/strict'
 import { Console } from 'node:console'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -86,7 +87,16 @@ async function tokenResponseFixture() {
     client.accountInfo.getAuthToken(),
     { bucketId: bucket.id },
   )
-  return { authorize, downloadAuthorization, uploadUrl }
+  const rawAuthorize = await client.raw.authorizeAccount(
+    'token-response-key-id',
+    'token-response-key',
+  )
+  const rawDownloadAuthorization = await client.raw.getDownloadAuthorization(
+    client.accountInfo.getApiUrl(),
+    client.accountInfo.getAuthToken(),
+    { bucketId: bucket.id, fileNamePrefix: 'raw-diagnostic/', validDurationInSeconds: 60 },
+  )
+  return { authorize, downloadAuthorization, uploadUrl, rawAuthorize, rawDownloadAuthorization }
 }
 
 function assertNoSecrets(rendered: string): void {
@@ -141,6 +151,15 @@ describe('credential redaction Node diagnostics', () => {
       'upload URL',
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
     ],
+    [
+      'raw authorize',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.rawAuthorize,
+    ],
+    [
+      'raw download authorization',
+      (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
+        responses.rawDownloadAuthorization,
+    ],
   ] as const)(
     '%s response JSON and inspect redact its authorization token',
     async (_name, select) => {
@@ -157,8 +176,10 @@ describe('credential redaction Node diagnostics', () => {
         Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
           ?.enumerable,
       ).toBe(false)
+      expect(Object.getPrototypeOf(response)).toBe(Object.prototype)
       expect(Object.keys(response)).toEqual(Object.keys({ ...response }))
       expect({ ...response }).toHaveProperty('authorizationToken', token)
+      expect(() => deepStrictEqual(response, { ...response })).not.toThrow()
     },
   )
 

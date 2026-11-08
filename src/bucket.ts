@@ -9,7 +9,6 @@ import {
 import type { RetryOptions } from './http/retry.ts'
 import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
-import { redactDownloadAuthorizationResponse } from './response-redaction.ts'
 import type {
   BucketDefaultRetention,
   BucketDefaultServerSideEncryption,
@@ -1236,17 +1235,19 @@ export class Bucket {
    * @param validDurationInSeconds - How long the authorization is valid (1-604800 seconds).
    *
    * @returns The download authorization response containing a time-limited token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `downloadAuthorizationResponseForPersistence()`
+   * before serializing it for persistence.
    */
   async getDownloadAuthorization(
     fileNamePrefix: string,
     validDurationInSeconds: number,
   ): Promise<DownloadAuthorizationResponse> {
-    const response = await this.#client.raw.getDownloadAuthorization(
+    return this.#client.raw.getDownloadAuthorization(
       this.#client.accountInfo.getApiUrl(),
       this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id, fileNamePrefix, validDurationInSeconds },
     )
-    return redactDownloadAuthorizationResponse(response)
   }
 
   /**

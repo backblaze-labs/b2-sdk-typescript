@@ -17,7 +17,11 @@ import { assertValidBucketConfiguration } from '../bucket-validation.ts'
 import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
-import { redactGetUploadUrlResponse } from '../response-redaction.ts'
+import {
+  redactAuthorizeAccountResponse,
+  redactDownloadAuthorizationResponse,
+  redactGetUploadUrlResponse,
+} from '../response-redaction.ts'
 import type {
   AllowedBucket,
   ApplicationKey,
@@ -355,6 +359,9 @@ export class RawClient {
    * @param options - Optional request controls.
    *
    * @returns The authorization response with API URLs and credentials.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `authorizeAccountResponseForPersistence()`
+   * before serializing it for persistence.
    */
   async authorizeAccount(
     applicationKeyId: string,
@@ -372,7 +379,9 @@ export class RawClient {
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
-    return normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>())
+    return redactAuthorizeAccountResponse(
+      normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>()),
+    )
   }
 
   // --- Buckets ---
@@ -454,6 +463,9 @@ export class RawClient {
    * @param retry - Optional per-request retry override.
    *
    * @returns The upload URL and authorization token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `getUploadUrlResponseForPersistence()` before
+   * serializing it for persistence.
    *
    * @deprecated Use the options-bag overload: `getUploadUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -472,6 +484,9 @@ export class RawClient {
    * @param options - Optional request controls such as cancellation and retry overrides.
    *
    * @returns The upload URL and authorization token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `getUploadUrlResponseForPersistence()` before
+   * serializing it for persistence.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -1203,18 +1218,22 @@ export class RawClient {
    * @param request - The API request parameters.
    *
    * @returns The download authorization token for the specified file prefix.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `downloadAuthorizationResponseForPersistence()`
+   * before serializing it for persistence.
    */
   async getDownloadAuthorization(
     apiUrl: string,
     authToken: string,
     request: DownloadAuthorizationRequest,
   ): Promise<DownloadAuthorizationResponse> {
-    return this.postJson<DownloadAuthorizationResponse>(
+    const response = await this.postJson<DownloadAuthorizationResponse>(
       apiUrl,
       authToken,
       'b2_get_download_authorization',
       request,
     )
+    return redactDownloadAuthorizationResponse(response)
   }
 
   // --- Keys ---
