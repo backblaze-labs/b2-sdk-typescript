@@ -30,7 +30,7 @@ export class InMemoryAccountInfo implements AccountInfo {
    */
   setAuth(auth: AuthorizeAccountResponse): void {
     assertAuthorizationTokenCanBeRehydrated(auth, 'Authorize response')
-    this.#auth = auth
+    this.#auth = { ...auth }
     this.#uploadUrls.clear()
     this.#partUploadUrls.clear()
   }
