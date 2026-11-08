@@ -70,6 +70,9 @@ export function assertAuthorizationTokenCanBeRehydrated(
   response: AuthorizationTokenResponse,
   responseName: string,
 ): void {
+  // Diagnostic JSON carries a placeholder, not a valid B2 bearer token. Reject it
+  // before it produces a confusing authorization failure, matching the Partner
+  // clone path in `src/partner/auth-clone.ts`.
   if (response.authorizationToken === AUTHORIZATION_TOKEN_REDACTED) {
     throw new TypeError(
       `${responseName} has a redacted authorization token; use its persistence helper before serializing`,
@@ -163,6 +166,9 @@ export function redactGetUploadPartUrlResponse(
  * @param response - Authorize response to persist.
  *
  * @returns A plain authorize response with the real token preserved.
+ *
+ * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
+ * rebuilt from diagnostic JSON.
  */
 export function authorizeAccountResponseForPersistence(
   response: AuthorizeAccountResponse,
@@ -177,6 +183,9 @@ export function authorizeAccountResponseForPersistence(
  * @param response - Download-authorization response to persist.
  *
  * @returns A plain download-authorization response with the real token preserved.
+ *
+ * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
+ * rebuilt from diagnostic JSON.
  */
 export function downloadAuthorizationResponseForPersistence(
   response: DownloadAuthorizationResponse,
@@ -192,6 +201,9 @@ export function downloadAuthorizationResponseForPersistence(
  * @param response - Upload-URL response to persist.
  *
  * @returns A plain upload-URL response with the real token preserved.
+ *
+ * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
+ * rebuilt from diagnostic JSON.
  */
 export function getUploadUrlResponseForPersistence(
   response: GetUploadUrlResponse,
@@ -207,6 +219,9 @@ export function getUploadUrlResponseForPersistence(
  * @param response - Upload-part-URL response to persist.
  *
  * @returns A plain upload-part-URL response with the real token preserved.
+ *
+ * @throws TypeError if the response token is the diagnostic placeholder, such as on a response
+ * rebuilt from diagnostic JSON.
  */
 export function getUploadPartUrlResponseForPersistence(
   response: GetUploadPartUrlResponse,

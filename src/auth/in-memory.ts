@@ -25,6 +25,9 @@ export class InMemoryAccountInfo implements AccountInfo {
 
   /**
    * Store a fresh authorization response, replacing any previous state.
+   * Stores a shallow copy, so `getAuth()` returns a different outer object and
+   * later top-level mutations of `auth` do not reach the stored state. Nested
+   * values retain their existing references.
    *
    * @param auth - The authorize account response to store.
    */
