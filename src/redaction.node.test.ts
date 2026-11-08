@@ -22,7 +22,7 @@ import {
   InMemoryAccountInfo,
 } from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
-import { AUTHORIZATION_TOKEN_REDACTED } from './response-redaction.ts'
+import { AUTHORIZATION_TOKEN_REDACTED, redactGetUploadUrlResponse } from './response-redaction.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
 import {
@@ -140,29 +140,34 @@ describe('credential redaction Node diagnostics', () => {
   it.each([
     [
       'authorize',
+      ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.authorize,
     ],
     [
       'download authorization',
+      ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.downloadAuthorization,
     ],
     [
       'upload URL',
+      ['bucketId', 'uploadUrl', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
     ],
     [
       'raw authorize',
+      ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.rawAuthorize,
     ],
     [
       'raw download authorization',
+      ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.rawDownloadAuthorization,
     ],
   ] as const)(
     '%s response JSON and inspect redact its authorization token',
-    async (_name, select) => {
+    async (_name, expectedKeys, select) => {
       const response = select(await tokenResponseFixture())
       const token = response.authorizationToken
 
@@ -177,11 +182,36 @@ describe('credential redaction Node diagnostics', () => {
           ?.enumerable,
       ).toBe(false)
       expect(Object.getPrototypeOf(response)).toBe(Object.prototype)
-      expect(Object.keys(response)).toEqual(Object.keys({ ...response }))
+      expect(Object.keys(response)).toEqual(expectedKeys)
+      expect(Object.keys({ ...response })).toEqual(expectedKeys)
       expect({ ...response }).toHaveProperty('authorizationToken', token)
       expect(() => deepStrictEqual(response, { ...response })).not.toThrow()
     },
   )
+
+  it('uses an inherited JSON hook for a frozen Bun response', async () => {
+    const { uploadUrl } = await tokenResponseFixture()
+    const source = Object.freeze({ ...uploadUrl, authorizationToken: 'frozen-bun-token' })
+    const previousBun = Object.getOwnPropertyDescriptor(globalThis, 'Bun')
+    Object.defineProperty(globalThis, 'Bun', { value: {}, configurable: true })
+
+    try {
+      const response = redactGetUploadUrlResponse(source)
+      const prototype = Object.getPrototypeOf(response)
+
+      expect(prototype).not.toBe(Object.prototype)
+      expect(Object.getOwnPropertyDescriptor(prototype, 'toJSON')?.enumerable).toBe(false)
+      expect(JSON.stringify(response)).not.toContain(source.authorizationToken)
+      expect(JSON.stringify(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+      expect(Object.hasOwn(source, 'toJSON')).toBe(false)
+    } finally {
+      if (previousBun === undefined) {
+        delete (globalThis as Record<string, unknown>)['Bun']
+      } else {
+        Object.defineProperty(globalThis, 'Bun', previousBun)
+      }
+    }
+  })
 
   it('response persistence helpers preserve real tokens and reject diagnostic placeholders', async () => {
     const { authorize, downloadAuthorization, uploadUrl } = await tokenResponseFixture()

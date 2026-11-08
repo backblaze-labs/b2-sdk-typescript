@@ -104,29 +104,34 @@ describe('credential redaction JSON and spread', () => {
   it.each([
     [
       'authorize',
+      ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.authorize,
     ],
     [
       'download authorization',
+      ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.downloadAuthorization,
     ],
     [
       'upload URL',
+      ['bucketId', 'uploadUrl', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.uploadUrl,
     ],
     [
       'raw authorize',
+      ['accountId', 'authorizationToken', 'apiInfo', 'applicationKeyExpirationTimestamp'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) => responses.rawAuthorize,
     ],
     [
       'raw download authorization',
+      ['bucketId', 'fileNamePrefix', 'authorizationToken'],
       (responses: Awaited<ReturnType<typeof tokenResponseFixture>>) =>
         responses.rawDownloadAuthorization,
     ],
   ] as const)(
     '%s response JSON redacts its authorization token without changing enumerable data',
-    async (_name, select) => {
+    async (_name, expectedKeys, select) => {
       const response = select(await tokenResponseFixture())
       const token = response.authorizationToken
 
@@ -134,7 +139,8 @@ describe('credential redaction JSON and spread', () => {
       expect(JSON.stringify(response)).not.toContain(token)
       expect(JSON.stringify(response)).toContain(AUTHORIZATION_TOKEN_REDACTED)
       expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
-      expect(Object.keys(response)).toEqual(Object.keys({ ...response }))
+      expect(Object.keys(response)).toEqual(expectedKeys)
+      expect(Object.keys({ ...response })).toEqual(expectedKeys)
       expect({ ...response }).toHaveProperty('authorizationToken', token)
       expect(response).toEqual({ ...response })
     },

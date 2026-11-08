@@ -23,6 +23,18 @@ function redactedAuthorizationTokenJson<T extends AuthorizationTokenResponse>(
 }
 
 function installJsonHook<T extends object>(target: T, toJson: () => unknown): void {
+  // Bun's serializer resolves non-enumerable toJSON hooks only when inherited.
+  // Keep plain-object prototypes unchanged for Node and browser callers.
+  if ('Bun' in globalThis) {
+    const originalPrototype = Object.getPrototypeOf(target)
+    const redactionPrototype = Object.create(originalPrototype) as object
+    Object.defineProperty(redactionPrototype, 'toJSON', {
+      value: toJson,
+      enumerable: false,
+      configurable: true,
+    })
+    Object.setPrototypeOf(target, redactionPrototype)
+  }
   Object.defineProperty(target, 'toJSON', {
     value: toJson,
     enumerable: false,
