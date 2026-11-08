@@ -348,6 +348,17 @@ describe('UploadUrlPool', () => {
     expect(pool.checkout('key1')).toBe(entryA)
   })
 
+  it('names both persistence helpers when rejecting a redacted pooled entry', () => {
+    const checkin = () =>
+      pool.checkin('key1', {
+        ...entryA,
+        authorizationToken: AUTHORIZATION_TOKEN_REDACTED,
+      })
+
+    expect(checkin).toThrow('getUploadUrlResponseForPersistence')
+    expect(checkin).toThrow('getUploadPartUrlResponseForPersistence')
+  })
+
   it('evict removes the specific entry', () => {
     pool.checkin('key1', entryA)
     pool.evict('key1', entryA)

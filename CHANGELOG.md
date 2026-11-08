@@ -31,8 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `authorize()` responses retain the real token for direct property access but
   redact it in JSON and Node inspection diagnostics; `getAuth()` returns the
   plain stored copy with the real token, and file auth caches still persist it.
-  Reusing a response rebuilt from diagnostic JSON now throws
-  `B2AuthorizationTokenRedactedError` before it can be sent as a bearer token.
+  The persistence helpers, `setAuth()`, `returnUploadUrl()`,
+  `returnPartUploadUrl()`, and `UploadUrlPool.checkin()` reject a response
+  rebuilt from diagnostic JSON with `B2AuthorizationTokenRedactedError`.
+  Passing its authorization token directly to a raw method is not guarded and
+  instead fails with a server 401.
   Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
   now throw `Cannot read private member`, the same constraint as the Partner
   client. Keep these SDK instances outside

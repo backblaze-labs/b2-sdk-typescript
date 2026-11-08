@@ -190,6 +190,8 @@ export class InMemoryAccountInfo implements AccountInfo {
    *
    * @param bucketId - The bucket the upload URL belongs to.
    * @param entry - The upload URL entry to return to the pool.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
     this.#uploadUrls.checkin(bucketId as string, entry)

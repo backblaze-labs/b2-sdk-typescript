@@ -32,7 +32,10 @@ export class UploadUrlPool {
    * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   checkin(key: string, entry: UploadUrlEntry): void {
-    assertAuthorizationTokenCanBeRehydrated(entry, 'getUploadUrlResponseForPersistence')
+    assertAuthorizationTokenCanBeRehydrated(
+      entry,
+      'getUploadUrlResponseForPersistence or getUploadPartUrlResponseForPersistence',
+    )
     let pool = this.#pools.get(key)
     if (!pool) {
       pool = []

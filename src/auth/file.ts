@@ -224,6 +224,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * Reads the JSON file at the configured path and populates in-memory state.
    * If the file is missing or contains invalid JSON, leaves state empty and
    * returns silently (a re-auth is expected next).
+   * A cache whose authorization token is the diagnostic placeholder is likewise
+   * ignored: this method resolves with no cached auth and no error.
    *
    * @returns A promise that resolves when load is complete.
    */
@@ -362,6 +364,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * Stores the given authorization response and triggers an async write to disk.
    *
    * @param auth - The authorize-account response to persist.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `auth` was rebuilt from diagnostic JSON.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
     this.#inner.setAuth(auth)
@@ -484,6 +488,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    *
    * @param bucketId - Bucket the upload URL belongs to.
    * @param entry - Upload URL entry to return.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
     this.#inner.returnUploadUrl(bucketId, entry)
@@ -515,6 +521,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    *
    * @param fileId - Large file the part upload URL belongs to.
    * @param entry - Part upload URL entry to return.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
     this.#inner.returnPartUploadUrl(fileId, entry)

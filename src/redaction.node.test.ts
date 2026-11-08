@@ -31,6 +31,7 @@ import {
   CREDENTIAL_BEARING_EXPORTS,
   REVIEWED_EXPORTS,
 } from './test-utils/redaction-export-review.ts'
+import type { AuthorizeAccountResponse } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
 import { type AuthToken, bucketId, partnerToken } from './types/ids.ts'
 
@@ -340,6 +341,28 @@ describe('credential redaction Node diagnostics', () => {
         redactedPartUploadUrl,
       ),
     ).toThrow(B2AuthorizationTokenRedactedError)
+  })
+
+  it('passes a hook-free authorization copy to a custom AccountInfo store', async () => {
+    class RecordingAccountInfo extends InMemoryAccountInfo {
+      serializedAuth: string | undefined
+      toJsonDescriptor: PropertyDescriptor | undefined
+
+      override setAuth(auth: AuthorizeAccountResponse): void {
+        this.serializedAuth = JSON.stringify(auth)
+        this.toJsonDescriptor = Object.getOwnPropertyDescriptor(auth, 'toJSON')
+        super.setAuth(auth)
+      }
+    }
+
+    const store = new RecordingAccountInfo()
+    const { client } = await fixture(store)
+    const auth = await client.authorize()
+
+    expect(JSON.parse(store.serializedAuth ?? '')).toMatchObject({
+      authorizationToken: auth.authorizationToken,
+    })
+    expect(store.toJsonDescriptor).toBeUndefined()
   })
 
   it('file-backed authorization persists the real token returned by authorize', async () => {
