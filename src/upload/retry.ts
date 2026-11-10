@@ -40,6 +40,19 @@ export interface UploadRetryOptions {
   /** Callback invoked before a fresh-URL upload retry. */
   readonly onUploadRetry?: UploadRetryListener | undefined
   /**
+   * Whether single-file upload POST connection faults retry. Defaults to true,
+   * or the client default; a per-call value overrides the client setting.
+   * Includes network errors, wrapped `TypeError`/`DOMException` failures, and
+   * timeouts before response headers arrive.
+   * A replay can create duplicate versions retained by Object Lock. Set false
+   * to surface these faults while retaining server/auth/URL retries and backoff.
+   * Upload-URL acquisition failures retain their existing retry policy.
+   * Multipart parts and write streams ignore this setting and retain their retry policy.
+   * Independent of `retryResponseBodyFailures`: success-body read failures,
+   * including body-read timeouts, follow that option and can still replay when true.
+   */
+  readonly retryUploadConnectionFaults?: boolean | undefined
+  /**
    * Whether unreadable upload response bodies should trigger a retry. Connection
    * failures retry by default with a fresh URL for single-file and part uploads.
    * Defaults to false. Set true only when replaying an ambiguous response is acceptable.
@@ -47,8 +60,10 @@ export interface UploadRetryOptions {
   readonly retryResponseBodyFailures?: boolean | undefined
 }
 
-interface UploadLayerRetryOptions extends Omit<UploadRetryOptions, 'retryResponseBodyFailures'> {
+interface UploadLayerRetryOptions
+  extends Omit<UploadRetryOptions, 'retryResponseBodyFailures' | 'retryUploadConnectionFaults'> {
   readonly retryResponseBodyFailures: boolean
+  readonly retryUploadConnectionFaults: boolean
   /** Abort signal for cancelling upload attempts and retry backoff sleeps. */
   readonly signal?: AbortSignal | undefined
 }
@@ -76,6 +91,19 @@ const freshUrlRetryOverride: Partial<RetryOptions> = { maxRetries: 0 }
  */
 export function resolveRetryResponseBodyFailures(value: boolean | undefined): boolean {
   return value ?? false
+}
+
+/**
+ * Resolves the public default for `retryUploadConnectionFaults`. Connection
+ * faults retry by default; false disables only single-file POST connection
+ * retries, leaving multipart and upload-URL acquisition retries unchanged.
+ *
+ * @param value - Caller-provided override, if any.
+ *
+ * @returns The boolean value passed to the upload retry helper.
+ */
+export function resolveRetryUploadConnectionFaults(value: boolean | undefined): boolean {
+  return value ?? true
 }
 
 /**
@@ -184,6 +212,7 @@ export function uploadPartWithFreshUrl(
     signal: options.signal,
     onUploadRetry: options.onUploadRetry,
     retryResponseBodyFailures: options.retryResponseBodyFailures,
+    retryUploadConnectionFaults: options.retryUploadConnectionFaults,
     checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
     returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
@@ -226,6 +255,7 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
 
   for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
     let uploadEntry: UploadUrlEntry | undefined
+    let uploadInProgress = false
 
     try {
       options.signal?.throwIfAborted()
@@ -234,7 +264,9 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
           ? (options.checkout() ?? (await options.fetchFresh()))
           : await options.fetchFresh()
 
+      uploadInProgress = true
       const result = await options.upload(uploadEntry)
+      uploadInProgress = false
       options.returnEntry(uploadEntry)
       return result
     } catch (err) {
@@ -252,7 +284,10 @@ export async function withFreshUploadUrlRetry<T>(options: FreshUrlRetryOptions<T
       if (isUploadRateLimitError(retryError) && uploadEntry !== undefined) {
         throw retryError
       }
-      if (!isUploadRetryable(retryError, options) || attempt === retryOptions.maxRetries) {
+      if (
+        !isUploadRetryable(retryError, options, uploadInProgress && options.partNumber === null) ||
+        attempt === retryOptions.maxRetries
+      ) {
         throw retryError
       }
 
@@ -289,11 +324,12 @@ function notifyUploadRetry(options: UploadLayerRetryOptions, event: UploadRetryE
 function isUploadRetryable(
   err: unknown,
   options: UploadLayerRetryOptions,
+  singleFilePostFault: boolean,
 ): err is B2Error | NetworkError {
   if (err instanceof NetworkError) {
     if (err.cause instanceof B2SsrfError) return false
     if (err.cause instanceof UploadResponseBodyError) return options.retryResponseBodyFailures
-    return true
+    return !singleFilePostFault || options.retryUploadConnectionFaults
   }
   if (err instanceof BadAuthTokenError) return true
   if (isUploadUrlInvalidationError(err)) return true
