@@ -1615,6 +1615,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: async () => entry,
         returnEntry,
@@ -2468,6 +2469,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {},
@@ -2501,6 +2503,7 @@ describe('upload fresh-URL retry', () => {
       partNumber: null,
       retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
       retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
       checkout: () => null,
       fetchFresh: () => {
         freshFetches += 1
@@ -2535,6 +2538,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => {
           freshFetches += 1
@@ -2573,6 +2577,7 @@ describe('upload fresh-URL retry', () => {
       partNumber: null,
       retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
       retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
       checkout: () => firstEntry,
       fetchFresh: () => {
         freshFetches += 1
@@ -2607,6 +2612,7 @@ describe('upload fresh-URL retry', () => {
       partNumber: null,
       retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
       retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
       checkout: () => entry,
       fetchFresh: () => {
         freshFetches += 1
@@ -2644,6 +2650,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {

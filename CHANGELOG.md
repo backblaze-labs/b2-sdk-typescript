@@ -9,9 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-11-06
 
+### Added
+
+- **Targeted single-file upload connection-fault retry opt-out.** `retryUploadConnectionFaults` defaults to `true` on client and per-upload options; per-call values take precedence. Set it to `false` to surface single-file POST network faults and pre-response-header timeouts while retaining server/auth/upload-URL retries and backoff. A replay can create duplicate versions retained by Object Lock. Multipart parts still replace the same part number and retain their existing retry policy. Success-body failures and body-read timeouts remain independently controlled by `retryResponseBodyFailures` (default `false`).
+
 ### Changed
 
-- **Upload POST connection failures now retry by default.** BEHAVIOR CHANGE: single-file and multipart-part uploads retry connection faults with a fresh upload URL. If the first single-file POST reached B2 before the connection failed, retrying can create duplicate versions, including in versioned or Object Lock buckets. Set `retry: { maxRetries: 0 }` on an upload to disable retries, including the 503, `BadAuthTokenError`, and bad-upload-URL retries that v0.4.0 already performed. Setting it on the client also disables client-level retries. There is no narrower connection-fault-only opt-out. `retryResponseBodyFailures` remains `false` by default and separately controls replay after an unreadable success response body. See [MIGRATION.md](./MIGRATION.md).
+- **Upload POST connection failures now retry by default.** BEHAVIOR CHANGE: single-file and multipart-part uploads retry connection faults with a fresh upload URL. If the first single-file POST reached B2 before the connection failed, retrying can create duplicate versions, including in versioned or Object Lock buckets. Set `retry: { maxRetries: 0 }` on an upload to disable retries, including the 503, `BadAuthTokenError`, and bad-upload-URL retries that v0.4.0 already performed. Setting it on the client also disables client-level retries. To disable only the single-file connection-fault retry while keeping the others, set `retryUploadConnectionFaults: false` (see Added above). `retryResponseBodyFailures` remains `false` by default and separately controls replay after an unreadable success response body. See [MIGRATION.md](./MIGRATION.md).
 - **BREAKING: `B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,
   `Object.assign({}, client)`, `Object.hasOwn(client, 'accountInfo')`, and
