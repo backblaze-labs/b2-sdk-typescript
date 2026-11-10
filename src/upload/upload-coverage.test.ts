@@ -945,6 +945,7 @@ describe('uploadLargeFile cleanup paths', () => {
         source,
         partSize,
         concurrency: 2,
+        fileInfo: { large_file_sha1: 'precomputed-for-read-abort-test' },
       }),
     ).rejects.toThrow('simulated source mutation')
 
@@ -1048,6 +1049,7 @@ describe('uploadLargeFile cleanup paths', () => {
         source: new FailingSecondSliceAfterFirstUploadSource(partSize, firstUploadStarted),
         partSize,
         concurrency: 2,
+        fileInfo: { large_file_sha1: 'precomputed-for-root-cause-test' },
       }),
     ).rejects.toThrow('simulated second part source failure')
   })
@@ -1523,6 +1525,7 @@ describe('uploadLargeFile cleanup paths', () => {
         partSize,
         concurrency: 2,
         signal: controller.signal,
+        fileInfo: { large_file_sha1: 'precomputed-for-parallel-drain-test' },
       }),
     ).rejects.toThrow(/part 2 read failed/)
 
@@ -1559,6 +1562,42 @@ function rejectOnAbort<T>(signal: AbortSignal | undefined, message: string): Pro
   })
 }
 
+const CONNECTION_FAILURE_PHASES = ['pre-send', 'mid-request', 'post-send'] as const
+
+async function failUploadAtPhase(
+  inner: HttpTransport,
+  request: HttpRequest,
+  phase: (typeof CONNECTION_FAILURE_PHASES)[number],
+  failure: NetworkError,
+  recordPartialBody: (bytes: number) => void,
+): Promise<never> {
+  if (phase === 'pre-send') throw failure
+  if (phase === 'post-send') {
+    await inner.send(request)
+    throw failure
+  }
+
+  const bytes = new Uint8Array(await new Response(request.body).arrayBuffer())
+  let sentPrefix = false
+  const interruptedBody = new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (sentPrefix) {
+          controller.error(failure)
+        } else {
+          sentPrefix = true
+          const prefix = bytes.subarray(0, Math.floor(bytes.byteLength / 2))
+          recordPartialBody(prefix.byteLength)
+          controller.enqueue(prefix)
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  )
+  await inner.send({ ...request, body: interruptedBody })
+  throw new Error('The interrupted upload body should fail before it is stored')
+}
+
 describe('upload fresh-URL retry', () => {
   it('returns rate-limited upload URLs to the pool without retrying the payload', async () => {
     const entry = { uploadUrl: 'https://upload.example/file', authorizationToken: 'upload-token' }
@@ -1576,6 +1615,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: async () => entry,
         returnEntry,
@@ -1616,6 +1656,175 @@ describe('upload fresh-URL retry', () => {
     expect(harness.uploadFileUrls).toHaveLength(2)
     expect(harness.uploadFileUrls[0]).not.toBe(harness.uploadFileUrls[1])
   })
+
+  it.each(CONNECTION_FAILURE_PHASES)(
+    'retries %s with a fresh upload URL by default',
+    async (phase) => {
+      const sim = new B2Simulator()
+      const inner = sim.transport()
+      const send = vi.spyOn(inner, 'send')
+      const storedUploads = vi.spyOn(sim, 'handleUpload')
+      const uploadUrls: string[] = []
+      let getUploadUrlCalls = 0
+      let partialBodyBytes = 0
+      const retryEvents: UploadRetryEvent[] = []
+      const transport: HttpTransport = {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_get_upload_url')) {
+            getUploadUrlCalls += 1
+            const response = await inner.send(req)
+            const body = await response.json<UploadUrlBody>()
+            return jsonResponse({
+              ...body,
+              uploadUrl: `${body.uploadUrl}&connectionRetry=${getUploadUrlCalls}`,
+            })
+          }
+          if (req.url.includes('b2_upload_file?')) {
+            uploadUrls.push(req.url)
+            if (uploadUrls.length === 1) {
+              return failUploadAtPhase(
+                inner,
+                req,
+                phase,
+                new NetworkError(`${phase} connection fault`),
+                (bytes) => {
+                  partialBodyBytes += bytes
+                },
+              )
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      })
+      await client.authorize()
+      const bucket = await client.createBucket({
+        bucketName: 'connection-retry',
+        bucketType: BucketType.AllPrivate,
+      })
+
+      const result = await bucket.upload({
+        fileName: 'connection-retry.txt',
+        source: new BufferSource(new Uint8Array([1, 2, 3])),
+        onUploadRetry: (event) => retryEvents.push(event),
+      })
+
+      expect(result.fileName).toBe('connection-retry.txt')
+      expect(uploadUrls).toHaveLength(2)
+      expect(uploadUrls[0]).not.toBe(uploadUrls[1])
+      expect(getUploadUrlCalls).toBe(2)
+      expect(retryEvents).toHaveLength(1)
+      expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+      expect(send.mock.calls.some(([request]) => request.url === uploadUrls[0])).toBe(
+        phase !== 'pre-send',
+      )
+      if (phase === 'mid-request') {
+        expect(partialBodyBytes).toBeGreaterThan(0)
+        expect(partialBodyBytes).toBeLessThan(3)
+      } else {
+        expect(partialBodyBytes).toBe(0)
+      }
+      expect(storedUploads).toHaveBeenCalledTimes(phase === 'post-send' ? 2 : 1)
+      expect(await countFileVersions(bucket, result.fileName)).toBe(phase === 'post-send' ? 2 : 1)
+      const downloaded = await bucket.download(result.fileName)
+      expect(await readStream(downloaded.body)).toEqual(new Uint8Array([1, 2, 3]))
+    },
+  )
+
+  it.each(CONNECTION_FAILURE_PHASES)(
+    'retries part %s with a fresh part URL by default',
+    async (phase) => {
+      const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+      const inner = sim.transport()
+      const send = vi.spyOn(inner, 'send')
+      const storedUploads = vi.spyOn(sim, 'handleUpload')
+      const partUrls: string[] = []
+      const partNumbers: string[] = []
+      const flow: string[] = []
+      let getUploadPartUrlCalls = 0
+      let partialBodyBytes = 0
+      const retryEvents: UploadRetryEvent[] = []
+      const transport: HttpTransport = {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_get_upload_part_url')) {
+            getUploadPartUrlCalls += 1
+            flow.push(`url:${getUploadPartUrlCalls}`)
+            const response = await inner.send(req)
+            const body = await response.json<UploadUrlBody>()
+            return jsonResponse({
+              ...body,
+              uploadUrl: `${body.uploadUrl}&partConnectionRetry=${getUploadPartUrlCalls}`,
+            })
+          }
+          if (req.url.includes('b2_upload_part?')) {
+            const partNumber = req.headers?.['X-Bz-Part-Number'] ?? ''
+            partUrls.push(req.url)
+            partNumbers.push(partNumber)
+            flow.push(`part:${partNumber}`)
+            if (partUrls.length === 1) {
+              return failUploadAtPhase(
+                inner,
+                req,
+                phase,
+                new NetworkError(`${phase} part connection fault`),
+                (bytes) => {
+                  partialBodyBytes += bytes
+                },
+              )
+            }
+          }
+          return inner.send(req)
+        },
+      }
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      })
+      await client.authorize()
+      const bucket = await client.createBucket({
+        bucketName: 'part-connection-retry',
+        bucketType: BucketType.AllPrivate,
+      })
+
+      const result = await bucket.upload({
+        fileName: 'part-connection-retry.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        onUploadRetry: (event) => retryEvents.push(event),
+      })
+
+      expect(result.fileName).toBe('part-connection-retry.bin')
+      expect(partNumbers).toEqual(['1', '1', '2'])
+      expect(flow).toEqual(['url:1', 'part:1', 'url:2', 'part:1', 'part:2'])
+      expect(partUrls).toHaveLength(3)
+      expect(partUrls[0]).not.toBe(partUrls[1])
+      expect(getUploadPartUrlCalls).toBe(2)
+      expect(retryEvents).toHaveLength(1)
+      expect(retryEvents[0]?.partNumber).toBe(1)
+      expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+      expect(send.mock.calls.some(([request]) => request.url === partUrls[0])).toBe(
+        phase !== 'pre-send',
+      )
+      if (phase === 'mid-request') {
+        expect(partialBodyBytes).toBeGreaterThan(0)
+        expect(partialBodyBytes).toBeLessThan(100_000)
+      } else {
+        expect(partialBodyBytes).toBe(0)
+      }
+      expect(storedUploads).toHaveBeenCalledTimes(phase === 'post-send' ? 3 : 2)
+      expect(await countFileVersions(bucket, result.fileName)).toBe(1)
+      const downloaded = await bucket.download(result.fileName)
+      expect(await readStream(downloaded.body)).toEqual(deterministicBytes(200_000))
+    },
+  )
 
   it('continues fresh-URL recovery when the upload retry observer throws', async () => {
     const sim = new B2Simulator()
@@ -2260,6 +2469,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {},
@@ -2293,6 +2503,7 @@ describe('upload fresh-URL retry', () => {
       partNumber: null,
       retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
       retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
       checkout: () => null,
       fetchFresh: () => {
         freshFetches += 1
@@ -2327,6 +2538,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 0, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => {
           freshFetches += 1
@@ -2345,7 +2557,7 @@ describe('upload fresh-URL retry', () => {
     expect(freshFetches).toBe(0)
   })
 
-  it('does not retry spoofable upload ECONNREFUSED errors after upload callback starts', async () => {
+  it('retries an upload connection failure even if the first attempt was stored', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
     let committedVersions = 0
@@ -2360,65 +2572,65 @@ describe('upload fresh-URL retry', () => {
       new TypeError('fetch failed', { cause: refusedCause }),
     )
 
-    await expect(
-      withFreshUploadUrlRetry({
-        fileName: 'connection-refused.txt',
-        partNumber: null,
-        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-        retryResponseBodyFailures: false,
-        checkout: () => firstEntry,
-        fetchFresh: () => {
-          freshFetches += 1
-          return Promise.resolve(secondEntry)
-        },
-        returnEntry: () => {},
-        evictEntry: () => {},
-        upload: () => {
-          uploadAttempts += 1
-          committedVersions += 1
-          return Promise.reject(networkError)
-        },
-        onUploadRetry: (event) => retryEvents.push(event),
-      }),
-    ).rejects.toBe(networkError)
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'connection-refused.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
+      checkout: () => firstEntry,
+      fetchFresh: () => {
+        freshFetches += 1
+        return Promise.resolve(secondEntry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        committedVersions += 1
+        return uploadAttempts === 1 ? Promise.reject(networkError) : Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(committedVersions).toBe(1)
-    expect(freshFetches).toBe(0)
-    expect(retryEvents).toHaveLength(0)
+    expect(result).toBe('uploaded')
+    expect(uploadAttempts).toBe(2)
+    expect(committedVersions).toBe(2)
+    expect(freshFetches).toBe(1)
+    expect(retryEvents).toHaveLength(1)
   })
 
-  it('does not replay generic single-request upload network errors by default', async () => {
+  it('retries generic single-request upload network errors by default', async () => {
     let uploadAttempts = 0
     let freshFetches = 0
     const retryEvents: UploadRetryEvent[] = []
     const entry = { uploadUrl: 'https://upload.example.test', authorizationToken: 'auth' }
     const networkError = new NetworkError('socket closed')
 
-    await expect(
-      withFreshUploadUrlRetry({
-        fileName: 'ambiguous-network.txt',
-        partNumber: null,
-        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
-        retryResponseBodyFailures: false,
-        checkout: () => entry,
-        fetchFresh: () => {
-          freshFetches += 1
-          return Promise.resolve(entry)
-        },
-        returnEntry: () => {},
-        evictEntry: () => {},
-        upload: () => {
-          uploadAttempts += 1
-          return Promise.reject(networkError)
-        },
-        onUploadRetry: (event) => retryEvents.push(event),
-      }),
-    ).rejects.toBe(networkError)
+    const result = await withFreshUploadUrlRetry({
+      fileName: 'ambiguous-network.txt',
+      partNumber: null,
+      retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      retryResponseBodyFailures: false,
+      retryUploadConnectionFaults: true,
+      checkout: () => entry,
+      fetchFresh: () => {
+        freshFetches += 1
+        return Promise.resolve(entry)
+      },
+      returnEntry: () => {},
+      evictEntry: () => {},
+      upload: () => {
+        uploadAttempts += 1
+        return uploadAttempts === 1 ? Promise.reject(networkError) : Promise.resolve('uploaded')
+      },
+      onUploadRetry: (event) => retryEvents.push(event),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(freshFetches).toBe(0)
-    expect(retryEvents).toHaveLength(0)
+    expect(result).toBe('uploaded')
+    expect(uploadAttempts).toBe(2)
+    expect(freshFetches).toBe(1)
+    expect(retryEvents).toHaveLength(1)
   })
 
   it('returns upload URLs before surfacing upload-layer rate limits', async () => {
@@ -2438,6 +2650,7 @@ describe('upload fresh-URL retry', () => {
         partNumber: null,
         retry: { maxRetries: 3, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
         retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
         checkout: () => entry,
         fetchFresh: () => Promise.resolve(entry),
         returnEntry: () => {
@@ -2633,7 +2846,7 @@ describe('upload fresh-URL retry', () => {
     expect(retryEvents).toEqual([])
   })
 
-  it('does not retry a single-file upload POST network error by default', async () => {
+  it('retries a single-file upload POST network error by default', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2645,8 +2858,10 @@ describe('upload fresh-URL retry', () => {
         }
         if (req.url.includes('b2_upload_file?')) {
           uploadAttempts += 1
-          await inner.send(req)
-          throw new TypeError('socket closed after upload')
+          if (uploadAttempts === 1) {
+            await inner.send(req)
+            throw new TypeError('socket closed after upload')
+          }
         }
         return inner.send(req)
       },
@@ -2659,23 +2874,22 @@ describe('upload fresh-URL retry', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'network-default-no-retry',
+      bucketName: 'network-default-retry',
       bucketType: BucketType.AllPrivate,
     })
 
-    await expect(
-      bucket.upload({
-        fileName: 'network-default.txt',
-        source: new BufferSource(new Uint8Array([1, 2, 3])),
-      }),
-    ).rejects.toThrow(NetworkError)
+    const result = await bucket.upload({
+      fileName: 'network-default.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(getUploadUrlCalls).toBe(1)
-    expect(await countFileVersions(bucket, 'network-default.txt')).toBe(1)
+    expect(result.fileName).toBe('network-default.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'network-default.txt')).toBe(2)
   })
 
-  it('retries upload network failures with a fresh URL when explicitly enabled', async () => {
+  it('retries upload network failures with response-body retries disabled', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2715,7 +2929,7 @@ describe('upload fresh-URL retry', () => {
     const result = await bucket.upload({
       fileName: 'retry-network.txt',
       source: new BufferSource(new Uint8Array([1, 2, 3])),
-      retryResponseBodyFailures: true,
+      retryResponseBodyFailures: false,
     })
 
     expect(result.fileName).toBe('retry-network.txt')
@@ -2723,7 +2937,7 @@ describe('upload fresh-URL retry', () => {
     expect(getUploadUrlCalls).toBe(2)
   })
 
-  it('does not retry upload timeouts after the file may have been stored', async () => {
+  it('retries upload timeouts after the file may have been stored', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()
     let getUploadUrlCalls = 0
@@ -2757,20 +2971,19 @@ describe('upload fresh-URL retry', () => {
     })
     await client.authorize()
     const bucket = await client.createBucket({
-      bucketName: 'no-retry-timeout',
+      bucketName: 'retry-timeout',
       bucketType: BucketType.AllPrivate,
     })
 
-    await expect(
-      bucket.upload({
-        fileName: 'no-retry-timeout.txt',
-        source: new BufferSource(new Uint8Array([1, 2, 3])),
-      }),
-    ).rejects.toBeInstanceOf(NetworkError)
+    const result = await bucket.upload({
+      fileName: 'retry-timeout.txt',
+      source: new BufferSource(new Uint8Array([1, 2, 3])),
+    })
 
-    expect(uploadAttempts).toBe(1)
-    expect(getUploadUrlCalls).toBe(1)
-    expect(await countFileVersions(bucket, 'no-retry-timeout.txt')).toBe(1)
+    expect(result.fileName).toBe('retry-timeout.txt')
+    expect(uploadAttempts).toBe(2)
+    expect(getUploadUrlCalls).toBe(2)
+    expect(await countFileVersions(bucket, 'retry-timeout.txt')).toBe(2)
   })
 
   it('recovers expired upload tokens through fresh URL retry without reauth', async () => {
@@ -2904,7 +3117,83 @@ describe('upload fresh-URL retry', () => {
     expect(retryEvents).toEqual([])
   })
 
-  it('does not retry multipart part timeouts after the part may have been stored', async () => {
+  it.each([false, true])(
+    'retries a lost part response body only with opt-in set to %s',
+    async (retryResponseBodyFailures) => {
+      const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+      const inner = sim.transport()
+      const partUrls: string[] = []
+      const partNumbers: string[] = []
+      const retryEvents: UploadRetryEvent[] = []
+      let getUploadPartUrlCalls = 0
+      const transport: HttpTransport = {
+        async send(req: HttpRequest): Promise<HttpResponse> {
+          if (req.url.includes('b2_get_upload_part_url')) {
+            getUploadPartUrlCalls += 1
+            const response = await inner.send(req)
+            const body = await response.json<UploadUrlBody>()
+            return jsonResponse({
+              ...body,
+              uploadUrl: `${body.uploadUrl}&partBody=${getUploadPartUrlCalls}`,
+            })
+          }
+          if (req.url.includes('b2_upload_part?')) {
+            partUrls.push(req.url)
+            partNumbers.push(req.headers?.['X-Bz-Part-Number'] ?? '')
+            const response = await inner.send(req)
+            if (partUrls.length === 1) {
+              return {
+                ...response,
+                json: () => Promise.reject(new TypeError('part response body lost')),
+              }
+            }
+            return response
+          }
+          return inner.send(req)
+        },
+      }
+      const client = new B2Client({
+        applicationKeyId: 'k',
+        applicationKey: 'k',
+        transport,
+        retry: { maxRetries: 1, initialRetryDelayMs: 0, maxRetryDelayMs: 0 },
+      })
+      await client.authorize()
+      const bucket = await client.createBucket({
+        bucketName: 'part-body-retry',
+        bucketType: BucketType.AllPrivate,
+      })
+
+      const upload = bucket.upload({
+        fileName: 'part-body-retry.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+        ...(retryResponseBodyFailures ? { retryResponseBodyFailures: true } : {}),
+        onUploadRetry: (event) => retryEvents.push(event),
+      })
+
+      if (retryResponseBodyFailures) {
+        const result = await upload
+        expect(result.fileName).toBe('part-body-retry.bin')
+        expect(partNumbers).toEqual(['1', '1', '2'])
+        expect(partUrls[0]).not.toBe(partUrls[1])
+        expect(getUploadPartUrlCalls).toBe(2)
+        expect(retryEvents).toHaveLength(1)
+        expect(retryEvents[0]?.error).toBeInstanceOf(NetworkError)
+        expect(retryEvents[0]?.error).toHaveProperty('cause', expect.any(UploadResponseBodyError))
+        expect(await countFileVersions(bucket, result.fileName)).toBe(1)
+      } else {
+        await expect(upload).rejects.toBeInstanceOf(UploadResponseBodyError)
+        expect(partNumbers).toEqual(['1'])
+        expect(getUploadPartUrlCalls).toBe(1)
+        expect(retryEvents).toEqual([])
+        expect(await countFileVersions(bucket, 'part-body-retry.bin')).toBe(0)
+      }
+    },
+  )
+
+  it('retries multipart part timeouts after the part may have been stored', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
     const inner = sim.transport()
     let getUploadPartUrlCalls = 0
@@ -2944,19 +3233,18 @@ describe('upload fresh-URL retry', () => {
       bucketType: BucketType.AllPrivate,
     })
 
-    await expect(
-      bucket.upload({
-        fileName: 'no-retry-part-timeout.bin',
-        source: new BufferSource(deterministicBytes(200_000)),
-        partSize: 100_000,
-        concurrency: 1,
-      }),
-    ).rejects.toBeInstanceOf(NetworkError)
+    const result = await bucket.upload({
+      fileName: 'part-timeout.bin',
+      source: new BufferSource(deterministicBytes(200_000)),
+      partSize: 100_000,
+      concurrency: 1,
+    })
 
-    expect(uploadPartAttempts).toBe(1)
-    expect(getUploadPartUrlCalls).toBe(1)
-    expect(cancelCalls).toBe(1)
-    expect(await countFileVersions(bucket, 'no-retry-part-timeout.bin')).toBe(0)
+    expect(result.fileName).toBe('part-timeout.bin')
+    expect(uploadPartAttempts).toBe(3)
+    expect(getUploadPartUrlCalls).toBe(2)
+    expect(cancelCalls).toBe(0)
+    expect(await countFileVersions(bucket, 'part-timeout.bin')).toBe(1)
   })
 })
 
@@ -3136,6 +3424,212 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       legalHold: LegalHoldValue.On,
     })
     expect(result.fileName).toBe('resume-hold.bin')
+  })
+
+  it('records the whole-file SHA-1 in large_file_sha1 metadata', async () => {
+    const { client: multipartClient } = makeClient({
+      minimumPartSize: 100_000,
+      recommendedPartSize: 100_000,
+    })
+    await multipartClient.authorize()
+    const multipartBucket = await multipartClient.createBucket({
+      bucketName: 'large-file-sha1',
+      bucketType: BucketType.AllPrivate,
+    })
+    const data = deterministicBytes(200_000)
+
+    const result = await uploadLargeFile(multipartClient.raw, multipartClient.accountInfo, {
+      bucketId: multipartBucket.id,
+      fileName: 'two-parts.bin',
+      source: new BufferSource(data),
+      concurrency: 1,
+    })
+
+    expect(result.contentSha1).toBeNull()
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
+  })
+
+  it('auto-resumes an interrupted upload that carries large_file_sha1', async () => {
+    const sim = new B2Simulator({ minimumPartSize: 100_000, recommendedPartSize: 100_000 })
+    const client = new B2Client({
+      applicationKeyId: 'k',
+      applicationKey: 'k',
+      transport: sim.transport(),
+      retry: { maxRetries: 0 },
+    })
+    await client.authorize()
+    const resumeBucket = await client.createBucket({
+      bucketName: 'resume-large-file-sha1',
+      bucketType: BucketType.AllPrivate,
+    })
+    const data = deterministicBytes(200_000)
+    const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+    sim.injectFailure({
+      on: 'b2_upload_part?fileId=',
+      status: 400,
+      code: 'bad_request',
+      message: 'interrupt after first part',
+      skip: 1,
+      count: 1,
+    })
+    sim.injectFailure({
+      on: 'b2_cancel_large_file',
+      status: 500,
+      code: 'internal_error',
+      message: 'leave unfinished upload for resume',
+      count: 1,
+    })
+
+    await expect(
+      uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: resumeBucket.id,
+        fileName: 'interrupted.bin',
+        source: new BufferSource(data),
+        concurrency: 1,
+      }),
+    ).rejects.toThrow('interrupt after first part')
+
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: resumeBucket.id },
+    )
+    const interrupted = unfinished.files[0]
+    expect(interrupted?.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
+    startLargeFile.mockClear()
+    const rejected: string[] = []
+
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: resumeBucket.id,
+      fileName: 'interrupted.bin',
+      source: new BufferSource(data),
+      concurrency: 1,
+      resume: true,
+      onResumeCandidateRejected: (event) => rejected.push(event.reason),
+    })
+
+    expect(rejected).toEqual([])
+    expect(result.fileName).toBe('interrupted.bin')
+    expect(startLargeFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { digest: 'computed', mode: 'automatic' },
+    { digest: 'computed', mode: 'explicit' },
+    { digest: 'caller-supplied', mode: 'automatic' },
+    { digest: 'caller-supplied', mode: 'explicit' },
+  ] as const)(
+    'rejects $mode resume with a different $digest whole-file SHA-1',
+    async (scenario) => {
+      const partSize = 100_000
+      const original = deterministicBytes(partSize * 2)
+      const changed = original.slice()
+      changed[0] = changed[0] === 0 ? 1 : 0
+      const originalSha1 =
+        scenario.digest === 'computed' ? await sha1Hex(original) : 'caller-original'
+      const changedSha1 = scenario.digest === 'computed' ? await sha1Hex(changed) : 'caller-changed'
+      const fileName = `digest-${scenario.digest}-${scenario.mode}.bin`
+      const start = await client.raw.startLargeFile(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        {
+          bucketId: bucket.id,
+          fileName,
+          contentType: 'application/octet-stream',
+          fileInfo: { large_file_sha1: originalSha1 },
+        },
+      )
+      const partUrl = await client.raw.getUploadPartUrl(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { fileId: start.fileId },
+      )
+      const originalPart = original.slice(0, partSize)
+      await client.raw.uploadPart(
+        partUrl.uploadUrl,
+        {
+          authorization: partUrl.authorizationToken,
+          partNumber: 1,
+          contentLength: originalPart.byteLength,
+          contentSha1: await sha1Hex(originalPart),
+        },
+        originalPart,
+      )
+      const startLargeFile = vi.spyOn(client.raw, 'startLargeFile')
+      const uploadPart = vi.spyOn(client.raw, 'uploadPart')
+      const listParts = vi.spyOn(client.raw, 'listParts')
+      const rejected: string[] = []
+      const upload = uploadLargeFile(client.raw, client.accountInfo, {
+        bucketId: bucket.id,
+        fileName,
+        contentType: 'application/octet-stream',
+        source: new BufferSource(changed),
+        partSize,
+        concurrency: 1,
+        ...(scenario.digest === 'caller-supplied'
+          ? { fileInfo: { large_file_sha1: changedSha1 } }
+          : {}),
+        ...(scenario.mode === 'automatic' ? { resume: true } : { resumeFileId: start.fileId }),
+        onResumeCandidateRejected: (event) => rejected.push(event.reason),
+      })
+
+      if (scenario.mode === 'explicit') {
+        await expect(upload).rejects.toBeInstanceOf(ResumeFileIdMismatchError)
+        expect(startLargeFile).not.toHaveBeenCalled()
+        expect(uploadPart).not.toHaveBeenCalled()
+      } else {
+        const result = await upload
+        expect(result.fileId).not.toBe(start.fileId)
+        expect(result.fileInfo['large_file_sha1']).toBe(changedSha1)
+        expect(startLargeFile).toHaveBeenCalledOnce()
+        const downloaded = await bucket.download(fileName)
+        expect(await readStream(downloaded.body)).toEqual(changed)
+      }
+      expect(rejected).toEqual(['file-info-mismatch'])
+      expect(listParts).not.toHaveBeenCalled()
+
+      const unfinished = await client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
+      expect(
+        unfinished.files.find((file) => file.fileId === start.fileId)?.fileInfo['large_file_sha1'],
+      ).toBe(originalSha1)
+    },
+  )
+
+  it('preserves a caller-supplied large_file_sha1', async () => {
+    const data = deterministicBytes(200_000)
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'caller-large-file-sha1.bin',
+      source: new BufferSource(data),
+      partSize: 100_000,
+      concurrency: 1,
+      fileInfo: { large_file_sha1: 'caller-supplied-sha1' },
+    })
+
+    expect(result.fileInfo['large_file_sha1']).toBe('caller-supplied-sha1')
+  })
+
+  it('does not add large_file_sha1 for a non-seekable stream', async () => {
+    const data = deterministicBytes(200_000)
+    const readable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(data)
+        controller.close()
+      },
+    })
+    const result = await uploadLargeFile(client.raw, client.accountInfo, {
+      bucketId: bucketId as never,
+      fileName: 'stream-large-file-sha1.bin',
+      source: new StreamSource(readable, data.byteLength),
+      partSize: 100_000,
+      concurrency: 1,
+    })
+
+    expect(result.fileInfo).not.toHaveProperty('large_file_sha1')
   })
 
   it.each([
@@ -3674,7 +4168,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
     }
   })
 
-  it('keeps caller fileInfo untouched when resume is enabled', async () => {
+  it('preserves caller fileInfo while adding a whole-file SHA-1 when resume is enabled', async () => {
     const partSize = 100_000
     const data = deterministicBytes(partSize * 2)
     const fileInfo = Object.fromEntries(
@@ -3692,7 +4186,9 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual(fileInfo)
+    expect(fileInfo).not.toHaveProperty('large_file_sha1')
+    expect(result.fileInfo).toMatchObject(fileInfo)
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
   })
 
   it('uses empty fileInfo with custom resume discovery limits', async () => {
@@ -3712,7 +4208,7 @@ describe('uploadLargeFile fresh multipart metadata', () => {
       onResumeCandidateRejected: () => {},
     })
 
-    expect(result.fileInfo).toEqual({})
+    expect(result.fileInfo['large_file_sha1']).toBe(await sha1Hex(data))
   })
 
   it('skips a same-name unfinished upload with conflicting resume identity', async () => {
@@ -4159,6 +4655,88 @@ describe('uploadLargeFile fresh multipart metadata', () => {
   })
 })
 
+describe('uploadLargeFile whole-file SHA-1 aborts', () => {
+  it('does not read prehash slices when the signal is already aborted', async () => {
+    const controller = new AbortController()
+    const reason = new Error('prehash already aborted')
+    controller.abort(reason)
+    const source = new BufferSource(deterministicBytes(4))
+    const slice = vi.spyOn(source, 'slice')
+
+    await expect(
+      uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+        bucketId: bucketId('bucket'),
+        fileName: 'prehash-abort.bin',
+        source,
+        partSize: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+
+    expect(slice).not.toHaveBeenCalled()
+  })
+
+  it('checks cancellation between whole-file prehash slices', async () => {
+    const controller = new AbortController()
+    const reason = new Error('stop after first prehash slice')
+    const source = new BufferSource(deterministicBytes(4))
+    const slice = vi.spyOn(source, 'slice').mockImplementation((start, end) => {
+      const part = new BufferSource(deterministicBytes(4).slice(start, end))
+      vi.spyOn(part, 'toArrayBuffer').mockImplementation(async () => {
+        controller.abort(reason)
+        return new ArrayBuffer(end - start)
+      })
+      return part
+    })
+
+    await expect(
+      uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+        bucketId: bucketId('bucket'),
+        fileName: 'prehash-between-slices.bin',
+        source,
+        partSize: 2,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason)
+
+    expect(slice).toHaveBeenCalledTimes(1)
+    expect(slice).toHaveBeenCalledWith(0, 2)
+  })
+
+  it('passes the signal to a pending whole-file prehash read', async () => {
+    const controller = new AbortController()
+    const reason = new Error('stop pending prehash read')
+    const started = deferred<void>()
+    const pendingRead = deferred<ArrayBuffer>()
+    const source = new BufferSource(deterministicBytes(4))
+    const part = new BufferSource(deterministicBytes(2))
+    vi.spyOn(source, 'slice').mockReturnValue(part)
+    const read = vi.spyOn(part, 'toArrayBuffer').mockImplementation((options) => {
+      options?.signal?.addEventListener('abort', () => pendingRead.reject(reason), { once: true })
+      started.resolve()
+      return pendingRead.promise
+    })
+    const upload = uploadLargeFile({} as RawClient, makeMultipartAccountInfo(), {
+      bucketId: bucketId('bucket'),
+      fileName: 'prehash-pending-read.bin',
+      source,
+      partSize: 2,
+      signal: controller.signal,
+    })
+    const settled = upload.catch((error: unknown) => error)
+
+    try {
+      await started.promise
+      expect(read).toHaveBeenCalledWith({ signal: controller.signal })
+      controller.abort(reason)
+      expect(await settled).toBe(reason)
+    } finally {
+      pendingRead.reject(reason)
+      await settled
+    }
+  })
+})
+
 describe('uploadLargeFile control-plane aborts', () => {
   it('passes a linked abort signal to stalled startLargeFile requests', async () => {
     const controller = new AbortController()
@@ -4176,6 +4754,7 @@ describe('uploadLargeFile control-plane aborts', () => {
       source: new BufferSource(deterministicBytes(4)),
       partSize: 2,
       signal: controller.signal,
+      fileInfo: { large_file_sha1: 'precomputed-for-start-abort-test' },
     })
     controller.abort(new Error('start aborted'))
 

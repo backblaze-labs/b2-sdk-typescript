@@ -1,14 +1,152 @@
 # Migration guide
 
-This guide covers the breaking changes introduced while aligning the SDK's
-TypeScript surface with Backblaze B2's **v4** native API (the `v0.4.0` line,
+This guide covers the v0.5.0 upload retry behavior change and the breaking changes
+introduced while aligning the SDK's TypeScript surface with Backblaze B2's **v4**
+native API (the `v0.4.0` line,
 tracked in [#193](https://github.com/backblaze-labs/b2-sdk-typescript/issues/193)).
 
 Because the SDK is pre-1.0 with no stable external compatibility guarantee yet,
 the v4 response-shape corrections shipped as **direct breaking changes** rather
 than deprecated `v3`-shaped mirrors. Each section below explains what changed and
-how to update your code. Every breaking change is also flagged `BREAKING` in
+how to update your code. The v4 breaking changes are also flagged `BREAKING` in
 [`CHANGELOG.md`](./CHANGELOG.md).
+
+## v0.5.0: Upload POST connection failures retry by default
+
+### Before
+
+In v0.4.0, upload POST connection faults were not replayed by default. Uploads
+already retried eligible 503, `BadAuthTokenError`, and bad-upload-URL failures.
+
+### After
+
+Single-file and multipart-part upload POST connection faults now retry with a
+fresh upload URL by default. If the first single-file POST reached B2 before
+the connection failed, replay can create duplicate versions, including in
+versioned or Object Lock buckets. Each duplicate can inherit retention or a
+legal hold that prevents deletion. Re-uploading a multipart part replaces the
+same part number.
+
+To disable connection-fault retries for an upload, set its retry budget to zero:
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithoutRetries(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+    retry: { maxRetries: 0 },
+  })
+}
+
+uploadWithoutRetries().catch(console.error)
+```
+
+Replace the application key and existing bucket name before running the example.
+
+This also disables that upload's 503, `BadAuthTokenError`, and bad-upload-URL
+retries that v0.4.0 performed by default. It does not restore the complete
+v0.4.0 retry policy. Setting `retry: { maxRetries: 0 }` on `B2Client` also
+disables client-level retries for all calls. There is no narrower per-fault
+option that disables only upload POST connection-failure retries.
+
+`retryResponseBodyFailures` is a separate option. It remains `false` by default
+and controls replay after an unreadable success response body; setting it to
+`false` does not disable connection-fault retries.
+
+## v0.5.0: Single-file upload connection-fault retry opt-out
+
+Upload POST connection faults retry by default with a fresh upload URL. If a
+single-file POST reached B2 before the connection dropped, replay can create
+duplicate versions. Object Lock retention or legal hold can prevent deleting
+those duplicates. Multipart retries replace the same part number instead.
+
+Previously, `retry: { maxRetries: 0 }` stopped connection-fault retries only by
+also disabling the existing server, auth-token, and upload-URL retries. Use
+`retryUploadConnectionFaults: false` to disable just the single-file POST
+connection-fault retry while keeping those recovery paths and backoff:
+
+```ts
+import { B2Client, BufferSource } from '@backblaze-labs/b2-sdk'
+
+async function uploadWithConnectionFaultOptOut(): Promise<void> {
+  const client = new B2Client({
+    applicationKeyId: 'your-application-key-id',
+    applicationKey: 'your-application-key',
+    retryUploadConnectionFaults: false,
+  })
+  await client.authorize()
+  const bucket = await client.getBucket('your-existing-bucket')
+  if (bucket === null) throw new Error('Bucket not found')
+  await bucket.upload({
+    fileName: 'data.bin',
+    source: new BufferSource(new Uint8Array([1, 2, 3])),
+  })
+}
+
+uploadWithConnectionFaultOptOut().catch(console.error)
+```
+
+Replace the credentials and bucket name before running. You can also set the
+option directly on `Bucket.upload()` or `B2Object.upload()`. A per-call value
+overrides the client default, including `true` on a client configured with
+`false`. Omitting the option retains the current default-on behavior.
+
+The option covers upload-callback network faults, including wrapped
+`TypeError`/`DOMException` errors and `requestTimeoutMs` timeouts **before
+response headers arrive**. Upload-URL acquisition failures keep retrying under
+their existing policy. Multipart uploads and write streams ignore the new
+setting and retain their existing retry policy.
+
+Failures while reading a successful response body, including body-read
+timeouts, still follow `retryResponseBodyFailures`. Its default is `false`;
+setting it to `true` can replay a stored single-file POST even when
+`retryUploadConnectionFaults` is `false`. This option is not an exactly-once
+guarantee. Keeping both options `false` avoids these two automatic single-file
+replay paths without disabling server/auth/upload-URL retries.
+
+## v0.5.0: SDK objects reject `Proxy` wrappers (credential redaction)
+
+`BREAKING`. Application keys and authorization tokens now live in private (`#`)
+fields on `B2Client`, `Bucket`, `B2Object`, `InMemoryAccountInfo`,
+`FileAccountInfo`, and the upload URL pools, so logging, inspecting, or
+serializing them no longer exposes secrets. A side effect: calling a method on
+any of these instances through a `Proxy` wrapper throws
+`TypeError: Cannot read private member`. Code that worked in v0.4.0 now throws.
+
+### Before
+
+```ts
+const client = reactive(new B2Client(options)) // Vue
+await client.authorize()
+await client.listBuckets()
+```
+
+### After
+
+Keep the SDK instance out of the reactive proxy and call its methods on the raw
+instance; wrap only your own plain state in `reactive()`.
+
+```ts
+const client = new B2Client(options)
+await client.authorize()
+const buckets = await client.listBuckets()
+```
+
+`client.accountInfo` and `'accountInfo' in client` still work on the raw
+instance. `accountInfo` is now a read-only prototype accessor — it has no setter
+and a subclass cannot redeclare it as a field (TypeScript `TS2610`) — so pass a
+custom store through the constructor's `accountInfo` option instead of assigning
+it.
 
 ## Wire routes: `/b2api/v3` → `/b2api/v4` (no action required)
 

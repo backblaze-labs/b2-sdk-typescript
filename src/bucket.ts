@@ -414,22 +414,30 @@ export class Bucket {
   readonly name: string
   /** Full bucket metadata as returned by the B2 API. */
   readonly info: BucketInfo
-  private readonly client: B2Client
+  readonly #client: B2Client
   private readonly uploadRetryOptions: RetryOptions
+  readonly #retryUploadConnectionFaults: boolean
 
   /**
    * @param client - The parent B2Client instance.
    * @param info - The bucket metadata from the API.
    * @param uploadRetryOptions - Resolved client upload retry defaults.
+   * @param retryUploadConnectionFaults - Client default for single-file POST connection retries.
    *
    * @internal
    */
-  constructor(client: B2Client, info: BucketInfo, uploadRetryOptions: RetryOptions) {
-    this.client = client
+  constructor(
+    client: B2Client,
+    info: BucketInfo,
+    uploadRetryOptions: RetryOptions,
+    retryUploadConnectionFaults = true,
+  ) {
+    this.#client = client
     this.info = info
     this.id = info.bucketId
     this.name = info.bucketName
     this.uploadRetryOptions = uploadRetryOptions
+    this.#retryUploadConnectionFaults = retryUploadConnectionFaults
   }
 
   /**
@@ -439,7 +447,13 @@ export class Bucket {
    * @returns A B2Object handle bound to this bucket and file name.
    */
   file(fileName: string): B2Object {
-    return new B2Object(this.client, this, fileName, this.uploadRetryOptions)
+    return new B2Object(
+      this.#client,
+      this,
+      fileName,
+      this.uploadRetryOptions,
+      this.#retryUploadConnectionFaults,
+    )
   }
 
   /**
@@ -450,7 +464,7 @@ export class Bucket {
    * @returns Metadata for the uploaded file version.
    */
   async upload(options: BucketUploadOptions): Promise<FileVersion> {
-    const recommendedPartSize = this.client.accountInfo.getRecommendedPartSize()
+    const recommendedPartSize = this.#client.accountInfo.getRecommendedPartSize()
     const isLarge = options.source.size > recommendedPartSize
     const uploadRetryOptions = mergeUploadRetryOptions(this.uploadRetryOptions, options.retry)
 
@@ -458,7 +472,7 @@ export class Bucket {
       const bucketInfo = resumeNeedsFreshBucketDefaults(options) ? await this.refresh() : this.info
       const bucketDefaultRetention = bucketDefaultRetentionSnapshot(bucketInfo)
       const bucketDefaultSse = bucketDefaultServerSideEncryptionSnapshot(bucketInfo)
-      return uploadLargeFile(this.client.raw, this.client.accountInfo, {
+      return uploadLargeFile(this.#client.raw, this.#client.accountInfo, {
         ...options,
         bucketId: this.id,
         retry: uploadRetryOptions,
@@ -476,10 +490,12 @@ export class Bucket {
     }
     rejectSmallResumeFileId(options, 'Bucket.upload')
     const smallOptions = stripResumeOnlyOptions(options)
-    return uploadSmallFile(this.client.raw, this.client.accountInfo, {
+    return uploadSmallFile(this.#client.raw, this.#client.accountInfo, {
       ...smallOptions,
       bucketId: this.id,
       retry: uploadRetryOptions,
+      retryUploadConnectionFaults:
+        options.retryUploadConnectionFaults ?? this.#retryUploadConnectionFaults,
     })
   }
 
@@ -493,7 +509,7 @@ export class Bucket {
    * @returns The download result containing response headers and a readable body stream.
    */
   async download(fileName: string, options?: DownloadCallOptions): Promise<DownloadResult> {
-    return downloadByName(this.client.raw, this.client.accountInfo, {
+    return downloadByName(this.#client.raw, this.#client.accountInfo, {
       bucketName: this.name,
       fileName,
       ...options,
@@ -523,7 +539,7 @@ export class Bucket {
    * ```
    */
   async head(fileName: string, options?: HeadCallOptions): Promise<HeadResult> {
-    return headByName(this.client.raw, this.client.accountInfo, {
+    return headByName(this.#client.raw, this.#client.accountInfo, {
       bucketName: this.name,
       fileName,
       ...options,
@@ -552,9 +568,9 @@ export class Bucket {
       | BucketListFileNamesWithDelimiterOptions
       | BucketListFileNamesMaybeDelimiterOptions,
   ): Promise<ListFileNamesResponse | ListFileNamesWithDelimiterResponse> {
-    const response = await this.client.raw.listFileNames(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    const response = await this.#client.raw.listFileNames(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         bucketId: this.id,
         ...(options?.startFileName !== undefined ? { startFileName: options.startFileName } : {}),
@@ -593,9 +609,9 @@ export class Bucket {
       | BucketListFileVersionsWithDelimiterOptions
       | BucketListFileVersionsMaybeDelimiterOptions,
   ): Promise<ListFileVersionsResponse | ListFileVersionsWithDelimiterResponse> {
-    const response = await this.client.raw.listFileVersions(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    const response = await this.#client.raw.listFileVersions(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         bucketId: this.id,
         ...(options?.startFileName !== undefined ? { startFileName: options.startFileName } : {}),
@@ -773,9 +789,9 @@ export class Bucket {
   ): AsyncIterableIterator<PartInfo> {
     return paginateItems(
       async (cursor: number | undefined) => {
-        const resp = await this.client.raw.listParts(
-          this.client.accountInfo.getApiUrl(),
-          this.client.accountInfo.getAuthToken(),
+        const resp = await this.#client.raw.listParts(
+          this.#client.accountInfo.getApiUrl(),
+          this.#client.accountInfo.getAuthToken(),
           {
             fileId: largeFileId,
             maxPartCount: options?.pageSize ?? DEFAULT_PAGE_SIZE,
@@ -843,9 +859,9 @@ export class Bucket {
    * @returns Metadata for the newly created hide marker.
    */
   async hideFile(fileName: string, options?: { signal?: AbortSignal }): Promise<FileVersion> {
-    return this.client.raw.hideFile(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.hideFile(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id, fileName },
       options,
     )
@@ -869,9 +885,9 @@ export class Bucket {
     fileId: FileId,
     options?: { bypassGovernance?: boolean; signal?: AbortSignal },
   ): Promise<void> {
-    await this.client.raw.deleteFileVersion(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    await this.#client.raw.deleteFileVersion(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         fileName,
         fileId,
@@ -892,9 +908,9 @@ export class Bucket {
    * @returns Metadata about the cancelled large file.
    */
   async cancelLargeFile(fileId: LargeFileId): Promise<CancelLargeFileResponse> {
-    return this.client.raw.cancelLargeFile(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.cancelLargeFile(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { fileId },
     )
   }
@@ -919,9 +935,9 @@ export class Bucket {
     /** Abort signal for cancelling the list request. */
     signal?: AbortSignal
   }) {
-    return this.client.raw.listUnfinishedLargeFiles(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.listUnfinishedLargeFiles(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         bucketId: this.id,
         ...(options?.namePrefix !== undefined ? { namePrefix: options.namePrefix } : {}),
@@ -1080,9 +1096,9 @@ export class Bucket {
     const { serverSideEncryption, destinationServerSideEncryption, signal, ...copyOptions } =
       options
     const destinationEncryption = destinationServerSideEncryption ?? serverSideEncryption
-    return this.client.raw.copyFile(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.copyFile(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         ...copyOptions,
         ...(destinationEncryption !== undefined
@@ -1134,7 +1150,7 @@ export class Bucket {
      */
     signal?: AbortSignal
   }): Promise<FileVersion> {
-    return copyLargeFile(this.client.raw, this.client.accountInfo, {
+    return copyLargeFile(this.#client.raw, this.#client.accountInfo, {
       sourceFileId: options.sourceFileId,
       fileName: options.fileName,
       ...(options.destinationBucketId !== undefined
@@ -1202,9 +1218,9 @@ export class Bucket {
       lifecycleRules,
       replicationConfiguration,
     } = options
-    return this.client.raw.updateBucket(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.updateBucket(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         ...(bucketType !== undefined ? { bucketType } : {}),
         ...(bucketInfo !== undefined ? { bucketInfo } : {}),
@@ -1214,7 +1230,7 @@ export class Bucket {
         ...(lifecycleRules !== undefined ? { lifecycleRules } : {}),
         ...(replicationConfiguration !== undefined ? { replicationConfiguration } : {}),
         ...(ifRevisionIs !== undefined ? { ifRevisionIs } : {}),
-        accountId: accountId(this.client.accountInfo.getAccountId()),
+        accountId: accountId(this.#client.accountInfo.getAccountId()),
         bucketId: this.id,
       },
     )
@@ -1226,7 +1242,7 @@ export class Bucket {
    * @returns The deleted bucket metadata.
    */
   async delete(): Promise<BucketInfo> {
-    return this.client.deleteBucket(this.id)
+    return this.#client.deleteBucket(this.id)
   }
 
   /**
@@ -1240,9 +1256,9 @@ export class Bucket {
     fileNamePrefix: string,
     validDurationInSeconds: number,
   ): Promise<DownloadAuthorizationResponse> {
-    return this.client.raw.getDownloadAuthorization(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.getDownloadAuthorization(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id, fileNamePrefix, validDurationInSeconds },
     )
   }
@@ -1253,9 +1269,9 @@ export class Bucket {
    * @returns The current notification rules for this bucket.
    */
   async getNotificationRules(): Promise<GetBucketNotificationRulesResponse> {
-    return this.client.raw.getBucketNotificationRules(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.getBucketNotificationRules(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id },
     )
   }
@@ -1269,9 +1285,9 @@ export class Bucket {
   async setNotificationRules(
     rules: readonly EventNotificationRule[],
   ): Promise<GetBucketNotificationRulesResponse> {
-    return this.client.raw.setBucketNotificationRules(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.setBucketNotificationRules(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { bucketId: this.id, eventNotificationRules: rules },
     )
   }
@@ -1291,9 +1307,9 @@ export class Bucket {
     retention: FileRetentionValue,
     options?: { bypassGovernance?: boolean },
   ) {
-    return this.client.raw.updateFileRetention(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.updateFileRetention(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       {
         fileName,
         fileId,
@@ -1314,9 +1330,9 @@ export class Bucket {
    * @returns The updated legal hold metadata.
    */
   async updateFileLegalHold(fileName: string, fileId: FileId, legalHold: LegalHoldValue) {
-    return this.client.raw.updateFileLegalHold(
-      this.client.accountInfo.getApiUrl(),
-      this.client.accountInfo.getAuthToken(),
+    return this.#client.raw.updateFileLegalHold(
+      this.#client.accountInfo.getApiUrl(),
+      this.#client.accountInfo.getAuthToken(),
       { fileName, fileId, legalHold },
     )
   }
@@ -1339,7 +1355,7 @@ export class Bucket {
    * @throws If the bucket no longer exists.
    */
   private async refresh(): Promise<BucketInfo> {
-    const fresh = await this.client.listBuckets({ bucketId: this.id })
+    const fresh = await this.#client.listBuckets({ bucketId: this.id })
     const found = fresh[0]
     if (!found) throw new Error(`Bucket ${this.id} not found`)
     return found.info
