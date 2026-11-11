@@ -62,6 +62,7 @@ const REASONS = new Set([
 // keeps it -- and anything else registered below -- out of
 // every detail string all the same.
 const guard = require('../lib/guard.cjs');
+const { isLegalHoldRefusal } = require('../lib/legal-hold-refusal.cjs');
 
 // Proxy variables must not reroute a loopback request.
 guard.scrubProxyEnv();
@@ -273,21 +274,23 @@ async function run() {
         'metadata reports legalHold ' + JSON.stringify(held.legalHold) + ', expected on');
     }
 
-    // The refusal must name the legal hold (HTTP 400/403 from the lock layer),
-    // not any thrown error.
+    // The refusal is either real B2's 401 access_denied or the TypeScript SDK
+    // simulator profile's 400/403 file_lock_legal_hold_protected
+    // (lib/legal-hold-refusal.cjs). Anything else -- a bad token, a 5xx, a
+    // network error -- is the wrong reason. 401 access_denied is what real B2
+    // answers (measured 2026-11-10, b2-simulator ledger F-139); the other
+    // values are that profile's own codes.
     const refusal = await guard.capture(() =>
       bucket.deleteFileVersion(OBJECT_NAME, uploaded.fileId));
     if (!refusal) {
       throw new Failure('delete under hold', 'a version on legal hold was deleted');
     }
-    // NOTE: the error type/status/code values below are derived from the simulator. Re-verify them against real
-    // B2 before using this assertion outside the simulator.
-    const wrong = guard.explainMismatch(refusal, {
-      statuses: [400, 403],
-      codes: ['file_lock_legal_hold_protected'],
-      message: /legal.?hold/i,
-    });
-    if (wrong) {
+    if (!isLegalHoldRefusal(refusal)) {
+      const wrong = guard.explainMismatch(refusal, {
+        statuses: [400, 403],
+        codes: ['file_lock_legal_hold_protected'],
+        message: /legal.?hold/i,
+      });
       throw new Failure('delete under hold', 'refused for the wrong reason: ' + wrong);
     }
 
