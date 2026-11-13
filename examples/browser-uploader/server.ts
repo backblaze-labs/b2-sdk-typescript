@@ -93,7 +93,8 @@ const server = createServer(async (req, res) => {
   res.end('Not found')
 })
 
-server.listen(PORT, () => {
+// Local development only: real deployments must choose an appropriate bind address and terminate TLS.
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Upload URL server listening on http://localhost:${PORT}`)
   console.log('  GET /api/upload-url  - get a fresh B2 upload URL')
   console.log('  GET /api/list-files  - list files in the bucket')

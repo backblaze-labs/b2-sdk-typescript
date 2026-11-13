@@ -110,7 +110,8 @@ const server = createServer((req, res) => {
 })
 
 const port = Number(process.env.PORT ?? 8787)
-server.listen(port, () => {
+// Local development only: real deployments must choose an appropriate bind address and terminate TLS.
+server.listen(port, '127.0.0.1', () => {
   console.log(`node-presigned-with-auth listening on http://localhost:${port}`)
   console.log(`  curl 'http://localhost:${port}/files/photos/cat.jpg' -H 'x-user: alice'`)
 })
