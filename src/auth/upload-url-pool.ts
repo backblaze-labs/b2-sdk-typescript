@@ -1,3 +1,4 @@
+import { assertAuthorizationTokenCanBeRehydrated } from '../response-redaction.ts'
 import type { UploadUrlEntry } from './account-info.ts'
 
 /**
@@ -27,8 +28,14 @@ export class UploadUrlPool {
    *
    * @param key - The bucket ID or file ID the entry belongs to.
    * @param entry - The upload URL entry to return to the pool.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   checkin(key: string, entry: UploadUrlEntry): void {
+    assertAuthorizationTokenCanBeRehydrated(
+      entry,
+      'getUploadUrlResponseForPersistence or getUploadPartUrlResponseForPersistence',
+    )
     let pool = this.#pools.get(key)
     if (!pool) {
       pool = []

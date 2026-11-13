@@ -8,11 +8,11 @@
  * appropriate subclass.
  *
  * Convention: most `B2Error` subclasses represent failures returned by the B2
- * API. The client-side exceptions are {@link B2BucketConfigurationError},
- * {@link B2RealmConfigurationError}, and {@link B2PartnerAuthorizationError};
- * they extend `B2Error` so validation, realm-, and Partner-authorization
- * failures can be handled with the SDK error hierarchy before or without a
- * server round-trip.
+ * API. The client-side exceptions are {@link B2AuthorizationTokenRedactedError},
+ * {@link B2BucketConfigurationError}, {@link B2RealmConfigurationError}, and
+ * {@link B2PartnerAuthorizationError}; they extend `B2Error` so validation,
+ * realm-, and authorization failures can be handled with the SDK error hierarchy
+ * before or without a server round-trip.
  *
  * Other programming errors and SDK preconditions, such as "not yet authorized",
  * "stream consumed twice", or "called before init", use the native `Error`
@@ -715,6 +715,19 @@ export class B2RealmConfigurationError extends B2Error {
   constructor(message: string) {
     super({ status: 400, code: 'bad_request', message })
     this.name = 'B2RealmConfigurationError'
+  }
+}
+
+/** Thrown when diagnostic JSON with a redacted authorization token is reused. */
+export class B2AuthorizationTokenRedactedError extends B2Error {
+  /**
+   * Creates a new B2AuthorizationTokenRedactedError instance.
+   *
+   * @param message - Human-readable description of the rejected diagnostic response.
+   */
+  constructor(message: string) {
+    super({ status: 400, code: 'bad_request', message })
+    this.name = 'B2AuthorizationTokenRedactedError'
   }
 }
 

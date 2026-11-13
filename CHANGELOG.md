@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** `JSON.stringify()` now redacts `authorizationToken` on authorization, download-authorization, upload-URL, and upload-part-URL responses, including the results of `B2Client.authorize()`, `Bucket.getDownloadAuthorization()`, `RawClient.authorizeAccount()`, `RawClient.getDownloadAuthorization()`, `RawClient.getUploadUrl()`, and `RawClient.getUploadPartUrl()`. Use `authorizeAccountResponseForPersistence()`, `downloadAuthorizationResponseForPersistence()`, `getUploadUrlResponseForPersistence()`, or `getUploadPartUrlResponseForPersistence()` before serializing these responses for persistence.
+- Authorization, download-authorization, upload-URL, and upload-part-URL responses now use consistent authorization-token redaction in JSON and Node inspection diagnostics. Under Bun only, these responses have a one-level prototype wrapper carrying an inherited non-enumerable `toJSON` hook; Node and browser prototypes are unchanged.
+- `InMemoryAccountInfo.setAuth()` now stores a shallow copy of its response. `getAuth()` returns a different outer object, so later top-level mutations of the caller's response do not reach stored state; nested values retain their existing references.
 - **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
 - **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,
@@ -29,8 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SDK objects hide application keys and authorization tokens in diagnostics.**
   Logging, inspecting, or serializing clients, bucket and file handles, auth
   stores, and upload URL pools no longer prints stored credentials. Explicit
-  `authorize()` and `getAuth()` responses still contain the real token, and file
-  auth caches still persist it.
+  `authorize()` responses retain the real token for direct property access but
+  redact it in JSON and Node inspection diagnostics; `getAuth()` returns the
+  plain stored copy with the real token, and file auth caches still persist it.
+  The persistence helpers, `setAuth()`, `returnUploadUrl()`,
+  `returnPartUploadUrl()`, and `UploadUrlPool.checkin()` reject a response
+  rebuilt from diagnostic JSON with `B2AuthorizationTokenRedactedError`.
+  Passing its authorization token directly to a raw method is not guarded and
+  instead fails with a server 401.
   Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
   now throw `Cannot read private member`, the same constraint as the Partner
   client. Keep these SDK instances outside

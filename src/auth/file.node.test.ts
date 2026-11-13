@@ -3,6 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { B2Client } from '../client.ts'
+import {
+  AUTHORIZATION_TOKEN_REDACTED,
+  redactAuthorizeAccountResponse,
+} from '../response-redaction.ts'
 import { B2Simulator } from '../simulator/index.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { BucketType } from '../types/bucket.ts'
@@ -93,6 +97,18 @@ describe('FileAccountInfo', () => {
       accountInfo: accountInfo2,
     })
     expect(client2.accountInfo.getAuth()).not.toBeNull()
+  })
+
+  it('persists the real token from a hooked authorize response', async () => {
+    const accountInfo = new FileAccountInfo(storePath)
+    const hooked = redactAuthorizeAccountResponse(makeCachedAuth())
+
+    accountInfo.setAuth(hooked)
+    await accountInfo.flushed()
+
+    const persisted = JSON.parse(await readFile(storePath, 'utf8')) as AuthorizeAccountResponse
+    expect(persisted.authorizationToken).toBe(hooked.authorizationToken)
+    expect(persisted.authorizationToken).not.toBe(AUTHORIZATION_TOKEN_REDACTED)
   })
 
   it('loads legacy cached auth without allowed.buckets', async () => {

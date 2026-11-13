@@ -1251,6 +1251,9 @@ export class Bucket {
    * @param validDurationInSeconds - How long the authorization is valid (1-604800 seconds).
    *
    * @returns The download authorization response containing a time-limited token.
+   * `JSON.stringify()` and Node inspection replace its authorization token with a
+   * diagnostic placeholder. Call `downloadAuthorizationResponseForPersistence()`
+   * before serializing it for persistence.
    */
   async getDownloadAuthorization(
     fileNamePrefix: string,

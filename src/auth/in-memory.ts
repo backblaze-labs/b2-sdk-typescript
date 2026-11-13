@@ -1,3 +1,4 @@
+import { assertAuthorizationTokenCanBeRehydrated } from '../response-redaction.ts'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
 import type { AccountInfo, UploadUrlEntry } from './account-info.ts'
@@ -24,11 +25,17 @@ export class InMemoryAccountInfo implements AccountInfo {
 
   /**
    * Store a fresh authorization response, replacing any previous state.
+   * Stores a shallow copy, so `getAuth()` returns a different outer object and
+   * later top-level mutations of `auth` do not reach the stored state. Nested
+   * values retain their existing references.
    *
    * @param auth - The authorize account response to store.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `auth` was rebuilt from diagnostic JSON.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
-    this.#auth = auth
+    assertAuthorizationTokenCanBeRehydrated(auth, 'authorizeAccountResponseForPersistence')
+    this.#auth = { ...auth }
     this.#uploadUrls.clear()
     this.#partUploadUrls.clear()
   }
@@ -183,6 +190,8 @@ export class InMemoryAccountInfo implements AccountInfo {
    *
    * @param bucketId - The bucket the upload URL belongs to.
    * @param entry - The upload URL entry to return to the pool.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnUploadUrl(bucketId: BucketId, entry: UploadUrlEntry): void {
     this.#uploadUrls.checkin(bucketId as string, entry)
@@ -214,8 +223,11 @@ export class InMemoryAccountInfo implements AccountInfo {
    *
    * @param fileId - The large file the part upload URL belongs to.
    * @param entry - The part upload URL entry to return to the pool.
+   *
+   * @throws B2AuthorizationTokenRedactedError if `entry` was rebuilt from diagnostic JSON.
    */
   returnPartUploadUrl(fileId: string, entry: UploadUrlEntry): void {
+    assertAuthorizationTokenCanBeRehydrated(entry, 'getUploadPartUrlResponseForPersistence')
     this.#partUploadUrls.checkin(fileId, entry)
   }
 

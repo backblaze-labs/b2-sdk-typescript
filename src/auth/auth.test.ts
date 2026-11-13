@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { B2RealmConfigurationError } from '../errors/index.ts'
+import {
+  AUTHORIZATION_TOKEN_REDACTED,
+  redactAuthorizeAccountResponse,
+} from '../response-redaction.ts'
 import { type AuthorizeAccountResponse, Capability } from '../types/auth.ts'
 import { bucketId } from '../types/ids.ts'
 import type { UploadUrlEntry } from './account-info.ts'
@@ -46,9 +50,18 @@ describe('InMemoryAccountInfo', () => {
     expect(info.getAuth()).toBeNull()
   })
 
-  it('setAuth stores response and getAuth returns it', () => {
-    info.setAuth(mockAuth)
-    expect(info.getAuth()).toBe(mockAuth)
+  it('setAuth stores a hook-free copy with the real authorization token', () => {
+    const hooked = redactAuthorizeAccountResponse({ ...mockAuth })
+
+    info.setAuth(hooked)
+    const stored = info.getAuth()
+
+    expect(stored?.authorizationToken).toBe(mockAuth.authorizationToken)
+    expect(JSON.stringify(stored)).toContain(mockAuth.authorizationToken)
+    expect(JSON.stringify(stored)).not.toContain(AUTHORIZATION_TOKEN_REDACTED)
+    expect(JSON.stringify(hooked)).toContain(AUTHORIZATION_TOKEN_REDACTED)
+    expect(stored).not.toBe(hooked)
+    expect(stored).toEqual({ ...hooked })
   })
 
   describe('after authorization', () => {
@@ -333,6 +346,17 @@ describe('UploadUrlPool', () => {
   it('checkin then checkout returns the entry', () => {
     pool.checkin('key1', entryA)
     expect(pool.checkout('key1')).toBe(entryA)
+  })
+
+  it('names both persistence helpers when rejecting a redacted pooled entry', () => {
+    const checkin = () =>
+      pool.checkin('key1', {
+        ...entryA,
+        authorizationToken: AUTHORIZATION_TOKEN_REDACTED,
+      })
+
+    expect(checkin).toThrow('getUploadUrlResponseForPersistence')
+    expect(checkin).toThrow('getUploadPartUrlResponseForPersistence')
   })
 
   it('evict removes the specific entry', () => {
