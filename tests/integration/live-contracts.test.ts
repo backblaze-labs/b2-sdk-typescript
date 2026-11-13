@@ -28,6 +28,7 @@ import {
   expectBytesEqual,
   fetchBytesWithDeadline,
   keyId,
+  liveRealmOptions,
   makeBucketName,
   makeBytes,
   readAllBytes,
@@ -277,6 +278,7 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
     client = new B2Client({
       applicationKeyId: keyId,
       applicationKey: appKey,
+      ...liveRealmOptions,
     })
     await setupStep('authorize', () => client.authorize())
 
@@ -504,13 +506,19 @@ describe.skipIf(skip)('B2 live endpoint integration contracts', () => {
       expect(auth.fileNamePrefix).toBe(name)
       expect(auth.authorizationToken).toBeTruthy()
 
-      const url = createNativeDownloadAuthorizationUrl(
-        client.accountInfo.getDownloadUrl(),
-        bucket.name,
-        name,
-        auth.authorizationToken,
-        60,
-      )
+      // createNativeDownloadAuthorizationUrl refuses any non-Backblaze host on purpose (SSRF
+      // guard, no option to relax it). Under B2_REALM the download host is the simulator's, so
+      // build the same native URL by hand there; production still goes through the SDK helper.
+      const url =
+        liveRealmOptions.realm === undefined
+          ? createNativeDownloadAuthorizationUrl(
+              client.accountInfo.getDownloadUrl(),
+              bucket.name,
+              name,
+              auth.authorizationToken,
+              60,
+            )
+          : `${client.accountInfo.getDownloadUrl()}/file/${encodeURIComponent(bucket.name)}/${encodeURIComponent(name)}?Authorization=${encodeURIComponent(auth.authorizationToken)}`
       const fetched = await fetchBytesWithDeadline(url)
       expect(fetched.status).toBe(200)
       expectBytesEqual(fetched.bytes, data)
