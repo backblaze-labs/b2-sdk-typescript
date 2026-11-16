@@ -37,7 +37,9 @@ export class InMemoryAccountInfo implements AccountInfo {
    */
   setAuth(auth: AuthorizeAccountResponse): void {
     this.#auth =
-      auth.authorizationToken === AUTHORIZATION_TOKEN_REDACTED || Object.hasOwn(auth, 'toJSON')
+      auth.authorizationToken === AUTHORIZATION_TOKEN_REDACTED ||
+      Object.hasOwn(auth, 'toJSON') ||
+      Object.hasOwn(auth, Symbol.for('nodejs.util.inspect.custom'))
         ? authorizeAccountResponseForPersistence(auth)
         : auth
     this.#uploadUrls.clear()

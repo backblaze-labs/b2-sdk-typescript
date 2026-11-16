@@ -203,6 +203,19 @@ describe('credential redaction Node diagnostics', () => {
     expect(inspect(store)).toBe(inspect({ authorized: true }))
   })
 
+  it('setAuth copies responses with only an inspect hook', async () => {
+    const { auth } = await fixture()
+    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+    Object.defineProperty(auth, inspectSymbol, { value: () => ({ authorized: true }) })
+    expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+    const store = new InMemoryAccountInfo()
+    store.setAuth(auth)
+    expect(store.getAuth()).not.toBe(auth)
+    expect(Object.getOwnPropertyDescriptor(store.getAuth(), inspectSymbol)).toBeUndefined()
+    expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
   it('file store inspect preserves the exact safe summary before and after setAuth', async () => {
     const { store } = await fileStore()
     const { auth } = await fixture()
