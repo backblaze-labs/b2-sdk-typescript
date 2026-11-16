@@ -1,6 +1,6 @@
 import {
-  AUTHORIZATION_TOKEN_REDACTED,
   authorizeAccountResponseForPersistence,
+  isDiagnosticAuthorizationResponse,
 } from '../response-redaction.ts'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
@@ -28,18 +28,21 @@ export class InMemoryAccountInfo implements AccountInfo {
 
   /**
    * Store a fresh authorization response, replacing any previous state.
-   * A response with diagnostic hooks is copied so those hooks do not affect the stored state.
-   * Plain responses retain their existing identity behavior.
+   * Responses with diagnostic hooks, accessors, or non-enumerable tokens are copied into
+   * plain stored state. Valid plain responses retain their existing identity behavior.
    *
    * @param auth - The authorize account response to store.
    *
-   * @throws TypeError if the token was rebuilt from redacted diagnostic JSON.
+   * @throws TypeError if the response is marked as diagnostic or has no string token.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
+    const tokenProperty = Object.getOwnPropertyDescriptor(auth, 'authorizationToken')
     this.#auth =
-      auth.authorizationToken === AUTHORIZATION_TOKEN_REDACTED ||
-      Object.hasOwn(auth, 'toJSON') ||
-      Object.hasOwn(auth, Symbol.for('nodejs.util.inspect.custom'))
+      tokenProperty?.enumerable !== true ||
+      typeof tokenProperty.value !== 'string' ||
+      isDiagnosticAuthorizationResponse(auth) ||
+      'toJSON' in auth ||
+      Symbol.for('nodejs.util.inspect.custom') in auth
         ? authorizeAccountResponseForPersistence(auth)
         : auth
     this.#uploadUrls.clear()

@@ -16,6 +16,12 @@ import {
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
 import { APPLICATION_KEY_REDACTED } from './partner/redaction-placeholders.ts'
 import { getUploadPartUrlResponseForPersistence as rawPartUrlForPersistence } from './raw/index.ts'
+import {
+  redactAuthorizeAccountResponse,
+  redactDownloadAuthorizationResponse,
+  redactGetUploadPartUrlResponse,
+  redactGetUploadUrlResponse,
+} from './response-redaction.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
 import type { AuthorizeAccountResponse } from './types/auth.ts'
@@ -93,7 +99,120 @@ function poolTokens(store: AccountInfo): void {
   store.returnPartUploadUrl('large-file-id', { ...entry, authorizationToken: PART_TOKEN })
 }
 
+async function returnedResponses() {
+  const { client, store, bucket } = await fixture()
+  const authorize = await client.authorize()
+  const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+    bucketId: BID,
+  })
+  const part = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+    fileId: largeFileId('diagnostic-large-file-id'),
+  })
+  const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+  return { authorize, upload, part, download }
+}
+
 describe('credential redaction JSON and spread', () => {
+  it.each(['authorize', 'upload', 'part', 'download'] as const)(
+    '%s response excludes its token from enumeration',
+    async (name) => {
+      const response = (await returnedResponses())[name]
+      const token = response.authorizationToken
+      const spread = { ...response }
+      const entries = Object.entries(response)
+      const browserPreview: Record<string, unknown> = {}
+      for (const key in response) browserPreview[key] = Reflect.get(response, key)
+      expect(spread).not.toHaveProperty('authorizationToken')
+      expect(entries.map(([key]) => key)).not.toContain('authorizationToken')
+      expect(browserPreview).not.toHaveProperty('authorizationToken')
+      for (const surface of [spread, entries, browserPreview, response]) {
+        expect(JSON.stringify(surface)).not.toContain(token)
+      }
+      expect(String(response)).not.toContain(token)
+      const descriptor = Object.getOwnPropertyDescriptor(response, 'authorizationToken')
+      expect(descriptor?.enumerable).toBe(false)
+      expect(descriptor?.get).toBeTypeOf('function')
+      expect(descriptor).not.toHaveProperty('value')
+      expect(response.authorizationToken).toBe(token)
+    },
+  )
+
+  it('persistence accepts ordinary token values matching the diagnostic label', async () => {
+    const { auth } = await fixture()
+    const token = '[redacted authorization token]'
+    const authorize = { ...auth, authorizationToken: token as AuthToken }
+    const upload = { bucketId: BID, ...entry, authorizationToken: token }
+    const part = {
+      fileId: largeFileId('diagnostic-large-file-id'),
+      ...entry,
+      authorizationToken: token,
+    }
+    const download = { bucketId: BID, fileNamePrefix: 'diagnostic', authorizationToken: token }
+    expect(authorizeAccountResponseForPersistence(authorize).authorizationToken).toBe(token)
+    expect(getUploadUrlResponseForPersistence(upload).authorizationToken).toBe(token)
+    expect(getUploadPartUrlResponseForPersistence(part).authorizationToken).toBe(token)
+    expect(downloadAuthorizationResponseForPersistence(download).authorizationToken).toBe(token)
+    expect(
+      authorizeAccountResponseForPersistence(redactAuthorizeAccountResponse(authorize))
+        .authorizationToken,
+    ).toBe(token)
+    expect(
+      getUploadUrlResponseForPersistence(redactGetUploadUrlResponse(upload)).authorizationToken,
+    ).toBe(token)
+    expect(
+      getUploadPartUrlResponseForPersistence(redactGetUploadPartUrlResponse(part))
+        .authorizationToken,
+    ).toBe(token)
+    expect(
+      downloadAuthorizationResponseForPersistence(redactDownloadAuthorizationResponse(download))
+        .authorizationToken,
+    ).toBe(token)
+    const store = new InMemoryAccountInfo()
+    store.setAuth({ ...auth, authorizationToken: token as AuthToken })
+    expect(store.getAuthToken()).toBe(token)
+  })
+
+  it('persistence rejects diagnostic provenance independently of the token text', async () => {
+    const { authorize, upload, part, download } = await returnedResponses()
+    for (const [response, helper] of [
+      [authorize, authorizeAccountResponseForPersistence],
+      [upload, getUploadUrlResponseForPersistence],
+      [part, getUploadPartUrlResponseForPersistence],
+      [download, downloadAuthorizationResponseForPersistence],
+    ] as const) {
+      const rebuilt = JSON.parse(JSON.stringify(response))
+      expect(rebuilt._b2sdkDiagnostic).toBe('authorization-token-redacted')
+      rebuilt.authorizationToken = 'diagnostic replacement'
+      expect(() => helper(rebuilt)).toThrow(TypeError)
+    }
+  })
+
+  it('frozen response data keeps direct token access without enumeration', async () => {
+    const original = Object.freeze({
+      fileId: largeFileId('diagnostic-large-file-id'),
+      ...entry,
+      authorizationToken: PART_TOKEN,
+    })
+    const response = redactGetUploadPartUrlResponse(original)
+    expect(Object.isFrozen(original)).toBe(true)
+    expect(response).not.toBe(original)
+    expect(Object.keys(response)).not.toContain('authorizationToken')
+    expect(JSON.stringify(response)).not.toContain(PART_TOKEN)
+    expect(response.authorizationToken).toBe(PART_TOKEN)
+    expect(getUploadPartUrlResponseForPersistence(response).authorizationToken).toBe(PART_TOKEN)
+  })
+
+  it('persistence helpers and memory stores reject incomplete response copies', async () => {
+    const { authorize, upload, part, download } = await returnedResponses()
+    expect(() => authorizeAccountResponseForPersistence({ ...authorize })).toThrow(TypeError)
+    expect(() => getUploadUrlResponseForPersistence({ ...upload })).toThrow(TypeError)
+    expect(() => getUploadPartUrlResponseForPersistence({ ...part })).toThrow(TypeError)
+    expect(() => downloadAuthorizationResponseForPersistence({ ...download })).toThrow(TypeError)
+    const store = new InMemoryAccountInfo()
+    expect(() => store.setAuth({ ...authorize })).toThrow(TypeError)
+    expect(store.getAuth()).toBeNull()
+  })
+
   it('client summary isolates a custom enumerable AccountInfo', async () => {
     const { auth } = await fixture()
     const store = {
@@ -281,8 +400,10 @@ describe('credential redaction JSON and spread', () => {
     expect(rawPartUrlForPersistence).toBe(getUploadPartUrlResponseForPersistence)
     const copy = getUploadPartUrlResponseForPersistence(response)
     expect(copy).not.toBe(response)
-    expect(copy).toEqual({ ...response })
-    expect(Object.keys(copy)).toEqual(Object.keys(response))
+    expect(copy).toEqual({ ...response, authorizationToken: PART_TOKEN })
+    expect(Object.keys(copy).filter((key) => key !== 'authorizationToken')).toEqual(
+      Object.keys(response),
+    )
     expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
     expect(
       Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
@@ -301,12 +422,12 @@ describe('credential redaction JSON and spread', () => {
     expect(() => getUploadPartUrlResponseForPersistence(diagnostic)).toThrow(
       'getUploadPartUrlResponseForPersistence',
     )
-    expect(() =>
+    expect(
       getUploadPartUrlResponseForPersistence({
         ...response,
         authorizationToken: '[redacted authorization token]',
-      }),
-    ).toThrow('getUploadPartUrlResponseForPersistence')
+      }).authorizationToken,
+    ).toBe('[redacted authorization token]')
   })
 
   it('plain persistence copies retain all three real tokens', async () => {
@@ -323,7 +444,9 @@ describe('credential redaction JSON and spread', () => {
     ] as const) {
       expect(copy.authorizationToken).toBe(response.authorizationToken)
       expect(JSON.parse(JSON.stringify(copy)).authorizationToken).toBe(response.authorizationToken)
-      expect(Object.keys(response)).toEqual(Object.keys(copy))
+      expect(Object.keys(copy).filter((key) => key !== 'authorizationToken')).toEqual(
+        Object.keys(response),
+      )
       expect(Object.hasOwn(response, 'toJSON')).toBe(true)
       expect(Object.keys(response)).not.toContain('toJSON')
     }

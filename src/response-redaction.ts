@@ -4,12 +4,52 @@ import type { GetUploadPartUrlResponse, GetUploadUrlResponse } from './types/upl
 
 export const AUTHORIZATION_TOKEN_REDACTED = '[redacted authorization token]'
 const INSPECT_CUSTOM = Symbol.for('nodejs.util.inspect.custom')
+const DIAGNOSTIC_KIND = 'authorization-token-redacted'
 
 type TokenResponse = { readonly authorizationToken: string }
 
+class ResponseAuthorizationToken {
+  readonly #value: string
+
+  constructor(value: string) {
+    this.#value = value
+  }
+
+  read(): string {
+    return this.#value
+  }
+}
+
+/**
+ * Identifies a response carrying the SDK's diagnostic provenance marker.
+ *
+ * @param response - Response to check before trusted persistence.
+ *
+ * @returns Whether the response is a diagnostic summary.
+ *
+ * @internal
+ */
+export function isDiagnosticAuthorizationResponse(response: TokenResponse): boolean {
+  return Object.getOwnPropertyDescriptor(response, '_b2sdkDiagnostic')?.value === DIAGNOSTIC_KIND
+}
+
 function redactResponse<T extends TokenResponse>(response: T): T {
-  const target = Object.isExtensible(response) ? response : ({ ...response } as T)
-  const summary = () => ({ ...target, authorizationToken: AUTHORIZATION_TOKEN_REDACTED })
+  const token = new ResponseAuthorizationToken(response.authorizationToken)
+  const target =
+    Object.isExtensible(response) &&
+    Object.getOwnPropertyDescriptor(response, 'authorizationToken')?.configurable !== false
+      ? response
+      : ({ ...response } as T)
+  Object.defineProperty(target, 'authorizationToken', {
+    get: token.read.bind(token),
+    enumerable: false,
+    configurable: true,
+  })
+  const summary = () => ({
+    ...target,
+    authorizationToken: AUTHORIZATION_TOKEN_REDACTED,
+    _b2sdkDiagnostic: DIAGNOSTIC_KIND,
+  })
 
   // Bun reads inherited toJSON methods; Node and browsers read the own hook.
   if ('Bun' in globalThis) {
@@ -23,14 +63,18 @@ function redactResponse<T extends TokenResponse>(response: T): T {
 }
 
 function forPersistence<T extends TokenResponse>(response: T, helperName: string): T {
-  if (response.authorizationToken === AUTHORIZATION_TOKEN_REDACTED) {
+  if (isDiagnosticAuthorizationResponse(response)) {
     throw new TypeError(`${helperName} requires the original response, not diagnostic JSON`)
   }
-  return { ...response }
+  const authorizationToken = response.authorizationToken
+  if (typeof authorizationToken !== 'string') {
+    throw new TypeError(`${helperName} requires a response with a string authorizationToken`)
+  }
+  return { ...response, authorizationToken }
 }
 
 /**
- * Adds non-enumerable diagnostic hooks while preserving direct token access.
+ * Stores the token behind a non-enumerable accessor and adds diagnostic hooks.
  *
  * @param response - Authorization response to prepare for diagnostics.
  *
@@ -44,7 +88,7 @@ export function redactAuthorizeAccountResponse(
 }
 
 /**
- * Adds non-enumerable diagnostic hooks while preserving direct token access.
+ * Stores the token behind a non-enumerable accessor and adds diagnostic hooks.
  *
  * @param response - Upload URL response to prepare for diagnostics.
  *
@@ -56,7 +100,7 @@ export function redactGetUploadUrlResponse(response: GetUploadUrlResponse): GetU
 }
 
 /**
- * Adds non-enumerable diagnostic hooks while preserving direct token access.
+ * Stores the token behind a non-enumerable accessor and adds diagnostic hooks.
  *
  * @param response - Part upload URL response to prepare for diagnostics.
  *
@@ -70,7 +114,7 @@ export function redactGetUploadPartUrlResponse(
 }
 
 /**
- * Adds non-enumerable diagnostic hooks while preserving direct token access.
+ * Stores the token behind a non-enumerable accessor and adds diagnostic hooks.
  *
  * @param response - Download authorization response to prepare for diagnostics.
  *
@@ -91,7 +135,7 @@ export function redactDownloadAuthorizationResponse(
  *
  * @returns A plain response copy with the real token.
  *
- * @throws TypeError if given a response rebuilt from diagnostic JSON.
+ * @throws TypeError if the response carries the diagnostic marker or has no string token.
  */
 export function authorizeAccountResponseForPersistence(
   response: AuthorizeAccountResponse,
@@ -107,7 +151,7 @@ export function authorizeAccountResponseForPersistence(
  *
  * @returns A plain response copy with the real token.
  *
- * @throws TypeError if given a response rebuilt from diagnostic JSON.
+ * @throws TypeError if the response carries the diagnostic marker or has no string token.
  */
 export function getUploadUrlResponseForPersistence(
   response: GetUploadUrlResponse,
@@ -123,7 +167,7 @@ export function getUploadUrlResponseForPersistence(
  *
  * @returns A plain response copy with the real token.
  *
- * @throws TypeError if given a response rebuilt from diagnostic JSON.
+ * @throws TypeError if the response carries the diagnostic marker or has no string token.
  */
 export function getUploadPartUrlResponseForPersistence(
   response: GetUploadPartUrlResponse,
@@ -139,7 +183,7 @@ export function getUploadPartUrlResponseForPersistence(
  *
  * @returns A plain response copy with the real token.
  *
- * @throws TypeError if given a response rebuilt from diagnostic JSON.
+ * @throws TypeError if the response carries the diagnostic marker or has no string token.
  */
 export function downloadAuthorizationResponseForPersistence(
   response: DownloadAuthorizationResponse,

@@ -5,6 +5,9 @@
  * with fully typed request and response objects. No retry logic, no URL pooling,
  * no automatic reauthorization. Use this when you need precise control over
  * individual API calls; for most use cases prefer the high-level `B2Client`.
+ * Returned authorization tokens remain directly readable through non-enumerable
+ * accessors. Object spread and property enumeration omit them; use the response's
+ * `*ResponseForPersistence` helper before trusted serialization.
  * SDK-built B2 native storage API URLs use `/b2api/v4`. JSON endpoints use
  * POST request bodies, including read/list endpoints whose API docs also show
  * GET query examples but document POST JSON compatibility.

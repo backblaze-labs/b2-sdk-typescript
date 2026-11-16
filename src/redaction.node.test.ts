@@ -203,18 +203,23 @@ describe('credential redaction Node diagnostics', () => {
     expect(inspect(store)).toBe(inspect({ authorized: true }))
   })
 
-  it('setAuth copies responses with only an inspect hook', async () => {
-    const { auth } = await fixture()
-    const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
-    Object.defineProperty(auth, inspectSymbol, { value: () => ({ authorized: true }) })
-    expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
-    const store = new InMemoryAccountInfo()
-    store.setAuth(auth)
-    expect(store.getAuth()).not.toBe(auth)
-    expect(Object.getOwnPropertyDescriptor(store.getAuth(), inspectSymbol)).toBeUndefined()
-    expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
-    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
-  })
+  it.each(['own', 'prototype'])(
+    'setAuth copies responses with only an inspect hook on the %s object',
+    async (placement) => {
+      const { auth } = await fixture()
+      const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+      const owner = placement === 'own' ? auth : Object.create(Object.getPrototypeOf(auth))
+      if (placement === 'prototype') Object.setPrototypeOf(auth, owner)
+      Object.defineProperty(owner, inspectSymbol, { value: () => ({ authorized: true }) })
+      expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+      const store = new InMemoryAccountInfo()
+      store.setAuth(auth)
+      expect(store.getAuth()).not.toBe(auth)
+      expect(Object.getOwnPropertyDescriptor(store.getAuth(), inspectSymbol)).toBeUndefined()
+      expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+      expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+    },
+  )
 
   it('file store inspect preserves the exact safe summary before and after setAuth', async () => {
     const { store } = await fileStore()
@@ -332,6 +337,46 @@ describe('credential redaction Node diagnostics', () => {
     expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
     expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
     await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('file store round-trips ordinary token text matching the diagnostic label', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    const token = '[redacted authorization token]'
+    store.setAuth({ ...auth, authorizationToken: token as AuthToken })
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(token)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getAuthToken()).toBe(token)
+  })
+
+  it('file store rejects incomplete response copies', async () => {
+    const { store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    try {
+      expect(() => store.setAuth({ ...response })).toThrow(TypeError)
+    } finally {
+      await store.flushed()
+    }
+    expect(store.getAuth()).toBeNull()
+  })
+
+  it('file store preserves a token accessor without diagnostic hooks', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    Object.defineProperty(auth, 'authorizationToken', {
+      get: () => ACCOUNT_TOKEN,
+      enumerable: false,
+    })
+    expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+    expect(Symbol.for('nodejs.util.inspect.custom') in auth).toBe(false)
+    store.setAuth(auth)
+    await store.flushed()
+    expect(store.getAuth()).not.toBe(auth)
+    expect(store.getAuthToken()).toBe(ACCOUNT_TOKEN)
     expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
   })
 
