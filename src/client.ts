@@ -10,6 +10,7 @@ import { deriveAllowedSuffixes, UrlGuard } from './http/url-guard.ts'
 import { redactUrlForError } from './internal/url-redaction.ts'
 import { APPLICATION_KEY_REDACTED } from './partner/redaction-placeholders.ts'
 import { RawClient } from './raw/index.ts'
+import { authorizeAccountResponseForPersistence } from './response-redaction.ts'
 import type { AuthorizeAccountResponse, Capability } from './types/auth.ts'
 import type {
   BucketDefaultServerSideEncryptionSetting,
@@ -216,7 +217,8 @@ export class B2Client {
    *
    * @param options - Optional request controls.
    *
-   * @returns The authorization response containing tokens, URLs, and capabilities.
+   * @returns The authorization response containing tokens, URLs, and capabilities. Direct token
+   * access is preserved; use `authorizeAccountResponseForPersistence` before trusted serialization.
    */
   async authorize(options?: B2ClientAuthorizeOptions): Promise<AuthorizeAccountResponse> {
     throwIfSignalAborted(options?.signal)
@@ -227,7 +229,7 @@ export class B2Client {
       options?.signal !== undefined ? { signal: options.signal } : undefined,
     )
     throwIfSignalAborted(options?.signal)
-    this.#accountInfo.setAuth(auth)
+    this.#accountInfo.setAuth(authorizeAccountResponseForPersistence(auth))
     this.lockUrlGuard(auth)
     return auth
   }

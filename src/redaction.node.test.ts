@@ -11,7 +11,16 @@ import { FileAccountInfo } from './auth/file.ts'
 import { UploadUrlPool } from './auth/index.ts'
 import { BackupClient } from './backup/index.ts'
 import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
-import { B2Client, B2Object, Bucket, InMemoryAccountInfo } from './index.ts'
+import {
+  authorizeAccountResponseForPersistence,
+  B2Client,
+  B2Object,
+  Bucket,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+  InMemoryAccountInfo,
+} from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
@@ -19,14 +28,16 @@ import {
   CREDENTIAL_BEARING_EXPORTS,
   REVIEWED_EXPORTS,
 } from './test-utils/redaction-export-review.ts'
+import type { AuthorizeAccountResponse } from './types/auth.ts'
 import { BucketType } from './types/bucket.ts'
-import { type AuthToken, bucketId, partnerToken } from './types/ids.ts'
+import { type AuthToken, bucketId, largeFileId, partnerToken } from './types/ids.ts'
 
 const APP_KEY = 'SECRET-APPKEY'
 const ACCOUNT_TOKEN = 'SECRET-ACCOUNT-TOKEN'
 const UPLOAD_TOKEN = 'SECRET-UPLOAD-TOKEN'
 const PART_TOKEN = 'SECRET-PART-UPLOAD-TOKEN'
-const SECRETS = [APP_KEY, ACCOUNT_TOKEN, UPLOAD_TOKEN, PART_TOKEN]
+const DOWNLOAD_TOKEN = 'SECRET-DOWNLOAD-TOKEN'
+const SECRETS = [APP_KEY, ACCOUNT_TOKEN, UPLOAD_TOKEN, PART_TOKEN, DOWNLOAD_TOKEN]
 const entry = { uploadUrl: 'https://pod.backblaze.com/upload', authorizationToken: UPLOAD_TOKEN }
 const directories: string[] = []
 
@@ -50,7 +61,28 @@ async function fixture(store: AccountInfo = new InMemoryAccountInfo()) {
     applicationKey: APP_KEY,
     accountInfo: store,
     transport: {
-      async send() {
+      async send(request) {
+        if (request.url.includes('b2_get_upload_part_url')) {
+          return jsonResponse({
+            fileId: largeFileId('diagnostic-large-file-id'),
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: PART_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_upload_url')) {
+          return jsonResponse({
+            bucketId: bucketId('diagnostic-bucket-id'),
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: UPLOAD_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_download_authorization')) {
+          return jsonResponse({
+            bucketId: bucketId('diagnostic-bucket-id'),
+            fileNamePrefix: 'diagnostic',
+            authorizationToken: DOWNLOAD_TOKEN,
+          })
+        }
         return jsonResponse(auth)
       },
     },
@@ -97,6 +129,71 @@ function poolTokens(store: AccountInfo): void {
 }
 
 describe('credential redaction Node diagnostics', () => {
+  it('inspect summaries retain diagnostic provenance for all response kinds', async () => {
+    const { client, store, bucket } = await fixture()
+    const authorize = await client.authorize()
+    const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: bucketId('diagnostic-bucket-id'),
+    })
+    const part = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+    for (const [response, helper] of [
+      [authorize, authorizeAccountResponseForPersistence],
+      [upload, getUploadUrlResponseForPersistence],
+      [part, getUploadPartUrlResponseForPersistence],
+      [download, downloadAuthorizationResponseForPersistence],
+    ] as const) {
+      const summary = Reflect.apply(
+        Reflect.get(response, Symbol.for('nodejs.util.inspect.custom')),
+        response,
+        [],
+      )
+      expect(summary).toHaveProperty('_b2sdkDiagnostic', 'authorization-token-redacted')
+      expect(inspect(response)).toContain('_b2sdkDiagnostic')
+      expect(() => helper(JSON.parse(JSON.stringify(summary)))).toThrow(TypeError)
+    }
+  })
+
+  it.each(surfaces)('authorize response hides its token via %s', async (_name, render) => {
+    const { client } = await fixture()
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(render(response)).not.toContain(ACCOUNT_TOKEN)
+  })
+
+  it.each(surfaces)('upload URL response hides its token via %s', async (_name, render) => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: bucketId('diagnostic-bucket-id'),
+    })
+    expect(response.authorizationToken).toBe(UPLOAD_TOKEN)
+    expect(render(response)).not.toContain(UPLOAD_TOKEN)
+  })
+
+  it.each(surfaces)('part upload URL response hides its token via %s', async (_name, render) => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    expect(response.authorizationToken).toBe(PART_TOKEN)
+    expect(render(response)).not.toContain(PART_TOKEN)
+  })
+
+  it.each(surfaces)(
+    'download authorization response hides its token via %s',
+    async (_name, render) => {
+      const { client, bucket } = await fixture()
+      await client.authorize()
+      const response = await bucket.getDownloadAuthorization('diagnostic', 60)
+      expect(response.authorizationToken).toBe(DOWNLOAD_TOKEN)
+      expect(render(response)).not.toContain(DOWNLOAD_TOKEN)
+    },
+  )
+
   it.each(surfaces)(
     'client summary isolates custom enumerable AccountInfo via %s',
     async (_name, render) => {
@@ -141,6 +238,32 @@ describe('credential redaction Node diagnostics', () => {
     poolTokens(store)
     expect(inspect(store)).toBe(inspect({ authorized: true }))
   })
+
+  it.each([
+    ['own', false],
+    ['own', true],
+    ['prototype', false],
+    ['prototype', true],
+  ] as const)(
+    'setAuth copies responses with only an inspect hook on the %s object (enumerable=%s)',
+    async (placement, enumerable) => {
+      const { auth } = await fixture()
+      const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
+      const owner = placement === 'own' ? auth : Object.create(Object.getPrototypeOf(auth))
+      if (placement === 'prototype') Object.setPrototypeOf(auth, owner)
+      Object.defineProperty(owner, inspectSymbol, {
+        value: () => ({ authorized: true }),
+        enumerable,
+      })
+      expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+      const store = new InMemoryAccountInfo()
+      store.setAuth(auth)
+      expect(store.getAuth()).not.toBe(auth)
+      expect(Object.getOwnPropertyDescriptor(store.getAuth(), inspectSymbol)).toBeUndefined()
+      expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+      expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+    },
+  )
 
   it('file store inspect preserves the exact safe summary before and after setAuth', async () => {
     const { store } = await fileStore()
@@ -219,6 +342,123 @@ describe('credential redaction Node diagnostics', () => {
       assertNoSecrets(JSON.stringify(reloaded))
     },
   )
+
+  it('file store persists the real token from an authorize response', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture(store)
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(store.getAuth()).not.toBe(response)
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('authorize passes a hook-free response to a custom AccountInfo', async () => {
+    class RecordingAccountInfo extends InMemoryAccountInfo {
+      json = ''
+      hook: PropertyDescriptor | undefined
+
+      override setAuth(auth: AuthorizeAccountResponse): void {
+        this.json = JSON.stringify(auth)
+        this.hook = Object.getOwnPropertyDescriptor(auth, 'toJSON')
+        super.setAuth(auth)
+      }
+    }
+    const store = new RecordingAccountInfo()
+    const { client } = await fixture(store)
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(store.json).authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(store.hook).toBeUndefined()
+  })
+
+  it('file store persists a hook-free copy of a raw authorize response', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.raw.authorizeAccount('key-id', APP_KEY)
+    store.setAuth(response)
+    expect(store.getAuth()).not.toBe(response)
+    expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('file store round-trips ordinary token text matching the diagnostic label', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    const token = '[redacted authorization token]'
+    store.setAuth({ ...auth, authorizationToken: token as AuthToken })
+    await store.flushed()
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(token)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getAuthToken()).toBe(token)
+  })
+
+  it('file store rejects incomplete response copies', async () => {
+    const { store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    try {
+      expect(() => store.setAuth({ ...response })).toThrow(TypeError)
+    } finally {
+      await store.flushed()
+    }
+    expect(store.getAuth()).toBeNull()
+  })
+
+  it('file store preserves a token accessor without diagnostic hooks', async () => {
+    const { path, store } = await fileStore()
+    const { auth } = await fixture()
+    Object.defineProperty(auth, 'authorizationToken', {
+      get: () => ACCOUNT_TOKEN,
+      enumerable: false,
+    })
+    expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
+    expect(Symbol.for('nodejs.util.inspect.custom') in auth).toBe(false)
+    store.setAuth(auth)
+    await store.flushed()
+    expect(store.getAuth()).not.toBe(auth)
+    expect(store.getAuthToken()).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it('file store round-trips non-enumerable authorization data', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    const expected = {
+      accountId: response.accountId,
+      authorizationToken: ACCOUNT_TOKEN,
+      apiInfo: response.apiInfo,
+      applicationKeyExpirationTimestamp: response.applicationKeyExpirationTimestamp,
+    }
+    for (const key of Object.keys(response)) {
+      const value: unknown = Reflect.get(response, key)
+      Object.defineProperty(response, key, {
+        get: () => value,
+        enumerable: false,
+        configurable: true,
+      })
+    }
+    store.setAuth(response)
+    await store.flushed()
+    expect(store.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(expected)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(reloaded.getDownloadUrl()).toBe(expected.apiInfo.storageApi.downloadUrl)
+    expect(reloaded.getS3ApiUrl()).toBe(expected.apiInfo.storageApi.s3ApiUrl)
+    expect(reloaded.getRecommendedPartSize()).toBe(expected.apiInfo.storageApi.recommendedPartSize)
+    expect(reloaded.getAbsoluteMinimumPartSize()).toBe(
+      expected.apiInfo.storageApi.absoluteMinimumPartSize,
+    )
+    expect(reloaded.getAccountId()).toBe(expected.accountId)
+    expect(reloaded.getAuthToken()).toBe(ACCOUNT_TOKEN)
+    expect(reloaded.getAuth()).toEqual(expected)
+  })
 
   it('reviewed public exports have sentinel coverage on every leak surface', async () => {
     const { store: file } = await fileStore()

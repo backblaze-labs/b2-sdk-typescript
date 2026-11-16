@@ -1250,7 +1250,8 @@ export class Bucket {
    * @param fileNamePrefix - Only authorize downloads of files starting with this prefix.
    * @param validDurationInSeconds - How long the authorization is valid (1-604800 seconds).
    *
-   * @returns The download authorization response containing a time-limited token.
+   * @returns The download authorization response containing a time-limited token. Use
+   * `downloadAuthorizationResponseForPersistence` before trusted serialization.
    */
   async getDownloadAuthorization(
     fileNamePrefix: string,

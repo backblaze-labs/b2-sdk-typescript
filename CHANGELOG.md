@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** Authorize-account, upload-URL, part-upload-URL and download-authorization responses now expose `authorizationToken` through a non-enumerable readonly accessor. Direct access retains the real token; object spread, `Object.keys`, `Object.entries` and browser property enumeration omit it. JSON and Node inspect diagnostics replace the token with a placeholder and include `_b2sdkDiagnostic: 'authorization-token-redacted'`. On Bun, returned responses also gain an inherited non-enumerable JSON hook on their prototype.
+  For trusted persistence, use `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence` or `downloadAuthorizationResponseForPersistence`. These helpers materialize all own response data, including non-enumerable fields and accessors, in a plain copy with the token restored and diagnostic hooks removed. They and the built-in account stores reject marked diagnostic summaries and missing or non-string tokens with `TypeError`; unmarked token text matching the placeholder remains valid input. Custom stores should use the persistence helper before trusted serialization. A spread copy of a returned response omits the token and cannot be used as cached auth.
+  `B2Client.authorize()` passes a plain copy to the account store, so `accountInfo.getAuth()` is not the returned object. `InMemoryAccountInfo.setAuth` normalizes responses with diagnostic hooks or token accessors into plain stored state; valid plain response identity is unchanged.
 - **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
 - **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,
@@ -29,8 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SDK objects hide application keys and authorization tokens in diagnostics.**
   Logging, inspecting, or serializing clients, bucket and file handles, auth
   stores, and upload URL pools no longer prints stored credentials. Explicit
-  `authorize()` and `getAuth()` responses still contain the real token, and file
-  auth caches still persist it.
+  `authorize()` and `getAuth()` retain direct access to the real token, and file
+  auth caches still persist it. Returned authorize-account, upload-URL, part-upload-URL and
+  download-authorization responses now use the same redacted diagnostic style.
   Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
   now throw `Cannot read private member`, the same constraint as the Partner
   client. Keep these SDK instances outside
