@@ -70,7 +70,10 @@ function forPersistence<T extends TokenResponse>(response: T, helperName: string
   if (typeof authorizationToken !== 'string') {
     throw new TypeError(`${helperName} requires a response with a string authorizationToken`)
   }
-  return { ...response, authorizationToken }
+  const copy = { ...response, authorizationToken }
+  Reflect.deleteProperty(copy, 'toJSON')
+  Reflect.deleteProperty(copy, INSPECT_CUSTOM)
+  return copy
 }
 
 /**

@@ -213,6 +213,50 @@ describe('credential redaction JSON and spread', () => {
     expect(store.getAuth()).toBeNull()
   })
 
+  it('persistence copies omit an enumerable JSON hook', async () => {
+    const { auth } = await fixture()
+    const response = { ...auth, toJSON: () => ({ authorized: true }) }
+    const copy = authorizeAccountResponseForPersistence(response)
+    expect(Object.hasOwn(copy, 'toJSON')).toBe(false)
+    expect(JSON.parse(JSON.stringify(copy)).authorizationToken).toBe(ACCOUNT_TOKEN)
+    const store = new InMemoryAccountInfo()
+    store.setAuth(response)
+    expect(store.getAuth()).not.toHaveProperty('toJSON')
+    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
+  })
+
+  it.each(['number', 'getter'] as const)(
+    'setAuth rejects a non-string token from an enumerable %s property',
+    async (kind) => {
+      const { auth } = await fixture()
+      Object.defineProperty(
+        auth,
+        'authorizationToken',
+        kind === 'number'
+          ? { value: 12345, enumerable: true }
+          : { get: () => undefined, enumerable: true },
+      )
+      const store = new InMemoryAccountInfo()
+      expect(() => store.setAuth(auth)).toThrow(TypeError)
+      expect(store.getAuth()).toBeNull()
+    },
+  )
+
+  it('fixed token descriptors retain direct access without enumeration', () => {
+    const original = {
+      fileId: largeFileId('diagnostic-large-file-id'),
+      ...entry,
+      authorizationToken: PART_TOKEN,
+    }
+    Object.defineProperty(original, 'authorizationToken', { configurable: false })
+    expect(Object.isExtensible(original)).toBe(true)
+    const response = redactGetUploadPartUrlResponse(original)
+    expect(response).not.toBe(original)
+    expect(Object.keys(response)).not.toContain('authorizationToken')
+    expect(response.authorizationToken).toBe(PART_TOKEN)
+    expect(getUploadPartUrlResponseForPersistence(response).authorizationToken).toBe(PART_TOKEN)
+  })
+
   it('client summary isolates a custom enumerable AccountInfo', async () => {
     const { auth } = await fixture()
     const store = {

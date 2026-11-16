@@ -11,7 +11,16 @@ import { FileAccountInfo } from './auth/file.ts'
 import { UploadUrlPool } from './auth/index.ts'
 import { BackupClient } from './backup/index.ts'
 import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
-import { B2Client, B2Object, Bucket, InMemoryAccountInfo } from './index.ts'
+import {
+  authorizeAccountResponseForPersistence,
+  B2Client,
+  B2Object,
+  Bucket,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+  InMemoryAccountInfo,
+} from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
@@ -120,6 +129,33 @@ function poolTokens(store: AccountInfo): void {
 }
 
 describe('credential redaction Node diagnostics', () => {
+  it('inspect summaries retain diagnostic provenance for all response kinds', async () => {
+    const { client, store, bucket } = await fixture()
+    const authorize = await client.authorize()
+    const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: bucketId('diagnostic-bucket-id'),
+    })
+    const part = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+    for (const [response, helper] of [
+      [authorize, authorizeAccountResponseForPersistence],
+      [upload, getUploadUrlResponseForPersistence],
+      [part, getUploadPartUrlResponseForPersistence],
+      [download, downloadAuthorizationResponseForPersistence],
+    ] as const) {
+      const summary = Reflect.apply(
+        Reflect.get(response, Symbol.for('nodejs.util.inspect.custom')),
+        response,
+        [],
+      )
+      expect(summary).toHaveProperty('_b2sdkDiagnostic', 'authorization-token-redacted')
+      expect(inspect(response)).toContain('_b2sdkDiagnostic')
+      expect(() => helper(JSON.parse(JSON.stringify(summary)))).toThrow(TypeError)
+    }
+  })
+
   it.each(surfaces)('authorize response hides its token via %s', async (_name, render) => {
     const { client } = await fixture()
     const response = await client.authorize()
@@ -203,14 +239,22 @@ describe('credential redaction Node diagnostics', () => {
     expect(inspect(store)).toBe(inspect({ authorized: true }))
   })
 
-  it.each(['own', 'prototype'])(
-    'setAuth copies responses with only an inspect hook on the %s object',
-    async (placement) => {
+  it.each([
+    ['own', false],
+    ['own', true],
+    ['prototype', false],
+    ['prototype', true],
+  ] as const)(
+    'setAuth copies responses with only an inspect hook on the %s object (enumerable=%s)',
+    async (placement, enumerable) => {
       const { auth } = await fixture()
       const inspectSymbol = Symbol.for('nodejs.util.inspect.custom')
       const owner = placement === 'own' ? auth : Object.create(Object.getPrototypeOf(auth))
       if (placement === 'prototype') Object.setPrototypeOf(auth, owner)
-      Object.defineProperty(owner, inspectSymbol, { value: () => ({ authorized: true }) })
+      Object.defineProperty(owner, inspectSymbol, {
+        value: () => ({ authorized: true }),
+        enumerable,
+      })
       expect(Object.hasOwn(auth, 'toJSON')).toBe(false)
       const store = new InMemoryAccountInfo()
       store.setAuth(auth)

@@ -362,6 +362,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
    * Stores the given authorization response and triggers an async write to disk.
    *
    * @param auth - The authorize-account response to persist.
+   *
+   * @throws TypeError if the response is marked as diagnostic or has no string token.
    */
   setAuth(auth: AuthorizeAccountResponse): void {
     this.#inner.setAuth(auth)
