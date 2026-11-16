@@ -33,13 +33,33 @@ export function isDiagnosticAuthorizationResponse(response: TokenResponse): bool
   return Object.getOwnPropertyDescriptor(response, '_b2sdkDiagnostic')?.value === DIAGNOSTIC_KIND
 }
 
+function copyResponseData<T extends TokenResponse>(response: T, authorizationToken: string): T {
+  // Snapshot response data even when its fields are non-enumerable accessors.
+  const copy = Object.fromEntries(
+    Reflect.ownKeys(response)
+      .filter((key) => key !== 'toJSON' && key !== INSPECT_CUSTOM)
+      .map((key) => [
+        key,
+        key === 'authorizationToken' ? authorizationToken : Reflect.get(response, key),
+      ]),
+  ) as T
+  Object.defineProperty(copy, 'authorizationToken', {
+    value: authorizationToken,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  })
+  return copy
+}
+
 function redactResponse<T extends TokenResponse>(response: T): T {
-  const token = new ResponseAuthorizationToken(response.authorizationToken)
+  const authorizationToken = response.authorizationToken
+  const token = new ResponseAuthorizationToken(authorizationToken)
   const target =
     Object.isExtensible(response) &&
     Object.getOwnPropertyDescriptor(response, 'authorizationToken')?.configurable !== false
       ? response
-      : ({ ...response } as T)
+      : copyResponseData(response, authorizationToken)
   Object.defineProperty(target, 'authorizationToken', {
     get: token.read.bind(token),
     enumerable: false,
@@ -70,10 +90,7 @@ function forPersistence<T extends TokenResponse>(response: T, helperName: string
   if (typeof authorizationToken !== 'string') {
     throw new TypeError(`${helperName} requires a response with a string authorizationToken`)
   }
-  const copy = { ...response, authorizationToken }
-  Reflect.deleteProperty(copy, 'toJSON')
-  Reflect.deleteProperty(copy, INSPECT_CUSTOM)
-  return copy
+  return copyResponseData(response, authorizationToken)
 }
 
 /**

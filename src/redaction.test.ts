@@ -112,7 +112,106 @@ async function returnedResponses() {
   return { authorize, upload, part, download }
 }
 
+function hideResponseData(response: object, accessor = true): void {
+  for (const key of Object.keys(response)) {
+    const value: unknown = Reflect.get(response, key)
+    Object.defineProperty(response, key, {
+      ...(accessor ? { get: () => value } : { value }),
+      enumerable: false,
+      configurable: true,
+    })
+  }
+}
+
 describe('credential redaction JSON and spread', () => {
+  it.each(['data', 'accessor'])(
+    'setAuth preserves non-enumerable authorization %s fields',
+    async (kind) => {
+      const { authorize } = await returnedResponses()
+      const expected = {
+        accountId: authorize.accountId,
+        authorizationToken: authorize.authorizationToken,
+        apiInfo: authorize.apiInfo,
+        applicationKeyExpirationTimestamp: authorize.applicationKeyExpirationTimestamp,
+      }
+      hideResponseData(authorize, kind === 'accessor')
+      const store = new InMemoryAccountInfo()
+      store.setAuth(authorize)
+      expect(store.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+      expect(store.getDownloadUrl()).toBe(expected.apiInfo.storageApi.downloadUrl)
+      expect(store.getS3ApiUrl()).toBe(expected.apiInfo.storageApi.s3ApiUrl)
+      expect(store.getRecommendedPartSize()).toBe(expected.apiInfo.storageApi.recommendedPartSize)
+      expect(store.getAbsoluteMinimumPartSize()).toBe(
+        expected.apiInfo.storageApi.absoluteMinimumPartSize,
+      )
+      expect(store.getAccountId()).toBe(expected.accountId)
+      expect(store.getAuthToken()).toBe(expected.authorizationToken)
+      expect(store.getAuth()).toEqual(expected)
+      expect(JSON.parse(JSON.stringify(store.getAuth()))).toEqual(expected)
+      expect(Object.getOwnPropertyDescriptor(store.getAuth(), 'apiInfo')).toMatchObject({
+        value: expected.apiInfo,
+        enumerable: true,
+      })
+      expect(JSON.stringify(authorize)).not.toContain(ACCOUNT_TOKEN)
+    },
+  )
+
+  it.each(['authorize', 'upload', 'part', 'download'] as const)(
+    '%s persistence retains non-enumerable response data',
+    async (name) => {
+      const responses = await returnedResponses()
+      const expected = {
+        authorize: {
+          accountId: responses.authorize.accountId,
+          authorizationToken: ACCOUNT_TOKEN,
+          apiInfo: responses.authorize.apiInfo,
+          applicationKeyExpirationTimestamp: responses.authorize.applicationKeyExpirationTimestamp,
+        },
+        upload: { bucketId: BID, uploadUrl: entry.uploadUrl, authorizationToken: UPLOAD_TOKEN },
+        part: {
+          fileId: largeFileId('diagnostic-large-file-id'),
+          uploadUrl: entry.uploadUrl,
+          authorizationToken: PART_TOKEN,
+        },
+        download: {
+          bucketId: BID,
+          fileNamePrefix: 'diagnostic',
+          authorizationToken: DOWNLOAD_TOKEN,
+        },
+      }
+      const persist = {
+        authorize: () => authorizeAccountResponseForPersistence(responses.authorize),
+        upload: () => getUploadUrlResponseForPersistence(responses.upload),
+        part: () => getUploadPartUrlResponseForPersistence(responses.part),
+        download: () => downloadAuthorizationResponseForPersistence(responses.download),
+      }
+      hideResponseData(responses[name])
+      const copy = persist[name]()
+      expect(copy).toEqual(expected[name])
+      expect(JSON.parse(JSON.stringify(copy))).toEqual(expected[name])
+      expect(Object.hasOwn(copy, 'toJSON')).toBe(false)
+      expect(Object.hasOwn(copy, Symbol.for('nodejs.util.inspect.custom'))).toBe(false)
+    },
+  )
+
+  it('frozen response accessors retain all data after redaction', () => {
+    const expected = {
+      fileId: largeFileId('diagnostic-large-file-id'),
+      uploadUrl: entry.uploadUrl,
+      authorizationToken: PART_TOKEN,
+    }
+    const original = { ...expected }
+    hideResponseData(original)
+    Object.freeze(original)
+    const response = redactGetUploadPartUrlResponse(original)
+    expect(response.fileId).toBe(expected.fileId)
+    expect(response.uploadUrl).toBe(expected.uploadUrl)
+    expect(response.authorizationToken).toBe(expected.authorizationToken)
+    expect(getUploadPartUrlResponseForPersistence(response)).toEqual(expected)
+    expect(Object.keys(response)).not.toContain('authorizationToken')
+    expect(JSON.stringify(response)).not.toContain(PART_TOKEN)
+  })
+
   it.each(['authorize', 'upload', 'part', 'download'] as const)(
     '%s response excludes its token from enumeration',
     async (name) => {

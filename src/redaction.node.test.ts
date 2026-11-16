@@ -424,6 +424,42 @@ describe('credential redaction Node diagnostics', () => {
     expect(JSON.parse(await readFile(path, 'utf8')).authorizationToken).toBe(ACCOUNT_TOKEN)
   })
 
+  it('file store round-trips non-enumerable authorization data', async () => {
+    const { path, store } = await fileStore()
+    const { client } = await fixture()
+    const response = await client.authorize()
+    const expected = {
+      accountId: response.accountId,
+      authorizationToken: ACCOUNT_TOKEN,
+      apiInfo: response.apiInfo,
+      applicationKeyExpirationTimestamp: response.applicationKeyExpirationTimestamp,
+    }
+    for (const key of Object.keys(response)) {
+      const value: unknown = Reflect.get(response, key)
+      Object.defineProperty(response, key, {
+        get: () => value,
+        enumerable: false,
+        configurable: true,
+      })
+    }
+    store.setAuth(response)
+    await store.flushed()
+    expect(store.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(expected)
+    const reloaded = new FileAccountInfo(path)
+    await reloaded.load()
+    expect(reloaded.getApiUrl()).toBe(expected.apiInfo.storageApi.apiUrl)
+    expect(reloaded.getDownloadUrl()).toBe(expected.apiInfo.storageApi.downloadUrl)
+    expect(reloaded.getS3ApiUrl()).toBe(expected.apiInfo.storageApi.s3ApiUrl)
+    expect(reloaded.getRecommendedPartSize()).toBe(expected.apiInfo.storageApi.recommendedPartSize)
+    expect(reloaded.getAbsoluteMinimumPartSize()).toBe(
+      expected.apiInfo.storageApi.absoluteMinimumPartSize,
+    )
+    expect(reloaded.getAccountId()).toBe(expected.accountId)
+    expect(reloaded.getAuthToken()).toBe(ACCOUNT_TOKEN)
+    expect(reloaded.getAuth()).toEqual(expected)
+  })
+
   it('reviewed public exports have sentinel coverage on every leak surface', async () => {
     const { store: file } = await fileStore()
     const { auth, client, store, bucket, object } = await fixture()
