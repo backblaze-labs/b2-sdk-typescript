@@ -622,8 +622,8 @@ describe('credential redaction JSON and spread', () => {
   })
 
   it('Bun-style inherited JSON hook redacts a returned response', async () => {
-    const previous = Object.getOwnPropertyDescriptor(globalThis, 'Bun')
-    Object.defineProperty(globalThis, 'Bun', { value: {}, configurable: true })
+    const simulatedBun = !('Bun' in globalThis)
+    if (simulatedBun) Object.defineProperty(globalThis, 'Bun', { value: {}, configurable: true })
     try {
       const { client } = await fixture()
       const response = await client.authorize()
@@ -633,8 +633,7 @@ describe('credential redaction JSON and spread', () => {
       expect(JSON.stringify(response)).not.toContain(ACCOUNT_TOKEN)
       expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
     } finally {
-      if (previous !== undefined) Object.defineProperty(globalThis, 'Bun', previous)
-      else Reflect.deleteProperty(globalThis, 'Bun')
+      if (simulatedBun) Reflect.deleteProperty(globalThis, 'Bun')
     }
   })
 
