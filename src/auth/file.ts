@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
@@ -348,10 +348,14 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
     await mkdir(dir, { recursive: true })
 
     try {
-      await writeFile(tempPath, contents, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
-      await chmod(tempPath, PRIVATE_FILE_MODE)
+      const handle = await open(tempPath, 'wx', PRIVATE_FILE_MODE)
+      try {
+        await handle.chmod(PRIVATE_FILE_MODE)
+        await handle.writeFile(contents, 'utf8')
+      } finally {
+        await handle.close()
+      }
       await rename(tempPath, this.path)
-      await chmod(this.path, PRIVATE_FILE_MODE)
     } catch (error) {
       await rm(tempPath, { force: true }).catch(() => {})
       throw error
