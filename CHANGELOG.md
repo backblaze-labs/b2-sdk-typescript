@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Credential-file write consistency.** `FileAccountInfo` now applies mode `0600` through the open file handle before completing the atomic file replacement.
 - **Large-file resume preserves SHA-1 metadata integrity.** Computed and caller-provided `large_file_sha1` values now reject a resume candidate with `file-info-mismatch` when both digests are present and differ; candidates remain compatible when only one side has the digest. Whole-file prehash reads now honor cancellation before each slice and during pending reads.
 
 - **`.sdkharness` checks no longer turn failures into amber.** A conformance or resilience leaf that prints `COULD-NOT-RUN` but exits nonzero is now a `FAIL` in both dispatchers, and a built SDK that throws on import is a `FAIL` instead of `COULD-NOT-RUN` (only a missing `dist/` build is amber). The `enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold` and `lock.per_file_retention` checks now assert the specific refusal (type, status, code, message) rather than treating any thrown error as one.
