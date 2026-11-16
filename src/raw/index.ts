@@ -17,6 +17,12 @@ import { assertValidBucketConfiguration } from '../bucket-validation.ts'
 import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
+import {
+  redactAuthorizeAccountResponse,
+  redactDownloadAuthorizationResponse,
+  redactGetUploadPartUrlResponse,
+  redactGetUploadUrlResponse,
+} from '../response-redaction.ts'
 import type {
   AllowedBucket,
   ApplicationKey,
@@ -85,6 +91,12 @@ export {
   assertValidBucketInfo,
   assertValidCorsRules,
 } from '../bucket-validation.ts'
+export {
+  authorizeAccountResponseForPersistence,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+} from '../response-redaction.ts'
 export {
   BUCKET_INFO_KEY_MAX_BYTES,
   BUCKET_INFO_KEY_MIN_BYTES,
@@ -353,7 +365,8 @@ export class RawClient {
    * @param realmUrl - The B2 realm URL to authenticate against.
    * @param options - Optional request controls.
    *
-   * @returns The authorization response with API URLs and credentials.
+   * @returns The authorization response with API URLs and credentials. Direct token access is
+   * unchanged; use `authorizeAccountResponseForPersistence` before trusted serialization.
    */
   async authorizeAccount(
     applicationKeyId: string,
@@ -371,7 +384,9 @@ export class RawClient {
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
-    return normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>())
+    return redactAuthorizeAccountResponse(
+      normalizeAuthorizeAccountResponse(await response.json<WireAuthorizeAccountResponse>()),
+    )
   }
 
   // --- Buckets ---
@@ -452,7 +467,8 @@ export class RawClient {
    * @param signal - Optional abort signal for cancellation.
    * @param retry - Optional per-request retry override.
    *
-   * @returns The upload URL and authorization token.
+   * @returns The upload URL and authorization token. Use `getUploadUrlResponseForPersistence`
+   * before trusted serialization.
    *
    * @deprecated Use the options-bag overload: `getUploadUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -470,7 +486,8 @@ export class RawClient {
    * @param request - The API request parameters.
    * @param options - Optional request controls such as cancellation and retry overrides.
    *
-   * @returns The upload URL and authorization token.
+   * @returns The upload URL and authorization token. Use `getUploadUrlResponseForPersistence`
+   * before trusted serialization.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -486,7 +503,8 @@ export class RawClient {
    * @param optionsOrSignal - Options bag or legacy abort signal.
    * @param retry - Optional legacy per-request retry override.
    *
-   * @returns The upload URL and authorization token.
+   * @returns The upload URL and authorization token. Use `getUploadUrlResponseForPersistence`
+   * before trusted serialization.
    */
   async getUploadUrl(
     apiUrl: string,
@@ -495,12 +513,14 @@ export class RawClient {
     optionsOrSignal?: RawRequestOptions | AbortSignal,
     retry?: Partial<RetryOptions>,
   ): Promise<GetUploadUrlResponse> {
-    return this.postJson<GetUploadUrlResponse>(
-      apiUrl,
-      authToken,
-      'b2_get_upload_url',
-      request,
-      normalizeRawRequestOptions(optionsOrSignal, retry),
+    return redactGetUploadUrlResponse(
+      await this.postJson<GetUploadUrlResponse>(
+        apiUrl,
+        authToken,
+        'b2_get_upload_url',
+        request,
+        normalizeRawRequestOptions(optionsOrSignal, retry),
+      ),
     )
   }
 
@@ -868,7 +888,8 @@ export class RawClient {
    * @param signal - Optional abort signal for cancellation.
    * @param retry - Optional per-request retry override.
    *
-   * @returns The upload part URL and authorization token.
+   * @returns The upload part URL and authorization token. Diagnostics redact the token; use
+   * `getUploadPartUrlResponseForPersistence` from `@backblaze-labs/b2-sdk/raw` before trusted serialization.
    *
    * @deprecated Use the options-bag overload: `getUploadPartUrl(apiUrl, authToken, request, { signal, retry })`.
    */
@@ -886,7 +907,8 @@ export class RawClient {
    * @param request - The API request parameters.
    * @param options - Optional request controls such as cancellation and retry overrides.
    *
-   * @returns The upload part URL and authorization token.
+   * @returns The upload part URL and authorization token. Diagnostics redact the token; use
+   * `getUploadPartUrlResponseForPersistence` from `@backblaze-labs/b2-sdk/raw` before trusted serialization.
    */
   async getUploadPartUrl(
     apiUrl: string,
@@ -902,7 +924,8 @@ export class RawClient {
    * @param optionsOrSignal - Options bag or legacy abort signal.
    * @param retry - Optional legacy per-request retry override.
    *
-   * @returns The upload part URL and authorization token.
+   * @returns The upload part URL and authorization token. Diagnostics redact the token; use
+   * `getUploadPartUrlResponseForPersistence` from `@backblaze-labs/b2-sdk/raw` before trusted serialization.
    */
   async getUploadPartUrl(
     apiUrl: string,
@@ -911,12 +934,14 @@ export class RawClient {
     optionsOrSignal?: RawRequestOptions | AbortSignal,
     retry?: Partial<RetryOptions>,
   ): Promise<GetUploadPartUrlResponse> {
-    return this.postJson<GetUploadPartUrlResponse>(
-      apiUrl,
-      authToken,
-      'b2_get_upload_part_url',
-      request,
-      normalizeRawRequestOptions(optionsOrSignal, retry),
+    return redactGetUploadPartUrlResponse(
+      await this.postJson<GetUploadPartUrlResponse>(
+        apiUrl,
+        authToken,
+        'b2_get_upload_part_url',
+        request,
+        normalizeRawRequestOptions(optionsOrSignal, retry),
+      ),
     )
   }
 
@@ -1200,18 +1225,21 @@ export class RawClient {
    * @param authToken - The current session authorization token.
    * @param request - The API request parameters.
    *
-   * @returns The download authorization token for the specified file prefix.
+   * @returns The download authorization token for the specified file prefix. Use
+   * `downloadAuthorizationResponseForPersistence` before trusted serialization.
    */
   async getDownloadAuthorization(
     apiUrl: string,
     authToken: string,
     request: DownloadAuthorizationRequest,
   ): Promise<DownloadAuthorizationResponse> {
-    return this.postJson<DownloadAuthorizationResponse>(
-      apiUrl,
-      authToken,
-      'b2_get_download_authorization',
-      request,
+    return redactDownloadAuthorizationResponse(
+      await this.postJson<DownloadAuthorizationResponse>(
+        apiUrl,
+        authToken,
+        'b2_get_download_authorization',
+        request,
+      ),
     )
   }
 

@@ -3,20 +3,31 @@ import type { AccountInfo } from './auth/account-info.ts'
 import { UploadUrlPool } from './auth/index.ts'
 import { BackupClient } from './backup/index.ts'
 import { DEFAULT_RETRY_OPTIONS } from './http/retry.ts'
-import { B2Client, B2Object, Bucket, InMemoryAccountInfo } from './index.ts'
+import {
+  authorizeAccountResponseForPersistence,
+  B2Client,
+  B2Object,
+  Bucket,
+  downloadAuthorizationResponseForPersistence,
+  getUploadPartUrlResponseForPersistence,
+  getUploadUrlResponseForPersistence,
+  InMemoryAccountInfo,
+} from './index.ts'
 import { InMemoryPartnerAccountInfo, PartnerClient } from './partner/index.ts'
 import { APPLICATION_KEY_REDACTED } from './partner/redaction-placeholders.ts'
+import { getUploadPartUrlResponseForPersistence as rawPartUrlForPersistence } from './raw/index.ts'
 import { B2Simulator } from './simulator/index.ts'
 import { jsonResponse } from './test-utils/index.ts'
 import type { AuthorizeAccountResponse } from './types/auth.ts'
 import { type BucketInfo, BucketType } from './types/bucket.ts'
-import { type AuthToken, bucketId, partnerToken } from './types/ids.ts'
+import { type AuthToken, bucketId, largeFileId, partnerToken } from './types/ids.ts'
 
 const APP_KEY = 'SECRET-APPKEY'
 const ACCOUNT_TOKEN = 'SECRET-ACCOUNT-TOKEN'
 const UPLOAD_TOKEN = 'SECRET-UPLOAD-TOKEN'
 const PART_TOKEN = 'SECRET-PART-UPLOAD-TOKEN'
-const SECRETS = [APP_KEY, ACCOUNT_TOKEN, UPLOAD_TOKEN, PART_TOKEN]
+const DOWNLOAD_TOKEN = 'SECRET-DOWNLOAD-TOKEN'
+const SECRETS = [APP_KEY, ACCOUNT_TOKEN, UPLOAD_TOKEN, PART_TOKEN, DOWNLOAD_TOKEN]
 const BID = bucketId('diagnostic-bucket-id')
 const entry = { uploadUrl: 'https://pod.backblaze.com/upload', authorizationToken: UPLOAD_TOKEN }
 
@@ -43,7 +54,28 @@ async function fixture() {
     applicationKey: APP_KEY,
     accountInfo: store,
     transport: {
-      async send() {
+      async send(request) {
+        if (request.url.includes('b2_get_upload_part_url')) {
+          return jsonResponse({
+            fileId: largeFileId('diagnostic-large-file-id'),
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: PART_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_upload_url')) {
+          return jsonResponse({
+            bucketId: BID,
+            uploadUrl: entry.uploadUrl,
+            authorizationToken: UPLOAD_TOKEN,
+          })
+        }
+        if (request.url.includes('b2_get_download_authorization')) {
+          return jsonResponse({
+            bucketId: BID,
+            fileNamePrefix: 'diagnostic',
+            authorizationToken: DOWNLOAD_TOKEN,
+          })
+        }
         return jsonResponse(auth)
       },
     },
@@ -191,11 +223,153 @@ describe('credential redaction JSON and spread', () => {
     const response = await client.authorize()
     expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
     expect(store.getAuth()?.authorizationToken).toBe(ACCOUNT_TOKEN)
-    expect(JSON.parse(JSON.stringify(response)).authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.parse(JSON.stringify(response)).authorizationToken).toBe(
+      '[redacted authorization token]',
+    )
+    expect(JSON.parse(JSON.stringify(store.getAuth())).authorizationToken).toBe(ACCOUNT_TOKEN)
     expect(client.accountInfo).toBe(store)
     poolTokens(store)
     expect(store.checkoutUploadUrl(BID)?.authorizationToken).toBe(UPLOAD_TOKEN)
     expect(store.checkoutPartUploadUrl('large-file-id')?.authorizationToken).toBe(PART_TOKEN)
+  })
+
+  it('authorize response redacts diagnostic JSON and String while retaining its token', async () => {
+    const { client } = await fixture()
+    const response = await client.authorize()
+    expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    expect(JSON.stringify(response)).not.toContain(ACCOUNT_TOKEN)
+    expect(String(response)).not.toContain(ACCOUNT_TOKEN)
+  })
+
+  it('upload URL response redacts diagnostic JSON and String while retaining its token', async () => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: BID,
+    })
+    expect(response.authorizationToken).toBe(UPLOAD_TOKEN)
+    expect(JSON.stringify(response)).not.toContain(UPLOAD_TOKEN)
+    expect(String(response)).not.toContain(UPLOAD_TOKEN)
+  })
+
+  it('download authorization response redacts diagnostic JSON and String while retaining its token', async () => {
+    const { client, bucket } = await fixture()
+    await client.authorize()
+    const response = await bucket.getDownloadAuthorization('diagnostic', 60)
+    expect(response.authorizationToken).toBe(DOWNLOAD_TOKEN)
+    expect(JSON.stringify(response)).not.toContain(DOWNLOAD_TOKEN)
+    expect(String(response)).not.toContain(DOWNLOAD_TOKEN)
+  })
+
+  it('part upload URL response redacts diagnostic JSON and String while retaining its token', async () => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    expect(response.authorizationToken).toBe(PART_TOKEN)
+    expect(JSON.stringify(response)).not.toContain(PART_TOKEN)
+    expect(String(response)).not.toContain(PART_TOKEN)
+  })
+
+  it('part upload URL persistence preserves the real token and rejects diagnostic JSON', async () => {
+    const { client, store } = await fixture()
+    await client.authorize()
+    const response = await client.raw.getUploadPartUrl(store.getApiUrl(), store.getAuthToken(), {
+      fileId: largeFileId('diagnostic-large-file-id'),
+    })
+    expect(rawPartUrlForPersistence).toBe(getUploadPartUrlResponseForPersistence)
+    const copy = getUploadPartUrlResponseForPersistence(response)
+    expect(copy).not.toBe(response)
+    expect(copy).toEqual({ ...response })
+    expect(Object.keys(copy)).toEqual(Object.keys(response))
+    expect(Object.getOwnPropertyDescriptor(response, 'toJSON')?.enumerable).toBe(false)
+    expect(
+      Object.getOwnPropertyDescriptor(response, Symbol.for('nodejs.util.inspect.custom'))
+        ?.enumerable,
+    ).toBe(false)
+    expect(Object.getOwnPropertyDescriptor(copy, 'toJSON')).toBeUndefined()
+    expect(
+      Object.getOwnPropertyDescriptor(copy, Symbol.for('nodejs.util.inspect.custom')),
+    ).toBeUndefined()
+    const reloaded = JSON.parse(JSON.stringify(copy))
+    expect(reloaded.authorizationToken).toBe(PART_TOKEN)
+    store.returnPartUploadUrl(response.fileId, reloaded)
+    expect(store.checkoutPartUploadUrl(response.fileId)?.authorizationToken).toBe(PART_TOKEN)
+    const diagnostic = JSON.parse(JSON.stringify(response))
+    expect(() => getUploadPartUrlResponseForPersistence(diagnostic)).toThrow(TypeError)
+    expect(() => getUploadPartUrlResponseForPersistence(diagnostic)).toThrow(
+      'getUploadPartUrlResponseForPersistence',
+    )
+    expect(() =>
+      getUploadPartUrlResponseForPersistence({
+        ...response,
+        authorizationToken: '[redacted authorization token]',
+      }),
+    ).toThrow('getUploadPartUrlResponseForPersistence')
+  })
+
+  it('plain persistence copies retain all three real tokens', async () => {
+    const { client, bucket, store } = await fixture()
+    const auth = await client.authorize()
+    const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: BID,
+    })
+    const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+    for (const [response, copy] of [
+      [auth, authorizeAccountResponseForPersistence(auth)],
+      [upload, getUploadUrlResponseForPersistence(upload)],
+      [download, downloadAuthorizationResponseForPersistence(download)],
+    ] as const) {
+      expect(copy.authorizationToken).toBe(response.authorizationToken)
+      expect(JSON.parse(JSON.stringify(copy)).authorizationToken).toBe(response.authorizationToken)
+      expect(Object.keys(response)).toEqual(Object.keys(copy))
+      expect(Object.hasOwn(response, 'toJSON')).toBe(true)
+      expect(Object.keys(response)).not.toContain('toJSON')
+    }
+  })
+
+  it('persistence helpers reject diagnostic JSON as input', async () => {
+    const { client, bucket, store } = await fixture()
+    const auth = await client.authorize()
+    const upload = await client.raw.getUploadUrl(store.getApiUrl(), store.getAuthToken(), {
+      bucketId: BID,
+    })
+    const download = await bucket.getDownloadAuthorization('diagnostic', 60)
+    for (const [response, helper] of [
+      [auth, authorizeAccountResponseForPersistence],
+      [upload, getUploadUrlResponseForPersistence],
+      [download, downloadAuthorizationResponseForPersistence],
+    ] as const) {
+      const rebuilt = JSON.parse(JSON.stringify(response))
+      expect(() => helper(rebuilt)).toThrow(TypeError)
+    }
+  })
+
+  it('account stores reject diagnostic JSON instead of caching its placeholder', async () => {
+    const { client } = await fixture()
+    const response = await client.authorize()
+    const rebuilt = JSON.parse(JSON.stringify(response)) as AuthorizeAccountResponse
+    const store = new InMemoryAccountInfo()
+    expect(() => store.setAuth(rebuilt)).toThrow(TypeError)
+    expect(store.getAuth()).toBeNull()
+  })
+
+  it('Bun-style inherited JSON hook redacts a returned response', async () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'Bun')
+    Object.defineProperty(globalThis, 'Bun', { value: {}, configurable: true })
+    try {
+      const { client } = await fixture()
+      const response = await client.authorize()
+      expect(
+        Object.getOwnPropertyDescriptor(Object.getPrototypeOf(response), 'toJSON')?.enumerable,
+      ).toBe(false)
+      expect(JSON.stringify(response)).not.toContain(ACCOUNT_TOKEN)
+      expect(response.authorizationToken).toBe(ACCOUNT_TOKEN)
+    } finally {
+      if (previous !== undefined) Object.defineProperty(globalThis, 'Bun', previous)
+      else Reflect.deleteProperty(globalThis, 'Bun')
+    }
   })
 
   it.each(['client', 'bucket', 'object', 'store'] as const)(

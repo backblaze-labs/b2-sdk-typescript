@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING:** Diagnostic `JSON.stringify` output for authorize-account, upload-URL, part-upload-URL and download-authorization responses now replaces `authorizationToken` with a placeholder. Direct field access retains the real token. For trusted persistence, use `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence` or `downloadAuthorizationResponseForPersistence` before serialization. Persistence helpers and built-in account stores reject the diagnostic placeholder; custom stores must use the persistence helper before trusted serialization. `B2Client.authorize()` now passes a plain copy to the account store, so `accountInfo.getAuth()` is not the returned object. `InMemoryAccountInfo.setAuth` copies responses with diagnostic hooks before storing them; plain response identity is unchanged. On Bun, returned responses gain an inherited non-enumerable JSON hook on their prototype.
 - **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
 - **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,
@@ -29,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SDK objects hide application keys and authorization tokens in diagnostics.**
   Logging, inspecting, or serializing clients, bucket and file handles, auth
   stores, and upload URL pools no longer prints stored credentials. Explicit
-  `authorize()` and `getAuth()` responses still contain the real token, and file
-  auth caches still persist it.
+  `authorize()` and `getAuth()` retain direct access to the real token, and file
+  auth caches still persist it. Returned authorize-account, upload-URL, part-upload-URL and
+  download-authorization responses now use the same redacted diagnostic style.
   Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
   now throw `Cannot read private member`, the same constraint as the Partner
   client. Keep these SDK instances outside
