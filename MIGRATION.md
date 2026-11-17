@@ -1,6 +1,6 @@
 # Migration guide
 
-## Single-file upload connection-fault retry opt-out (unreleased)
+## v0.5.0: Single-file upload connection-fault retry opt-out
 
 Upload POST connection faults retry by default with a fresh upload URL. If a
 single-file POST reached B2 before the connection dropped, replay can create

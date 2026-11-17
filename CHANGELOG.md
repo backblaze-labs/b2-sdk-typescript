@@ -7,50 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-17
+
+### Added
+
+- **Authorization-response persistence helpers.** Added `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence`, and `downloadAuthorizationResponseForPersistence` to both the package root and `@backblaze-labs/b2-sdk/raw`. Use the matching helper on the original response before trusted serialization; it returns a plain copy containing the real token and all own response data, without diagnostic hooks. Store these copies only in credential-grade storage.
+- **Repository-owned SDK checks.** Added example health checks and simulator-backed conformance and resilience scenarios under `.sdkharness/`, including local-run instructions and unit tests for their dispatchers and guards.
+
+### Changed
+
+- **BREAKING: Authorization response enumeration and serialization.** Responses from `B2Client.authorize()`, `RawClient.authorizeAccount()`, `getUploadUrl()`, `getUploadPartUrl()`, and `getDownloadAuthorization()` (including `Bucket.getDownloadAuthorization()`) now expose `authorizationToken` through a non-enumerable readonly accessor. Direct field access still returns the real token; spread, `Object.keys`, `Object.entries`, and browser property enumeration omit it. JSON and Node inspect output use a placeholder and include `_b2sdkDiagnostic: 'authorization-token-redacted'`. Use the matching persistence helper above instead of persisting diagnostic JSON or a spread copy. Helpers and built-in account stores reject marked diagnostic summaries and missing or non-string tokens with `TypeError`; an unmarked token matching the placeholder text remains valid input. On Bun, these responses also gain an inherited non-enumerable JSON hook on their prototype. (#393)
+- **BREAKING: Authorization account-store identity.** `B2Client.authorize()` now passes a plain persistence copy to the configured account store, so `accountInfo.getAuth()` is not the returned response object. `InMemoryAccountInfo.setAuth()` also copies responses carrying diagnostic hooks or token accessors into plain stored state; valid plain responses retain their existing identity behavior. File caches continue to persist the real token and complete authorization data. (#393)
+- **BREAKING: Guarded URLs require HTTPS.** When host suffixes are configured, `UrlGuard` rejects non-HTTPS URLs on otherwise allowed hosts, including plain-HTTP `apiUrl`, `downloadUrl`, and `s3ApiUrl` values. Supply HTTPS URLs. A custom transport bypasses the guard, and an unlocked guard with no configured suffixes retains its existing behavior. The error identifies the scheme and host and explains how to proceed. (#358)
+- **Contributor tooling and documentation.** Updated development tooling and its transitive dependencies, pinned CI actions to reviewed revisions, added the Backblaze Labs ecosystem links to the README, and added the repository reference manifest. The published SDK still has no runtime dependencies.
+
+### Fixed
+
+- **Object Lock conformance refusals.** The legal-hold check now accepts exactly `401 access_denied` alongside the existing hold-specific `400`/`403` refusal, while still rejecting other `401` codes and retaining the hold-state and post-release deletion checks. Governance checks also accept the observed `401 access_denied` refusal, and TLS fixture hostnames are read from the fixture certificate. These are test corrections; SDK request behavior is unchanged. (#392, #353)
+- **Harness failure reporting and isolation.** A failing leaf or broken built-SDK import now fails instead of being reported as unavailable; only a missing build is treated as unavailable. Shared guards enforce the loopback-only simulator contract, validate the fixed test credentials, remove proxy routing, and require a fresh simulator for resilience checks. `SDKHARNESS_SDK_PREBUILT=1` allows checking a prebuilt or installed release without rebuilding it. (#320, #322, #323, #342)
+
+### Security
+
+- **Authorization tokens are redacted from returned-response diagnostics.** Extended the SDK object's diagnostic redaction to authorize-account, upload-URL, part-upload-URL, and download-authorization responses. Routine JSON serialization, Node inspection, and property enumeration no longer include their bearer tokens; direct programmatic access and trusted persistence remain available through the APIs described above. (#393)
+- **Credential-file permissions are applied through the open descriptor.** `FileAccountInfo` now exclusively creates its temporary file with mode `0600`, applies the exact mode and writes through the same open file handle, then closes it before atomic replacement. Permission setup no longer resolves the temporary or destination filename again; existing cleanup and persistence behavior are preserved. (#395)
+
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - **Targeted single-file upload connection-fault retry opt-out.** `retryUploadConnectionFaults` defaults to `true` on client and per-upload options; per-call values take precedence. Set it to `false` to surface single-file POST network faults and pre-response-header timeouts while retaining server/auth/upload-URL retries and backoff. A replay can create duplicate versions retained by Object Lock. Multipart parts still replace the same part number and retain their existing retry policy. Success-body failures and body-read timeouts remain independently controlled by `retryResponseBodyFailures` (default `false`).
 
 ### Changed
 
-- **BREAKING:** Authorize-account, upload-URL, part-upload-URL and download-authorization responses now expose `authorizationToken` through a non-enumerable readonly accessor. Direct access retains the real token; object spread, `Object.keys`, `Object.entries` and browser property enumeration omit it. JSON and Node inspect diagnostics replace the token with a placeholder and include `_b2sdkDiagnostic: 'authorization-token-redacted'`. On Bun, returned responses also gain an inherited non-enumerable JSON hook on their prototype.
-  For trusted persistence, use `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence` or `downloadAuthorizationResponseForPersistence`. These helpers materialize all own response data, including non-enumerable fields and accessors, in a plain copy with the token restored and diagnostic hooks removed. They and the built-in account stores reject marked diagnostic summaries and missing or non-string tokens with `TypeError`; unmarked token text matching the placeholder remains valid input. Custom stores should use the persistence helper before trusted serialization. A spread copy of a returned response omits the token and cannot be used as cached auth.
-  `B2Client.authorize()` passes a plain copy to the account store, so `accountInfo.getAuth()` is not the returned object. `InMemoryAccountInfo.setAuth` normalizes responses with diagnostic hooks or token accessors into plain stored state; valid plain response identity is unchanged.
-- **BREAKING:** `UrlGuard` now requires HTTPS for allowed hosts. Plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values are rejected. Supply an HTTPS URL, or use a custom transport to bypass the guard.
-- **`B2Client.accountInfo` is now a prototype accessor.** It is no longer an
+- **Upload POST connection failures now retry by default.** BEHAVIOR CHANGE: single-file and multipart-part uploads retry connection faults with a fresh upload URL. If the first single-file POST reached B2 before the connection failed, retrying can create duplicate versions, including in versioned or Object Lock buckets. Set `retry: { maxRetries: 0 }` on an upload to disable retries, including the 503, `BadAuthTokenError`, and bad-upload-URL retries that v0.4.0 already performed. Setting it on the client also disables client-level retries. To disable only the single-file connection-fault retry while keeping the others, set `retryUploadConnectionFaults: false` (see Added above). `retryResponseBodyFailures` remains `false` by default and separately controls replay after an unreadable success response body. See [MIGRATION.md](./MIGRATION.md).
+- **BREAKING: `B2Client.accountInfo` is now a prototype accessor.** It is no longer an
   own property, so `{ ...client }`, `Object.keys(client)`,
   `Object.assign({}, client)`, `Object.hasOwn(client, 'accountInfo')`, and
   `Object.getOwnPropertyDescriptor(client, 'accountInfo')` no longer see it.
   Assigning `client.accountInfo` throws in strict mode, and a subclass
   redeclaring `accountInfo` as a field fails with TypeScript `TS2610`.
-  `client.accountInfo` and `'accountInfo' in client` still work. Read
+  `client.accountInfo` and `'accountInfo' in client` still work on the
+  instance (not through a `Proxy` wrapper — see the next entry). Read
   `client.accountInfo` directly, and pass a custom store through the
   constructor's `accountInfo` option.
+- **BREAKING: SDK objects reject `Proxy` wrappers.** Because credentials now
+  live in private (`#`) fields, calling a method that reads those fields — which
+  is most methods — on `B2Client`, `Bucket`, `B2Object`, `InMemoryAccountInfo`,
+  `FileAccountInfo`, or an upload URL pool through a `Proxy` wrapper (for example
+  Vue `reactive(client)`) throws `TypeError: Cannot read private member`. Code
+  that worked in v0.4.0, such as `reactive(new B2Client(options)).authorize()`,
+  now throws. A method that touches only ordinary state (for example
+  `FileAccountInfo.flushed()`) is unaffected. Keep SDK instances outside
+  reactive proxy wrappers and call methods on the raw instance; see
+  [MIGRATION.md](./MIGRATION.md).
+
+### Fixed
+
+- **Large-file uploads record whole-file SHA-1 metadata and preserve resume integrity.** Sliceable sources get a computed `large_file_sha1` unless the caller supplies a value. Resume matching compares computed and caller-provided digests, rejects differing known values with `file-info-mismatch`, and remains compatible when either side lacks the digest. Prehash reads honor cancellation before each slice and during pending reads.
 
 ### Security
 
 - **SDK objects hide application keys and authorization tokens in diagnostics.**
   Logging, inspecting, or serializing clients, bucket and file handles, auth
   stores, and upload URL pools no longer prints stored credentials. Explicit
-  `authorize()` and `getAuth()` retain direct access to the real token, and file
-  auth caches still persist it. Returned authorize-account, upload-URL, part-upload-URL and
-  download-authorization responses now use the same redacted diagnostic style.
+  `authorize()` and `getAuth()` responses still contain the real token, and file
+  auth caches still persist it.
   Methods called through a `Proxy` wrapper (for example Vue `reactive(client)`)
   now throw `Cannot read private member`, the same constraint as the Partner
   client. Keep these SDK instances outside
   reactive proxy wrappers.
-
-- Updated transitive development dependencies to patched versions.
-
-### Fixed
-
-- **Credential-file write consistency.** `FileAccountInfo` now applies mode `0600` through the open file handle before completing the atomic file replacement.
-- **Large-file resume preserves SHA-1 metadata integrity.** Computed and caller-provided `large_file_sha1` values now reject a resume candidate with `file-info-mismatch` when both digests are present and differ; candidates remain compatible when only one side has the digest. Whole-file prehash reads now honor cancellation before each slice and during pending reads.
-
-- **`.sdkharness` checks no longer turn failures into amber.** A conformance or resilience leaf that prints `COULD-NOT-RUN` but exits nonzero is now a `FAIL` in both dispatchers, and a built SDK that throws on import is a `FAIL` instead of `COULD-NOT-RUN` (only a missing `dist/` build is amber). The `enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold` and `lock.per_file_retention` checks now assert the specific refusal (type, status, code, message) rather than treating any thrown error as one.
-- **`.sdkharness` checks enforce the loopback contract themselves.** One shared guard (`.sdkharness/tests/lib/guard.cjs`) is used by every leaf and `health-golden-path`: simulator and control URLs must be `http://127.0.0.1:<port>` (`[::1]` is no longer accepted), only the fixed simulator credential is accepted (the health check refuses any other key), proxy variables are scrubbed, and failure messages carry the underlying reason. The README gains a "run one check locally" section and the guards have unit tests (`pnpm run test:sdkharness`). Known SDK findings the checks report (for example `large.multipart`, upload retries, `lock.bypass_governance`, `urls.native_download`) are unchanged and still fail.
-- **`.sdkharness` `run-resilience` refuses a simulator that already served requests.** The resilience checks count the simulator's whole request journal, which has no reset, so on a simulator shared by several scenarios `upload.cap_exceeded_403` and `api.retry_after_503` read earlier scenarios' requests as their own and failed with a false SDK verdict. The dispatcher now fails with a `configuration` reason (`requireFreshSimulator` in `.sdkharness/tests/lib/guard.cjs`); the harness already starts a fresh simulator per scenario, so its results are unchanged.
-- **`.sdkharness` guard follow-ups.** A `dist/` that exists but lacks the file `package.json` exports for an import is now a `FAIL` (a moved or renamed build output is a regression); only an absent `dist/` is `COULD-NOT-RUN`. The `run-resilience` fresh-simulator guard now has dispatcher-level tests (used simulator, unreachable journal), and the dispatcher and leaf unit tests skip on Windows, where they cannot spawn shebang scripts, so `pnpm verify` stays portable. The four refusal assertions (`enc.sse_c`, `keys.multi_bucket`, `lock.legal_hold`, `lock.per_file_retention`) note that their error type, status and code values are simulator-derived and must be re-verified against real B2 before use outside the simulator. No verdict for a known SDK finding changes.
+- Updated development tooling and transitive dependencies, with an expiring allowlist entry for the dev-only minimatch advisory.
 
 ## [0.4.0] - 2026-09-01
 
@@ -349,7 +375,9 @@ First public release of `@backblaze-labs/b2-sdk`. Everything below is new in thi
 - TypeDoc for API documentation
 - Vitest test suite with 486 tests across 20 files at ≥ 95% statement coverage. Tests run cleanly under both vitest (Node) and Bun's vitest-compat (no module-level mocking required)
 
-[Unreleased]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.4.0...v0.5.0
 [0.4.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.3.0...v0.4.0
 [0.3.0]: git+https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/v0.1.0...v0.2.0
