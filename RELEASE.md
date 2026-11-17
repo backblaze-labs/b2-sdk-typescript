@@ -15,7 +15,7 @@ The flow is **tag-driven**. pnpm/npm owns `package.json` versions; the version l
 2. **Two-factor authentication enabled** on your npm account. Required for the manual first publish and any `@backblaze-labs`-scoped package.
 3. **`pnpm` 11+** locally. Install via `corepack enable && corepack prepare pnpm@11.1.0 --activate`.
 4. **A GitHub CLI login with release security access**, and permission to create release PRs, milestones, tags and GitHub Releases.
-5. **Git 2.34+ and GPG or OpenSSH** for signing and verification. Signing-key enrollment is described below; enforcement is initially off.
+5. **Git 2.34+, GPG and OpenSSH** on the verification host (the release runner includes them). Maintainers can sign with either GPG or SSH. Signing-key enrollment is described below; enforcement is initially off.
 
 npm publication uses OIDC trusted publishing (no npm credential secret); configure it once on npmjs.com, see [Configure trusted publishing](#3-configure-trusted-publishing-after-010-is-live). The separate GitHub security-read credential is described under the release security gate.
 
@@ -165,7 +165,7 @@ Before enabling enforcement, each listed maintainer must:
    ```
 
 With the variable set to `true`, unsigned, unknown-signer, unreadable-key-source,
-or invalid-signature results fail the job. Do not enable it before enrollment.
+or invalid-signature results fail this workflow's verification job. Do not enable it before enrollment.
 To check a real release tag locally after it exists:
 
 ```bash
@@ -175,6 +175,14 @@ ENFORCE_SIGNED_TAGS=true pnpm release:tag vX.Y.Z
 CI loads the roster and policy from the default branch, inspects the requested
 tag, and passes its exact commit to the build. The build does not resolve the
 mutable tag name again.
+
+The variable controls CI verification; it is not a repository authorization rule.
+Repository-wide publishing enforcement additionally requires tag-creation rulesets
+for approved `v*` tags and a protected release environment restricted to those
+protected tags, with the npm trusted publisher bound to that environment. An
+administrator must coordinate those settings and the publish-job environment
+binding before relying on repository-wide enforcement. This change preserves the
+existing OIDC publisher configuration and does not configure those external controls.
 
 ## Release milestone discipline
 
@@ -310,12 +318,14 @@ git push origin refs/tags/vX.Y.Z
 During the warning-only enrollment phase, a maintainer without an enrolled key
 may use `git tag -a` instead of `git tag -s` and run `pnpm release:tag vX.Y.Z`
 without enforcement. The workflow warns; it does not block on enrollment.
-Once `ENFORCE_SIGNED_TAGS=true`, only verified maintainer-signed tags pass.
+Once `ENFORCE_SIGNED_TAGS=true`, only verified maintainer-signed tags pass the
+checks in this workflow. Repository-wide enforcement also requires the tag rules
+and environment protections described above.
 Never move or delete a published tag.
 
 Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
-1. Loads trusted tag and milestone policy from the default branch, verifies the requested tag under the enrollment/enforcement mode, checks the milestone and security triage, and pins artifact checkout to the inspected commit. It also verifies that the tag matches `package.json`.
+1. Uses the configured workflow gates to load trusted policy from the default branch, verify the tag under the enrollment/enforcement mode, check milestone/security readiness, and pin artifact checkout to the inspected commit. The tag must match `package.json`. Repository-wide enforcement depends on the tag rulesets and protected-environment binding described above.
 2. Runs the quality gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
 3. `npm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).

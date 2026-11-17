@@ -46,6 +46,34 @@ async function maintainerKeys(username, fetchKey) {
   return { username, gpg, ssh: [...new Set(keys)] }
 }
 
+function inspectGpgKeys(keys, home, env, warnings) {
+  for (const key of keys) {
+    if (key.gpg.trim()) {
+      const inspected = spawnSync(
+        'gpg',
+        ['--batch', '--homedir', home, '--with-colons', '--show-keys'],
+        {
+          env,
+          input: key.gpg,
+          encoding: 'utf8',
+          timeout: 30_000,
+        },
+      )
+      if (inspected.error) {
+        warnings.push('Registered GPG key data could not be inspected')
+      } else if (!/^pub:/m.test(inspected.stdout)) {
+        // GitHub returns armored text even when a user has no GPG key packets.
+        key.gpg = ''
+      } else if (inspected.status !== 0) {
+        warnings.push('Registered GPG key data could not be fully read')
+      }
+    }
+    if (!key.gpg.trim() && key.ssh.length === 0) {
+      warnings.push(`No signing keys enrolled for ${key.username}`)
+    }
+  }
+}
+
 export async function verifyReleaseTag({
   repo = root,
   tag: input,
@@ -98,10 +126,7 @@ export async function verifyReleaseTag({
     await Promise.all(
       maintainers.map(async (username) => {
         try {
-          const key = await maintainerKeys(username, fetchKey)
-          if (!key.gpg.trim() && key.ssh.length === 0)
-            warnings.push(`No signing keys enrolled for ${username}`)
-          return key
+          return await maintainerKeys(username, fetchKey)
         } catch {
           warnings.push(`Public signing keys could not be read for ${username}`)
           return null
@@ -128,6 +153,7 @@ export async function verifyReleaseTag({
       GIT_CONFIG_GLOBAL: empty,
       GIT_CONFIG_NOSYSTEM: '1',
     }
+    inspectGpgKeys(keys, home, env, warnings)
     const gpg = keys
       .map((key) => key.gpg.trim())
       .filter(Boolean)

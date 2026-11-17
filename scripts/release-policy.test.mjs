@@ -2,8 +2,26 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
+
+const emptyGithubGpg = `-----BEGIN PGP PUBLIC KEY BLOCK-----
+Note: This user hasn't uploaded any GPG keys.
+
+
+=twTO
+-----END PGP PUBLIC KEY BLOCK-----`
+
+test('production signing roster contains exactly the intended maintainers', async () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const roster = (await readFile(join(root, '.github/signing-maintainers'), 'utf8'))
+    .split('\n')
+    .map((line) => line.split('#')[0].trim())
+    .filter(Boolean)
+    .sort()
+  assert.deepEqual(roster, ['ffumero2003', 'goanpeca', 'sophiecarreras'])
+})
 
 function command(program, args, cwd, options = {}) {
   const result = spawnSync(program, args, { cwd, encoding: 'utf8', timeout: 30_000, ...options })
@@ -90,6 +108,32 @@ test('GitHub signing-only SSH keys are accepted alongside the public keys feed',
     )
   const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey })
   assert.equal(result.verified, true)
+})
+
+test('SSH-only enrollment accepts GitHub empty GPG armor', {
+  skip: spawnSync('gpg', ['--version']).status !== 0 ? 'gpg is not installed' : false,
+}, async (t) => {
+  const fixture = await tagFixture(t, true)
+  const fetchKey = async (url) =>
+    new Response(
+      url.endsWith('.gpg') ? emptyGithubGpg : url.endsWith('.keys') ? fixture.publicKey : '[]',
+    )
+  const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
+  const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey })
+  assert.equal(result.verified, true)
+})
+
+test('GitHub empty GPG armor does not count as enrolled key material', {
+  skip: spawnSync('gpg', ['--version']).status !== 0 ? 'gpg is not installed' : false,
+}, async (t) => {
+  const fixture = await tagFixture(t, true)
+  const fetchKey = async (url) =>
+    new Response(
+      url.endsWith('.gpg') ? emptyGithubGpg : url.endsWith('ssh_signing_keys') ? '[]' : '',
+    )
+  const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
+  const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', fetchKey })
+  assert.ok(result.warnings.some((warning) => /No signing keys enrolled/.test(warning)))
 })
 
 test('an unregistered signer cannot satisfy enforcement', async (t) => {
