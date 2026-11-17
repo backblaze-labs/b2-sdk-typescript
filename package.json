@@ -147,6 +147,7 @@
     "test": "vitest run",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:all": "vitest run && vitest run --config vitest.slow.config.ts",
+    "test:known-defects": "vitest run --config vitest.known-defects.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --config vitest.coverage.config.ts --coverage",
     "test:browser": "vitest run --config vitest.browser.config.ts",
@@ -162,6 +163,7 @@
     "test:release-channel": "node --test scripts/verify-release-channel.test.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit -p examples/tsconfig.json",
+    "typecheck:known-defects": "tsc --noEmit -p tests/known-defects/tsconfig.json",
     "docs": "typedoc",
     "docs:watch": "typedoc --watch",
     "clean": "rm -rf dist api-docs",
@@ -178,12 +180,12 @@
     "verify:release": "pnpm run changelog:check && pnpm run test:release-policy && node scripts/verify-release-workflow.mjs",
     "verify:release-channel": "node scripts/verify-release-channel.mjs",
     "verify:ci-docs-filter": "node --test scripts/verify-docs-only-classifier.test.mjs",
-    "verify:docs-consistency": "node --test scripts/verify-docs-consistency.test.mjs",
+    "verify:docs-consistency": "node --test scripts/verify-docs-consistency.test.mjs scripts/verify-changelog-migration.test.mjs",
     "verify:exports": "node scripts/verify-package-exports.mjs",
     "verify:release-workflow": "node scripts/verify-release-workflow.mjs",
     "smoke:published": "node scripts/smoke-published-package.mjs",
     "test:smoke-published": "node --test scripts/smoke-published-package.test.mjs",
-    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
+    "verify": "pnpm run lint && pnpm run lint:docs && pnpm run lint:spelling && pnpm run typecheck && pnpm run typecheck:examples && pnpm run typecheck:known-defects && pnpm run test:audit:deps && pnpm run test:sdkharness && pnpm run test && pnpm run test:release-channel && pnpm run build && pnpm run verify:release-channel && pnpm run docs && pnpm run verify:metadata && pnpm run verify:release && pnpm run verify:ci-docs-filter && pnpm run verify:docs-consistency && pnpm run verify:exports"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
