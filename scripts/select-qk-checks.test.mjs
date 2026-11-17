@@ -36,7 +36,11 @@ test('workflow compiles then selects explicit options with the tested pinned QK 
     (workflow.match(/quality-keeper\.git@da3df2255df129a292616e65417d333946f4cd6f/g) ?? []).length,
     2,
   )
-  for (const artifact of ['action-options.json', 'selected-options.json', 'selected-options.args']) {
+  for (const artifact of [
+    'action-options.json',
+    'selected-options.json',
+    'selected-options.args',
+  ]) {
     assert.ok(workflow.includes(`\n            artifacts/${artifact}\n`), `upload ${artifact}`)
   }
 })
