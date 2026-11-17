@@ -367,6 +367,9 @@ jobs:
           if-no-files-found: warn
           path: |
             artifacts/assessment.json
+            artifacts/action-options.json
+            artifacts/selected-options.json
+            artifacts/selected-options.args
             artifacts/exec/execution.json
             artifacts/post-execute-summary.json
             artifacts/post-execute-report.html
