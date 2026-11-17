@@ -99,6 +99,30 @@ test('registered maintainer SSH signature passes real git verify-tag', async (t)
   assert.equal(result.commit, fixture.commit)
 })
 
+test('every intended maintainer has all public key sources resolved', async (t) => {
+  const fixture = await tagFixture(t, true)
+  const roster = ['goanpeca', 'ffumero2003', 'sophiecarreras']
+  await writeFile(join(fixture.repo, '.github/signing-maintainers'), roster.join('\n'))
+  const seen = []
+  const fetchKey = async (url) => {
+    seen.push(url)
+    return fixture.fetchKey(url)
+  }
+  const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
+  const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey })
+  assert.equal(result.verified, true)
+  assert.deepEqual(
+    seen.sort(),
+    roster
+      .flatMap((name) => [
+        `https://github.com/${name}.gpg`,
+        `https://github.com/${name}.keys`,
+        `https://api.github.com/users/${name}/ssh_signing_keys`,
+      ])
+      .sort(),
+  )
+})
+
 test('GitHub signing-only SSH keys are accepted alongside the public keys feed', async (t) => {
   const fixture = await tagFixture(t, true)
   const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
@@ -180,22 +204,13 @@ test('unreadable key sources cannot satisfy enforcement', async (t) => {
 })
 
 test('tag verification stays bound to the object inspected before key lookup', async (t) => {
-  const fixture = await tagFixture(t)
+  const fixture = await tagFixture(t, true)
   command(
     'git',
-    [
-      '-c',
-      'gpg.format=ssh',
-      '-c',
-      `user.signingkey=${fixture.key}`,
-      'tag',
-      '-s',
-      'v1.2.4',
-      '-m',
-      'fixture',
-    ],
+    ['-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-qm', 'next'],
     fixture.repo,
   )
+  command('git', ['-c', 'tag.gpgsign=false', 'tag', '-a', 'v1.2.4', '-m', 'next'], fixture.repo)
   const replacement = command('git', ['rev-parse', 'refs/tags/v1.2.4'], fixture.repo)
   let moved = false
   const fetchKey = async (url) => {
@@ -206,10 +221,9 @@ test('tag verification stays bound to the object inspected before key lookup', a
     return fixture.fetchKey(url)
   }
   const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
-  await assert.rejects(
-    verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey }),
-    /signature/i,
-  )
+  const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey })
+  assert.equal(result.verified, true)
+  assert.equal(result.commit, fixture.commit)
 })
 
 test('a signed tag annotation cannot be reused under another release name', async (t) => {
@@ -398,12 +412,33 @@ test('milestone API access failures do not pass readiness', async () => {
   )
 })
 
-test('tag enforcement defaults off and rejects an invalid switch value', async () => {
+test('release milestone requires one exact title rather than a prefix or duplicates', async () => {
+  const { checkReleaseMilestone } = await import('./verify-release-milestone.mjs')
+  for (const milestones of [
+    [{ number: 7, title: 'v1.2.30' }],
+    [{ number: 7, title: 'v1.2.3-rc.0' }],
+    [
+      { number: 7, title: 'v1.2.3' },
+      { number: 8, title: 'v1.2.3' },
+    ],
+  ]) {
+    await assert.rejects(
+      checkReleaseMilestone({
+        repo: 'example/sdk',
+        tag: 'v1.2.3',
+        api: apiFixture({ milestones }).api,
+      }),
+      /must exist exactly once/,
+    )
+  }
+})
+
+test('tag enforcement requires the literal true opt-in', async () => {
   const { enforceSignedTags } = await import('./verify-release-tag.mjs')
-  assert.equal(enforceSignedTags(), false)
-  assert.equal(enforceSignedTags('false'), false)
+  for (const value of [undefined, '', 'false', '0', 'off', '1', 'on', 'TRUE', ' true ', 'treu']) {
+    assert.equal(enforceSignedTags(value), false, `unexpected enforcement for ${String(value)}`)
+  }
   assert.equal(enforceSignedTags('true'), true)
-  assert.throws(() => enforceSignedTags('treu'), /ENFORCE_SIGNED_TAGS/)
 })
 
 test('GitHub policy lists include every page and fail on missing API access', async () => {

@@ -10,9 +10,7 @@ const sshKey =
   /^(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-[\w-]+|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com) [A-Za-z\d+/]+=*(?: .*)?$/
 
 export function enforceSignedTags(value = '') {
-  if (['', 'false', '0', 'off'].includes(value.trim().toLowerCase())) return false
-  if (['true', '1', 'on'].includes(value.trim().toLowerCase())) return true
-  throw new Error('ENFORCE_SIGNED_TAGS must be true or false')
+  return value === 'true'
 }
 
 async function maintainerKeys(username, fetchKey) {

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 
-async function checkWorkflow(t, change = (workflow) => workflow) {
+async function checkWorkflow(t, change) {
   const root = await mkdtemp(join(tmpdir(), 'b2-release-workflow-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(join(root, 'scripts'))
@@ -17,7 +17,9 @@ async function checkWorkflow(t, change = (workflow) => workflow) {
     await copyFile(join(repo, file), join(root, file))
   }
   const workflow = await readFile(join(repo, '.github/workflows/release.yml'), 'utf8')
-  await writeFile(join(root, '.github/workflows/release.yml'), change(workflow))
+  const changed = change ? change(workflow) : workflow
+  if (change) assert.notEqual(changed, workflow, 'workflow mutation must change the fixture')
+  await writeFile(join(root, '.github/workflows/release.yml'), changed)
   return spawnSync(process.execPath, [join(root, 'scripts/verify-release-workflow.mjs')], {
     cwd: root,
     encoding: 'utf8',
@@ -101,4 +103,38 @@ test('release actions must remain pinned to full commit SHAs', async (t) => {
   )
   assert.notEqual(result.status, 0, 'floating action references are not permitted')
   assert.match(result.stderr, /pin|SHA/i)
+})
+
+for (const job of ['release-policy', 'security']) {
+  test(`${job} must check out trusted policy from the default branch`, async (t) => {
+    const result = await checkWorkflow(t, (workflow) =>
+      workflow.replace(new RegExp(`^  ${job}:\\n[\\s\\S]*?(?=^  [a-z-]+:)`, 'm'), (section) =>
+        section.replace(
+          `ref: \${{ github.event.repository.default_branch }}`,
+          `ref: \${{ env.REF }}`,
+        ),
+      ),
+    )
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /trusted|default.branch/i)
+  })
+}
+
+test('release policy must fetch the tag history', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace('fetch-depth: 0', 'fetch-depth: 1'),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /fetch-depth/i)
+})
+
+test('tag enforcement must read the repository opt-in variable', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace(
+      `ENFORCE_SIGNED_TAGS: \${{ vars.ENFORCE_SIGNED_TAGS }}`,
+      'ENFORCE_SIGNED_TAGS: false',
+    ),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /ENFORCE_SIGNED_TAGS/i)
 })

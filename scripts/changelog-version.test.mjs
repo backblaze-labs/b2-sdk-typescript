@@ -94,13 +94,41 @@ test('prerelease version lifecycle retains pending fragments and the existing ch
 test('stable version lifecycle rejects a release without fragments', async (t) => {
   const { root, hook } = await fixture(t, '1.2.4', false)
   const result = spawnSync(process.execPath, [join(root, hook)], { cwd: root, encoding: 'utf8' })
-  assert.notEqual(result.status, 0, 'a stable release needs changelog fragments')
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /changelog-version: stable releases require Changie fragments/)
 })
 
-test('stable version lifecycle cannot go backwards from the released history', async (t) => {
-  const { root, hook } = await fixture(t, '1.2.2')
-  const result = spawnSync(process.execPath, [join(root, hook)], { cwd: root, encoding: 'utf8' })
-  assert.notEqual(result.status, 0, 'the npm-selected version must be newer than released history')
+for (const [version, accepted] of [
+  ['1.2.3', false],
+  ['1.2.2', false],
+  ['1.1.9', false],
+  ['1.3.0', true],
+  ['2.0.0', true],
+]) {
+  test(`stable lifecycle ${accepted ? 'accepts' : 'rejects'} ${version} after 1.2.3`, async (t) => {
+    const { root, hook } = await fixture(t, version)
+    const result = spawnSync(process.execPath, [join(root, hook)], { cwd: root, encoding: 'utf8' })
+    assert.equal(result.status, accepted ? 0 : 1, result.stderr)
+    if (!accepted) {
+      assert.match(
+        result.stderr,
+        /changelog-version: npm must select a version newer than the released history/,
+      )
+    }
+  })
+}
+
+// Check the real archives as well as the isolated version-lifecycle fixtures.
+test('each archived version retains its heading reference link in the generated changelog', async () => {
+  const changelog = await readFile(join(repo, 'CHANGELOG.md'), 'utf8')
+  const headings = [...changelog.matchAll(/^## \[([0-9.]+)\]/gm)]
+  assert.ok(headings.length > 0)
+  for (const [, version] of headings) {
+    const archived = await readFile(join(repo, `.changes/v${version}.md`), 'utf8')
+    const definition = archived.split('\n').find((line) => line.startsWith(`[${version}]: `))
+    assert.ok(definition, `missing heading link for ${version}`)
+    assert.ok(changelog.includes(definition), `generated heading link missing for ${version}`)
+  }
 })
 
 test('stable version lifecycle can follow a prerelease preview of the same version', async (t) => {

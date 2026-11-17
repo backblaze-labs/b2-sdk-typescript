@@ -147,7 +147,8 @@ No private keys belong in this repository or its workflow secrets.
 
 **Enrollment phase:** `ENFORCE_SIGNED_TAGS` is unset by default. The job runs
 `git verify-tag`, reports missing keys or invalid signatures as warnings, and
-continues. Security triage and milestone readiness are still mandatory.
+continues. Only the literal value `true` enables signature enforcement; every
+other value keeps warning mode. Security triage and milestone readiness are still mandatory.
 
 Before enabling enforcement, each listed maintainer must:
 
