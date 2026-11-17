@@ -138,7 +138,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "MIGRATION.md"
   ],
   "scripts": {
     "build": "vite build && node scripts/build-cts-types.mjs",
