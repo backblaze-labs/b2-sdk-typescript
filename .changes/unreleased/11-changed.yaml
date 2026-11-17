@@ -1,0 +1,3 @@
+kind: Changed
+body: "Standardized release preparation with Changie fragments, release milestones, security triage, and a maintainer tag-signature check that initially warns until key enrollment is complete. Package versioning remains with pnpm/npm, and publishing retains OIDC trusted publishing and provenance."
+time: 2026-11-17T00:00:00Z

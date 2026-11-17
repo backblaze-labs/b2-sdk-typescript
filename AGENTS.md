@@ -12,7 +12,7 @@ This is a map, not a manual. Follow the pointers to the real source of truth.
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Subpath exports, source layout, layering, and the key design decisions. **Read before touching `src/`.** |
 | [`docs/`](docs/README.md) | **System of record.** [core beliefs](docs/design-docs/core-beliefs.md), [design-docs/ADRs](docs/design-docs/index.md), [quality score](docs/QUALITY_SCORE.md), [exec-plans + tech-debt](docs/exec-plans/tech-debt-tracker.md), [references](docs/references/). |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Dev workflow, PR checklist, release steps. |
-| [`CHANGELOG.md`](CHANGELOG.md) / [`MIGRATION.md`](MIGRATION.md) | Keep-a-Changelog history / v3→v4 upgrade guide. |
+| [`.changes/`](.changes/) / [`CHANGELOG.md`](CHANGELOG.md) / [`MIGRATION.md`](MIGRATION.md) | Changie fragments and generated history / upgrade guide. |
 | `api-docs/` | Generated TypeDoc reference (`pnpm docs`; not versioned). |
 | [`README.md`](README.md) | User-facing docs — governed by the docs policy below. |
 

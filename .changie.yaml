@@ -1,0 +1,26 @@
+changesDir: .changes
+unreleasedDir: unreleased
+headerPath: header.tpl.md
+changelogPath: CHANGELOG.md
+versionExt: md
+versionFormat: '## [{{.VersionNoPrefix}}] - {{.Time.Format "2006-01-02"}}'
+kindFormat: '### {{.Kind}}'
+changeFormat: '- {{.Body}}'
+footerFormat: |-
+  [{{.VersionNoPrefix}}]: https://github.com/backblaze-labs/b2-sdk-typescript/compare/{{.PreviousVersion}}...{{.Version}}
+kinds:
+  - label: Added
+  - label: Changed
+  - label: Deprecated
+  - label: Removed
+  - label: Fixed
+  - label: Security
+newlines:
+  afterChangelogHeader: 0
+  beforeChangelogVersion: 1
+  endOfVersion: 1
+  afterKind: 1
+  beforeKind: 1
+  beforeFooterTemplate: 1
+# Changelog rendering only: package versions and publishing remain with pnpm/npm.
+# Do not add version replacements here.

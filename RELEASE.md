@@ -2,7 +2,7 @@
 
 How to cut a new version of `@backblaze-labs/b2-sdk`, publish it to npm, and produce a matching GitHub Release.
 
-The flow is **tag-driven**: you bump the version with `pnpm version`, which also dates the changelog and creates a `v<version>` git tag; pushing that tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which builds, publishes to npm via **OIDC trusted publishing** (no `NPM_TOKEN`), and creates the GitHub Release. The changelog is maintained by hand under a `## [Unreleased]` heading (Keep a Changelog style) and promoted automatically on each bump.
+The flow is **tag-driven**. pnpm/npm owns `package.json` versions; the version lifecycle asks Changie to assemble fragments for that exact version. The release goes through a PR before a maintainer tags its approved merge commit. Pushing a `v<version>` tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which checks release policy and security triage, builds a verified artifact, publishes with **npm OIDC trusted publishing and provenance**, and creates the GitHub Release. Changie owns only changelog content; it does not bump package versions or publish.
 
 > If anything here conflicts with what's actually in [`package.json`](package.json) or [`.github/workflows/`](.github/workflows/), trust the config and fix the doc.
 
@@ -14,9 +14,10 @@ The flow is **tag-driven**: you bump the version with `pnpm version`, which also
    - Confirm with `npm whoami` and `npm access ls-collaborators @backblaze-labs/b2-sdk` (after the first publish).
 2. **Two-factor authentication enabled** on your npm account. Required for the manual first publish and any `@backblaze-labs`-scoped package.
 3. **`pnpm` 11+** locally. Install via `corepack enable && corepack prepare pnpm@11.1.0 --activate`.
-4. **Push access to `main`** and permission to create tags + GitHub Releases.
+4. **A GitHub CLI login with release security access**, and permission to create release PRs, milestones, tags and GitHub Releases.
+5. **Git 2.34+ and GPG or OpenSSH** for signing and verification. Signing-key enrollment is described below; enforcement is initially off.
 
-Automated releases use OIDC trusted publishing (no secret to manage); you configure it once on npmjs.com after 0.1.0 ships, see [Configure trusted publishing](#3-configure-trusted-publishing-after-010-is-live).
+npm publication uses OIDC trusted publishing (no npm credential secret); configure it once on npmjs.com, see [Configure trusted publishing](#3-configure-trusted-publishing-after-010-is-live). The separate GitHub security-read credential is described under the release security gate.
 
 ---
 
@@ -98,29 +99,149 @@ While below `1.0.0`, breaking changes are allowed in `minor` bumps per the stand
 
 ---
 
-## Keeping the changelog updated
+## Changelog fragments
 
-The changelog is a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) file with a `## [Unreleased]` section at the top.
+Changie **1.24.0** is pinned as a development dependency, so `pnpm install`
+provides the same generator locally and in CI. The fragment layout follows
+[Blazer](https://github.com/Backblaze/blazer/blob/main/.changie.yaml); the separate
+release preflight follows the approach documented by
+[Genblaze](https://github.com/backblaze-labs/genblaze/blob/main/RELEASING.md).
 
-The `v0.5.0` tag is not an ancestor of `main`; its changelog section was restored by hand, so compare the released trees when interpreting `v0.5.0..v0.6.0`.
+The `v0.5.0` tag is not an ancestor of `main`; compare the released trees when interpreting `v0.5.0..v0.6.0`.
 
-**As part of any PR that changes behaviour, add a bullet under `## [Unreleased]`**, grouped under the appropriate heading (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security`). Write it for a user, in the past tense, focused on *why* it matters:
+Add a fragment with each user-facing change:
 
-```markdown
-## [Unreleased]
-
-### Added
-
-- Resume multipart uploads after a crash with the new `resume: true` option.
-
-### Fixed
-
-- Range download retries no longer drop bytes when the transport reuses buffers.
+```bash
+pnpm changelog:new
 ```
 
-That's the whole discipline. At release time, `pnpm version` promotes everything under `## [Unreleased]` into a dated `## [<version>]` section and leaves a fresh empty `## [Unreleased]` behind (via [`scripts/cut-changelog.mjs`](scripts/cut-changelog.mjs), wired to the `version` lifecycle script). If `[Unreleased]` is empty when you bump, the script warns so you notice a release with no notes.
+Choose Added, Changed, Deprecated, Removed, Fixed, or Security. Keep the note
+focused on the caller's resulting behavior and migration, and commit the YAML
+under `.changes/unreleased/` with its PR. Unpublished advisory details belong in
+the private advisory, never in a public fragment or issue.
 
-> Tip: a CI check that fails a PR touching `src/` without a corresponding `## [Unreleased]` edit keeps this honest. Not enforced today; add one if entries start getting forgotten.
+`CHANGELOG.md` is generated from the version archives in `.changes/`; do not edit
+it or maintain a hand-written Unreleased section. `pnpm changelog:merge` rebuilds
+it and `pnpm changelog:check` checks for drift. Released archives must retain
+their content unless a correction is explained in the PR.
+
+The existing notes through v0.5.0 are imported from their published history.
+Pending fragments describe changes after that release, including the pending
+release preparation. Review the fragments against the published tag before batching.
+
+pnpm/npm remains the version owner. After it changes `package.json`, the `version`
+lifecycle runs `changie batch v<package.json version>` and `changie merge`, then
+stages the changelog and fragment changes. There are no Changie version replacements.
+The hook rejects an empty stable release or a version older than released history.
+A prerelease bump retains the pending stable fragments; see the prerelease section.
+
+## Signing-key enrollment and rollout
+
+The intended maintainers in [`.github/signing-maintainers`](.github/signing-maintainers)
+are `goanpeca`, `ffumero2003`, and `sophiecarreras`. The gate resolves their current
+public GPG keys from `https://github.com/<username>.gpg` and SSH keys from
+`https://github.com/<username>.keys`. It also reads GitHub's public SSH signing-key
+API because keys registered only for signing are separate from the `.keys` feed.
+Verification uses a temporary keyring and allowed-signers file, never a personal keyring.
+No private keys belong in this repository or its workflow secrets.
+
+**Enrollment phase:** `ENFORCE_SIGNED_TAGS` is unset by default. The job runs
+`git verify-tag`, reports missing keys or invalid signatures as warnings, and
+continues. Security triage and milestone readiness are still mandatory.
+
+Before enabling enforcement, each listed maintainer must:
+
+1. Create a personal GPG or SSH signing key and register the public key on their
+   GitHub account. For SSH, select the **Signing Key** type. Never upload the private key.
+2. Configure Git to sign with that key. For GPG, set `user.signingkey` to the key's
+   fingerprint and `gpg.format` to `openpgp`; for SSH, set `gpg.format` to `ssh` and
+   `user.signingkey` to the signing key's public-key path.
+3. Verify a signed test tag using the gate, then confirm every listed maintainer
+   has at least one enrolled key. Keep fixture keys outside the real repository.
+4. Have a maintainer enable the repository Actions variable:
+
+   ```bash
+   gh variable set ENFORCE_SIGNED_TAGS --body true --repo backblaze-labs/b2-sdk-typescript
+   ```
+
+With the variable set to `true`, unsigned, unknown-signer, unreadable-key-source,
+or invalid-signature results fail the job. Do not enable it before enrollment.
+To check a real release tag locally after it exists:
+
+```bash
+ENFORCE_SIGNED_TAGS=true pnpm release:tag vX.Y.Z
+```
+
+CI loads the roster and policy from the default branch, inspects the requested
+tag, and passes its exact commit to the build. The build does not resolve the
+mutable tag name again.
+
+## Release milestone discipline
+
+Create one milestone named exactly `vX.Y.Z` when planning the release. Assign its
+issues and PRs, including the release PR, to that milestone. Public fixes use
+public issues; unpublished security work stays in its private advisory.
+
+Before tagging, all intended changes must be merged and the milestone must have
+**zero open issues and pull requests**. The workflow checks every API page and
+fails if the milestone is missing, unreadable, or still has open work. A maintainer
+must decide whether deferred work belongs in a later release; do not close work
+merely to make the gate pass.
+
+Readiness is a tagging/publishing prerequisite. An open release PR may correctly
+keep the milestone check on hold during preparation.
+
+Keep the milestone open until publication and the installed-package smoke check
+are complete, then close it. An already closed milestone with no open work is
+accepted for an idempotent workflow rerun.
+
+```bash
+pnpm release:milestone vX.Y.Z
+```
+
+## Release security gate
+
+`pnpm run verify` checks quality and release-tool behavior; it is **not** a live
+security-triage approval. Run the separate gate before tagging:
+
+```bash
+pnpm release:security vX.Y.Z
+```
+
+The release workflow runs the same gate before it can build or publish:
+
+| Source | Holds the release when |
+| --- | --- |
+| Code scanning | Any alert is open on the default branch. |
+| Dependabot | An open alert has a patched version. |
+| Secret scanning | Any alert is open. |
+| Repository security advisories | A triage advisory or an unapproved draft remains open. |
+
+Dependency alerts without a patched version are reported as notes; record their
+triage and owner decision before release. Fix or formally dismiss actionable
+findings with a written reason through the appropriate security workflow. The gate
+never dismisses, changes labels, or closes alerts itself.
+
+Configure the Actions secret `RELEASE_SECURITY_TOKEN` with a GitHub App token or
+fine-grained token held by a maintainer/security manager who can read all four
+sources for this repository. Grant only the required read permissions: Code
+scanning alerts, Dependabot alerts, Secret scanning alerts, and Repository security
+advisories. This is a GitHub read credential, not an npm publishing credential.
+The default `GITHUB_TOKEN` may lack these permissions. Missing access, security
+feature availability, malformed data, or API failures are **UNVERIFIED** and hold
+the release; an empty readable list is the only clear result. Output contains
+counts and states, never secret values, unpublished summaries or private advisory IDs.
+
+When this release fixes a draft advisory that must remain private until tagging,
+a security maintainer records approval privately and sets the optional
+`RELEASE_SECURITY_APPROVAL` Actions secret to JSON with `tag` (exact `vX.Y.Z`) and
+`advisories` (the approved draft IDs). The exemption applies only to that tag and
+to draft state; triage advisories still hold. Confirm the fixes in the release PR
+without copying private identifiers into it, publish those advisories immediately
+after the release, then clear the approval secret.
+
+This does not change npm authentication: the publish job retains OIDC, provenance,
+its existing pinned actions, and its prohibition on executing repository code.
 
 ---
 
@@ -130,11 +251,13 @@ Run the full local gate before releasing (CI runs it too, but catching it locall
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm run verify     # lint + lint:docs + lint:spelling + typecheck + typecheck:examples
-                    # + test + build + docs + verify:metadata + verify:release + verify:exports
+pnpm run verify
+bash .sdkharness/tests/health-examples
+pnpm release:security vX.Y.Z
+pnpm release:milestone vX.Y.Z
 ```
 
-`pnpm run verify` must exit `0`. For extra confidence on the published artifact:
+`pnpm run verify` must exit `0`. The local health command builds the SDK and runs the example lifecycle against its in-memory simulator; it needs no live B2 credentials. The HTTP golden-path check additionally needs the harness-provided simulator and environment described in [`.sdkharness/README.md`](.sdkharness/README.md). For extra confidence on the published artifact:
 
 ```bash
 pnpm test:coverage  # coverage gate: 97% statements, 98% lines, 97% functions, 92% branches
@@ -154,25 +277,46 @@ The tarball should contain `dist/` (`.js` / `.cjs` / `.d.ts` / `.d.cts` per entr
 
 ## Releasing (the normal flow, 0.1.1 onward)
 
-From a clean, up-to-date `main`:
+From a clean, up-to-date `main`, after planning the release milestone and reviewing triage:
 
 ```bash
-git checkout main && git pull --ff-only
-pnpm run verify                      # green gate
-
-pnpm version patch                   # or `minor` / `major`
-#  -> bumps package.json version
-#  -> runs the `version` lifecycle script: cut-changelog promotes
-#     [Unreleased] -> [<version>] - <date>, then `git add CHANGELOG.md`
-#  -> commits package.json + CHANGELOG.md and creates the tag v<version>
-
-git push --follow-tags               # pushes the version commit AND the tag
+git switch -c release/vX.Y.Z origin/main
+pnpm install --frozen-lockfile
+pnpm exec changie latest --skip-prereleases   # check the published-history floor
+pnpm version X.Y.Z --no-git-tag-version       # manifest version changes; Changie only renders notes
+pnpm run verify
+bash .sdkharness/tests/health-examples
 ```
+
+Choose the next version explicitly from the latest release and its compatibility
+changes; do not assume a stale development manifest is the latest published version.
+Review `package.json`, `.changes/`, and `CHANGELOG.md`, commit them, and open the
+release PR with its milestone, changelog, verification and human review request.
+Do not create a release tag during PR preparation.
+
+After approval and merge, rerun the security and milestone checks. Milestone
+readiness is expected to hold while the release PR is still open. Once both
+checks pass, tag the release PR's merge commit, which may no longer be the tip of main:
+
+```bash
+git fetch origin main --tags
+release_commit=$(gh pr view <release-pr> --json mergeCommit --jq .mergeCommit.oid)
+git log -1 --oneline "$release_commit"
+git tag -s vX.Y.Z "$release_commit" -m "Release X.Y.Z"
+ENFORCE_SIGNED_TAGS=true pnpm release:tag vX.Y.Z
+git push origin refs/tags/vX.Y.Z
+```
+
+During the warning-only enrollment phase, a maintainer without an enrolled key
+may use `git tag -a` instead of `git tag -s` and run `pnpm release:tag vX.Y.Z`
+without enforcement. The workflow warns; it does not block on enrollment.
+Once `ENFORCE_SIGNED_TAGS=true`, only verified maintainer-signed tags pass.
+Never move or delete a published tag.
 
 Pushing the tag fires [`.github/workflows/release.yml`](.github/workflows/release.yml), which:
 
-1. Checks out the tag and verifies the tag matches `package.json` version.
-2. Runs the gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
+1. Loads trusted tag and milestone policy from the default branch, verifies the requested tag under the enrollment/enforcement mode, checks the milestone and security triage, and pins artifact checkout to the inspected commit. It also verifies that the tag matches `package.json`.
+2. Runs the quality gate (`lint`, `typecheck`, `test`, `build`, `verify:metadata`, `verify:release`, `verify:exports`) and immediately packs/uploads that verified artifact. `attw` is informational, pinned, and runs through `npx` in a separate job that never creates the npm artifact or enters the build job dependency graph.
 3. `npm publish` over OIDC (skipped only if the version is already on the registry with matching integrity). Provenance is attested automatically.
 4. Creates the GitHub Release using the matching `CHANGELOG.md` section as the body (via `scripts/extract-changelog.mjs`).
 
@@ -235,13 +379,21 @@ is available.
 ## Pre-releases (alpha, beta, rc)
 
 ```bash
-pnpm version prerelease --preid rc   # 0.1.1 -> 0.1.2-rc.0 (re-run bumps to rc.1, ...)
-git push --follow-tags
+pnpm version X.Y.Z-rc.0 --no-git-tag-version
+# npm owns the new prerelease version; render a preview without consuming stable fragments:
+prerelease_version=$(node -p "require('./package.json').version")
+pnpm exec changie batch "v$prerelease_version" --keep
+pnpm changelog:merge
+pnpm run verify
 ```
 
-Prereleases are detected by the hyphen in the version. `cut-changelog` **leaves `## [Unreleased]` intact** (the notes describe the eventual stable release), and `release.yml` publishes to the **`next`** dist-tag and marks the GitHub Release as a pre-release. `latest` is untouched.
-
-Users opt in with `pnpm add @backblaze-labs/b2-sdk@next`. Ship the stable cut later with a normal `pnpm version patch|minor|major`, which then promotes the accumulated `[Unreleased]` notes.
+Commit the preview in a release PR with its matching milestone. After merge,
+use the same tag/signature, security and milestone gates as stable releases.
+A hyphenated version publishes to the **`next`** dist-tag and creates a prerelease
+on GitHub; `latest` is untouched. The version lifecycle retains pending stable
+fragments, and the explicit preview keeps them with `--keep`. The eventual stable
+`pnpm version X.Y.Z --no-git-tag-version` batches them normally. Users opt in with
+`pnpm add @backblaze-labs/b2-sdk@next`.
 
 ---
 
@@ -251,19 +403,23 @@ Users opt in with `pnpm add @backblaze-labs/b2-sdk@next`. Ship the stable cut la
 |---|---|
 | Bad version on npm (broken types/build) | Publish a patch on top. **Do not** unpublish — npm forbids it after 72 h and it breaks downstream lockfiles. |
 | Truly compromised version (secret leaked) | `npm deprecate '@backblaze-labs/b2-sdk@<version>' '<reason>'`, then publish a fixed patch. Coordinate with security if a key leaked. |
-| Tag points at the wrong commit | Delete local + remote tag, retag the right commit, force-push: `git push --force origin v<version>`. Then re-run the release via `workflow_dispatch`. |
+| Published tag points at the wrong commit | Keep the published tag immutable and prepare a corrected patch release. |
 | GitHub Release body is wrong | Edit it on the GitHub UI, or re-run the release workflow (it re-uses the changelog section). |
-| Forgot a changelog entry before tagging | Fix `CHANGELOG.md` on `main`, then `gh release edit v<version> --notes-file <(node scripts/extract-changelog.mjs <version>)`. |
+| Forgot a changelog entry before tagging | Explain the correction in a PR, update its released `.changes/v<version>.md` archive and run `pnpm changelog:merge`. A maintainer can then update the GitHub Release notes. |
 
 ---
 
 ## Checklist (TL;DR)
 
-- [ ] `## [Unreleased]` in `CHANGELOG.md` reflects everything since the last release
-- [ ] `pnpm install --frozen-lockfile` clean
-- [ ] `pnpm run verify` green (optionally `pnpm test:coverage` + `pnpm test:browser`)
-- [ ] `pnpm version <patch|minor|major>` produces a sensible `CHANGELOG.md` diff + tag
-- [ ] `git push --follow-tags`
-- [ ] Release workflow green: npm publish + GitHub Release created
-- [ ] `npm view @backblaze-labs/b2-sdk version` shows the new version
-- [ ] Smoke test from a fresh `pnpm add @backblaze-labs/b2-sdk` passes
+- [ ] Intended work and release PR belong to the exact `vX.Y.Z` milestone
+- [ ] Main CI and relevant live integration are green
+- [ ] Changie fragments cover the changes and explain compatibility/migration
+- [ ] pnpm/npm selects the version without creating a tag during PR preparation
+- [ ] `pnpm install --frozen-lockfile` and `pnpm run verify` pass
+- [ ] `bash .sdkharness/tests/health-examples` passes locally
+- [ ] Separate security triage passes; no UNVERIFIED checks remain
+- [ ] Milestone has no open issues or PRs before tagging
+- [ ] Human approves the release PR; tag its merge commit
+- [ ] Signing keys are enrolled before `ENFORCE_SIGNED_TAGS` is enabled
+- [ ] Publish only through the existing tag-driven npm OIDC/provenance workflow
+- [ ] Smoke the installed artifact, publish any privately approved fixed advisories, and close the milestone
