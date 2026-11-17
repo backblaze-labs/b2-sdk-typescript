@@ -1,6 +1,6 @@
 {
   "name": "@backblaze-labs/b2-sdk",
-  "version": "0.4.0",
+  "version": "0.6.0",
   "description": "The official Backblaze B2 Cloud Storage SDK for TypeScript and JavaScript",
   "license": "MIT",
   "type": "module",
@@ -138,7 +138,8 @@
     "dist",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "MIGRATION.md"
   ],
   "scripts": {
     "build": "vite build && node scripts/build-cts-types.mjs",
