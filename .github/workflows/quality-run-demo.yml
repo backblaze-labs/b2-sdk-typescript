@@ -283,7 +283,7 @@ jobs:
             echo "::error title=Quality Keeper install::QK_INSTALL_TOKEN is empty at install time; the preflight step should have skipped this. Not invoking git/pip with an empty credential." >&2
             exit 1
           fi
-          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
+          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@da3df2255df129a292616e65417d333946f4cd6f"
 
       - name: Assess and run SAFE existing checks
         if: steps.preflight.outputs.trusted == 'true' && steps.preflight.outputs.install_ready == 'true'
@@ -291,7 +291,16 @@ jobs:
           mkdir -p artifacts
           # 1) Assess the source. A genuine QK error here fails the job (red).
           quality-keeper assess --repo . --run-inventory --json artifacts/assessment.json
-          # 2) Run the SAFE existing checks automatically — NO --include-expensive,
+          # 2) Choose explicit QK options. The root test:all script already
+          # contains test's fast suite; retain its slow suite without rerunning
+          # the fast prefix. Unknown scripts/contexts keep their original options.
+          node --test scripts/select-qk-checks.test.mjs
+          quality-keeper act run-found-checks \
+            --assessment artifacts/assessment.json --repo . \
+            --json artifacts/action-options.json
+          node scripts/select-qk-checks.mjs artifacts/action-options.json . artifacts/selected-options
+          mapfile -t selected_args < artifacts/selected-options.args
+          # Run SAFE existing checks automatically — NO --include-expensive,
           #    so integration/live-B2/system checks are gated (reported, not run).
           #    ADVISORY: `run-found-checks` exits non-zero when a safe check FAILS.
           #    A failing SDK check is advisory evidence, NOT a workflow failure, so
@@ -303,7 +312,7 @@ jobs:
           set +e
           quality-keeper act run-found-checks \
             --assessment artifacts/assessment.json --repo . \
-            --execute --all --execution-dir artifacts/exec --timeout-seconds 900
+            --execute "${selected_args[@]}" --execution-dir artifacts/exec --timeout-seconds 900
           rc=$?
           set -e
           echo "run-found-checks exit=${rc} (non-zero = some safe checks failed; advisory only)"
@@ -400,7 +409,7 @@ jobs:
             echo "::error title=Quality Keeper install::QK_INSTALL_TOKEN is empty in the comment job; run_quality should have gated this. Not invoking git/pip with an empty credential." >&2
             exit 1
           fi
-          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@main"
+          pip install --quiet "git+https://x-access-token:${QK_INSTALL_TOKEN}@github.com/backblaze-labs/quality-keeper.git@da3df2255df129a292616e65417d333946f4cd6f"
 
       - name: Download proof artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
