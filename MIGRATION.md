@@ -1,5 +1,70 @@
 # Migration guide
 
+## v0.6.0: Authorization-response persistence and HTTPS URLs
+
+### Before
+
+Serializing an authorization response with `JSON.stringify(response)` retained
+its authorization token, and spreading the response copied the token. A custom
+account store could serialize the object passed to `setAuth()` directly.
+
+### After
+
+Returned authorization responses expose the real token through
+`response.authorizationToken`, but omit it from spread and property enumeration.
+JSON and Node inspect diagnostics substitute a placeholder and include the
+`_b2sdkDiagnostic` marker. Diagnostic JSON is not an authorization cache.
+
+Use the persistence helper on the original response before serialization. This
+complete example returns cache JSON for a caller-provided credential pair:
+
+```ts
+import { B2Client, authorizeAccountResponseForPersistence } from '@backblaze-labs/b2-sdk'
+
+export async function createAuthorizationCacheJson(
+  applicationKeyId: string,
+  applicationKey: string,
+): Promise<string> {
+  const client = new B2Client({ applicationKeyId, applicationKey })
+  const response = await client.authorize()
+  const cache = authorizeAccountResponseForPersistence(response)
+  return JSON.stringify(cache)
+}
+```
+
+Store the resulting JSON only in credential-grade storage and never print it.
+The helpers produce plain copies containing all own response data and the real
+token, with diagnostic hooks removed. They reject marked diagnostic summaries
+and missing or non-string tokens with `TypeError`; they cannot recover a token
+from previously saved diagnostic JSON. Authorize again if only that JSON remains.
+
+The same migration applies to these responses; all four helpers can be imported
+from the package root or `@backblaze-labs/b2-sdk/raw`:
+
+| Response | Persistence helper |
+| --- | --- |
+| `authorize()` / `authorizeAccount()` | `authorizeAccountResponseForPersistence` |
+| `getUploadUrl()` | `getUploadUrlResponseForPersistence` |
+| `getUploadPartUrl()` | `getUploadPartUrlResponseForPersistence` |
+| `getDownloadAuthorization()` | `downloadAuthorizationResponseForPersistence` |
+
+`B2Client.authorize()` now passes a separate plain response to its account store;
+do not rely on object identity between its result and `accountInfo.getAuth()`.
+`InMemoryAccountInfo.setAuth()` copies responses with diagnostic hooks or token
+accessors, while valid plain responses retain their identity. `getAuth()` returns
+the plain stored response with its real token. `FileAccountInfo` handles its own
+persistence without requiring a caller-side helper.
+
+The response token accessor is readonly. On Bun, returned responses also have an
+inherited non-enumerable JSON hook on their prototype; use field access rather
+than relying on a plain-object prototype or descriptor layout.
+
+Guarded URLs now require HTTPS when host suffixes are configured. Update any
+plain-HTTP `apiUrl`, `downloadUrl`, or `s3ApiUrl` values supplied by a custom
+endpoint to HTTPS. Other schemes are rejected too. An unlocked guard with no
+configured suffixes keeps its existing behavior, and a custom transport still
+owns its URL validation and bypasses the SDK's guard.
+
 ## v0.5.0: Single-file upload connection-fault retry opt-out
 
 Upload POST connection faults retry by default with a fresh upload URL. If a

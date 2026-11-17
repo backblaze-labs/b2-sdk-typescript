@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Authorization-response persistence helpers.** Added `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence`, and `downloadAuthorizationResponseForPersistence` to both the package root and `@backblaze-labs/b2-sdk/raw`. Use the matching helper on the original response before trusted serialization; it returns a plain copy containing the real token and all own response data, without diagnostic hooks. Store these copies only in credential-grade storage.
+- **Authorization-response persistence helpers.** Added `authorizeAccountResponseForPersistence`, `getUploadUrlResponseForPersistence`, `getUploadPartUrlResponseForPersistence`, and `downloadAuthorizationResponseForPersistence` to both the package root and `@backblaze-labs/b2-sdk/raw`. Use the matching helper on the original response before trusted serialization; it returns a plain copy containing the real token and all own response data, without diagnostic hooks. Store these copies only in credential-grade storage. See [MIGRATION.md](./MIGRATION.md) for a complete example.
 - **Repository-owned SDK checks.** Added example health checks and simulator-backed conformance and resilience scenarios under `.sdkharness/`, including local-run instructions and unit tests for their dispatchers and guards.
 
 ### Changed
