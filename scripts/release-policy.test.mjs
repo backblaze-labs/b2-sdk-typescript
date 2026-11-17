@@ -136,6 +136,25 @@ test('GitHub empty GPG armor does not count as enrolled key material', {
   assert.ok(result.warnings.some((warning) => /No signing keys enrolled/.test(warning)))
 })
 
+test('malformed armored GPG feeds cannot satisfy enforcement through SSH', {
+  skip: spawnSync('gpg', ['--version']).status !== 0 ? 'gpg is not installed' : false,
+}, async (t) => {
+  const fixture = await tagFixture(t, true)
+  const fetchKey = async (url) =>
+    new Response(
+      url.endsWith('.gpg')
+        ? '-----BEGIN PGP PUBLIC KEY BLOCK-----\ninvalid key data\n-----END PGP PUBLIC KEY BLOCK-----'
+        : url.endsWith('.keys')
+          ? fixture.publicKey
+          : '[]',
+    )
+  const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
+  await assert.rejects(
+    verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey }),
+    /GPG key data is malformed/,
+  )
+})
+
 test('an unregistered signer cannot satisfy enforcement', async (t) => {
   const fixture = await tagFixture(t, true)
   const { verifyReleaseTag } = await import('./verify-release-tag.mjs')

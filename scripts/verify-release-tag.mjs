@@ -46,6 +46,23 @@ async function maintainerKeys(username, fetchKey) {
   return { username, gpg, ssh: [...new Set(keys)] }
 }
 
+function isGithubEmptyGpg(value) {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  // Only GitHub's known empty response counts as absent; other invalid armor is an error.
+  return (
+    lines.join('\n') ===
+    [
+      '-----BEGIN PGP PUBLIC KEY BLOCK-----',
+      "Note: This user hasn't uploaded any GPG keys.",
+      '=twTO',
+      '-----END PGP PUBLIC KEY BLOCK-----',
+    ].join('\n')
+  )
+}
+
 function inspectGpgKeys(keys, home, env, warnings) {
   for (const key of keys) {
     if (key.gpg.trim()) {
@@ -62,7 +79,7 @@ function inspectGpgKeys(keys, home, env, warnings) {
       if (inspected.error) {
         warnings.push('Registered GPG key data could not be inspected')
       } else if (!/^pub:/m.test(inspected.stdout)) {
-        // GitHub returns armored text even when a user has no GPG key packets.
+        if (!isGithubEmptyGpg(key.gpg)) warnings.push('Registered GPG key data is malformed')
         key.gpg = ''
       } else if (inspected.status !== 0) {
         warnings.push('Registered GPG key data could not be fully read')
