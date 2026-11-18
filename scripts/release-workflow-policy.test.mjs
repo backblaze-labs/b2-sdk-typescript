@@ -223,3 +223,33 @@ for (const job of ['build', 'package-type-analysis']) {
     assert.match(result.stderr, new RegExp(`${job} must checkout`))
   })
 }
+
+test('release security triage rejects an unprotected environment selection', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    changeJob(workflow, 'security', (body) =>
+      body
+        .replace(/^ {4}environment:[^\n]*\n/m, '')
+        .replace('  security:\n', '  security:\n    environment: unprotected\n'),
+    ),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /security must use the release-security environment/)
+})
+
+test('package type analysis must retain its release-policy dependency', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    changeJob(workflow, 'package-type-analysis', (body) =>
+      body.replace('needs: release-policy', 'needs: []'),
+    ),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /package-type-analysis must checkout/)
+})
+
+test('release security triage requires its protected environment selection', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace('    environment: release-security\n', ''),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /security must use the release-security environment/)
+})

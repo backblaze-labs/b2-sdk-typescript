@@ -143,7 +143,8 @@ test('stable version lifecycle can follow a prerelease preview of the same versi
 })
 
 test('pnpm owns the version bump and can prepare the changelog without creating a tag', async (t) => {
-  const { root, hook } = await fixture(t, '1.2.3')
+  const { root } = await fixture(t, '1.2.3')
+  const pkg = JSON.parse(await readFile(join(repo, 'package.json'), 'utf8'))
   const initialized = spawnSync('git', ['init', '-q'], { cwd: root, encoding: 'utf8' })
   assert.equal(initialized.status, 0, initialized.stderr)
   await writeFile(
@@ -151,7 +152,7 @@ test('pnpm owns the version bump and can prepare the changelog without creating 
     JSON.stringify({
       name: 'release-fixture',
       version: '1.2.3',
-      scripts: { version: `node ${hook} && git add -A CHANGELOG.md .changes` },
+      scripts: { version: pkg.scripts.version },
     }),
   )
   await writeFile(join(root, '.gitignore'), 'node_modules/\n')
@@ -177,6 +178,16 @@ test('pnpm owns the version bump and can prepare the changelog without creating 
   const tags = spawnSync('git', ['tag', '--list'], { cwd: root, encoding: 'utf8' })
   assert.equal(tags.status, 0, tags.stderr)
   assert.equal(tags.stdout, '', 'release preparation must not create a tag')
+  const staged = spawnSync('git', ['diff', '--cached', '--name-status'], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  assert.equal(staged.status, 0, staged.stderr)
+  assert.deepEqual(staged.stdout.trim().split('\n').sort(), [
+    'A\t.changes/v1.2.4.md',
+    'D\t.changes/unreleased/fix.yaml',
+    'M\tCHANGELOG.md',
+  ])
 })
 
 test('changelog check rejects malformed pending fragments without changing release files', async (t) => {

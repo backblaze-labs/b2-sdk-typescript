@@ -196,10 +196,11 @@ test('an unregistered signer cannot satisfy enforcement', async (t) => {
 test('unreadable key sources cannot satisfy enforcement', async (t) => {
   const fixture = await tagFixture(t, true)
   const { verifyReleaseTag } = await import('./verify-release-tag.mjs')
-  const fetchKey = async () => new Response('', { status: 503 })
+  const fetchKey = async (url) =>
+    url.endsWith('.gpg') ? new Response('', { status: 503 }) : fixture.fetchKey(url)
   await assert.rejects(
     verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey }),
-    /key|signature/i,
+    /Public signing keys could not be read/,
   )
 })
 
@@ -705,4 +706,62 @@ test('milestone issue-list API errors are an UNVERIFIED rejection', async () => 
     }),
     /UNVERIFIED: release milestone readiness could not be checked/,
   )
+})
+
+for (const [name, blocked] of [
+  ['clear', false],
+  ['held', true],
+]) {
+  test(`security CLI exits ${blocked ? 1 : 0} for ${name} triage`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'b2-security-cli-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const preload = join(root, 'github-fixture.mjs')
+    await writeFile(
+      preload,
+      `import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+const original = childProcess.spawnSync
+childProcess.spawnSync = (program, args, options) => {
+  if (program !== 'gh') return original(program, args, options)
+  const alerts = ${blocked} && args.at(-1).includes('/code-scanning/') ? [{ number: 1 }] : []
+  return { status: 0, stdout: JSON.stringify([alerts]), stderr: '' }
+}
+syncBuiltinESMExports()
+`,
+    )
+    const script = join(dirname(fileURLToPath(import.meta.url)), 'release-security-check.mjs')
+    const env = { ...process.env, GITHUB_DEFAULT_BRANCH: 'main' }
+    delete env.RELEASE_SECURITY_APPROVAL
+    const result = spawnSync(
+      process.execPath,
+      ['--import', preload, script, 'v1.2.3', 'example/sdk'],
+      {
+        encoding: 'utf8',
+        timeout: 10_000,
+        env,
+      },
+    )
+    assert.equal(result.status, blocked ? 1 : 0, result.stderr)
+    if (blocked) {
+      assert.match(result.stderr, /HOLD: 1 code-scanning alerts are open on the default branch/)
+      assert.doesNotMatch(result.stdout, /triage gate passed/)
+    } else {
+      assert.match(result.stdout, /release-security: triage gate passed/)
+      assert.equal(result.stderr, '')
+    }
+  })
+}
+
+test('release tag parsing accepts full release names and rejects other refs', async () => {
+  const { releaseTag } = await import('./release-policy-common.mjs')
+  for (const [input, expected] of [
+    ['v0.0.0', 'v0.0.0'],
+    ['refs/tags/v1.2.3', 'v1.2.3'],
+    ['v1.2.3-rc.1+build.2', 'v1.2.3-rc.1+build.2'],
+  ]) {
+    assert.equal(releaseTag(input), expected)
+  }
+  for (const input of ['', '1.2.3', 'v1.2', 'v01.2.3', 'refs/heads/v1.2.3', 'v1.2.3\n', '--help']) {
+    assert.throws(() => releaseTag(input), /A release tag such as v1.2.3 is required/)
+  }
 })

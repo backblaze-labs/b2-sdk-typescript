@@ -300,6 +300,9 @@ if (releasePolicyJob !== '') {
   }
 }
 if (securityJob !== '') {
+  if (!/^ {4}environment: release-security\s*$/m.test(securityJob)) {
+    errors.push('release.yml security must use the release-security environment.')
+  }
   if (!needs(securityJob, 'release-policy'))
     errors.push('release.yml security must depend on release-policy.')
   if (!securityJob.includes('node scripts/release-security-check.mjs')) {

@@ -69,6 +69,7 @@ jobs:
 
   security:
     name: Release security triage
+    environment: release-security
     needs: release-policy
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -232,7 +232,15 @@ triage and owner decision before release. Fix or formally dismiss actionable
 findings with a written reason through the appropriate security workflow. The gate
 never dismisses, changes labels, or closes alerts itself.
 
-Configure the Actions secret `RELEASE_SECURITY_TOKEN` with a GitHub App token or
+Before the first release, create the `release-security` Actions environment.
+Allow only `v*` tags, protect their creation with the release tag ruleset, and
+require independent maintainer approval before this environment can be used.
+Store both triage secrets only in this environment; never as repository or
+organization Actions secrets. If either already exists at a wider scope, remove
+that copy after enrolling it in the protected environment. The workflow names
+the environment but cannot configure its protection rules.
+
+Configure the environment secret `RELEASE_SECURITY_TOKEN` with a GitHub App token or
 fine-grained token held by a maintainer/security manager who can read all four
 sources for this repository. Grant only the required read permissions: Code
 scanning alerts, Dependabot alerts, Secret scanning alerts, and Repository security
@@ -244,7 +252,7 @@ counts and states, never secret values, unpublished summaries or private advisor
 
 When this release fixes a draft advisory that must remain private until tagging,
 a security maintainer records approval privately and sets the optional
-`RELEASE_SECURITY_APPROVAL` Actions secret to JSON with `tag` (exact `vX.Y.Z`) and
+`RELEASE_SECURITY_APPROVAL` environment secret in `release-security` to JSON with `tag` (exact `vX.Y.Z`) and
 `advisories` (the approved draft IDs). The exemption applies only to that tag and
 to draft state; triage advisories still hold. Confirm the fixes in the release PR
 without copying private identifiers into it, publish those advisories immediately
