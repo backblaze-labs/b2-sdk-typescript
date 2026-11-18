@@ -71,9 +71,10 @@ const POD_ORIGIN = 'https://pod-000-0000-00.backblaze.com'
 
 globalThis.fetch = async (input, init = {}) => {
   const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-  const url = rawUrl.startsWith(POD_ORIGIN)
-    ? SIM_UPLOAD_ORIGIN + rawUrl.slice(POD_ORIGIN.length)
-    : rawUrl
+  const url =
+    rawUrl === POD_ORIGIN || rawUrl.startsWith(`${POD_ORIGIN}/`)
+      ? SIM_UPLOAD_ORIGIN + rawUrl.slice(POD_ORIGIN.length)
+      : rawUrl
   const response = await transport.send({
     url,
     method: init.method ?? 'GET',
