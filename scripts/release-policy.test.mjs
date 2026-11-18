@@ -678,3 +678,31 @@ for (const [name, env] of [
     await assert.rejects(readFile(fixture.output), { code: 'ENOENT' })
   })
 }
+
+test('non-array milestone records are an UNVERIFIED rejection', async () => {
+  const { checkReleaseMilestone } = await import('./verify-release-milestone.mjs')
+  await assert.rejects(
+    checkReleaseMilestone({
+      repo: 'example/sdk',
+      tag: 'v1.2.3',
+      api: apiFixture({ milestones: {} }).api,
+    }),
+    /UNVERIFIED: release milestone could not be read/,
+  )
+})
+
+test('milestone issue-list API errors are an UNVERIFIED rejection', async () => {
+  const { checkReleaseMilestone } = await import('./verify-release-milestone.mjs')
+  const fixture = apiFixture()
+  await assert.rejects(
+    checkReleaseMilestone({
+      repo: 'example/sdk',
+      tag: 'v1.2.3',
+      api: async (path) => {
+        if (path.includes('/issues?')) throw new Error('fixture issue-list failure')
+        return fixture.api(path)
+      },
+    }),
+    /UNVERIFIED: release milestone readiness could not be checked/,
+  )
+})
