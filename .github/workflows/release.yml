@@ -23,7 +23,8 @@ on:
         type: boolean
         default: false
 
-# Release jobs do not use the shared Actions cache.
+# GitHub enforces cache-mode with scoped tokens, including on workflow_dispatch.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#cache-mode
 cache-mode: none
 
 permissions:

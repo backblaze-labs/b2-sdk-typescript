@@ -144,3 +144,18 @@ test('release workflow disables cache access for every job', async () => {
   assert.equal(/^cache-mode: none\s*$/m.test(workflow), true, 'workflow must disable cache access')
   assert.doesNotMatch(workflow, /^ +cache-mode:/m, 'jobs must not override the workflow cache mode')
 })
+
+test('every release setup-node step disables automatic package-manager caching', async () => {
+  const workflow = await readFile(join(repo, '.github/workflows/release.yml'), 'utf8')
+  const steps = workflow
+    .split(/^ {6}- /m)
+    .filter((step) => /^(?: {8})?uses: actions\/setup-node@/m.test(step))
+  assert.ok(steps.length > 0, 'expected release setup-node steps')
+  for (const step of steps) {
+    assert.equal(
+      /^ {10}package-manager-cache: false\s*$/m.test(step),
+      true,
+      'each setup-node step must disable automatic package-manager caching',
+    )
+  }
+})
