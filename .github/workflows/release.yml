@@ -7,7 +7,7 @@ name: Release
 #
 # ENFORCE_SIGNED_TAGS defaults off while maintainers enroll public signing keys.
 # Signature failures warn in that phase; security triage and milestone readiness
-# remain required. Artifact checkout uses the commit inspected by release-policy.
+# remain required. The inspected tag commit must equal the immutable event SHA.
 
 on:
   push:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)publish, e.g. v0.1.1'
+        description: 'Existing tag to (re)publish; also select this tag as the workflow ref'
         required: true
       allow_registry_artifact_mismatch:
         description: 'Bootstrap-only: allow an existing npm artifact to differ from this verified tarball'
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.release-policy.outputs.commit }}
+          ref: ${{ github.sha }}
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
@@ -184,7 +184,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ needs.release-policy.outputs.commit }}
+          ref: ${{ github.sha }}
 
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 

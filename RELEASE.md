@@ -174,8 +174,9 @@ ENFORCE_SIGNED_TAGS=true pnpm release:tag vX.Y.Z
 ```
 
 CI loads the roster and policy from the default branch, inspects the requested
-tag, and passes its exact commit to the build. The build does not resolve the
-mutable tag name again.
+tag, and requires both its name and inspected commit to match the workflow event.
+The build checks out that immutable event SHA and does not resolve the mutable
+tag name again.
 
 The variable controls CI verification; it is not a repository authorization rule.
 Repository-wide publishing enforcement additionally requires tag-creation rulesets
@@ -342,7 +343,16 @@ npm view @backblaze-labs/b2-sdk version      # the new version
 npm view @backblaze-labs/b2-sdk dist-tags    # latest: <version>
 ```
 
-If you ever need to re-run a release for an existing tag, use the workflow's **Run workflow** button (`workflow_dispatch`) and pass the tag, e.g. `v0.1.1`.
+To re-run a release prepared with this workflow, dispatch it from the same tag
+that you pass as the `tag` input:
+
+```bash
+gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
+```
+
+A dispatch from a branch, a different tag, or a different commit is rejected
+before artifact creation. Historical tags retain their original workflow and
+do not inherit these gates; prepare a new release to use the current policy.
 
 ### Smoke test the published package
 

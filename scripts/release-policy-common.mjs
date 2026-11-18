@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 export function releaseTag(value = '') {
@@ -22,7 +22,10 @@ export function repository(
 }
 
 export function isEntry(url) {
-  return process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(url)
+  return (
+    process.argv[1] !== undefined &&
+    realpathSync(process.argv[1]) === realpathSync(fileURLToPath(url))
+  )
 }
 
 export async function githubList(path, run = spawnSync) {

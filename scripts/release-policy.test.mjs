@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -315,6 +315,10 @@ for (const [name, overrides] of [
     const { api } = apiFixture(overrides)
     const result = await checkReleaseSecurity({ repo: 'example/sdk', tag: 'v1.2.3', api })
     assert.ok(result.holds.length > 0)
+    assert.ok(
+      result.holds.every((hold) => hold.startsWith('HOLD:')),
+      JSON.stringify(result.holds),
+    )
     assert.ok(!JSON.stringify(result).includes('must-not-appear'))
     assert.ok(!JSON.stringify(result).includes('GHSA-xxxx-yyyy-zzzz'))
   })
@@ -349,6 +353,7 @@ test('malformed security responses are holds rather than clear results', async (
     api: async () => ({}),
   })
   assert.equal(result.holds.length, 4)
+  assert.ok(result.holds.every((hold) => hold.startsWith('UNVERIFIED:')))
 })
 
 test('private fixed-advisory approval is scoped to the exact release and only draft state', async () => {
@@ -523,3 +528,153 @@ test('registered maintainer GPG signature passes real git verify-tag', {
   const result = await verifyReleaseTag({ ...fixture, tag: 'v1.2.3', enforce: true, fetchKey })
   assert.equal(result.verified, true)
 })
+
+for (const script of [
+  'release-security-check.mjs',
+  'verify-release-milestone.mjs',
+  'verify-release-tag.mjs',
+]) {
+  test(`${script} executes through a symlinked checkout path`, async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'b2-policy-entry-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const alias = join(root, 'checkout')
+    await symlink(repo, alias, 'junction')
+    const result = spawnSync(process.execPath, [join(alias, 'scripts', script), 'invalid-tag'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    assert.equal(result.status, 1, 'the CLI must run and reject the invalid release tag')
+    assert.match(result.stderr, /release tag|UNVERIFIED/i)
+  })
+}
+
+async function tagCliFixture(t) {
+  const fixture = await tagFixture(t)
+  const source = join(dirname(fileURLToPath(import.meta.url)), '..')
+  await mkdir(join(fixture.repo, 'scripts'))
+  for (const file of ['verify-release-tag.mjs', 'release-policy-common.mjs']) {
+    await copyFile(join(source, 'scripts', file), join(fixture.repo, 'scripts', file))
+  }
+  const preload = join(fixture.repo, 'fetch-fixture.mjs')
+  await writeFile(
+    preload,
+    `globalThis.fetch = async (url) => new Response(url.endsWith('ssh_signing_keys') ? '[]' : '')\n`,
+  )
+  const output = join(fixture.repo, 'github-output')
+  const env = {
+    ...process.env,
+    GITHUB_OUTPUT: output,
+    GITHUB_ACTIONS: 'true',
+    GITHUB_REF: 'refs/tags/v1.2.3',
+    GITHUB_SHA: fixture.commit,
+  }
+  delete env.ENFORCE_SIGNED_TAGS
+  const run = (extraEnv = {}) =>
+    spawnSync(
+      process.execPath,
+      ['--import', preload, join(fixture.repo, 'scripts/verify-release-tag.mjs'), 'v1.2.3'],
+      { cwd: fixture.repo, encoding: 'utf8', timeout: 15_000, env: { ...env, ...extraEnv } },
+    )
+  return { ...fixture, output, run }
+}
+
+test('tag CLI rejects an unsigned tag with the enforcement environment opt-in', async (t) => {
+  const fixture = await tagCliFixture(t)
+  const result = fixture.run({ ENFORCE_SIGNED_TAGS: 'true' })
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /Release tag signature verification failed/)
+  await assert.rejects(readFile(fixture.output), { code: 'ENOENT' })
+})
+
+test('tag CLI warns by default and writes the inspected commit output', async (t) => {
+  const fixture = await tagCliFixture(t)
+  const result = fixture.run()
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stderr, /::warning::.*signed-tag enforcement is off/)
+  assert.match(result.stdout, /release-tag: v1\.2\.3; signature not verified \(warn-only\)/)
+  assert.equal(await readFile(fixture.output, 'utf8'), `commit=${fixture.commit}\n`)
+})
+
+test('fixed-advisory approval does not cover another draft advisory', async () => {
+  const { checkReleaseSecurity } = await import('./release-security-check.mjs')
+  const { api } = apiFixture({
+    advisories: [
+      { ghsa_id: 'GHSA-aaaa-bbbb-cccc', state: 'draft' },
+      { ghsa_id: 'GHSA-dddd-eeee-ffff', state: 'draft' },
+    ],
+  })
+  const result = await checkReleaseSecurity({
+    repo: 'example/sdk',
+    tag: 'v1.2.3',
+    api,
+    approval: JSON.stringify({ tag: 'v1.2.3', advisories: ['GHSA-aaaa-bbbb-cccc'] }),
+  })
+  assert.deepEqual(result.holds, ['HOLD: 1 draft or triage advisories need resolution'])
+  assert.deepEqual(result.notes, [
+    '1 draft advisories declared fixed for this release; publish them after tagging',
+  ])
+})
+
+for (const [name, advisories] of [
+  ['an invalid advisory ID', ['not-an-advisory']],
+  ['a non-array advisory list', 'GHSA-aaaa-bbbb-cccc'],
+]) {
+  test(`fixed-advisory approval rejects ${name}`, async () => {
+    const { checkReleaseSecurity } = await import('./release-security-check.mjs')
+    await assert.rejects(
+      checkReleaseSecurity({
+        repo: 'example/sdk',
+        tag: 'v1.2.3',
+        api: apiFixture().api,
+        approval: JSON.stringify({ tag: 'v1.2.3', advisories }),
+      }),
+      /Private security approval must name this exact release tag and advisory IDs/,
+    )
+  })
+}
+
+test('security gate queries the explicitly configured default branch', async () => {
+  const { checkReleaseSecurity } = await import('./release-security-check.mjs')
+  const { api, paths } = apiFixture()
+  const result = await checkReleaseSecurity({
+    repo: 'example/sdk',
+    tag: 'v1.2.3',
+    api,
+    defaultBranch: 'release/default',
+  })
+  assert.deepEqual(result.holds, [])
+  assert.deepEqual(
+    paths.filter((path) => path.includes('/code-scanning/')),
+    [
+      'repos/example/sdk/code-scanning/alerts?state=open&per_page=100&ref=refs%2Fheads%2Frelease%2Fdefault',
+    ],
+  )
+})
+
+test('malformed milestone readiness data is an UNVERIFIED rejection', async () => {
+  const { checkReleaseMilestone } = await import('./verify-release-milestone.mjs')
+  await assert.rejects(
+    checkReleaseMilestone({
+      repo: 'example/sdk',
+      tag: 'v1.2.3',
+      api: apiFixture({ items: {} }).api,
+    }),
+    /UNVERIFIED: release milestone readiness could not be checked/,
+  )
+})
+
+for (const [name, env] of [
+  ['a branch dispatch', { GITHUB_REF: 'refs/heads/main' }],
+  ['another tag dispatch', { GITHUB_REF: 'refs/tags/v1.2.4' }],
+  ['another event commit', { GITHUB_SHA: '0'.repeat(40) }],
+  ['a missing event commit', { GITHUB_SHA: '' }],
+]) {
+  test(`tag CLI rejects ${name} before emitting an artifact commit`, async (t) => {
+    const fixture = await tagCliFixture(t)
+    const result = fixture.run(env)
+    assert.equal(result.status, 1, 'the tag must match both the workflow ref and event commit')
+    assert.match(result.stderr, /workflow must run from the requested tag and its inspected commit/)
+    await assert.rejects(readFile(fixture.output), { code: 'ENOENT' })
+  })
+}

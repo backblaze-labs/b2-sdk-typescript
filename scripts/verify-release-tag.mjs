@@ -94,6 +94,7 @@ export async function verifyReleaseTag({
   tag: input,
   enforce = false,
   fetchKey = fetch,
+  event = null,
 } = {}) {
   const tag = releaseTag(input)
   const target = `refs/tags/${tag}`
@@ -112,6 +113,9 @@ export async function verifyReleaseTag({
   if (commitResult.status !== 0) throw new Error('Release tag does not resolve to a commit')
   const commit = commitResult.stdout.trim()
   if (!/^[a-f\d]{40,64}$/.test(commit)) throw new Error('Unexpected release tag commit')
+  if (event && (event.ref !== target || event.sha !== commit)) {
+    throw new Error('Release workflow must run from the requested tag and its inspected commit')
+  }
   const maintainers = (await readFile(join(repo, '.github/signing-maintainers'), 'utf8'))
     .split('\n')
     .map((line) => line.split('#')[0].trim())
@@ -219,6 +223,10 @@ if (isEntry(import.meta.url)) {
     const result = await verifyReleaseTag({
       tag: process.argv[2],
       enforce: enforceSignedTags(process.env.ENFORCE_SIGNED_TAGS),
+      event:
+        process.env.GITHUB_ACTIONS === 'true'
+          ? { ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA }
+          : null,
     })
     for (const warning of result.warnings)
       console.warn(`::warning::${warning} (signed-tag enforcement is off)`)

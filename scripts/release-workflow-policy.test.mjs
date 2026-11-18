@@ -47,9 +47,9 @@ test('release workflow must execute its security triage command', async (t) => {
   assert.match(result.stderr, /security/i)
 })
 
-test('release artifact checkout must use the exact tag-policy commit', async (t) => {
+test('release artifact checkout must use the immutable event commit', async (t) => {
   const result = await checkWorkflow(t, (workflow) =>
-    workflow.replaceAll(`ref: \${{ needs.release-policy.outputs.commit }}`, `ref: \${{ env.REF }}`),
+    workflow.replaceAll(`ref: \${{ github.sha }}`, `ref: \${{ env.REF }}`),
   )
   assert.notEqual(result.status, 0, 'a moving tag ref must not replace the inspected commit')
   assert.match(result.stderr, /commit/i)
@@ -159,3 +159,67 @@ test('every release setup-node step disables automatic package-manager caching',
     )
   }
 })
+
+function changeJob(workflow, job, change) {
+  return workflow.replace(
+    new RegExp(`^  ${job}:\\n[\\s\\S]*?(?=^  [a-z-]+:|$(?![\\s\\S]))`, 'm'),
+    change,
+  )
+}
+
+for (const dependency of ['release-policy', 'security']) {
+  test(`release build must retain its ${dependency} dependency independently`, async (t) => {
+    const retained = dependency === 'security' ? 'release-policy' : 'security'
+    const result = await checkWorkflow(t, (workflow) =>
+      workflow.replace('needs: [release-policy, security]', `needs: [${retained}]`),
+    )
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /build must depend on release-policy and security/)
+  })
+}
+
+test('security triage must retain its release-policy dependency', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    changeJob(workflow, 'security', (body) => body.replace('needs: release-policy', 'needs: []')),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /security must depend on release-policy/)
+})
+
+for (const setting of ['continue-on-error: true', 'if: false']) {
+  test(`release policy cannot bypass its checks with ${setting}`, async (t) => {
+    const result = await checkWorkflow(t, (workflow) =>
+      workflow.replace('  release-policy:\n', `  release-policy:\n    ${setting}\n`),
+    )
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, /release-policy must not bypass its required checks/)
+  })
+}
+
+test('release policy must execute the tag verification command', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace('node scripts/verify-release-tag.mjs', 'node -e "process.exit(0)"'),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /release-policy must include node scripts\/verify-release-tag/)
+})
+
+test('release policy must expose the inspected commit output', async (t) => {
+  const result = await checkWorkflow(t, (workflow) =>
+    workflow.replace(`commit: \${{ steps.signature.outputs.commit }}`, 'commit: missing'),
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /release-policy must include commit:/)
+})
+
+for (const job of ['build', 'package-type-analysis']) {
+  test(`${job} must independently checkout the immutable event commit`, async (t) => {
+    const result = await checkWorkflow(t, (workflow) =>
+      changeJob(workflow, job, (body) =>
+        body.replace(`ref: \${{ github.sha }}`, `ref: \${{ env.REF }}`),
+      ),
+    )
+    assert.notEqual(result.status, 0)
+    assert.match(result.stderr, new RegExp(`${job} must checkout`))
+  })
+}

@@ -331,8 +331,10 @@ if (buildJob !== '') {
   if (!needs(buildJob, 'release-policy') || !needs(buildJob, 'security')) {
     errors.push('release.yml build must depend on release-policy and security.')
   }
-  if (!buildJob.includes(`ref: \${{ needs.release-policy.outputs.commit }}`)) {
-    errors.push('release.yml build must checkout the exact inspected tag commit.')
+  if (!buildJob.includes(`ref: \${{ github.sha }}`)) {
+    errors.push(
+      'release.yml build must checkout the immutable event commit verified by release-policy.',
+    )
   }
   if (/\battw\b|@arethetypeswrong\/cli|npx\s/.test(buildJob)) {
     errors.push(
@@ -383,9 +385,11 @@ if (buildJob !== '') {
 if (packageTypeJob !== '') {
   if (
     !needs(packageTypeJob, 'release-policy') ||
-    !packageTypeJob.includes(`ref: \${{ needs.release-policy.outputs.commit }}`)
+    !packageTypeJob.includes(`ref: \${{ github.sha }}`)
   ) {
-    errors.push('release.yml package-type-analysis must checkout the inspected tag commit.')
+    errors.push(
+      'release.yml package-type-analysis must checkout the immutable event commit verified by release-policy.',
+    )
   }
   const pinnedAttwCommand = `npx --yes -p @arethetypeswrong/cli@${attwVersion} attw --pack . --profile node16`
   if (!packageTypeJob.includes(pinnedAttwCommand)) {
