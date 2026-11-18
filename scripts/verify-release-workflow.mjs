@@ -262,11 +262,67 @@ const buildJob = jobs.find((job) => job.name === 'build')?.body ?? ''
 const packageTypeJob = jobs.find((job) => job.name === 'package-type-analysis')?.body ?? ''
 const publishJob = jobs.find((job) => job.name === 'publish')?.body ?? ''
 const githubReleaseJob = jobs.find((job) => job.name === 'github-release')?.body ?? ''
+const releasePolicyJob = jobs.find((job) => job.name === 'release-policy')?.body ?? ''
+const securityJob = jobs.find((job) => job.name === 'security')?.body ?? ''
 
 if (buildJob === '') errors.push('release.yml must define a build job.')
 if (packageTypeJob === '') errors.push('release.yml must define a package-type-analysis job.')
 if (publishJob === '') errors.push('release.yml must define a publish job.')
 if (githubReleaseJob === '') errors.push('release.yml must define a github-release job.')
+if (releasePolicyJob === '') errors.push('release.yml must define a release-policy job.')
+if (securityJob === '') errors.push('release.yml must define a security triage job.')
+
+for (const match of workflow.matchAll(/\buses:\s+([^\s#]+)/g)) {
+  if (!/^[\w./-]+@[a-f\d]{40}$/.test(match[1])) {
+    errors.push('release.yml actions must be pinned to full commit SHAs.')
+  }
+}
+
+function needs(body, name) {
+  const match = /^ {4}needs:\s*(?:\[([^\]]+)\]|([\w-]+))\s*$/m.exec(body)
+  return (match?.[1] ?? match?.[2] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .includes(name)
+}
+
+if (releasePolicyJob !== '') {
+  for (const snippet of [
+    'node scripts/verify-release-tag.mjs',
+    'node scripts/verify-release-milestone.mjs',
+    `ref: \${{ github.event.repository.default_branch }}`,
+    'fetch-depth: 0',
+    `ENFORCE_SIGNED_TAGS: \${{ vars.ENFORCE_SIGNED_TAGS }}`,
+    `commit: \${{ steps.signature.outputs.commit }}`,
+  ]) {
+    if (!releasePolicyJob.includes(snippet))
+      errors.push(`release.yml release-policy must include ${snippet}.`)
+  }
+}
+if (securityJob !== '') {
+  if (!/^ {4}environment: release-security\s*$/m.test(securityJob)) {
+    errors.push('release.yml security must use the release-security environment.')
+  }
+  if (!needs(securityJob, 'release-policy'))
+    errors.push('release.yml security must depend on release-policy.')
+  if (!securityJob.includes('node scripts/release-security-check.mjs')) {
+    errors.push('release.yml security must execute the security triage command.')
+  }
+  if (!securityJob.includes(`GH_TOKEN: \${{ secrets.RELEASE_SECURITY_TOKEN }}`)) {
+    errors.push('release.yml security must use its configured security-read credential.')
+  }
+  if (!securityJob.includes(`ref: \${{ github.event.repository.default_branch }}`)) {
+    errors.push('release.yml security must use the trusted default-branch policy.')
+  }
+}
+for (const [name, body] of [
+  ['release-policy', releasePolicyJob],
+  ['security', securityJob],
+]) {
+  if (/continue-on-error:\s*(?!false\b)\S/.test(body) || /^\s+if:/m.test(body)) {
+    errors.push(`release.yml ${name} must not bypass its required checks.`)
+  }
+}
 
 for (const { body, name } of jobs) {
   if (hasOidcWritePermission(body)) rejectOidcJobHazards(name, body, errors)
@@ -275,6 +331,14 @@ for (const { body, name } of jobs) {
 }
 
 if (buildJob !== '') {
+  if (!needs(buildJob, 'release-policy') || !needs(buildJob, 'security')) {
+    errors.push('release.yml build must depend on release-policy and security.')
+  }
+  if (!buildJob.includes(`ref: \${{ github.sha }}`)) {
+    errors.push(
+      'release.yml build must checkout the immutable event commit verified by release-policy.',
+    )
+  }
   if (/\battw\b|@arethetypeswrong\/cli|npx\s/.test(buildJob)) {
     errors.push(
       'release.yml build job must not run or install attw before packing the verified artifact.',
@@ -322,6 +386,14 @@ if (buildJob !== '') {
 }
 
 if (packageTypeJob !== '') {
+  if (
+    !needs(packageTypeJob, 'release-policy') ||
+    !packageTypeJob.includes(`ref: \${{ github.sha }}`)
+  ) {
+    errors.push(
+      'release.yml package-type-analysis must checkout the immutable event commit verified by release-policy.',
+    )
+  }
   const pinnedAttwCommand = `npx --yes -p @arethetypeswrong/cli@${attwVersion} attw --pack . --profile node16`
   if (!packageTypeJob.includes(pinnedAttwCommand)) {
     errors.push(
