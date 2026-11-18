@@ -138,3 +138,9 @@ test('tag enforcement must read the repository opt-in variable', async (t) => {
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /ENFORCE_SIGNED_TAGS/i)
 })
+
+test('release workflow disables cache access for every job', async () => {
+  const workflow = await readFile(join(repo, '.github/workflows/release.yml'), 'utf8')
+  assert.equal(/^cache-mode: none\s*$/m.test(workflow), true, 'workflow must disable cache access')
+  assert.doesNotMatch(workflow, /^ +cache-mode:/m, 'jobs must not override the workflow cache mode')
+})

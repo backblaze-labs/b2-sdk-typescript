@@ -23,6 +23,9 @@ on:
         type: boolean
         default: false
 
+# Release jobs do not use the shared Actions cache.
+cache-mode: none
+
 permissions:
   contents: read # default read-only access; release publishing escalates below
 
