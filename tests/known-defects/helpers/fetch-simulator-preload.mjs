@@ -10,12 +10,18 @@
  *   { buckets: [{ name, files: [{ name, text?, base64?, fileInfo? }] }],
  *     failUploads?: boolean }   // every b2_upload_file returns HTTP 400
  *
+ * When `EXAMPLE_SIM_UPLOAD_TRACE` names a file, every `b2_upload_file` request
+ * appends one JSON line `{ "fileName": <decoded X-Bz-File-Name>, "status": <HTTP status> }`
+ * to it. Credentials and upload tokens are never recorded.
+ *
  * Requires `pnpm build` first (same prerequisite as `.github/workflows/examples.yml`).
  */
+import { appendFileSync } from 'node:fs'
 import { B2Client, BucketType } from '../../../dist/index.js'
 import { B2Simulator } from '../../../dist/simulator/index.js'
 import { BufferSource } from '../../../dist/streams/index.js'
 
+const uploadTrace = process.env.EXAMPLE_SIM_UPLOAD_TRACE
 const seed = JSON.parse(process.env.EXAMPLE_SIM_SEED ?? '{}')
 const sim = new B2Simulator()
 const transport = sim.transport()
@@ -71,10 +77,10 @@ const POD_ORIGIN = 'https://pod-000-0000-00.backblaze.com'
 
 globalThis.fetch = async (input, init = {}) => {
   const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  // Compare the parsed origin exactly (not a string prefix) so only the pod host is remapped.
+  const parsed = new URL(rawUrl)
   const url =
-    rawUrl === POD_ORIGIN || rawUrl.startsWith(`${POD_ORIGIN}/`)
-      ? SIM_UPLOAD_ORIGIN + rawUrl.slice(POD_ORIGIN.length)
-      : rawUrl
+    parsed.origin === POD_ORIGIN ? SIM_UPLOAD_ORIGIN + parsed.pathname + parsed.search : rawUrl
   const response = await transport.send({
     url,
     method: init.method ?? 'GET',
@@ -82,6 +88,13 @@ globalThis.fetch = async (input, init = {}) => {
     ...(init.body !== undefined && init.body !== null ? { body: init.body } : {}),
     ...(init.signal !== undefined ? { signal: init.signal } : {}),
   })
+  if (uploadTrace !== undefined && url.includes('b2_upload_file')) {
+    const encodedName = canonicalHeaders(init.headers ?? {})['X-Bz-File-Name'] ?? ''
+    appendFileSync(
+      uploadTrace,
+      `${JSON.stringify({ fileName: decodeURIComponent(encodedName), status: response.status })}\n`,
+    )
+  }
   const nullBody = response.status === 204 || response.status === 304
   if (!nullBody && (response.headers.get('content-type') ?? '').includes('application/json')) {
     const text = (await response.text()).replaceAll(SIM_UPLOAD_ORIGIN, POD_ORIGIN)

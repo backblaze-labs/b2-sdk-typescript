@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { B2Client } from '../../src/client.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
 import { B2Simulator } from '../../src/simulator/index.ts'
-import { deterministicBytes } from '../../src/test-utils/index.ts'
+import { deterministicBytes, readStream } from '../../src/test-utils/index.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 
 function jsonResp(status: number, body: unknown): HttpResponse {
@@ -20,17 +20,21 @@ function jsonResp(status: number, body: unknown): HttpResponse {
   }
 }
 
-async function makeStreamClient(
-  minimumPartSize: number,
-  intercept: (req: HttpRequest) => HttpResponse | undefined,
-) {
+type Intercept = (req: HttpRequest) => Promise<HttpResponse | undefined> | HttpResponse | undefined
+
+async function makeStreamClient(minimumPartSize: number, intercept: Intercept = () => undefined) {
   const sim = new B2Simulator({ minimumPartSize })
   const inner = sim.transport()
   const seen: HttpRequest[] = []
+  // URLs of requests whose response has been fully produced (a request is in
+  // `seen` as soon as it starts; it is in `completed` once it has answered).
+  const completed: string[] = []
   const transport: HttpTransport = {
     async send(req: HttpRequest): Promise<HttpResponse> {
       seen.push(req)
-      return intercept(req) ?? inner.send(req)
+      const resp = (await intercept(req)) ?? (await inner.send(req))
+      completed.push(req.url)
+      return resp
     },
   }
   const client = new B2Client({
@@ -44,83 +48,174 @@ async function makeStreamClient(
     bucketName: 'stream-kd',
     bucketType: BucketType.AllPrivate,
   })
-  return { client, bucket, sim, seen }
+  return { client, bucket, sim, seen, completed }
 }
 
 const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+const PART_LIMIT_MESSAGE = /10[,_ ]?000|too many parts|part.*limit/i
+const SINGLE_PART_MESSAGE = /single[- ]part|one part|at least two parts|minimum part/i
+
+/** Polls `predicate` until it holds or `timeoutMs` passes; resolves to whether it held. */
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return true
+    await sleepMs(20)
+  }
+  return predicate()
+}
+
 describe('createWriteStream known defects', () => {
   it('a failed part rejects done and cancels the large file without close() or pipeTo', async () => {
-    const { client, bucket } = await makeStreamClient(100_000, (req) =>
-      req.url.includes('b2_upload_part')
-        ? jsonResp(400, { status: 400, code: 'bad_request', message: 'simulated part failure' })
-        : undefined,
-    )
+    // The injected part failure is held behind a latch so the test can first observe
+    // the unfinished large file, then release the fault and start its bounded waits.
+    let releaseFault: () => void = () => {}
+    const faultGate = new Promise<void>((resolve) => {
+      releaseFault = resolve
+    })
+    let partRequestArrived: () => void = () => {}
+    const partArrived = new Promise<void>((resolve) => {
+      partRequestArrived = resolve
+    })
+    const { client, bucket, seen, completed } = await makeStreamClient(100_000, async (req) => {
+      if (!req.url.includes('b2_upload_part')) return undefined
+      partRequestArrived()
+      await faultGate
+      return jsonResp(400, { status: 400, code: 'bad_request', message: 'simulated part failure' })
+    })
+    const listUnfinished = () =>
+      client.raw.listUnfinishedLargeFiles(
+        client.accountInfo.getApiUrl(),
+        client.accountInfo.getAuthToken(),
+        { bucketId: bucket.id },
+      )
     const { writable, done } = bucket.file('c26.bin').createWriteStream({
       partSize: 100_000,
       concurrency: 2,
     })
     const writer = writable.getWriter()
-    // Hold the writer open after shipping one full part: no close(), no abort().
-    void writer.write(deterministicBytes(100_000)).catch(() => undefined)
+    try {
+      // Hold the writer open after shipping one full part: no close(), no abort().
+      const writeOutcome = writer.write(deterministicBytes(100_000)).then(
+        () => undefined,
+        (error: unknown) => error,
+      )
 
-    const settled = await Promise.race([
-      done.then(
-        () => 'resolved' as const,
-        () => 'rejected' as const,
-      ),
-      sleepMs(1500).then(() => 'pending' as const),
-    ])
-    expect(settled, 'done must reject once a part has failed').toBe('rejected')
+      const arrived = await Promise.race([
+        partArrived.then(() => true),
+        sleepMs(5000).then(() => false),
+      ])
+      expect(arrived, 'the part upload request was never issued').toBe(true)
+      const before = (await listUnfinished()).files.find((f) => f.fileName === 'c26.bin')
+      expect(before, 'the large file must exist before the fault is released').toBeDefined()
 
-    const unfinished = await client.raw.listUnfinishedLargeFiles(
-      client.accountInfo.getApiUrl(),
-      client.accountInfo.getAuthToken(),
-      { bucketId: bucket.id },
-    )
-    expect(
-      unfinished.files.find((f) => f.fileName === 'c26.bin'),
-      'the failed large file was left unfinished instead of cancelled',
-    ).toBeUndefined()
-  })
+      releaseFault()
+      const settled = await Promise.race([
+        done.then(
+          () => ({ status: 'resolved' as const }),
+          (error: unknown) => ({ status: 'rejected' as const, error }),
+        ),
+        sleepMs(3000).then(() => ({ status: 'pending' as const })),
+      ])
+      expect(settled.status, 'done must reject once a part has failed').toBe('rejected')
+      if (settled.status === 'rejected') {
+        expect(settled.error).toBeInstanceOf(Error)
+        expect((settled.error as { code?: string }).code).toBe('bad_request')
+        expect((settled.error as Error).message).toMatch(/simulated part failure/)
+      }
+      const writeError = await writeOutcome
+      if (writeError !== undefined)
+        expect((writeError as Error).message).toMatch(/simulated part failure/)
+
+      const cancelled = await waitFor(
+        () => completed.some((u) => u.includes('b2_cancel_large_file')),
+        3000,
+      )
+      expect(
+        cancelled && seen.some((r) => r.url.includes('b2_cancel_large_file')),
+        'b2_cancel_large_file was never sent and completed',
+      ).toBe(true)
+      const stillUnfinished = (await listUnfinished()).files.find(
+        (f) => f.fileId === before?.fileId,
+      )
+      expect(
+        stillUnfinished,
+        'the failed large file was left unfinished instead of cancelled',
+      ).toBeUndefined()
+    } finally {
+      releaseFault()
+      await writer.abort().catch(() => undefined)
+    }
+  }, 20_000)
 
   it('data that fits in one part is not committed as a single-part large file', async () => {
-    const { seen } = await (async () => {
-      const ctx = await makeStreamClient(100_000, () => undefined)
-      const { writable, done } = ctx.bucket.file('c17.bin').createWriteStream({
-        partSize: 100_000,
-        concurrency: 1,
-      })
-      const writer = writable.getWriter()
-      await writer.write(deterministicBytes(1_000))
-      await writer.close().catch(() => undefined)
-      await done.catch(() => undefined)
-      return ctx
-    })()
+    const payload = deterministicBytes(1_000)
+    const { bucket, seen } = await makeStreamClient(100_000)
+    const { writable, done } = bucket.file('c17.bin').createWriteStream({
+      partSize: 100_000,
+      concurrency: 1,
+    })
+    const writer = writable.getWriter()
+    const writeOutcome = await writer.write(payload).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const closeOutcome = await writer.close().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const doneOutcome = await done.then(
+      (file) => ({ file }),
+      (error: unknown) => ({ error }),
+    )
 
-    const finishes = seen.filter((r) => r.url.includes('b2_finish_large_file'))
-    for (const req of finishes) {
-      const body = JSON.parse(String(req.body)) as { partSha1Array: string[] }
-      // B2 requires at least two parts for a large file; the SDK must use the
-      // single-request upload path (or reject) instead of finishing one part.
-      expect(
-        body.partSha1Array.length,
-        'a large file was finished with fewer than two parts',
-      ).toBeGreaterThanOrEqual(2)
+    // B2 requires at least two parts for a large file, so a one-part finish is never valid.
+    const oneFinishedPart = seen
+      .filter((r) => r.url.includes('b2_finish_large_file'))
+      .map((r) => (JSON.parse(String(r.body)) as { partSha1Array: string[] }).partSha1Array.length)
+      .filter((n) => n < 2)
+    expect(oneFinishedPart, 'a large file was finished with fewer than two parts').toEqual([])
+
+    if ('file' in doneOutcome) {
+      // Accepted design 1: the single-request upload path stores exactly the written bytes.
+      expect(writeOutcome).toBeUndefined()
+      expect(closeOutcome).toBeUndefined()
+      const stored = await readStream((await bucket.file('c17.bin').download()).body)
+      expect(stored).toEqual(payload)
+    } else {
+      // Accepted design 2: rejecting the case, with an error that names the reason.
+      expect(doneOutcome.error).toBeInstanceOf(Error)
+      expect((doneOutcome.error as Error).message).toMatch(SINGLE_PART_MESSAGE)
     }
   })
 
   it('never ships part number 10,001', async () => {
-    const { bucket, seen } = await makeStreamClient(1, () => undefined)
+    const { bucket, seen } = await makeStreamClient(1)
     const { writable, done } = bucket.file('c6.bin').createWriteStream({
       partSize: 1,
       concurrency: 4,
     })
     const writer = writable.getWriter()
-    await writer.write(deterministicBytes(10_001)).catch(() => undefined)
-    await writer.close().catch(() => undefined)
-    await done.catch(() => undefined)
+    const writeOutcome = await writer.write(deterministicBytes(10_001)).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const closeOutcome = await writer.close().then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    const doneOutcome = await done.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
 
+    // The stream cannot represent 10,001 parts, so it must reject, and say why.
+    expect(doneOutcome, 'done must reject an oversized stream').toBeInstanceOf(Error)
+    expect((doneOutcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
+    for (const outcome of [writeOutcome, closeOutcome]) {
+      if (outcome !== undefined) expect((outcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
+    }
     const partNumbers = seen
       .filter((r) => r.url.includes('b2_upload_part'))
       .map((r) => Number(r.headers?.['X-Bz-Part-Number']))
@@ -128,5 +223,27 @@ describe('createWriteStream known defects', () => {
       Math.max(0, ...partNumbers),
       'a part number above 10,000 was uploaded',
     ).toBeLessThanOrEqual(10_000)
+  }, 60_000)
+
+  it('still accepts a stream of exactly 10,000 parts', async () => {
+    // Boundary control: an implementation that rejects every large stream must not pass.
+    const payload = deterministicBytes(10_000)
+    const { bucket, seen } = await makeStreamClient(1)
+    const { writable, done } = bucket.file('c6-boundary.bin').createWriteStream({
+      partSize: 1,
+      concurrency: 4,
+    })
+    const writer = writable.getWriter()
+    await writer.write(payload)
+    await writer.close()
+    await done
+
+    const partNumbers = seen
+      .filter((r) => r.url.includes('b2_upload_part'))
+      .map((r) => Number(r.headers?.['X-Bz-Part-Number']))
+    expect(Math.max(...partNumbers)).toBe(10_000)
+    expect(new Set(partNumbers).size).toBe(10_000)
+    const stored = await readStream((await bucket.file('c6-boundary.bin').download()).body)
+    expect(stored).toEqual(payload)
   }, 60_000)
 })

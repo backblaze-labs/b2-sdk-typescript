@@ -11,6 +11,8 @@ import { deterministicBytes } from '../../src/test-utils/index.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 import { uploadLargeFile } from '../../src/upload/large.ts'
 
+const PART_LIMIT_MESSAGE = /10[,_ ]?000|too many parts|part.*limit/i
+
 function stop400(): HttpResponse {
   const body = { status: 400, code: 'bad_request', message: 'stop here' }
   return {
@@ -71,7 +73,7 @@ describe('uploadLargeFile known defects', () => {
         partSize: 100_000,
         concurrency: 0,
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/concurrency/i)
 
     expect(slices, 'source was read before the invalid option was rejected').toBe(0)
     expect(
@@ -91,8 +93,37 @@ describe('uploadLargeFile known defects', () => {
         partSize: 1,
         concurrency: 1,
       }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(PART_LIMIT_MESSAGE)
 
     expect(startCalls, 'b2_start_large_file must not be reached for 10,001 parts').toHaveLength(0)
+  })
+
+  it('still starts the large file for a valid concurrency and for exactly 10,000 parts', async () => {
+    // Boundary controls: a general early failure must not satisfy the validation tests above.
+    // The recording transport answers b2_start_large_file with a 400, so reaching it surfaces
+    // as that specific error.
+    const valid = await recordingClient(100_000)
+    await expect(
+      uploadLargeFile(valid.client.raw, valid.client.accountInfo, {
+        bucketId: valid.bucket.id,
+        fileName: 'one-concurrency.bin',
+        source: new BufferSource(deterministicBytes(200_000)),
+        partSize: 100_000,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow(/stop here/)
+    expect(valid.startCalls).toHaveLength(1)
+
+    const boundary = await recordingClient(1)
+    await expect(
+      uploadLargeFile(boundary.client.raw, boundary.client.accountInfo, {
+        bucketId: boundary.bucket.id,
+        fileName: 'ten-thousand-parts.bin',
+        source: new BufferSource(deterministicBytes(10_000)),
+        partSize: 1,
+        concurrency: 1,
+      }),
+    ).rejects.toThrow(/stop here/)
+    expect(boundary.startCalls).toHaveLength(1)
   })
 })

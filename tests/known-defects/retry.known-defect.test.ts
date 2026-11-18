@@ -2,9 +2,10 @@
 // is still present. Not part of `pnpm test`; run on demand with `pnpm test:known-defects`.
 // When the defect is fixed, move the test next to the code it covers (src/**/*.test.ts) so it
 // joins the default suite (see tests/known-defects/README.md).
-import { describe, expect, it } from 'vitest'
+import { getEventListeners } from 'node:events'
+import { describe, expect, it, vi } from 'vitest'
 import { sleep } from '../../src/http/retry.ts'
-import type { HttpResponse, HttpTransport } from '../../src/http/transport.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
 import { RetryTransport } from '../../src/http/transport.ts'
 
 const noSleep = (): Promise<void> => Promise.resolve()
@@ -22,26 +23,21 @@ function response(status: number, body: unknown): HttpResponse {
 
 describe('retry sleep must not leak abort listeners', () => {
   it('removes its abort listener from the caller signal once the delay elapses normally', async () => {
-    let added = 0
-    let removed = 0
-    const listeners = new Set<unknown>()
-    const signal = {
-      aborted: false,
-      reason: undefined,
-      addEventListener: (_type: string, listener: unknown) => {
-        added++
-        listeners.add(listener)
-      },
-      removeEventListener: (_type: string, listener: unknown) => {
-        removed++
-        listeners.delete(listener)
-      },
-    } as unknown as AbortSignal
+    const signal = new AbortController().signal
+    const baseline = getEventListeners(signal, 'abort').length
+    vi.useFakeTimers()
+    try {
+      const sleeping = sleep(1, signal)
+      await vi.advanceTimersByTimeAsync(1)
+      await sleeping
+    } finally {
+      vi.useRealTimers()
+    }
 
-    await sleep(1, signal)
-
-    expect(added, 'expected exactly one abort listener to be added').toBe(1)
-    expect(listeners.size, `listeners left on signal: added=${added} removed=${removed}`).toBe(0)
+    expect(
+      getEventListeners(signal, 'abort').length,
+      'abort listeners left on the caller signal after the delay elapsed',
+    ).toBe(baseline)
   })
 
   it('does not accumulate listeners on a long-lived signal across many retry sleeps', async () => {
@@ -66,11 +62,11 @@ describe('retry sleep must not leak abort listeners', () => {
 
 describe('endpoint classification must not be fooled by a download file name', () => {
   it('retries a GET download in place when the file name contains b2api/x/b2_upload_file', async () => {
-    let hits = 0
+    const requests: { method: string; url: string }[] = []
     const inner: HttpTransport = {
-      async send(): Promise<HttpResponse> {
-        hits++
-        if (hits === 1) {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        requests.push({ method: req.method, url: req.url })
+        if (requests.length === 1) {
           return response(500, { status: 500, code: 'internal_error', message: 'boom' })
         }
         return response(200, { ok: true })
@@ -82,13 +78,18 @@ describe('endpoint classification must not be fooled by a download file name', (
       sleepImpl: noSleep,
     })
 
+    const url = 'https://f000.backblazeb2.com/file/my-bucket/b2api/x/b2_upload_file'
     const result = await retrying.send({
       method: 'GET',
-      url: 'https://f000.backblazeb2.com/file/my-bucket/b2api/x/b2_upload_file',
+      url,
       headers: { Authorization: 'tok' },
     })
 
     expect(result.status, 'GET did not succeed after the retry').toBe(200)
-    expect(hits, 'expected the failed request plus one retry to the same URL').toBe(2)
+    // The original GET is retried in place: same method, same URL, exactly one retry.
+    expect(requests).toEqual([
+      { method: 'GET', url },
+      { method: 'GET', url },
+    ])
   })
 })

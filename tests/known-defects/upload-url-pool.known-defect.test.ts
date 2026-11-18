@@ -4,6 +4,7 @@
 // joins the default suite (see tests/known-defects/README.md).
 import { describe, expect, it } from 'vitest'
 import { B2Client } from '../../src/client.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
 import { B2Simulator } from '../../src/simulator/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
 import { deterministicBytes } from '../../src/test-utils/index.ts'
@@ -13,10 +14,24 @@ import { uploadLargeFile } from '../../src/upload/large.ts'
 describe('part upload URL pool known defects', () => {
   it('part-upload URLs for a finished large file are not retained in the account pool', async () => {
     const sim = new B2Simulator({ minimumPartSize: 100_000 })
+    // The pool is keyed by the large-file id issued by b2_start_large_file. The simulator
+    // gives the finished file a different id, so read the key off the start request itself
+    // instead of the returned FileVersion or any internal check-in call.
+    const inner = sim.transport()
+    let startedFileId: string | undefined
+    const transport: HttpTransport = {
+      async send(req: HttpRequest): Promise<HttpResponse> {
+        const resp = await inner.send(req)
+        if (req.url.includes('b2_start_large_file')) {
+          startedFileId = ((await resp.json()) as { fileId: string }).fileId
+        }
+        return resp
+      },
+    }
     const client = new B2Client({
       applicationKeyId: 'test-key-id',
       applicationKey: 'test-key',
-      transport: sim.transport(),
+      transport,
     })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -24,15 +39,7 @@ describe('part upload URL pool known defects', () => {
       bucketType: BucketType.AllPrivate,
     })
 
-    // Record which per-file keys the upload checks part URLs in under.
-    const keys = new Set<string>()
     const info = client.accountInfo
-    const originalReturn = info.returnPartUploadUrl.bind(info)
-    info.returnPartUploadUrl = (fileId, entry) => {
-      keys.add(fileId)
-      originalReturn(fileId, entry)
-    }
-
     await uploadLargeFile(client.raw, client.accountInfo, {
       bucketId: bucket.id,
       fileName: 'pooled.bin',
@@ -43,10 +50,10 @@ describe('part upload URL pool known defects', () => {
 
     // The large file is finished; its per-file part-URL entries can never be
     // used again, so the pool must not keep them (otherwise it grows per file).
-    expect(keys.size, 'precondition: exactly one pooled upload URL key').toBe(1)
-    for (const key of keys) {
-      const leaked = info.checkoutPartUploadUrl(key)
-      expect(leaked, 'a part upload URL for a finished large file is still pooled').toBeNull()
-    }
+    // Whether the upload checked URLs in or never pooled them is an implementation
+    // detail: only the absence of a retained entry is the contract.
+    expect(startedFileId, 'b2_start_large_file was never issued').toBeDefined()
+    const leaked = info.checkoutPartUploadUrl(startedFileId as string)
+    expect(leaked, 'a part upload URL for a finished large file is still pooled').toBeNull()
   })
 })

@@ -4,7 +4,7 @@
 // joins the default suite (see tests/known-defects/README.md).
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -54,6 +54,15 @@ function run(
   })
 }
 
+/** Reads the upload trace the preload wrote: one `{ fileName, status }` per b2_upload_file request. */
+async function readUploadTrace(path: string): Promise<{ fileName: string; status: number }[]> {
+  const text = await readFile(path, 'utf8').catch(() => '')
+  return text
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => JSON.parse(line) as { fileName: string; status: number })
+}
+
 const exampleCredentials = {
   B2_APPLICATION_KEY_ID: 'example-key',
   B2_APPLICATION_KEY: 'example-secret',
@@ -68,6 +77,8 @@ beforeAll(() => {
 describe('node-backup-cli', () => {
   it('snapshot to a different destination uploads the files instead of trusting the local manifest', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-'))
+    // Traces live outside the snapshotted directory so they are never backed up themselves.
+    const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
     try {
       await writeFile(join(dir, 'a.txt'), 'alpha')
       const env = {
@@ -75,27 +86,41 @@ describe('node-backup-cli', () => {
         B2_BACKUP_PASSPHRASE: 'pass',
         EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
       }
+      const firstTrace = join(traceDir, 'first-uploads.jsonl')
+      const secondTrace = join(traceDir, 'second-uploads.jsonl')
       const first = await run(
         'examples/node-backup-cli/backup.ts',
         ['snapshot', dir, 'b2://dest-bucket/one'],
-        env,
+        { ...env, EXAMPLE_SIM_UPLOAD_TRACE: firstTrace },
       )
       expect(first.code, first.stderr).toBe(0)
       expect(first.stdout).toContain('plan: 1 to upload')
+      // Control: the trace records the first snapshot's real upload.
+      expect(await readUploadTrace(firstTrace)).toContainEqual({
+        fileName: 'one/a.txt',
+        status: 200,
+      })
 
       // Different destination (a fresh, empty simulator and a different prefix).
       const second = await run(
         'examples/node-backup-cli/backup.ts',
         ['snapshot', dir, 'b2://dest-bucket/two'],
-        env,
+        { ...env, EXAMPLE_SIM_UPLOAD_TRACE: secondTrace },
       )
       expect(second.code, second.stderr).toBe(0)
       expect(
         second.stdout,
         'second destination is empty; the file must be planned for upload',
       ).toContain('plan: 1 to upload')
+      // Planning is not enough: the file must actually reach the second destination.
+      const secondUploads = await readUploadTrace(secondTrace)
+      expect(
+        secondUploads,
+        `the second snapshot planned an upload but never uploaded two/a.txt; uploads: ${JSON.stringify(secondUploads)}`,
+      ).toContainEqual({ fileName: 'two/a.txt', status: 200 })
     } finally {
       await rm(dir, { recursive: true, force: true })
+      await rm(traceDir, { recursive: true, force: true })
     }
   })
 })

@@ -6,6 +6,11 @@ outside `src/` on purpose: the default `pnpm test`, `bun test src/`, the browser
 run and the coverage run never collect them, so CI stays green while the
 defects stay visible and runnable.
 
+A few tests are deliberate boundary controls (for example a stream of exactly
+10,000 parts still succeeds). They pass today and exist so that an early failure
+in the code under test cannot satisfy a neighbouring validation test; keep them
+when moving the file.
+
 ```bash
 pnpm build                  # the example-program tests spawn the built package
 pnpm test:known-defects     # exits non-zero until every defect here is fixed

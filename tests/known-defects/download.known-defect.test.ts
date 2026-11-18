@@ -48,22 +48,30 @@ describe('parallel download known defects', () => {
   it('a connection reset mid-body on one range must not abort the download by default', async () => {
     const data = deterministicBytes(100)
     const { sim } = makeClient()
-    let rangeRequests = 0
+    const ranges: string[] = []
     const inner = sim.transport()
     const flaky: HttpTransport = {
       async send(req: HttpRequest): Promise<HttpResponse> {
         const resp = await inner.send(req)
         const range = req.headers?.['Range'] ?? req.headers?.['range']
         if (range !== undefined && resp.status === 206) {
-          rangeRequests++
-          if (rangeRequests === 1) {
+          ranges.push(range)
+          if (ranges.length === 1) {
             const full = new Uint8Array(await resp.arrayBuffer())
-            const body = new ReadableStream<Uint8Array>({
-              start(controller) {
-                controller.enqueue(full.slice(0, 5))
-                controller.error(new TypeError('terminated: connection reset'))
+            // Pull-driven (highWaterMark 0): the first pull hands the consumer five
+            // bytes, and the reset is raised on the next pull, i.e. after the reader
+            // has already received that chunk (erroring in start() would discard it).
+            let pulls = 0
+            const body = new ReadableStream<Uint8Array>(
+              {
+                pull(controller) {
+                  pulls++
+                  if (pulls === 1) controller.enqueue(full.slice(0, 5))
+                  else controller.error(new TypeError('terminated: connection reset'))
+                },
               },
-            })
+              { highWaterMark: 0 },
+            )
             return {
               ...resp,
               body,
@@ -96,7 +104,13 @@ describe('parallel download known defects', () => {
       }),
     )
 
-    expect(rangeRequests, 'expected at least two ranged requests').toBeGreaterThanOrEqual(2)
+    // The first request is the 50-byte range that was cut off after 5 bytes. It must be
+    // requested again, either whole or resumed from byte 5, never skipped.
+    expect(ranges[0], 'first ranged request').toBe('bytes=0-49')
+    expect(
+      ranges.slice(1).some((r) => r === 'bytes=0-49' || r === 'bytes=5-49'),
+      `the failed range was not requested again; ranged requests: ${JSON.stringify(ranges)}`,
+    ).toBe(true)
     expect(got, 'downloaded bytes differ from the stored file').toEqual(data)
   })
 })
