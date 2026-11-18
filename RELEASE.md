@@ -102,6 +102,8 @@ While below `1.0.0`, breaking changes are allowed in `minor` bumps per the stand
 
 The changelog is a [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) file with a `## [Unreleased]` section at the top.
 
+The `v0.5.0` tag is not an ancestor of `main`; its changelog section was restored by hand, so compare the released trees when interpreting `v0.5.0..v0.6.0`.
+
 **As part of any PR that changes behaviour, add a bullet under `## [Unreleased]`**, grouped under the appropriate heading (`### Added`, `### Changed`, `### Fixed`, `### Removed`, `### Security`). Write it for a user, in the past tense, focused on *why* it matters:
 
 ```markdown
