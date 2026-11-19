@@ -135,10 +135,13 @@ describe('node-sync-cli', () => {
         EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'sync-bucket' }], failUploads: true }),
       })
       expect(result.stderr).toContain('ERROR')
+      expect(result.code, 'the CLI must exit normally rather than terminate by signal').toBeTypeOf(
+        'number',
+      )
       expect(
         result.code,
         `expected a non-zero exit code, but the CLI exited 0 after reporting errors; stdout tail: ${result.stdout.slice(-200)}`,
-      ).not.toBe(0)
+      ).toBeGreaterThan(0)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

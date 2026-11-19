@@ -42,6 +42,7 @@ describe('parallel download known defects', () => {
       expect(outcome.bytes, 'download with concurrency 0 returned different bytes').toEqual(data)
     } else {
       expect(outcome.error).toBeInstanceOf(Error)
+      expect((outcome.error as Error).message).toMatch(/concurrency/i)
     }
   })
 
