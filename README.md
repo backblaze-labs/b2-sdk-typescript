@@ -221,13 +221,16 @@ const partial = await bucket.download('large-file.bin', {
 
 // Parallel ranged download (for large files).
 // Each range uses the client's configured RetryTransport budget, so transient
-// 503s are retried without adding a second default retry layer per chunk.
+// 503s are retried without adding a second request retry layer per chunk.
+// Interrupted range bodies use the client's retry settings separately.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
   rangeSize: 10 * 1024 * 1024,
 })
 ```
+
+If a range response body encounters a retryable connection failure while being read, the SDK discards its partial bytes and retries that range using the client's retry settings. Each new range request also has its own transport retry budget, so failures in both stages can produce additional requests. Set `retry.maxRetries: 0` on the client to disable both kinds of retries.
 
 Full-body downloads are automatically verified when B2 returns a real `X-Bz-Content-Sha1` digest. If the downloaded bytes do not match, the body stream errors with `ChecksumMismatchError`; discard any partially written output when piping to disk. HEAD requests, range GETs, and files whose SHA-1 is unavailable are not verified because no matching whole-body digest exists.
 
