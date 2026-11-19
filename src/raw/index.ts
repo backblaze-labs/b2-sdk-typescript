@@ -396,6 +396,9 @@ export class RawClient {
 
   /**
    * Calls {@link https://www.backblaze.com/apidocs/b2-create-bucket | b2_create_bucket}.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
@@ -762,6 +765,9 @@ export class RawClient {
 
   /**
    * Calls {@link https://www.backblaze.com/apidocs/b2-hide-file | b2_hide_file}.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
@@ -806,6 +812,9 @@ export class RawClient {
 
   /**
    * Calls {@link https://www.backblaze.com/apidocs/b2-copy-file | b2_copy_file}.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.
@@ -1250,6 +1259,9 @@ export class RawClient {
 
   /**
    * Calls {@link https://www.backblaze.com/apidocs/b2-create-key | b2_create_key}.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param apiUrl - The B2 API base URL.
    * @param authToken - The authorization token.
    * @param request - The API request parameters.

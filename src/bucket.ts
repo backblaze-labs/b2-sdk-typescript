@@ -853,6 +853,9 @@ export class Bucket {
 
   /**
    * Hides a file by creating a hide marker. The file remains in version history but is no longer visible in `listFileNames`.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param fileName - The file path to hide.
    * @param options - Optional request controls such as an abort signal.
    *
@@ -1064,6 +1067,9 @@ export class Bucket {
 
   /**
    * Creates a server-side copy of a file within or across buckets.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param options - Copy configuration including source file ID and destination name.
    *
    * @returns Metadata for the newly created file version.

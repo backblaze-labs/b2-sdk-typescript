@@ -292,6 +292,9 @@ export class B2Client {
 
   /**
    * Creates a new B2 bucket.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param options - Bucket configuration including name, type, and optional settings.
    *
    * @returns A {@link Bucket} handle for the newly created bucket.
@@ -421,6 +424,9 @@ export class B2Client {
 
   /**
    * Creates a new application key with the specified capabilities.
+   * This mutation is not automatically replayed after connection failures or HTTP 408/5xx.
+   * Check its outcome before retrying manually; expired-token reauth and HTTP 429 retries remain enabled.
+   *
    * @param options - Key configuration including capabilities, name, and optional restrictions.
    *
    * @returns The full key including the secret (only returned at creation time).
