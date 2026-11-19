@@ -32,9 +32,12 @@ export interface ParallelDownloadOptions {
    */
   readonly serverSideEncryption?: SseCDownloadKey
   /**
-   * Extra retry attempts per range on transient failures. By default, request
-   * failures are left to `RetryTransport`, while response body failures use the
-   * client's retry budget. Set this to 0 to disable range-level retries.
+   * Override the range-level retry limit for request failures surfaced by the
+   * raw client and for retryable response-body failures. When omitted, there are
+   * no extra range-level request retries; body retries use the supplied client
+   * settings or the SDK default of 5. Setting this to 0 disables range-level
+   * retries but does not change any retries performed by the underlying transport.
+   * This internal option is not a per-call option on `B2Object.createReadStream`.
    */
   readonly maxRetries?: number
   /**

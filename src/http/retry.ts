@@ -1,6 +1,12 @@
 /** Configuration for retry behavior on transient failures. */
 export interface RetryOptions {
-  /** Maximum number of retry attempts before giving up. */
+  /**
+   * Maximum retry attempts for each retry mechanism. Defaults to 5.
+   * Parallel downloads use separate limits for request retries and for
+   * retryable range-body failures; each repeated range request can use its own
+   * request retry budget. Set to 0 to disable those transient retries. Expired
+   * token reauthorization is handled separately.
+   */
   readonly maxRetries: number
   /** Upper bound on retry delay in milliseconds, regardless of backoff calculation. */
   readonly maxRetryDelayMs: number

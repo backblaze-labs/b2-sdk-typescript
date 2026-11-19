@@ -220,9 +220,8 @@ const partial = await bucket.download('large-file.bin', {
 })
 
 // Parallel ranged download (for large files).
-// Each range uses the client's configured RetryTransport budget, so transient
-// 503s are retried without adding a second request retry layer per chunk.
-// Interrupted range bodies use the client's retry settings separately.
+// Range requests and retryable body failures use separate retry budgets,
+// both configured through the client's retry settings.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
@@ -230,7 +229,7 @@ const stream = obj.createReadStream(fileId, totalSize, {
 })
 ```
 
-If a range response body encounters a retryable connection failure while being read, the SDK discards its partial bytes and retries that range using the client's retry settings. Each new range request also has its own transport retry budget, so failures in both stages can produce additional requests. Set `retry.maxRetries: 0` on the client to disable both kinds of retries.
+If a range response body encounters a retryable connection failure, such as a reset, the SDK discards its partial bytes and retries that range. Configure `retry.maxRetries` on `B2Client` (default `5`); `createReadStream` has no per-call retry override. The limit applies separately to body retries for each range and transport retries for each new range request, so it is not a total HTTP request limit. Set `retry.maxRetries: 0` on the client to disable transient request and range-body retries. Expired-token reauthorization remains separate.
 
 Full-body downloads are automatically verified when B2 returns a real `X-Bz-Content-Sha1` digest. If the downloaded bytes do not match, the body stream errors with `ChecksumMismatchError`; discard any partially written output when piping to disk. HEAD requests, range GETs, and files whose SHA-1 is unavailable are not verified because no matching whole-body digest exists.
 
@@ -678,8 +677,10 @@ non-streaming response-body reads. For `response.body` download streams it is an
 idle/no-progress timeout that resets after each received chunk, so healthy large
 downloads are not aborted merely because the total transfer takes longer than
 the timeout. Slow large-part uploads may need a higher value or `0` to rely on
-your own `AbortSignal`. Worst-case terminal latency can be roughly
+your own `AbortSignal`. For a single request, terminal latency can be roughly
 `(retry.maxRetries + 1) * requestTimeoutMs` plus backoff when an endpoint hangs.
+This is not an overall deadline for parallel downloads: a retried range body can
+start another request with its own transport retry budget.
 
 When a multipart upload, streaming upload, or multipart copy fails, the SDK calls `b2_cancel_large_file` on a best-effort basis. Pass `onCleanupFailure` on those operations to observe failed cancellation or a skipped cancellation after an ambiguous `b2_finish_large_file` response, with the relevant `fileId` so operators can reconcile unfinished or possibly committed large files. Pair long-running resume workflows with lifecycle or version-retention cleanup so orphaned unfinished large files do not accumulate past the bounded resume discovery scan.
 
