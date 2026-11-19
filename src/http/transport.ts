@@ -10,6 +10,7 @@ import type { B2ErrorResponse } from '../types/errors.ts'
 import { abortReason, raceWithAbort, throwIfSignalAborted } from '../util/abort.ts'
 import {
   isBackupNonIdempotentMutationEndpoint,
+  isNativeNonIdempotentMutationEndpoint,
   isPartnerNonIdempotentMutationEndpoint,
 } from './non-idempotent-mutations.ts'
 import { computeBackoff, DEFAULT_RETRY_OPTIONS, type RetryOptions, sleep } from './retry.ts'
@@ -485,7 +486,8 @@ function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
   return (
     request.idempotent === false ||
     (request.method === 'POST' &&
-      (isKnownPartnerNonIdempotentMutationEndpoint(request.url) ||
+      (isNativeNonIdempotentMutationEndpoint(b2ApiEndpointName(request.url)) ||
+        isKnownPartnerNonIdempotentMutationEndpoint(request.url) ||
         isKnownBackupNonIdempotentMutationEndpoint(request.url)))
   )
 }

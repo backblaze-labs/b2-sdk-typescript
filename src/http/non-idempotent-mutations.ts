@@ -1,3 +1,11 @@
+/** Native storage API endpoints that must not be automatically replayed. */
+export const NATIVE_NON_IDEMPOTENT_MUTATION_ENDPOINTS = [
+  'b2_create_key',
+  'b2_create_bucket',
+  'b2_copy_file',
+  'b2_hide_file',
+] as const
+
 /** Partner API endpoints that must not be automatically replayed. */
 export const PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS = [
   'b2_create_group_member',
@@ -19,9 +27,23 @@ export type BackupNonIdempotentMutationEndpoint =
 const PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET: ReadonlySet<string> = new Set(
   PARTNER_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
 )
+const NATIVE_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET: ReadonlySet<string> = new Set(
+  NATIVE_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
+)
 const BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET: ReadonlySet<string> = new Set(
   BACKUP_NON_IDEMPOTENT_MUTATION_ENDPOINTS,
 )
+
+/**
+ * Checks whether a native storage endpoint is a non-idempotent mutation.
+ *
+ * @param endpoint - Native endpoint name parsed from the request URL.
+ *
+ * @returns Whether the endpoint must opt out of automatic replay.
+ */
+export function isNativeNonIdempotentMutationEndpoint(endpoint: string | undefined): boolean {
+  return endpoint !== undefined && NATIVE_NON_IDEMPOTENT_MUTATION_ENDPOINT_SET.has(endpoint)
+}
 
 /**
  * Checks whether a Partner endpoint name is a non-idempotent mutation.

@@ -18,6 +18,7 @@
 import { assertSecureRealmUrl } from '../auth/realms.ts'
 import { assertValidBucketConfiguration } from '../bucket-validation.ts'
 import { FinishLargeFileResponseBodyError, UploadResponseBodyError } from '../errors/index.ts'
+import { isNativeNonIdempotentMutationEndpoint } from '../http/non-idempotent-mutations.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { HttpTransport } from '../http/transport.ts'
 import {
@@ -1424,6 +1425,7 @@ export class RawClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      ...(isNativeNonIdempotentMutationEndpoint(endpoint) ? { idempotent: false as const } : {}),
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
       ...(options?.retry !== undefined ? { retry: options.retry } : {}),
     })
