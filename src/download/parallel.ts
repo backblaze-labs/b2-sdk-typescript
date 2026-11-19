@@ -37,6 +37,8 @@ export interface ParallelDownloadOptions {
    * no extra range-level request retries; body retries use the supplied client
    * settings or the SDK default of 5. Setting this to 0 disables range-level
    * retries but does not change any retries performed by the underlying transport.
+   * With an explicit override, request and body failures share the same
+   * range-level retry counter rather than receiving separate allowances.
    * This internal option is not a per-call option on `B2Object.createReadStream`.
    */
   readonly maxRetries?: number

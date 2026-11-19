@@ -220,8 +220,8 @@ const partial = await bucket.download('large-file.bin', {
 })
 
 // Parallel ranged download (for large files).
-// Range requests and retryable body failures use separate retry budgets,
-// both configured through the client's retry settings.
+// The client's transport retries and this stream's retryable body failures use
+// separate retry budgets, both configured through the client's retry settings.
 const obj = bucket.file('big-dataset.parquet')
 const stream = obj.createReadStream(fileId, totalSize, {
   concurrency: 4,
