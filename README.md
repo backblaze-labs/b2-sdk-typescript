@@ -655,6 +655,8 @@ The SDK automatically retries transient errors with exponential backoff:
 - **Network errors**: retried with backoff; high-level single-file upload POST connection faults can be excluded with `retryUploadConnectionFaults: false`
 - **Permanent errors** (403 cap_exceeded, 404 not_found, etc.): thrown immediately
 
+Native `b2_create_key`, `b2_create_bucket`, `b2_copy_file`, and `b2_hide_file` are exceptions: connection failures and HTTP 408/5xx responses are surfaced without automatic replay because the operation may already have been applied. Check whether the key, bucket, copied version, or hide marker exists before manually retrying. Expired-token reauthorization and HTTP 429 backoff (including `Retry-After`) remain enabled for these operations.
+
 Configure retry behavior:
 
 ```ts

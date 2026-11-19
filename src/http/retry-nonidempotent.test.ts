@@ -55,7 +55,7 @@ function retryTransport(send: HttpTransport['send']): RetryTransport {
 
 describe('native mutation retry policy', () => {
   describe.each(mutations)('$endpoint', ({ endpoint, invoke }) => {
-    it.each([500, 502, 503, 504])('does not replay after HTTP %i', async (status) => {
+    it.each([408, 500, 502, 503, 504])('does not replay after HTTP %i', async (status) => {
       const send = vi.fn<HttpTransport['send']>(async () =>
         jsonErrorResponse(status, 'internal_error', 'Temporary service failure'),
       )
@@ -85,15 +85,51 @@ describe('native mutation retry policy', () => {
       expect(send).toHaveBeenCalledTimes(1)
     })
 
-    it('marks the raw request as non-idempotent for custom transports', async () => {
-      const send = vi.fn<HttpTransport['send']>(async () => {
-        throw new TypeError('Connection closed before response')
+    it('reauthorizes after an expired-token rejection before surfacing a later 503', async () => {
+      const send = vi
+        .fn<HttpTransport['send']>()
+        .mockResolvedValueOnce(jsonErrorResponse(401, 'expired_auth_token', 'Token expired'))
+        .mockResolvedValueOnce(jsonErrorResponse(503, 'service_unavailable', 'Try again'))
+      const onReauth = vi.fn(async () => 'refreshed-test-token')
+      const transport = new RetryTransport({
+        transport: { send },
+        retry: { maxRetries: 2 },
+        onReauth,
+        sleepImpl: async () => {},
       })
 
-      await expect(invoke(new RawClient({ transport: { send } }))).rejects.toThrow(
-        'Connection closed before response',
-      )
-      expect(send.mock.calls[0]?.[0].idempotent).toBe(false)
+      await expect(invoke(new RawClient({ transport }))).rejects.toMatchObject({
+        status: 503,
+        code: 'service_unavailable',
+      })
+      expect(onReauth).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(send.mock.calls.map(([request]) => request.headers?.['Authorization'])).toEqual([
+        authToken,
+        'refreshed-test-token',
+      ])
+    })
+
+    it('honors throttling Retry-After before surfacing a later 503', async () => {
+      const throttled = jsonErrorResponse(429, 'too_many_requests', 'Try later')
+      throttled.headers.set('Retry-After', '2')
+      const send = vi
+        .fn<HttpTransport['send']>()
+        .mockResolvedValueOnce(throttled)
+        .mockResolvedValueOnce(jsonErrorResponse(503, 'service_unavailable', 'Try again'))
+      const sleep = vi.fn(async (_ms: number, _signal?: AbortSignal) => {})
+      const transport = new RetryTransport({
+        transport: { send },
+        retry: { maxRetries: 2, maxRetryDelayMs: 100_000 },
+        sleepImpl: sleep,
+      })
+
+      await expect(invoke(new RawClient({ transport }))).rejects.toMatchObject({
+        status: 503,
+        code: 'service_unavailable',
+      })
+      expect(send).toHaveBeenCalledTimes(2)
+      expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([2000])
     })
 
     it.each(['HTTP 503', 'connection failure'])(

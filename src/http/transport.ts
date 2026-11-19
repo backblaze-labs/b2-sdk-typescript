@@ -480,14 +480,20 @@ function isKnownBackupNonIdempotentMutationEndpoint(url: string): boolean {
   return isBackupNonIdempotentMutationEndpoint(backupApiEndpointName(url))
 }
 
+function isNativeNonIdempotentMutationRequest(request: HttpRequest): boolean {
+  return (
+    request.method === 'POST' &&
+    isNativeNonIdempotentMutationEndpoint(b2ApiEndpointName(request.url))
+  )
+}
+
 function isNonIdempotentMutationRequest(request: HttpRequest): boolean {
   // Defense in depth: known mutations must not replay if a wrapper drops
   // the raw client's explicit `idempotent: false` marker.
   return (
     request.idempotent === false ||
     (request.method === 'POST' &&
-      (isNativeNonIdempotentMutationEndpoint(b2ApiEndpointName(request.url)) ||
-        isKnownPartnerNonIdempotentMutationEndpoint(request.url) ||
+      (isKnownPartnerNonIdempotentMutationEndpoint(request.url) ||
         isKnownBackupNonIdempotentMutationEndpoint(request.url)))
   )
 }
@@ -509,6 +515,10 @@ function backupApiEndpointName(url: string): string | undefined {
   return segments[apiRootIndex + 3]
 }
 
+function isAmbiguousNativeMutationResponse(request: HttpRequest, status: number): boolean {
+  return isNativeNonIdempotentMutationRequest(request) && (status === 408 || status >= 500)
+}
+
 function isReplayUnsafeRequest(request: HttpRequest): boolean {
   if (request.idempotent === false) return true
   if (request.method !== 'POST') return false
@@ -516,6 +526,7 @@ function isReplayUnsafeRequest(request: HttpRequest): boolean {
     isUploadEndpoint(request.url) ||
     isStartLargeFileEndpoint(request.url) ||
     isFinishLargeFileEndpoint(request.url) ||
+    isNativeNonIdempotentMutationRequest(request) ||
     isNonIdempotentMutationRequest(request)
   )
 }
@@ -560,6 +571,11 @@ function isTerminalTransportError(err: unknown): boolean {
  * Handles transient errors (408, 429, and the transient 5xx set 500/502/503/504),
  * expired auth tokens, and network failures. Delegates to an inner
  * {@link HttpTransport}.
+ *
+ * Native `b2_create_key`, `b2_create_bucket`, `b2_copy_file`, and `b2_hide_file`
+ * are not replayed after connection failures or HTTP 408/5xx responses. Check
+ * the outcome before retrying manually. Expired-token reauth and HTTP 429
+ * backoff remain enabled because those responses reject the operation.
  *
  * Upload endpoints (`b2_upload_file` / `b2_upload_part`) are URL-pinned. Their
  * retryable pod failures bubble to the upload layer, which evicts the failed
@@ -646,6 +662,12 @@ export class RetryTransport implements HttpTransport {
           ...(retryAfterSec !== undefined ? { retryAfter: retryAfterSec } : {}),
           ...(requestId !== undefined ? { requestId } : {}),
         })
+
+        // These outcomes do not tell us whether the mutation was applied.
+        // Explicit expired-token and throttling refusals retain normal retry handling.
+        if (isAmbiguousNativeMutationResponse(request, response.status)) {
+          throw error
+        }
 
         if (
           error instanceof ExpiredAuthTokenError &&

@@ -1,3 +1,3 @@
 kind: Fixed
-body: "Native create-key, create-bucket, copy-file, and hide-file requests now surface transient failures without automatic replay. Read and download requests retain normal retries. Check the operation's result before manually retrying a mutation."
+body: "Native create-key, create-bucket, copy-file, and hide-file requests now surface connection failures and HTTP 408/5xx responses without automatic replay. Expired-token reauthorization, HTTP 429 backoff, and read/download retries remain enabled. Check the operation's result before manually retrying a mutation."
 time: 2026-11-19T00:00:00Z
