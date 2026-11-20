@@ -60,6 +60,15 @@ Release workflow success alone does not prove live B2 integration passed. Before
 cutting or trusting a release, confirm that the relevant commit also has a green
 `Integration (real B2)` run, or manually dispatch that workflow for the commit.
 
+Raw single-file integration fixtures use `tests/helpers/raw-upload.ts` to follow
+[B2's documented upload recovery](https://www.backblaze.com/docs/cloud-storage-upload-files-with-the-native-api):
+a 5xx response is retried with a fresh upload URL/token, with at most five
+attempts and a 60-second overall deadline. The helper uses the SDK's existing
+recovery policy; deterministic request errors and unreadable successful responses
+still fail. It logs retry counts/status only. Metadata, encryption and byte
+assertions remain in the live tests. Credential-free helper regressions run
+with the ordinary Node test suite.
+
 ### Test file naming convention
 
 | Pattern | Where it runs |
