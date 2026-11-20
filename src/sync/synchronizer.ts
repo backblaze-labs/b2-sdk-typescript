@@ -42,7 +42,7 @@ import {
   readyComparePair,
 } from './policies/compare.ts'
 import type { ActionFactory } from './policies/index.ts'
-import { generateActions } from './policies/index.ts'
+import { assertValidKeepPolicy, generateActions } from './policies/index.ts'
 import { asRawB2KeyPrefix, b2KeyToRelativePathUnderPrefix } from './prefix.ts'
 import {
   DEFAULT_SHA1_VERIFICATION_TIMEOUT_MILLIS,
@@ -210,6 +210,9 @@ function resolveDirection(source: SyncFolder, dest: SyncFolder): SyncDirection {
  * @param config - The synchronizer configuration (source, dest, options, and optional bucket).
  *
  * @returns An async generator that yields comparison and action events.
+ *
+ * @throws A `TypeError` on iteration if `keepMode` is unsupported.
+ * @throws A `RangeError` on iteration if `keep-days` has no finite, non-negative `keepDays` value.
  */
 export function synchronize(config: SupportedSynchronizerConfig): AsyncGenerator<SyncEvent>
 /**
@@ -230,6 +233,7 @@ export async function* synchronize(config: SynchronizerConfig): AsyncGenerator<S
   const direction = resolveDirection(source, dest)
   const dryRun = options.dryRun ?? false
   const concurrency = normalizeSyncConcurrency(options.concurrency)
+  assertValidKeepPolicy(options.keepMode, options.keepDays)
   const keepDays = options.keepDays ?? 0
   const compareThreshold = options.compareThreshold ?? 0
   const nowMillis = Date.now()

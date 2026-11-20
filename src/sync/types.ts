@@ -303,7 +303,10 @@ export interface SyncOptions extends SyncFilterOptions {
   readonly compareMode: CompareMode
   /** What to do with destination files absent from the source. */
   readonly keepMode: KeepMode
-  /** Number of days to retain orphaned destination files when keepMode is 'keep-days'. */
+  /**
+   * Number of days to retain orphaned destination files. Required for `keep-days`;
+   * must be finite and non-negative. An explicit 0 permits immediate orphan removal.
+   */
   readonly keepDays?: number
   /** Maximum number of concurrent transfer actions. Must be a positive integer. Defaults to 4. */
   readonly concurrency?: number

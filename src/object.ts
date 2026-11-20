@@ -289,19 +289,23 @@ export class B2Object {
    * so the setting is not a total HTTP request limit. Set it to 0 on the client
    * to disable transient request and range-body retries; expired-token
    * reauthorization remains separate. There is no per-call retry override here.
+   * `rangeSize` must be positive and `concurrency` must be a positive integer,
+   * including for an empty file.
    * @param fileId - The file version ID to download.
    * @param totalSize - Total file size in bytes (needed to compute range boundaries).
    * @param options - Concurrency, range size, SSE-C decryption, and abort signal.
    *
    * @returns A Web ReadableStream of file data in sequential order.
+   *
+   * @throws A `RangeError` synchronously if `rangeSize` is not positive or `concurrency` is not a positive integer.
    */
   createReadStream(
     fileId: FileId,
     totalSize: number,
     options?: {
-      /** Size of each ranged GET request in bytes. Defaults to 10 MB. */
+      /** Size of each ranged GET request in bytes. Must be positive. Defaults to 10 MB. */
       rangeSize?: number
-      /** Number of concurrent range requests. Defaults to 4. */
+      /** Number of concurrent range requests. Must be a positive integer. Defaults to 4. */
       concurrency?: number
       /** SSE-C decryption parameters, required if the file was uploaded with SSE-C. */
       serverSideEncryption?: SseCDownloadKey
