@@ -32,11 +32,21 @@ export interface ParallelDownloadOptions {
    */
   readonly serverSideEncryption?: SseCDownloadKey
   /**
-   * Extra retry attempts per range on transient failures. Defaults to 0 because
-   * `B2Client` already applies `RetryTransport`; set this only when supplying a
-   * raw client that does not already retry transport failures.
+   * Override the range-level retry limit for request failures surfaced by the
+   * raw client and for retryable response-body failures. When omitted, there are
+   * no extra range-level request retries; body retries use the supplied client
+   * settings or the SDK default of 5. Setting this to 0 disables range-level
+   * retries but does not change any retries performed by the underlying transport.
+   * Request and body failures each have their own range-level retry counter.
+   * This internal option is not a per-call option on `B2Object.createReadStream`.
    */
   readonly maxRetries?: number
+  /**
+   * Client retry settings used for response body retries.
+   *
+   * @internal
+   */
+  readonly bodyRetryOptions?: RetryOptions
   /** Signal to abort the download. */
   readonly signal?: AbortSignal
 }
@@ -55,6 +65,7 @@ interface FetchRangeWithRetryParams {
   readonly totalSize: number
   readonly serverSideEncryption: SseCDownloadKey | undefined
   readonly retryOptions: RetryOptions
+  readonly bodyMaxRetries: number
   readonly signal: AbortSignal | undefined
 }
 
@@ -93,13 +104,15 @@ export function createParallelDownloadStream(
       ? redactSseCKeyMaterial(options.serverSideEncryption, { label: 'SseCDownloadKey' })
       : undefined
   // The high-level B2Client already wraps the raw transport in RetryTransport.
-  // Keep the parallel-download outer retry disabled by default so each range
-  // has one retry budget unless callers explicitly opt into an extra raw-client
-  // retry layer.
+  // Keep request-level retries in RetryTransport by default, but allow a
+  // separate bounded retry when the response body fails after headers arrived.
   const retryOptions = {
     ...DEFAULT_RETRY_OPTIONS,
+    ...options.bodyRetryOptions,
     maxRetries: options.maxRetries ?? 0,
   }
+  const bodyMaxRetries =
+    options.maxRetries ?? options.bodyRetryOptions?.maxRetries ?? DEFAULT_RETRY_OPTIONS.maxRetries
   const internalAbort = new AbortController()
   const abort = internalAbort.signal
   let removeCallerAbortListener: (() => void) | undefined
@@ -165,6 +178,7 @@ export function createParallelDownloadStream(
             totalSize,
             serverSideEncryption,
             retryOptions,
+            bodyMaxRetries,
             signal: abort,
           })
           buffer.set(idx, result)
@@ -264,6 +278,7 @@ export function createParallelDownloadStream(
 
 /**
  * Fetches a single byte range with bounded retry on transient failures.
+ * Request and body retries are tracked independently against their own budgets.
  * @param params - Range request parameters, retry settings, and cancellation.
  *
  * @returns The range's bytes, or throws after exhausting all retry attempts.
@@ -280,18 +295,27 @@ async function fetchRangeWithRetry(
     totalSize,
     serverSideEncryption,
     retryOptions,
+    bodyMaxRetries,
     signal,
   } = params
   let lastError: unknown
-  for (let attempt = 0; attempt <= retryOptions.maxRetries; attempt++) {
-    if (attempt > 0) {
+  const retries = { requestRetries: 0, bodyRetries: 0 }
+  // Preserve the no-attempt fallback for negative or NaN retry limits.
+  const maxRetryLimit = Math.max(retryOptions.maxRetries, bodyMaxRetries)
+  let retryIndex: number | undefined
+  while (
+    maxRetryLimit >= 0 &&
+    (retries.requestRetries <= retryOptions.maxRetries || retries.bodyRetries <= bodyMaxRetries)
+  ) {
+    if (retryIndex !== undefined) {
       const retryAfter =
         lastError instanceof B2Error && lastError.retryAfter !== undefined
           ? lastError.retryAfter
           : undefined
-      const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
+      const delay = computeBackoff(retryIndex, retryOptions, retryAfter)
       await sleep(delay, signal)
     }
+    let failedDuringBody = false
     try {
       signal?.throwIfAborted()
       const resp = await raw.downloadFileById(
@@ -308,7 +332,13 @@ async function fetchRangeWithRetry(
         throw await classifyDownloadResponseError(resp)
       }
       if (!resp.body) throw new Error('Download chunk has no body')
-      const data = await collectStream(resp.body)
+      let data: Uint8Array
+      try {
+        data = await collectStream(resp.body)
+      } catch (err) {
+        failedDuringBody = true
+        throw err
+      }
       validateRangeResponse(resp, start, end, totalSize, data.byteLength)
       return {
         data,
@@ -319,9 +349,17 @@ async function fetchRangeWithRetry(
       // Honour AbortSignal cancellation: don't retry past an abort.
       if (signal?.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
-      if (!isRetryableRangeError(err) || attempt === retryOptions.maxRetries) {
+      const counter = failedDuringBody ? 'bodyRetries' : 'requestRetries'
+      const maxRetries = failedDuringBody ? bodyMaxRetries : retryOptions.maxRetries
+      const usedRetries = retries[counter]
+      const retryable = failedDuringBody
+        ? isRetryableRangeBodyError(err)
+        : isRetryableRangeError(err)
+      if (!retryable || usedRetries >= maxRetries) {
         throw err
       }
+      retries[counter]++
+      retryIndex = usedRetries
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
@@ -430,6 +468,14 @@ function isRetryableRangeError(err: unknown): boolean {
   // Bare FetchTransport surfaces network failures as TypeError. Validation
   // failures use RangeValidationError above, so they never land here.
   return err instanceof TypeError
+}
+
+function isRetryableRangeBodyError(err: unknown): boolean {
+  if (hasRetryableFlag(err)) return err.retryable
+  return (
+    isRetryableRangeError(err) ||
+    (err instanceof Error && 'code' in err && err.code === 'ECONNRESET')
+  )
 }
 
 function hasRetryableFlag(err: unknown): err is { retryable: boolean } {

@@ -283,6 +283,12 @@ export class B2Object {
 
   /**
    * Creates a parallel-download ReadableStream that fetches the file in concurrent ranged chunks.
+   * Retryable range-body failures, such as a connection reset, use the client's
+   * `retry.maxRetries` setting (default 5). Partial range bytes are discarded
+   * before retrying. Each new range request has its own transport retry budget,
+   * so the setting is not a total HTTP request limit. Set it to 0 on the client
+   * to disable transient request and range-body retries; expired-token
+   * reauthorization remains separate. There is no per-call retry override here.
    * @param fileId - The file version ID to download.
    * @param totalSize - Total file size in bytes (needed to compute range boundaries).
    * @param options - Concurrency, range size, SSE-C decryption, and abort signal.
@@ -307,6 +313,7 @@ export class B2Object {
       fileId,
       totalSize,
       ...options,
+      bodyRetryOptions: this.uploadRetryOptions,
     })
   }
 
