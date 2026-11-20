@@ -1,0 +1,13 @@
+# Snyk policy. `exclude.code` keeps paths out of Snyk Code (SAST) scanning.
+exclude:
+  code:
+    # Test code. Tests are never shipped (package.json "files" is dist/ plus
+    # docs), and their fixtures are credential-shaped on purpose (fake
+    # application keys, auth tokens, S3 secret keys and SSE-C keys), which Snyk
+    # Code reports as hardcoded secrets. Production source, including the
+    # shipped B2Simulator (src/simulator/) and examples/, is still scanned.
+    - '**/*.test.*'
+    - '**/*.spec.*'
+    - src/test-utils/**
+    - tests/**
+    - .sdkharness/tests/**
