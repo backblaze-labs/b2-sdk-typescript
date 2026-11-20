@@ -27,7 +27,7 @@ import {
 } from './retry.ts'
 import { uploadSmallFile } from './single.ts'
 
-/** Options for creating a streaming multipart upload sink. */
+/** Options for creating a streaming upload sink. */
 export interface CreateWriteStreamOptions extends UploadRetryOptions, CleanupFailureOptions {
   /** Target bucket for the upload. */
   readonly bucketId: BucketId
@@ -79,14 +79,19 @@ export interface UploadWriteHandle {
 }
 
 /**
- * Creates a {@link WritableStream} that streams data into a B2 multipart upload.
+ * Creates a {@link WritableStream} that uploads data into B2.
  *
  * Buffers incoming chunks until `partSize` bytes are accumulated, ships each
  * complete part through the standard multipart engine, and finalizes the file
- * once the stream is closed. Honours backpressure via the queue's bounded
- * concurrency. Streaming uploads do not support resume because the total size
- * and per-part hashes aren't known in advance; use {@link uploadLargeFile} with
- * a buffered source when resume is required.
+ * once the stream is closed. Streams of one part or less finish through a
+ * single-request file upload; larger streams finish as multipart uploads.
+ * At exactly one part, the provisional large file is cancelled and the retained
+ * bytes are uploaded again through the single-request path.
+ * Closing a stream without writing any data rejects.
+ *
+ * Honours backpressure via the queue's bounded concurrency. Streaming uploads
+ * do not support resume because the total size and per-part hashes aren't known
+ * in advance; use {@link uploadLargeFile} with a buffered source when resume is required.
  *
  * @param raw - Low-level B2 API client.
  * @param accountInfo - Authorized account state (tokens, URLs, part URL pool).
@@ -425,9 +430,21 @@ export function createWriteStream(
           if (errored) throw errored
           abortScope.signal.throwIfAborted()
           if (largeFileId !== null) await cancelStartedLargeFile(largeFileId)
-          const { onProgress: _onProgress, ...singleOptions } = options
           const result = await uploadSmallFile(raw, accountInfo, {
-            ...singleOptions,
+            bucketId: options.bucketId,
+            fileName: options.fileName,
+            contentType: options.contentType ?? DEFAULT_CONTENT_TYPE,
+            fileInfo: options.fileInfo ?? {},
+            ...(options.serverSideEncryption !== undefined
+              ? { serverSideEncryption: options.serverSideEncryption }
+              : {}),
+            ...(options.customUploadTimestamp !== undefined
+              ? { customUploadTimestamp: options.customUploadTimestamp }
+              : {}),
+            retry: options.retry,
+            onUploadRetry: options.onUploadRetry,
+            retryResponseBodyFailures: options.retryResponseBodyFailures,
+            retryUploadConnectionFaults: options.retryUploadConnectionFaults,
             source: new BufferSource(singleData),
             signal: abortScope.signal,
           })

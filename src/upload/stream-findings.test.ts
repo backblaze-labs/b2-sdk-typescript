@@ -4,6 +4,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import { B2Simulator } from '../simulator/index.ts'
 import { deterministicBytes, readStream } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
+import { LegalHoldValue, RetentionMode } from '../types/lock.ts'
 import type { CleanupFailureEvent } from './cancel.ts'
 
 function jsonResp(status: number, body: unknown): HttpResponse {
@@ -223,6 +224,55 @@ describe('createWriteStream regressions', () => {
       expect(seen.filter((req) => req.url.includes('b2_cancel_large_file'))).toHaveLength(
         size === 100_000 ? 1 : 0,
       )
+    },
+  )
+
+  it.each([1_000, 100_000, 200_000])(
+    'ignores non-streaming options on a reused options object (%i bytes)',
+    async (size) => {
+      const { client, seen } = await makeStreamClient(100_000)
+      const bucket = await client.createBucket({
+        bucketName: 'stream-options-contract',
+        bucketType: BucketType.AllPrivate,
+        fileLockEnabled: true,
+      })
+      // Structural typing allows a variable with additional upload options.
+      // Those fields must not silently take effect only on the small-file path.
+      const options = {
+        partSize: 100_000,
+        fileInfo: { purpose: 'stream-options' },
+        fileRetention: {
+          mode: RetentionMode.Compliance,
+          retainUntilTimestamp: Date.UTC(2100, 0, 1),
+        },
+        legalHold: LegalHoldValue.On,
+        lastModifiedMillis: 1_700_000_000_000,
+      }
+      const object = bucket.file('reused-options.bin')
+      const { writable, done } = object.createWriteStream(options)
+      const writer = writable.getWriter()
+      const payload = deterministicBytes(size)
+      await writer.write(payload)
+      await writer.close()
+      const uploaded = await done
+      const stored = await object.getFileInfo(uploaded.fileId)
+
+      // The simulator does not persist upload-file Object Lock headers, so
+      // check the HTTP boundary as well as the stored metadata.
+      const singleUploads = seen.filter((req) => req.url.includes('b2_upload_file'))
+      expect(singleUploads).toHaveLength(size <= 100_000 ? 1 : 0)
+      for (const req of singleUploads) {
+        const headers = new Headers(req.headers)
+        expect({
+          retentionMode: headers.get('X-Bz-File-Retention-Mode'),
+          retainUntil: headers.get('X-Bz-File-Retention-Retain-Until-Timestamp'),
+          legalHold: headers.get('X-Bz-File-Legal-Hold'),
+        }).toEqual({ retentionMode: null, retainUntil: null, legalHold: null })
+      }
+      expect(stored.fileRetention).toEqual({ isClientAuthorizedToRead: true, value: null })
+      expect(stored.legalHold).toEqual({ isClientAuthorizedToRead: true, value: null })
+      expect(stored.fileInfo).toEqual({ purpose: 'stream-options' })
+      expect(await readStream((await object.download()).body)).toEqual(payload)
     },
   )
 

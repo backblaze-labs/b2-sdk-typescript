@@ -318,9 +318,13 @@ export class B2Object {
   }
 
   /**
-   * Creates a Web `WritableStream` that uploads streamed data into this file
-   * using the multipart protocol. Pipe a `ReadableStream<Uint8Array>` into the
-   * returned `writable` and await `done` to get the final {@link FileVersion}.
+   * Creates a Web `WritableStream` that uploads streamed data into this file.
+   * Streams of one part or less finish through a single-request upload; larger
+   * streams use the multipart protocol. At exactly one part, the provisional
+   * large file is cancelled and the bytes are uploaded again as a single file.
+   * Closing a stream without writing any data rejects.
+   * Pipe a `ReadableStream<Uint8Array>` into the returned `writable` and await
+   * `done` to get the final {@link FileVersion}.
    *
    * Note: streaming uploads do not support resume because the size and per-part
    * hashes are not known in advance. Use {@link upload} with a buffered source
