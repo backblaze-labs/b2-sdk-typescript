@@ -92,14 +92,20 @@ const server = createServer((req, res) => {
     return
   }
 
-  // Extract the file key from `/files/<key>`. URL.pathname decodes percent-
-  // encoded characters, which matches how the policy table is keyed.
+  // Decode the file key from `/files/<key>` to match the policy table.
   const url = new URL(req.url, 'http://localhost')
   if (!url.pathname.startsWith('/files/')) {
     send(res, 404, 'not found')
     return
   }
-  const fileKey = decodeURIComponent(url.pathname.slice('/files/'.length))
+  let fileKey: string
+  try {
+    fileKey = decodeURIComponent(url.pathname.slice('/files/'.length))
+  } catch (err) {
+    if (!(err instanceof URIError)) throw err
+    send(res, 400, 'invalid file path encoding')
+    return
+  }
 
   // Surface async errors from the route handler so an unhandled rejection
   // doesn't silently hang the response.
