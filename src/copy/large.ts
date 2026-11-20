@@ -30,9 +30,12 @@ export interface CopyLargeFileOptions {
    * {@link DEFAULT_TRANSFER_CONCURRENCY}.
    */
   readonly concurrency?: number
-  /** MIME type for the destination file. Defaults to `b2/x-auto`. */
+  /** MIME type for the destination file. Defaults to the source's type, or `b2/x-auto` if unavailable. */
   readonly contentType?: string
-  /** Custom file info merged into the destination. */
+  /**
+   * Replacement custom file info. Omit to inherit the source's file info;
+   * an explicit empty object removes all custom file info.
+   */
   readonly fileInfo?: Record<string, string>
   /** Server-side encryption applied to the destination. */
   readonly destinationServerSideEncryption?: EncryptionSetting
