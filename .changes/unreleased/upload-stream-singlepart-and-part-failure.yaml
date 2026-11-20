@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Streaming uploads that fit in one part use a single-request upload. Failed parts reject completion and cancel the unfinished large file even when the writer remains open."
+time: 2026-11-20T00:00:00Z
