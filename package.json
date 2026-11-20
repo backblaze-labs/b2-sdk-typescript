@@ -195,7 +195,7 @@
     "@vitest/browser": "^4.1.12",
     "@vitest/browser-playwright": "^4.1.12",
     "@vitest/coverage-v8": "^4.1.12",
-    "changie": "1.24.0",
+    "changie": "1.26.0",
     "cspell": "^10.3.0",
     "eslint": "^10.10.0",
     "eslint-plugin-jsdoc": "^64.3.6",
