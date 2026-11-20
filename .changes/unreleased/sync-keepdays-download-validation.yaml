@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Sync keep-days requires a finite, non-negative keepDays value; explicit 0 remains valid. Parallel downloads reject invalid range sizes and concurrency without retaining abort listeners. Multipart copies preserve source fileInfo unless a replacement is supplied."
+time: 2026-11-20T00:00:00Z

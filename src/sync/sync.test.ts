@@ -122,6 +122,55 @@ function makeNoopFactory(): ActionFactory {
   }
 }
 
+describe('keep-policy validation before generating actions', () => {
+  const now = 1_700_000_000_001
+  const dest = makeB2SyncPath('orphan.txt', now - 1, 10)
+
+  function actions(keepMode: string | undefined, keepDays: number | undefined) {
+    const factory = makeNoopFactory()
+    const removeOrphan = vi.spyOn(factory, 'removeOrphan')
+    const generate = () => [
+      ...generateActions(
+        [null, dest],
+        'b2-to-b2',
+        'size',
+        keepMode as Parameters<typeof generateActions>[3],
+        keepDays as number,
+        now,
+        factory,
+        0,
+      ),
+    ]
+    return { generate, removeOrphan }
+  }
+
+  it.each([undefined, Number.NaN, -1, Infinity, -Infinity])(
+    'rejects keep-days with keepDays %s before removing an orphan',
+    (keepDays) => {
+      const { generate, removeOrphan } = actions('keep-days', keepDays)
+      expect(generate).toThrow(RangeError)
+      expect(removeOrphan).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['bogus', undefined])('rejects unsupported keepMode %s', (keepMode) => {
+    const { generate, removeOrphan } = actions(keepMode, 0)
+    expect(generate).toThrow(TypeError)
+    expect(removeOrphan).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['keep-days', 0, 1],
+    ['keep-days', 7, 0],
+    ['delete', 0, 1],
+    ['no-delete', 0, 0],
+  ] as const)('accepts %s with keepDays %s', (keepMode, keepDays, removals) => {
+    const { generate, removeOrphan } = actions(keepMode, keepDays)
+    generate()
+    expect(removeOrphan).toHaveBeenCalledTimes(removals)
+  })
+})
+
 describe('filesAreDifferent', () => {
   const a = makeSyncPath('file.txt', 1000, 100)
   const b = makeSyncPath('file.txt', 1000, 100)

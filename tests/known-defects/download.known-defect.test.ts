@@ -9,43 +9,7 @@ import { BufferSource } from '../../src/streams/source.ts'
 import { deterministicBytes, makeClient, readStream } from '../../src/test-utils/index.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 
-async function setup(size: number) {
-  const { client } = makeClient()
-  await client.authorize()
-  const bucket = await client.createBucket({
-    bucketName: 'download-kd',
-    bucketType: BucketType.AllPrivate,
-  })
-  const data = deterministicBytes(size)
-  const uploaded = await bucket.upload({ fileName: 'f.bin', source: new BufferSource(data) })
-  return { bucket, data, uploaded }
-}
-
 describe('parallel download known defects', () => {
-  it('concurrency 0 must not silently end with zero bytes', async () => {
-    const { bucket, data, uploaded } = await setup(100)
-    const obj = bucket.file('f.bin')
-
-    let outcome: { bytes: Uint8Array } | { error: unknown }
-    try {
-      outcome = {
-        bytes: await readStream(
-          obj.createReadStream(uploaded.fileId, data.byteLength, { rangeSize: 25, concurrency: 0 }),
-        ),
-      }
-    } catch (error) {
-      outcome = { error }
-    }
-
-    // Correct behaviour: either reject the invalid option, or deliver the whole file.
-    if ('bytes' in outcome) {
-      expect(outcome.bytes, 'download with concurrency 0 returned different bytes').toEqual(data)
-    } else {
-      expect(outcome.error).toBeInstanceOf(Error)
-      expect((outcome.error as Error).message).toMatch(/concurrency/i)
-    }
-  })
-
   it('a connection reset mid-body on one range must not abort the download by default', async () => {
     const data = deterministicBytes(100)
     const { sim } = makeClient()

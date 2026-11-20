@@ -50,30 +50,6 @@ function bytes(text: string): BufferSource {
 }
 
 describe('synchronize known defects', () => {
-  it('keep-days without keepDays does not delete a just-uploaded orphan', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'b2sdk-c19-'))
-    try {
-      const { bucket } = await makeBucket('sync-c19')
-      await bucket.upload({ fileName: 'orphan.txt', source: bytes('recent orphan') })
-
-      const config: SynchronizerUpConfig = {
-        source: new LocalFolder(root),
-        dest: new B2Folder(bucket, ''),
-        options: { compareMode: 'size', keepMode: 'keep-days' },
-        bucket,
-        prefix: '',
-      }
-      const events = await collect(config)
-
-      const deleted = events.filter((e) => e.type === 'delete-remote' || e.type === 'hide')
-      expect(deleted, 'a file uploaded moments ago was removed as an orphan').toHaveLength(0)
-      const names = await bucket.listFileNames()
-      expect(JSON.stringify(names), 'orphan.txt is missing from the bucket').toContain('orphan.txt')
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
   it('a second modtime sync of an unchanged local file uploads nothing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-c29-'))
     try {

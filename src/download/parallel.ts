@@ -20,9 +20,9 @@ export interface ParallelDownloadOptions {
   readonly fileId: FileId
   /** Total file size in bytes (must be known in advance). */
   readonly totalSize: number
-  /** Size of each ranged chunk in bytes. Defaults to 10 MB. */
+  /** Size of each ranged chunk in bytes. Must be positive. Defaults to 10 MB. */
   readonly rangeSize?: number
-  /** Maximum number of chunks fetched in parallel. Defaults to 4. */
+  /** Maximum number of chunks fetched in parallel. Must be positive. Defaults to 4. */
   readonly concurrency?: number
   /**
    * SSE-C decryption parameters, required if the file was uploaded with SSE-C.
@@ -90,6 +90,8 @@ interface FetchRangeWithRetryParams {
  * @param options - Parallel download parameters (file ID, size, concurrency).
  *
  * @returns A `ReadableStream` that yields file bytes in order.
+ *
+ * @throws A `RangeError` synchronously if `concurrency` or `rangeSize` is not positive.
  */
 export function createParallelDownloadStream(
   raw: RawClient,
@@ -99,6 +101,10 @@ export function createParallelDownloadStream(
   const rangeSize = options.rangeSize ?? DEFAULT_DOWNLOAD_RANGE_SIZE
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.totalSize
+  if (!(concurrency > 0)) {
+    throw new RangeError(`concurrency must be a positive number, got ${concurrency}`)
+  }
+  const ranges = planRanges(totalSize, rangeSize)
   const serverSideEncryption =
     options.serverSideEncryption !== undefined
       ? redactSseCKeyMaterial(options.serverSideEncryption, { label: 'SseCDownloadKey' })
@@ -126,8 +132,6 @@ export function createParallelDownloadStream(
       removeCallerAbortListener = () => callerSignal.removeEventListener('abort', abortFromCaller)
     }
   }
-
-  const ranges = planRanges(totalSize, rangeSize)
 
   // `inflight` holds currently-fetching range promises; `buffer` holds
   // completed ranges waiting for their slot in the emit order. Total

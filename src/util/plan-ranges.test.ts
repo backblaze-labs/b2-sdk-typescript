@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { planRanges } from './plan-ranges.ts'
 
 describe('planRanges', () => {
+  it.each([0, -1, Number.NaN])('rejects chunk size %s even for an empty total', (chunkSize) => {
+    expect(() => planRanges(0, chunkSize)).toThrow(RangeError)
+  })
+
   it('covers [0, total) exactly with positive chunk sizes', () => {
     const plans = planRanges(10, 4)
     expect(plans).toEqual([

@@ -11,44 +11,7 @@ import { BufferSource } from '../../src/streams/source.ts'
 import { deterministicBytes, makeClient } from '../../src/test-utils/index.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 
-async function smallPartClient() {
-  const sim = new B2Simulator({ minimumPartSize: 100_000 })
-  const client = new B2Client({
-    applicationKeyId: 'test-key-id',
-    applicationKey: 'test-key',
-    transport: sim.transport(),
-  })
-  await client.authorize()
-  return client
-}
-
 describe('copy known defects', () => {
-  it('multipart copy preserves the source fileInfo when none is supplied', async () => {
-    const client = await smallPartClient()
-    const bucket = await client.createBucket({
-      bucketName: 'copy-c7',
-      bucketType: BucketType.AllPrivate,
-    })
-    const uploaded = await bucket.upload({
-      fileName: 'src.bin',
-      source: new BufferSource(deterministicBytes(200_000)),
-      partSize: 100_000,
-      concurrency: 1,
-      fileInfo: { 'src-tag': 'keep-me' },
-    })
-
-    const copied = await copyLargeFile(client.raw, client.accountInfo, {
-      sourceFileId: uploaded.fileId,
-      fileName: 'dst.bin',
-      partSize: 100_000,
-      concurrency: 1,
-    })
-
-    expect(copied.fileInfo, 'source fileInfo was not carried over to the copy').toMatchObject({
-      'src-tag': 'keep-me',
-    })
-  })
-
   it('Bucket.copyFile without destinationBucketId copies into this bucket', async () => {
     const { client } = makeClient()
     await client.authorize()

@@ -139,7 +139,7 @@ export async function copyLargeFile(
         bucketId: destBucketId,
         fileName: options.fileName,
         contentType: options.contentType ?? sourceInfo.contentType ?? DEFAULT_CONTENT_TYPE,
-        fileInfo: options.fileInfo ?? {},
+        fileInfo: options.fileInfo ?? sourceInfo.fileInfo ?? {},
         ...(options.destinationServerSideEncryption !== undefined
           ? { serverSideEncryption: options.destinationServerSideEncryption }
           : {}),
