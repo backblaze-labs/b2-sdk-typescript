@@ -70,7 +70,9 @@ const exampleCredentials = {
 
 beforeAll(() => {
   if (!existsSync(join(repoRoot, 'dist/index.js'))) {
-    throw new Error('dist/ is missing: run `pnpm build` before the example behaviour tests')
+    throw new Error(
+      'dist/ is missing: run `pnpm test:known-defects` (it builds first), not bare vitest',
+    )
   }
 })
 

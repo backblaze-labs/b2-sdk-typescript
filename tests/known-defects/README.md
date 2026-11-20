@@ -12,8 +12,8 @@ in the code under test cannot satisfy a neighbouring validation test; keep them
 when moving the file.
 
 ```bash
-pnpm build                  # the example-program tests spawn the built package
-pnpm test:known-defects     # exits non-zero until every defect here is fixed
+pnpm test:known-defects     # builds first (the example-program tests spawn the built package);
+                            # exits non-zero until every defect here is fixed
 ```
 
 `pnpm run typecheck:known-defects` (part of `pnpm verify`) keeps the files

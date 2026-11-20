@@ -23,7 +23,7 @@ pnpm test
 |---|---|
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
-| `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; run `pnpm build` first). See `tests/known-defects/README.md` |
+| `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; it runs `pnpm build` first because the example-program tests spawn the built package). See `tests/known-defects/README.md` |
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
