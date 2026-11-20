@@ -37,8 +37,7 @@ export interface ParallelDownloadOptions {
    * no extra range-level request retries; body retries use the supplied client
    * settings or the SDK default of 5. Setting this to 0 disables range-level
    * retries but does not change any retries performed by the underlying transport.
-   * With an explicit override, request and body failures share the same
-   * range-level retry counter rather than receiving separate allowances.
+   * Request and body failures each have their own range-level retry counter.
    * This internal option is not a per-call option on `B2Object.createReadStream`.
    */
   readonly maxRetries?: number
@@ -279,6 +278,7 @@ export function createParallelDownloadStream(
 
 /**
  * Fetches a single byte range with bounded retry on transient failures.
+ * Request and body retries are tracked independently against their own budgets.
  * @param params - Range request parameters, retry settings, and cancellation.
  *
  * @returns The range's bytes, or throws after exhausting all retry attempts.
@@ -299,13 +299,20 @@ async function fetchRangeWithRetry(
     signal,
   } = params
   let lastError: unknown
-  for (let attempt = 0; attempt <= Math.max(retryOptions.maxRetries, bodyMaxRetries); attempt++) {
-    if (attempt > 0) {
+  const retries = { requestRetries: 0, bodyRetries: 0 }
+  // Preserve the no-attempt fallback for negative or NaN retry limits.
+  const maxRetryLimit = Math.max(retryOptions.maxRetries, bodyMaxRetries)
+  let retryIndex: number | undefined
+  while (
+    maxRetryLimit >= 0 &&
+    (retries.requestRetries <= retryOptions.maxRetries || retries.bodyRetries <= bodyMaxRetries)
+  ) {
+    if (retryIndex !== undefined) {
       const retryAfter =
         lastError instanceof B2Error && lastError.retryAfter !== undefined
           ? lastError.retryAfter
           : undefined
-      const delay = computeBackoff(attempt - 1, retryOptions, retryAfter)
+      const delay = computeBackoff(retryIndex, retryOptions, retryAfter)
       await sleep(delay, signal)
     }
     let failedDuringBody = false
@@ -342,13 +349,17 @@ async function fetchRangeWithRetry(
       // Honour AbortSignal cancellation: don't retry past an abort.
       if (signal?.aborted) throw err
       if (err instanceof DOMException && err.name === 'AbortError') throw err
+      const counter = failedDuringBody ? 'bodyRetries' : 'requestRetries'
       const maxRetries = failedDuringBody ? bodyMaxRetries : retryOptions.maxRetries
+      const usedRetries = retries[counter]
       const retryable = failedDuringBody
         ? isRetryableRangeBodyError(err)
         : isRetryableRangeError(err)
-      if (!retryable || attempt >= maxRetries) {
+      if (!retryable || usedRetries >= maxRetries) {
         throw err
       }
+      retries[counter]++
+      retryIndex = usedRetries
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Range download failed after retries')
