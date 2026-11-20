@@ -50,17 +50,20 @@ describe('parallel download option validation', () => {
 
     const result = read()
     await expect(result).rejects.toThrow(RangeError)
-    await expect(result).rejects.toThrow(/concurrency must be a positive number/)
+    await expect(result).rejects.toThrow(/concurrency must be a positive integer/)
     expect(download).not.toHaveBeenCalled()
   })
 
-  it.each([0, -1, Number.NaN])('rejects concurrency %s before requesting bytes', async (value) => {
-    const { read, downloadFileById } = downloadWith({ concurrency: value })
-    const result = read()
-    await expect(result).rejects.toThrow(RangeError)
-    await expect(result).rejects.toThrow(/concurrency must be a positive number/)
-    expect(downloadFileById).not.toHaveBeenCalled()
-  })
+  it.each([0, -1, Number.NaN, 1.5, Infinity])(
+    'rejects concurrency %s before requesting bytes',
+    async (value) => {
+      const { read, downloadFileById } = downloadWith({ concurrency: value })
+      const result = read()
+      await expect(result).rejects.toThrow(RangeError)
+      await expect(result).rejects.toThrow(/concurrency must be a positive integer/)
+      expect(downloadFileById).not.toHaveBeenCalled()
+    },
+  )
 
   it.each([0, -1, Number.NaN])(
     'rejects rangeSize %s even for an empty file before requesting bytes',

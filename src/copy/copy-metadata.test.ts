@@ -10,6 +10,7 @@ describe('multipart copy metadata', () => {
     ['uses explicit replacement fileInfo', { replacement: 'only' }],
     ['uses an explicitly empty replacement fileInfo', {}],
   ] as const)('%s', async (_name, replacement) => {
+    // Small simulator parts exercise multipart behavior without multi-MB fixtures.
     const { client } = makeClient({ minimumPartSize: 100_000 })
     await client.authorize()
     const bucket = await client.createBucket({
@@ -25,6 +26,7 @@ describe('multipart copy metadata', () => {
       fileInfo: sourceInfo,
     })
     expect(uploaded.fileInfo).toMatchObject(sourceInfo)
+    const expectedInfo = { ...(replacement ?? uploaded.fileInfo) }
     const copyPart = vi.spyOn(client.raw, 'copyPart')
 
     const copied = await copyLargeFile(client.raw, client.accountInfo, {
@@ -35,7 +37,6 @@ describe('multipart copy metadata', () => {
       ...(replacement !== undefined ? { fileInfo: replacement } : {}),
     })
 
-    const expectedInfo = replacement ?? uploaded.fileInfo
     expect(copyPart).toHaveBeenCalledTimes(2)
     expect(copied.fileInfo).toEqual(expectedInfo)
     const stored = await client.raw.getFileInfo(
@@ -44,5 +45,39 @@ describe('multipart copy metadata', () => {
       { fileId: copied.fileId },
     )
     expect(stored.fileInfo).toEqual(expectedInfo)
+  })
+
+  it('preserves source fileInfo on a small copy with only a contentType override', async () => {
+    const { client } = makeClient()
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'copy-small-metadata',
+      bucketType: BucketType.AllPrivate,
+    })
+    const sourceInfo = { 'src-tag': 'keep-me' }
+    const uploaded = await bucket.upload({
+      fileName: 'src.txt',
+      source: new BufferSource(new TextEncoder().encode('small source')),
+      contentType: 'application/octet-stream',
+      fileInfo: sourceInfo,
+    })
+    const copyPart = vi.spyOn(client.raw, 'copyPart')
+
+    const copied = await copyLargeFile(client.raw, client.accountInfo, {
+      sourceFileId: uploaded.fileId,
+      fileName: 'dst.txt',
+      contentType: 'text/plain',
+    })
+
+    expect(copyPart).not.toHaveBeenCalled()
+    expect(copied.contentType).toBe('text/plain')
+    expect(copied.fileInfo).toEqual(sourceInfo)
+    const stored = await client.raw.getFileInfo(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { fileId: copied.fileId },
+    )
+    expect(stored.contentType).toBe('text/plain')
+    expect(stored.fileInfo).toEqual(sourceInfo)
   })
 })
