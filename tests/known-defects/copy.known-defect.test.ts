@@ -8,31 +8,10 @@ import { copyLargeFile } from '../../src/copy/large.ts'
 import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
 import { B2Simulator } from '../../src/simulator/index.ts'
 import { BufferSource } from '../../src/streams/source.ts'
-import { deterministicBytes, makeClient } from '../../src/test-utils/index.ts'
+import { deterministicBytes } from '../../src/test-utils/index.ts'
 import { BucketType } from '../../src/types/bucket.ts'
 
 describe('copy known defects', () => {
-  it('Bucket.copyFile without destinationBucketId copies into this bucket', async () => {
-    const { client } = makeClient()
-    await client.authorize()
-    const src = await client.createBucket({
-      bucketName: 'copy-c23-src',
-      bucketType: BucketType.AllPrivate,
-    })
-    const dst = await client.createBucket({
-      bucketName: 'copy-c23-dst',
-      bucketType: BucketType.AllPrivate,
-    })
-    const uploaded = await src.upload({
-      fileName: 'a.txt',
-      source: new BufferSource(new TextEncoder().encode('hello')),
-    })
-
-    const copied = await dst.copyFile({ sourceFileId: uploaded.fileId, fileName: 'b.txt' })
-
-    expect(copied.bucketId, 'copy landed in a different bucket than expected').toBe(dst.id)
-  })
-
   it('multipart copy rejects a plan above 10,000 parts before starting the large file', async () => {
     const { client, bucket, startCalls } = await startCountingClient('copy-c6')
     const uploaded = await bucket.upload({

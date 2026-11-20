@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Bucket.copyFile now defaults to the bucket associated with the handle when destinationBucketId is omitted."
+time: 2026-11-20T00:00:00Z

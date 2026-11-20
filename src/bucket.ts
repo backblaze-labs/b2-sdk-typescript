@@ -1107,6 +1107,7 @@ export class Bucket {
       this.#client.accountInfo.getAuthToken(),
       {
         ...copyOptions,
+        destinationBucketId: copyOptions.destinationBucketId ?? this.id,
         ...(destinationEncryption !== undefined
           ? { destinationServerSideEncryption: destinationEncryption }
           : {}),
