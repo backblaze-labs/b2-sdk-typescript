@@ -23,6 +23,7 @@ pnpm test
 |---|---|
 | `pnpm build` | Build ESM + CJS + DTS via Vite library mode |
 | `pnpm test` | Run tests (Vitest, uses in-memory simulator) |
+| `pnpm test:known-defects` | Run the known-defect tests in `tests/known-defects/` (they assert correct behaviour that is not implemented yet, so this command exits non-zero until the defects are fixed; it runs `pnpm build` first because the example-program tests spawn the built package). See `tests/known-defects/README.md` |
 | `pnpm test:watch` | Run tests in watch mode |
 | `pnpm test:coverage` | Run tests with v8 coverage report (gates: 97% statements, 98% lines, 97% functions, 92% branches) |
 | `pnpm test:browser` | Run the test suite in real Chromium/Firefox/WebKit via Playwright |
@@ -66,6 +67,7 @@ cutting or trusting a release, confirm that the relevant commit also has a green
 |---|---|
 | `**/*.test.ts` | Both Node (`pnpm test`) and Browser (`pnpm test:browser`) |
 | `**/*.node.test.ts` | Node only. Anything that imports `node:fs`, `node:os`, `node:util`, OS keychain, etc. |
+| `tests/known-defects/*.known-defect.test.ts` | Only `pnpm test:known-defects`. Tests of correct behaviour that currently fails; never part of `pnpm test`, Bun or browser runs |
 
 If a single test inside a shared file is Node-only (e.g. uses `node:util.inspect`), gate it with `it.skipIf(...)`:
 
