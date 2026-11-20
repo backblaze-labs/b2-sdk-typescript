@@ -198,7 +198,7 @@
     "changie": "1.24.0",
     "cspell": "^10.3.0",
     "eslint": "^10.10.0",
-    "eslint-plugin-jsdoc": "^64.3.6",
+    "eslint-plugin-jsdoc": "^65.4.5",
     "eslint-plugin-tsdoc": "^0.5.2",
     "playwright": "^1.62.1",
     "tsx": "^4.23.15",
