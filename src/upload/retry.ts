@@ -215,7 +215,9 @@ export function uploadPartWithFreshUrl(
     retryUploadConnectionFaults: options.retryUploadConnectionFaults,
     checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
-    returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
+    returnEntry: (entry) => {
+      if (!options.signal?.aborted) accountInfo.returnPartUploadUrl(fileId, entry)
+    },
     evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
     upload: (entry) => {
       const serverSideEncryption = uploadPartEncryption(options.serverSideEncryption)

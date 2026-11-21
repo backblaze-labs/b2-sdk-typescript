@@ -1,0 +1,3 @@
+kind: Fixed
+body: "Part upload URLs are discarded after their large file is finished or successfully cancelled."
+time: 2026-11-21T00:00:00Z

@@ -19,7 +19,9 @@ export class UploadUrlPool {
   checkout(key: string): UploadUrlEntry | null {
     const pool = this.#pools.get(key)
     if (!pool || pool.length === 0) return null
-    return pool.pop() ?? null
+    const entry = pool.pop() ?? null
+    if (pool.length === 0) this.#pools.delete(key)
+    return entry
   }
 
   /**
@@ -49,6 +51,7 @@ export class UploadUrlPool {
     const idx = pool.findIndex((e) => e.uploadUrl === entry.uploadUrl)
     if (idx !== -1) {
       pool.splice(idx, 1)
+      if (pool.length === 0) this.#pools.delete(key)
     }
   }
 

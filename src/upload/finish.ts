@@ -5,6 +5,7 @@ import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import { isAbortError, isTimeoutError } from '../util/abort.ts'
+import { discardPartUploadUrls } from './part-url-pool.ts'
 
 /** Context for safely finalizing a large file. */
 export interface FinishLargeFileContext {
@@ -33,7 +34,7 @@ export async function finishLargeFileWithAbortReconciliation(
 ): Promise<FileVersion> {
   context.signal?.throwIfAborted()
   try {
-    return await raw.finishLargeFile(
+    const result = await raw.finishLargeFile(
       accountInfo.getApiUrl(),
       accountInfo.getAuthToken(),
       {
@@ -47,6 +48,8 @@ export async function finishLargeFileWithAbortReconciliation(
             ...(context.retry !== undefined ? { retry: context.retry } : {}),
           },
     )
+    discardPartUploadUrls(accountInfo, context.fileId)
+    return result
   } catch (err) {
     if (err instanceof FinishLargeFileResponseBodyError) {
       throw finishLargeFileResponseBodyErrorWithContext(err, context)
