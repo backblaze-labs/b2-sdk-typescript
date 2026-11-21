@@ -249,10 +249,15 @@ export async function uploadLargeFile(
   accountInfo: AccountInfo,
   options: UploadLargeFileOptions,
 ): Promise<FileVersion> {
+  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    throw new RangeError(
+      `uploadLargeFile: concurrency must be a positive integer; got ${concurrency}.`,
+    )
+  }
   const recommendedPartSize = accountInfo.getRecommendedPartSize()
   const minPartSize = accountInfo.getAbsoluteMinimumPartSize()
   const partSize = Math.max(options.partSize ?? recommendedPartSize, minPartSize)
-  const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.source.size
 
   assertPartLimit(Math.ceil(totalSize / partSize))

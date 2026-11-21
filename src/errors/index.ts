@@ -836,9 +836,9 @@ export class UploadResponseBodyError extends Error {
 }
 
 /**
- * Thrown when `b2_finish_large_file` returned a response but its body could not
- * be read. The large file may already be committed server-side, so high-level
- * upload paths do not cancel the large file after this error.
+ * Thrown when the outcome of `b2_finish_large_file` is ambiguous, including an
+ * unreadable response body, a network failure, or a server error. The large file
+ * may already be committed, so high-level upload paths do not cancel it.
  */
 export class FinishLargeFileResponseBodyError extends Error {
   /** Ambiguous large file ID that may already be committed server-side. */
@@ -850,7 +850,7 @@ export class FinishLargeFileResponseBodyError extends Error {
 
   /**
    * Creates a new FinishLargeFileResponseBodyError instance.
-   * @param message - Human-readable description of the response read failure.
+   * @param message - Human-readable description of the ambiguous outcome.
    * @param options - Optional cause and reconciliation metadata.
    */
   constructor(
