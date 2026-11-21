@@ -166,19 +166,25 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
     destination,
   }
 
+  for (const [path, entry] of Object.entries(manifest.files)) {
+    if (path !== entry.path) {
+      throw new Error(`manifest entry key does not match path: ${path}`)
+    }
+  }
+
   const kek = await deriveKek(passphrase, manifestSalt(manifest))
 
   // A copied or legacy manifest does not establish that its files exist here.
   // Preserve its salt, but only trust records whose destination bytes verify.
   if (prior === remote && remote !== null && !sameDestination(remote)) {
-    for (const entry of Object.values(remote.files)) {
+    for (const [path, entry] of Object.entries(remote.files)) {
       const remoteKey = prefix ? `${prefix}/${entry.path}` : entry.path
       let result: Awaited<ReturnType<Bucket['download']>>
       try {
         result = await bucket.download(remoteKey)
       } catch (error) {
         if (!(error instanceof B2Error && error.status === 404)) throw error
-        manifest = recordRemove(manifest, entry.path)
+        manifest = recordRemove(manifest, path)
         continue
       }
       const ciphertext = new Uint8Array(await new Response(result.body).arrayBuffer())
@@ -188,7 +194,7 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
         kek,
       )
       if (createHash('sha1').update(plaintext).digest('hex') !== entry.sha1) {
-        throw new Error(`backup file does not match remote manifest: ${entry.path}`)
+        manifest = recordRemove(manifest, path)
       }
     }
   }

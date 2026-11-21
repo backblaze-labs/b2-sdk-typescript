@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -66,9 +67,9 @@ async function readUploadTrace(path: string): Promise<{ fileName: string; status
     .map((line) => JSON.parse(line) as { fileName: string; status: number })
 }
 
-async function encryptedSeed(name: string, salt: string) {
+async function encryptedSeed(name: string, salt: string, plaintext = 'alpha') {
   const kek = await deriveKek('pass', saltFromString(salt))
-  const { ciphertext, wrapped } = await encryptFile(new TextEncoder().encode('alpha'), kek)
+  const { ciphertext, wrapped } = await encryptFile(new TextEncoder().encode(plaintext), kek)
   return {
     name,
     base64: Buffer.from(ciphertext).toString('base64'),
@@ -233,68 +234,155 @@ describe('node-backup-cli', () => {
     },
   )
 
-  it.each(['unreadable', 'wrong digest'] as const)(
-    'does not overwrite a copied remote manifest when its object has %s',
-    async (failure) => {
-      const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-invalid-'))
-      const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
-      try {
-        await writeFile(join(dir, 'a.txt'), 'alpha')
-        const env = {
-          ...exampleCredentials,
-          B2_BACKUP_PASSPHRASE: 'pass',
-          EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
-        }
-        const first = await run(
-          'examples/node-backup-cli/backup.ts',
-          ['snapshot', dir, 'b2://dest-bucket/one'],
-          env,
-        )
-        expect(first.code, first.stderr).toBe(0)
-        const path = join(dir, '.b2-backup.json')
-        const before = await readFile(path, 'utf8')
-        const remote = JSON.parse(before) as {
-          salt: string
-          files: Record<string, { sha1: string }>
-        }
-        const object =
-          failure === 'unreadable'
-            ? { name: 'two/a.txt', text: 'not encrypted' }
-            : await encryptedSeed('two/a.txt', remote.salt)
-        if (failure === 'wrong digest') {
-          const entry = remote.files['a.txt']
-          if (!entry) throw new Error('missing fixture entry')
-          entry.sha1 = '0000000000000000000000000000000000000000'
-        }
-        const trace = join(traceDir, 'invalid.jsonl')
-        const second = await run(
-          'examples/node-backup-cli/backup.ts',
-          ['snapshot', dir, 'b2://dest-bucket/two'],
-          {
-            ...env,
-            EXAMPLE_SIM_SEED: JSON.stringify({
-              buckets: [
-                {
-                  name: 'dest-bucket',
-                  files: [{ name: 'two/.b2-backup.json', text: JSON.stringify(remote) }, object],
-                },
-              ],
-            }),
-            EXAMPLE_SIM_UPLOAD_TRACE: trace,
-          },
-        )
-        expect(second.code).not.toBe(0)
-        expect(second.stderr).toContain(
-          failure === 'unreadable' ? 'missing wrapped-key' : 'does not match remote manifest',
-        )
-        expect(await readFile(path, 'utf8')).toBe(before)
-        expect(await readUploadTrace(trace)).toEqual([])
-      } finally {
-        await rm(dir, { recursive: true, force: true })
-        await rm(traceDir, { recursive: true, force: true })
+  it('rejects an unreadable copied remote object without overwriting the manifest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-invalid-'))
+    const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
+    try {
+      await writeFile(join(dir, 'a.txt'), 'alpha')
+      const env = {
+        ...exampleCredentials,
+        B2_BACKUP_PASSPHRASE: 'pass',
+        EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
       }
-    },
-  )
+      const first = await run(
+        'examples/node-backup-cli/backup.ts',
+        ['snapshot', dir, 'b2://dest-bucket/one'],
+        env,
+      )
+      expect(first.code, first.stderr).toBe(0)
+      const path = join(dir, '.b2-backup.json')
+      const before = await readFile(path, 'utf8')
+      const trace = join(traceDir, 'invalid.jsonl')
+      const second = await run(
+        'examples/node-backup-cli/backup.ts',
+        ['snapshot', dir, 'b2://dest-bucket/two'],
+        {
+          ...env,
+          EXAMPLE_SIM_SEED: JSON.stringify({
+            buckets: [
+              {
+                name: 'dest-bucket',
+                files: [
+                  { name: 'two/.b2-backup.json', text: before },
+                  { name: 'two/a.txt', text: 'not encrypted' },
+                ],
+              },
+            ],
+          }),
+          EXAMPLE_SIM_UPLOAD_TRACE: trace,
+        },
+      )
+      expect(second.code).not.toBe(0)
+      expect(second.stderr).toContain('missing wrapped-key')
+      expect(await readFile(path, 'utf8')).toBe(before)
+      expect(await readUploadTrace(trace)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(traceDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a copied manifest whose entry path differs from its map key', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-key-path-'))
+    const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
+    try {
+      await writeFile(join(dir, 'a.txt'), 'alpha')
+      const env = {
+        ...exampleCredentials,
+        B2_BACKUP_PASSPHRASE: 'pass',
+        EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
+      }
+      const first = await run(
+        'examples/node-backup-cli/backup.ts',
+        ['snapshot', dir, 'b2://dest-bucket/one'],
+        env,
+      )
+      expect(first.code, first.stderr).toBe(0)
+      const path = join(dir, '.b2-backup.json')
+      const before = await readFile(path, 'utf8')
+      const remote = JSON.parse(before) as { salt: string; files: Record<string, { path: string }> }
+      const entry = remote.files['a.txt']
+      if (!entry) throw new Error('missing fixture entry')
+      entry.path = 'b.txt'
+      const trace = join(traceDir, 'invalid.jsonl')
+      const second = await run(
+        'examples/node-backup-cli/backup.ts',
+        ['snapshot', dir, 'b2://dest-bucket/two'],
+        {
+          ...env,
+          EXAMPLE_SIM_SEED: JSON.stringify({
+            buckets: [
+              {
+                name: 'dest-bucket',
+                files: [
+                  { name: 'two/.b2-backup.json', text: JSON.stringify(remote) },
+                  await encryptedSeed('two/b.txt', remote.salt),
+                ],
+              },
+            ],
+          }),
+          EXAMPLE_SIM_UPLOAD_TRACE: trace,
+        },
+      )
+      expect(second.code).not.toBe(0)
+      expect(second.stderr).toMatch(/manifest.*(?:key|path)/i)
+      expect(await readFile(path, 'utf8')).toBe(before)
+      expect(await readUploadTrace(trace)).toEqual([])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(traceDir, { recursive: true, force: true })
+    }
+  })
+
+  it('resumes a legacy backup when the remote object is newer than its manifest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-stale-'))
+    const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
+    try {
+      await writeFile(join(dir, 'a.txt'), 'alpha')
+      const env = {
+        ...exampleCredentials,
+        B2_BACKUP_PASSPHRASE: 'pass',
+        EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
+      }
+      const uri = 'b2://dest-bucket/one'
+      const first = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], env)
+      expect(first.code, first.stderr).toBe(0)
+      const path = join(dir, '.b2-backup.json')
+      const legacy = JSON.parse(await readFile(path, 'utf8')) as {
+        destination?: object
+        salt: string
+        files: Record<string, { sha1: string }>
+      }
+      delete legacy.destination
+      await writeFile(path, JSON.stringify(legacy))
+      await writeFile(join(dir, 'a.txt'), 'bravo')
+      const trace = join(traceDir, 'resumed.jsonl')
+      const second = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], {
+        ...env,
+        EXAMPLE_SIM_SEED: JSON.stringify({
+          buckets: [
+            {
+              name: 'dest-bucket',
+              files: [
+                { name: 'one/.b2-backup.json', text: JSON.stringify(legacy) },
+                await encryptedSeed('one/a.txt', legacy.salt, 'bravo'),
+              ],
+            },
+          ],
+        }),
+        EXAMPLE_SIM_UPLOAD_TRACE: trace,
+      })
+      expect(second.code, second.stderr).toBe(0)
+      expect(second.stdout).toContain('plan: 1 to upload')
+      expect(await readUploadTrace(trace)).toContainEqual({ fileName: 'one/a.txt', status: 200 })
+      const after = JSON.parse(await readFile(path, 'utf8')) as typeof legacy
+      expect(after.salt).toBe(legacy.salt)
+      expect(after.files['a.txt']?.sha1).toBe(createHash('sha1').update('bravo').digest('hex'))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+      await rm(traceDir, { recursive: true, force: true })
+    }
+  })
 
   it('preserves both encrypted files across destination switches and API changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'b2sdk-c27-roundtrip-'))
