@@ -1,15 +1,11 @@
-// Known-defect test: asserts the CORRECT behaviour and currently fails because the defect
-// is still present. Not part of `pnpm test`; run on demand with `pnpm test:known-defects`.
-// When the defect is fixed, move the test next to the code it covers (src/**/*.test.ts) so it
-// joins the default suite (see tests/known-defects/README.md).
 import { describe, expect, it } from 'vitest'
-import { B2Client } from '../../src/client.ts'
-import { ConflictError } from '../../src/errors/index.ts'
-import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
-import { B2Simulator } from '../../src/simulator/index.ts'
-import { BucketType } from '../../src/types/bucket.ts'
+import { B2Client } from './client.ts'
+import { ConflictError } from './errors/index.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from './http/transport.ts'
+import { B2Simulator } from './simulator/index.ts'
+import { BucketType } from './types/bucket.ts'
 
-describe('bucket lifecycle rule read-modify-write known defects', () => {
+describe('bucket lifecycle rule concurrent updates', () => {
   it('two concurrent addLifecycleRule calls never silently lose one rule', async () => {
     const sim = new B2Simulator()
     const inner = sim.transport()

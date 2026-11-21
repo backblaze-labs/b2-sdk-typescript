@@ -6,6 +6,7 @@ import {
   type HeadResult,
   headByName,
 } from './download/single.ts'
+import { B2Error } from './errors/index.ts'
 import type { RetryOptions } from './http/retry.ts'
 import { mergeUploadRetryOptions } from './internal/upload-retry-options.ts'
 import { B2Object, type DownloadCallOptions, type HeadCallOptions } from './object.ts'
@@ -1510,9 +1511,10 @@ export class Bucket {
    * @returns The updated bucket metadata.
    */
   async addLifecycleRule(rule: LifecycleRule): Promise<BucketInfo> {
-    const current = await this.getLifecycleRules()
-    const without = current.filter((r) => r.fileNamePrefix !== rule.fileNamePrefix)
-    return this.setLifecycleRules([...without, rule])
+    return this.updateLifecycleRules((current) => [
+      ...current.filter((r) => r.fileNamePrefix !== rule.fileNamePrefix),
+      rule,
+    ])
   }
 
   /**
@@ -1524,8 +1526,25 @@ export class Bucket {
    * @returns The updated bucket metadata.
    */
   async removeLifecycleRule(fileNamePrefix: string): Promise<BucketInfo> {
-    const current = await this.getLifecycleRules()
-    return this.setLifecycleRules(current.filter((r) => r.fileNamePrefix !== fileNamePrefix))
+    return this.updateLifecycleRules((current) =>
+      current.filter((r) => r.fileNamePrefix !== fileNamePrefix),
+    )
+  }
+
+  private async updateLifecycleRules(
+    change: (current: readonly LifecycleRule[]) => LifecycleRule[],
+  ): Promise<BucketInfo> {
+    for (let retries = 0; ; retries++) {
+      const current = await this.refresh()
+      try {
+        return await this.update({
+          ifRevisionIs: current.revision,
+          lifecycleRules: change(current.lifecycleRules),
+        })
+      } catch (error) {
+        if (!(error instanceof B2Error) || error.status !== 409 || retries >= 3) throw error
+      }
+    }
   }
 
   /**
