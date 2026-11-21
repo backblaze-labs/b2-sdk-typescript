@@ -143,7 +143,7 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
  * @returns The decoded bytes, or `null` if the input was not valid hex.
  */
 function hexToBytes(hex: string): Uint8Array | null {
-  if (hex.length % 2 !== 0) return null
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null
   const out = new Uint8Array(hex.length / 2)
   for (let i = 0; i < out.byteLength; i++) {
     const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)

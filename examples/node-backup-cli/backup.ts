@@ -13,7 +13,7 @@
 
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { Bucket } from '@backblaze-labs/b2-sdk'
 import { B2Client } from '@backblaze-labs/b2-sdk'
 import { B2Error } from '@backblaze-labs/b2-sdk/errors'
@@ -277,10 +277,19 @@ async function restore(uriString: string, localDir: string, options: CliOptions)
 
   const kek = await deriveKek(passphrase, manifestSalt(manifest))
   const entries = Object.values(manifest.files)
+  const root = resolve(localDir)
+  const destinations = entries.map((entry) => {
+    const destination = resolve(root, entry.path)
+    const path = relative(root, destination)
+    if (!path || path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path)) {
+      throw new Error(`manifest path escapes restore destination: ${entry.path}`)
+    }
+    return destination
+  })
   console.log(`restoring ${entries.length} files to ${localDir}...`)
 
   let restored = 0
-  const tasks = entries.map((entry) => async () => {
+  const tasks = entries.map((entry, index) => async () => {
     const remoteKey = prefix ? `${prefix}/${entry.path}` : entry.path
     const result = await bucket.download(remoteKey)
 
@@ -302,7 +311,8 @@ async function restore(uriString: string, localDir: string, options: CliOptions)
 
     const wrapped = fileInfoToWrappedKey(result.headers.fileInfo)
     const plaintext = await decryptFile(ciphertext, wrapped, kek)
-    const destPath = join(localDir, entry.path)
+    const destPath = destinations[index]
+    if (destPath === undefined) throw new Error('missing restore destination')
     await mkdir(dirname(destPath), { recursive: true })
     await writeFile(destPath, plaintext)
     restored++
