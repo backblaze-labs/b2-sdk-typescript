@@ -449,14 +449,15 @@ export interface RetryTransportOptions {
 }
 
 /**
- * Decide whether `url` points at a URL-pinned upload POST endpoint.
+ * Decide whether a request targets a URL-pinned upload POST endpoint.
  *
- * @param url - Request URL to inspect.
+ * @param request - Request to inspect.
  *
  * @returns Whether the request is a direct upload endpoint.
  */
-function isUploadEndpoint(url: string): boolean {
-  const endpoint = b2ApiEndpointName(url)
+function isUploadEndpoint(request: HttpRequest): boolean {
+  if (request.method !== 'POST') return false
+  const endpoint = b2ApiEndpointName(request.url)
   return endpoint === 'b2_upload_file' || endpoint === 'b2_upload_part'
 }
 
@@ -523,7 +524,7 @@ function isReplayUnsafeRequest(request: HttpRequest): boolean {
   if (request.idempotent === false) return true
   if (request.method !== 'POST') return false
   return (
-    isUploadEndpoint(request.url) ||
+    isUploadEndpoint(request) ||
     isStartLargeFileEndpoint(request.url) ||
     isFinishLargeFileEndpoint(request.url) ||
     isNativeNonIdempotentMutationRequest(request) ||
@@ -547,8 +548,8 @@ function shouldRetryInPlace(error: B2Error, request: HttpRequest): boolean {
   if (isAuthorizeEndpoint(request.url) && error instanceof ExpiredAuthTokenError) return false
   if (isNonIdempotentMutationRequest(request)) return false
   if (isStartLargeFileEndpoint(request.url) || isFinishLargeFileEndpoint(request.url)) return false
-  if (isUploadEndpoint(request.url) && error.status === 429) return true
-  if (isUploadEndpoint(request.url)) return false
+  if (isUploadEndpoint(request) && error.status === 429) return true
+  if (isUploadEndpoint(request)) return false
   return true
 }
 
@@ -673,7 +674,7 @@ export class RetryTransport implements HttpTransport {
           error instanceof ExpiredAuthTokenError &&
           this.onReauth &&
           !isAuthorizeEndpoint(request.url) &&
-          !isUploadEndpoint(request.url) &&
+          !isUploadEndpoint(request) &&
           !isNonIdempotentMutationRequest(request) &&
           !didReauth
         ) {
