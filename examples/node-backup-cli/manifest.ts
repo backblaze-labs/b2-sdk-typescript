@@ -39,7 +39,6 @@ export interface Manifest {
   readonly salt: string
   /** Destination associated with this manifest, if recorded by this CLI. */
   readonly destination?: {
-    readonly apiUrl: string
     readonly bucketId: string
     readonly prefix: string
   }

@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const repoRoot = resolve(import.meta.dirname, '..')
-const preload = join(repoRoot, 'tests/known-defects/helpers/fetch-simulator-preload.mjs')
+const preload = pathToFileURL(
+  join(repoRoot, 'tests/known-defects/helpers/fetch-simulator-preload.mjs'),
+).href
 
 interface RunResult {
   readonly code: number | null
@@ -17,11 +20,12 @@ function run(
   script: string,
   args: readonly string[],
   env: Record<string, string>,
+  preloadModule = preload,
 ): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(
       process.execPath,
-      ['--import', 'tsx', '--import', preload, join(repoRoot, script), ...args],
+      ['--import', 'tsx', '--import', preloadModule, join(repoRoot, script), ...args],
       {
         cwd: repoRoot,
         env: {
@@ -67,6 +71,162 @@ const exampleCredentials = {
 }
 
 describe('node-backup-cli', () => {
+  it('passes the preload to Node as a file URL', () => {
+    expect(new URL(preload).protocol).toBe('file:')
+  })
+
+  it('keeps a local backup when its API endpoint changes and the remote lookup is forbidden', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-api-'))
+    try {
+      await writeFile(join(dir, 'a.txt'), 'alpha')
+      const env = {
+        ...exampleCredentials,
+        B2_BACKUP_PASSPHRASE: 'pass',
+        EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
+      }
+      const uri = 'b2://dest-bucket/one'
+      const first = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], env)
+      expect(first.code, first.stderr).toBe(0)
+      const path = join(dir, '.b2-backup.json')
+      const before = JSON.parse(await readFile(path, 'utf8')) as { salt: string; files: unknown }
+      const second = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], {
+        ...env,
+        EXAMPLE_SIM_API_URL: 'https://api001.backblazeb2.com',
+        EXAMPLE_SIM_MANIFEST_FAILURE: '1',
+      })
+      expect(second.code, second.stderr).toBe(0)
+      expect(second.stdout).toContain('plan: 0 to upload')
+      const after = JSON.parse(await readFile(path, 'utf8')) as {
+        salt: string
+        files: unknown
+        destination: object
+      }
+      expect(after.salt).toBe(before.salt)
+      expect(after.files).toEqual(before.files)
+      expect(after.destination).not.toHaveProperty('apiUrl')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['matching', 'different'] as const)(
+    'preserves a %s destination remote manifest on a fresh local folder',
+    async (identity) => {
+      const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-remote-identity-'))
+      const traceDir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-trace-'))
+      try {
+        await writeFile(join(dir, 'a.txt'), 'alpha')
+        const env = {
+          ...exampleCredentials,
+          B2_BACKUP_PASSPHRASE: 'pass',
+          EXAMPLE_SIM_SEED: JSON.stringify({ buckets: [{ name: 'dest-bucket' }] }),
+        }
+        const uri = 'b2://dest-bucket/one'
+        const first = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], env)
+        expect(first.code, first.stderr).toBe(0)
+        const path = join(dir, '.b2-backup.json')
+        const remote = JSON.parse(await readFile(path, 'utf8')) as {
+          destination: { bucketId: string; prefix: string; apiUrl?: string }
+          salt: string
+          files: unknown
+        }
+        if (identity === 'different') remote.destination.bucketId = 'other-bucket-id'
+        await rm(path)
+        const trace = join(traceDir, 'remote.jsonl')
+        const second = await run('examples/node-backup-cli/backup.ts', ['snapshot', dir, uri], {
+          ...env,
+          EXAMPLE_SIM_SEED: JSON.stringify({
+            buckets: [
+              {
+                name: 'dest-bucket',
+                files: [
+                  { name: 'one/.b2-backup.json', text: JSON.stringify(remote) },
+                  { name: 'one/a.txt', text: 'existing backup' },
+                ],
+              },
+            ],
+          }),
+          EXAMPLE_SIM_UPLOAD_TRACE: trace,
+        })
+        expect(second.code, second.stderr).toBe(0)
+        expect(second.stdout).toContain('plan: 0 to upload')
+        expect(await readUploadTrace(trace)).not.toContainEqual({
+          fileName: 'one/a.txt',
+          status: 200,
+        })
+        const after = JSON.parse(await readFile(path, 'utf8')) as typeof remote
+        expect(after.salt).toBe(remote.salt)
+        expect(after.files).toEqual(remote.files)
+      } finally {
+        await rm(dir, { recursive: true, force: true })
+        await rm(traceDir, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('preserves both encrypted files across destination switches and API changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-c27-roundtrip-'))
+    try {
+      const dir = join(root, 'source')
+      const restored = join(root, 'restored')
+      await mkdir(dir)
+      await writeFile(join(dir, 'a.txt'), 'alpha')
+      await writeFile(join(dir, 'b.txt'), 'bravo')
+      await utimes(join(dir, 'a.txt'), 1_600_000_000, 1_600_000_000)
+      await utimes(join(dir, 'b.txt'), 1_700_000_000, 1_700_000_000)
+      const env = {
+        ...exampleCredentials,
+        B2_BACKUP_PASSPHRASE: 'pass',
+        REVIEW_STATE: join(root, 'state.json'),
+      }
+      const persistentPreload = pathToFileURL(
+        join(repoRoot, 'examples/_smoke/backup-state-preload.mjs'),
+      ).href
+      const invoke = (args: string[], extra: Record<string, string> = {}) =>
+        run('examples/node-backup-cli/backup.ts', args, { ...env, ...extra }, persistentPreload)
+      const first = await invoke(['snapshot', dir, 'b2://review-bucket/one'])
+      expect(first.code, first.stderr).toBe(0)
+      const second = await invoke(['snapshot', dir, 'b2://review-bucket/two'])
+      expect(second.code, second.stderr).toBe(0)
+      // Model a remote manifest copied from another bucket while keeping its encrypted objects.
+      const statePath = join(root, 'state.json')
+      const storedObjects = JSON.parse(await readFile(statePath, 'utf8')) as {
+        name: string
+        base64: string
+      }[]
+      const remoteManifest = storedObjects.find((object) => object.name === 'one/.b2-backup.json')
+      expect(remoteManifest).toBeDefined()
+      if (!remoteManifest) throw new Error('missing remote manifest')
+      const movedManifest = JSON.parse(Buffer.from(remoteManifest.base64, 'base64').toString()) as {
+        destination: { bucketId: string }
+      }
+      movedManifest.destination.bucketId = 'copied-from-another-bucket'
+      remoteManifest.base64 = Buffer.from(JSON.stringify(movedManifest)).toString('base64')
+      await writeFile(statePath, JSON.stringify(storedObjects))
+      const back = await invoke(['snapshot', dir, 'b2://review-bucket/one'])
+      expect(back.code, back.stderr).toBe(0)
+      expect(back.stdout).toContain('plan: 0 to upload')
+      const rotated = await invoke(
+        ['snapshot', dir, 'b2://review-bucket/one', '--since', '2023-01-01'],
+        { REVIEW_API_HOST: 'https://api001.backblazeb2.com' },
+      )
+      expect(rotated.code, rotated.stderr).toBe(0)
+      expect(rotated.stdout).toContain('plan: 0 to upload')
+      const manifest = JSON.parse(await readFile(join(dir, '.b2-backup.json'), 'utf8')) as {
+        files: Record<string, unknown>
+      }
+      expect(Object.keys(manifest.files).sort()).toEqual(['a.txt', 'b.txt'])
+      const restore = await invoke(['restore', 'b2://review-bucket/one', restored], {
+        REVIEW_API_HOST: 'https://api001.backblazeb2.com',
+      })
+      expect(restore.code, restore.stderr).toBe(0)
+      expect(await readFile(join(restored, 'a.txt'), 'utf8')).toBe('alpha')
+      expect(await readFile(join(restored, 'b.txt'), 'utf8')).toBe('bravo')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('Finding C27: snapshot to a different destination uploads the files instead of trusting the local manifest', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c27-'))
     // Traces live outside the snapshotted directory so they are never backed up themselves.

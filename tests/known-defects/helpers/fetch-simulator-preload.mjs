@@ -117,7 +117,12 @@ globalThis.fetch = async (input, init = {}) => {
   }
   const nullBody = response.status === 204 || response.status === 304
   if (!nullBody && (response.headers.get('content-type') ?? '').includes('application/json')) {
-    const text = (await response.text()).replaceAll(SIM_UPLOAD_ORIGIN, POD_ORIGIN)
+    let text = (await response.text()).replaceAll(SIM_UPLOAD_ORIGIN, POD_ORIGIN)
+    if (url.includes('b2_authorize_account') && process.env.EXAMPLE_SIM_API_URL) {
+      const auth = JSON.parse(text)
+      auth.apiInfo.storageApi.apiUrl = process.env.EXAMPLE_SIM_API_URL
+      text = JSON.stringify(auth)
+    }
     return new Response(text, { status: response.status, headers: response.headers })
   }
   return new Response(nullBody ? null : response.body, {

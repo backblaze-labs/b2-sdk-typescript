@@ -150,10 +150,9 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
     process.exit(1)
   }
 
-  const destination = { apiUrl: client.accountInfo.getApiUrl(), bucketId: bucket.id, prefix }
+  const destination = { bucketId: bucket.id, prefix }
   const sameDestination = (candidate: Manifest) =>
-    candidate.destination?.apiUrl === destination.apiUrl &&
-    candidate.destination.bucketId === destination.bucketId &&
+    candidate.destination?.bucketId === destination.bucketId &&
     candidate.destination.prefix === destination.prefix
   const local = await readManifest(localDir)
   // A local manifest is only evidence for the destination where it was written.
@@ -162,9 +161,7 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
     local && sameDestination(local) ? null : await downloadRemoteManifest(bucket, prefix)
   const prior = local && sameDestination(local) ? local : remote
   let manifest: Manifest = {
-    ...(prior && (prior.destination === undefined || sameDestination(prior))
-      ? prior
-      : newManifest(generateSalt())),
+    ...(prior ?? newManifest(generateSalt())),
     destination,
   }
 
