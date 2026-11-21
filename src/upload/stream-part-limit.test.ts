@@ -1,13 +1,9 @@
-// Known-defect test: asserts the CORRECT behaviour and currently fails because the defect
-// is still present. Not part of `pnpm test`; run on demand with `pnpm test:known-defects`.
-// When the defect is fixed, move the test next to the code it covers (src/**/*.test.ts) so it
-// joins the default suite (see tests/known-defects/README.md).
 import { describe, expect, it } from 'vitest'
-import { B2Client } from '../../src/client.ts'
-import type { HttpRequest, HttpResponse, HttpTransport } from '../../src/http/transport.ts'
-import { B2Simulator } from '../../src/simulator/index.ts'
-import { deterministicBytes, readStream } from '../../src/test-utils/index.ts'
-import { BucketType } from '../../src/types/bucket.ts'
+import { B2Client } from '../client.ts'
+import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport.ts'
+import { B2Simulator } from '../simulator/index.ts'
+import { deterministicBytes, readStream } from '../test-utils/index.ts'
+import { BucketType } from '../types/bucket.ts'
 
 type Intercept = (req: HttpRequest) => Promise<HttpResponse | undefined> | HttpResponse | undefined
 
@@ -42,7 +38,27 @@ async function makeStreamClient(minimumPartSize: number, intercept: Intercept = 
 
 const PART_LIMIT_MESSAGE = /10[,_ ]?000|too many parts|part.*limit/i
 
-describe('createWriteStream known defects', () => {
+describe('stream part limit', () => {
+  it('rejects a partial 10,001st part and cancels without waiting for close', async () => {
+    const { client, bucket, seen } = await makeStreamClient(2)
+    const { writable, done } = bucket.file('c6-partial.bin').createWriteStream({
+      partSize: 2,
+      concurrency: 4,
+    })
+    const writer = writable.getWriter()
+    await writer.write(deterministicBytes(20_000))
+    await expect(writer.write(deterministicBytes(1))).rejects.toThrow(PART_LIMIT_MESSAGE)
+    await expect(done).rejects.toThrow(PART_LIMIT_MESSAGE)
+    expect(seen.some((r) => r.url.includes('b2_cancel_large_file'))).toBe(true)
+    expect(seen.some((r) => r.url.includes('b2_finish_large_file'))).toBe(false)
+    const unfinished = await client.raw.listUnfinishedLargeFiles(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      { bucketId: bucket.id },
+    )
+    expect(unfinished.files.some((f) => f.fileName === 'c6-partial.bin')).toBe(false)
+  }, 60_000)
+
   it('never ships part number 10,001', async () => {
     const { bucket, seen } = await makeStreamClient(1)
     const { writable, done } = bucket.file('c6.bin').createWriteStream({
@@ -66,8 +82,15 @@ describe('createWriteStream known defects', () => {
     // The stream cannot represent 10,001 parts, so it must reject, and say why.
     expect(doneOutcome, 'done must reject an oversized stream').toBeInstanceOf(Error)
     expect((doneOutcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
-    for (const outcome of [writeOutcome, closeOutcome]) {
-      if (outcome !== undefined) expect((outcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
+    if (writeOutcome !== undefined)
+      expect((writeOutcome as Error).message).toMatch(PART_LIMIT_MESSAGE)
+    if (closeOutcome !== undefined) {
+      // Closing an already-errored Web WritableStream may report invalid state.
+      expect((closeOutcome as Error).message).toMatch(
+        writeOutcome === undefined
+          ? PART_LIMIT_MESSAGE
+          : /10[,_ ]?000|too many parts|part.*limit|invalid state/i,
+      )
     }
     const partNumbers = seen
       .filter((r) => r.url.includes('b2_upload_part'))

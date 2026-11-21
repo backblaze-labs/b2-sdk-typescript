@@ -19,6 +19,7 @@ import {
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
+import { assertPartLimit } from './part-limit.ts'
 import {
   resolveRetryResponseBodyFailures,
   resolveRetryUploadConnectionFaults,
@@ -396,6 +397,13 @@ export function createWriteStream(
       abortScope.signal.throwIfAborted()
       if (chunk.byteLength === 0) return
 
+      try {
+        assertPartLimit(
+          nextPartNumber - 1 + Math.ceil((pendingBytes + chunk.byteLength) / partSize),
+        )
+      } catch (err) {
+        throw await failUpload(err)
+      }
       pending.push(chunk)
       pendingBytes += chunk.byteLength
       while (pendingBytes >= partSize) {

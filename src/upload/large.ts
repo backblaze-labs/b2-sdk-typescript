@@ -20,6 +20,7 @@ import {
 } from './cancel.ts'
 import { Semaphore } from './concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
+import { assertPartLimit } from './part-limit.ts'
 import {
   findResumeCandidate,
   type ResumeCandidateCriteria,
@@ -254,6 +255,7 @@ export async function uploadLargeFile(
   const concurrency = options.concurrency ?? DEFAULT_TRANSFER_CONCURRENCY
   const totalSize = options.source.size
 
+  assertPartLimit(Math.ceil(totalSize / partSize))
   const parts = planRanges(totalSize, partSize)
   // Keep caller fileInfo on a null-prototype record so resume identity
   // comparison only sees caller-owned enumerable keys.

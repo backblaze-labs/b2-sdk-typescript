@@ -11,6 +11,7 @@ import {
 } from '../upload/cancel.ts'
 import { Semaphore } from '../upload/concurrency.ts'
 import { finishLargeFileWithAbortReconciliation } from '../upload/finish.ts'
+import { assertPartLimit } from '../upload/part-limit.ts'
 import { raceWithAbort } from '../util/abort.ts'
 import { DEFAULT_CONTENT_TYPE, DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { byteRangeHeader, planRanges } from '../util/plan-ranges.ts'
@@ -127,6 +128,7 @@ export async function copyLargeFile(
   // are already typed `BucketId`, so no cast is needed.
   const destBucketId = options.destinationBucketId ?? sourceInfo.bucketId
 
+  assertPartLimit(Math.ceil(totalSize / partSize))
   const ranges = planRanges(totalSize, partSize)
   const partSha1s: string[] = new Array(ranges.length)
   const sem = new Semaphore(concurrency)
