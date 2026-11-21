@@ -22,6 +22,7 @@ function stop400(): HttpResponse {
 }
 
 async function recordingClient(minimumPartSize: number) {
+  // Tiny simulator parts exercise the 10,000-part boundary with small fixtures.
   const sim = new B2Simulator({ minimumPartSize })
   const inner = sim.transport()
   const startCalls: string[] = []

@@ -8,6 +8,7 @@ import { BucketType } from '../types/bucket.ts'
 type Intercept = (req: HttpRequest) => Promise<HttpResponse | undefined> | HttpResponse | undefined
 
 async function makeStreamClient(minimumPartSize: number, intercept: Intercept = () => undefined) {
+  // Tiny simulator parts exercise the 10,000-part boundary with small fixtures.
   const sim = new B2Simulator({ minimumPartSize })
   const inner = sim.transport()
   const seen: HttpRequest[] = []
@@ -146,6 +147,26 @@ describe('stream part limit', () => {
     await expect(writable.close()).rejects.toBe(reason)
     await expect(done).rejects.toBe(reason)
   })
+
+  it.each(['writer', 'stream'] as const)(
+    'keeps native %s close errors after a non-part-limit abort',
+    async (surface) => {
+      const { bucket } = await makeStreamClient(1)
+      const { writable, done } = bucket.file('c6-aborted.bin').createWriteStream({ partSize: 1 })
+      const writer = writable.getWriter()
+      const reason = new Error('upload stopped')
+      await writer.abort(reason)
+      await expect(done).rejects.toBe(reason)
+      await expect(writer.closed).rejects.toBe(reason)
+
+      if (surface === 'writer') {
+        await expect(writer.close()).rejects.toBeInstanceOf(TypeError)
+      } else {
+        writer.releaseLock()
+        await expect(writable.close()).rejects.toBeInstanceOf(TypeError)
+      }
+    },
+  )
 
   it('preserves the part-limit reason when close is queued with the oversized write', async () => {
     const { bucket } = await makeStreamClient(1)

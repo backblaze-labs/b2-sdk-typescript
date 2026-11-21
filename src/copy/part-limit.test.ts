@@ -48,6 +48,7 @@ describe('multipart copy part limit', () => {
 })
 
 async function startCountingClient(bucketName: string) {
+  // Tiny simulator parts exercise the 10,000-part boundary with small fixtures.
   const sim = new B2Simulator({ minimumPartSize: 1 })
   const inner = sim.transport()
   const startCalls: string[] = []
