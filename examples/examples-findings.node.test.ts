@@ -87,6 +87,45 @@ const exampleCredentials = {
 }
 
 describe('node-backup-cli', () => {
+  it('rejects restore manifest paths that escape the destination', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'b2sdk-c28-'))
+    try {
+      const dest = join(root, 'restore')
+      const salt = 'AAECAwQFBgcICQoLDA0ODw'
+      const entry = { path: '../outside.txt', size: 5, mtime: '2020-01-01T00:00:00Z', sha1: 'test' }
+      const manifest = {
+        version: 1,
+        salt,
+        updatedAt: entry.mtime,
+        files: { '../outside.txt': entry },
+      }
+      const result = await run(
+        'examples/node-backup-cli/backup.ts',
+        ['restore', 'b2://dest-bucket/one', dest],
+        {
+          ...exampleCredentials,
+          B2_BACKUP_PASSPHRASE: 'pass',
+          EXAMPLE_SIM_SEED: JSON.stringify({
+            buckets: [
+              {
+                name: 'dest-bucket',
+                files: [
+                  { name: 'one/.b2-backup.json', text: JSON.stringify(manifest) },
+                  await encryptedSeed('outside.txt', salt),
+                ],
+              },
+            ],
+          }),
+        },
+      )
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/outside|escape|invalid.*path/i)
+      await expect(readFile(join(root, 'outside.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('passes the preload to Node as a file URL', () => {
     expect(new URL(preload).protocol).toBe('file:')
   })

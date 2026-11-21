@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { AuthorizeAccountResponse } from '../types/auth.ts'
 import type { BucketId } from '../types/ids.ts'
@@ -8,6 +8,7 @@ import { InMemoryAccountInfo } from './in-memory.ts'
 import { getRealmUrl } from './realms.ts'
 
 const PRIVATE_FILE_MODE = 0o600
+const PRIVATE_DIRECTORY_MODE = 0o700
 const PERSISTED_AUTH_VERSION = 1
 const BUILT_IN_PRODUCTION_REALM_URL = getRealmUrl('production')
 const BUILT_IN_STAGING_REALM_URL = getRealmUrl('staging')
@@ -210,7 +211,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
   /**
    * Constructs a `FileAccountInfo` bound to a JSON file on disk. The file is
    * created on the first `setAuth` write; reading it back happens via
-   * {@link load}.
+   * {@link load}. Writes set the containing directory's mode to `0o700`,
+   * including when it already exists, so use a dedicated directory.
    *
    * @param path - Absolute path to the JSON file that backs this account info.
    * @param options - Optional discard and write-error observers.
@@ -345,7 +347,8 @@ export class FileAccountInfo implements AccountInfo, AuthContextAwareAccountInfo
   private async writePrivateFileAtomically(contents: string): Promise<void> {
     const dir = dirname(this.path)
     const tempPath = join(dir, `.${basename(this.path)}.${process.pid}.${randomUUID()}.tmp`)
-    await mkdir(dir, { recursive: true })
+    await mkdir(dir, { recursive: true, mode: PRIVATE_DIRECTORY_MODE })
+    await chmod(dir, PRIVATE_DIRECTORY_MODE)
 
     try {
       const handle = await open(tempPath, 'wx', PRIVATE_FILE_MODE)

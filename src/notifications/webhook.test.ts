@@ -167,6 +167,30 @@ describe('verifyWebhookSignature', () => {
     expect(result.reason).toBe('bad signature format')
   })
 
+  it.each(['1g', 'f ', '0x', 'g1'])('rejects a non-hex pair %s', async (pair) => {
+    const result = await verifyWebhookSignature({
+      body: VALID_BODY,
+      signature: `v1=${pair}${'00'.repeat(31)}`,
+      secret: SECRET,
+    })
+    expect(result).toEqual({ valid: false, payload: null, reason: 'bad signature format' })
+  })
+
+  it('rejects a malformed signature even when partial hex parsing would match the HMAC', async () => {
+    const signature = await sign(SECRET, VALID_BODY)
+    const match = /0[1-9a-f]/.exec(signature.slice(3))
+    expect(match).not.toBeNull()
+    if (match === null) throw new Error('test signature has no suitable byte')
+    const hex = signature.slice(3)
+    const malformed = `${hex.slice(0, match.index)}${match[0][1]}g${hex.slice(match.index + 2)}`
+    const result = await verifyWebhookSignature({
+      body: VALID_BODY,
+      signature: `v1=${malformed}`,
+      secret: SECRET,
+    })
+    expect(result).toEqual({ valid: false, payload: null, reason: 'bad signature format' })
+  })
+
   it('rejects when the secret is empty', async () => {
     const signature = await sign(SECRET, VALID_BODY)
     const result = await verifyWebhookSignature({

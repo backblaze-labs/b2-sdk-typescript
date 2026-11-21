@@ -69,7 +69,7 @@ function observeCredentialWrite(path: string, failure = '') {
         if (failure) await fs.writeFile(path, 'previous state');
         if (process.platform !== 'win32') process.umask(0o777);
         fs.chmod = async (...args) => {
-          pathModes++;
+          if (args[0] !== dirname(path)) pathModes++;
           return chmod(...args);
         };
         fs.open = async (...args) => {
@@ -293,6 +293,21 @@ describe('FileAccountInfo', () => {
 
     expect((await stat(storePath)).mode & 0o777).toBe(0o600)
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'creates and tightens the credential directory to mode 0700',
+    async () => {
+      const directory = join(tempDir, 'credentials')
+      const first = new FileAccountInfo(join(directory, 'auth.json'))
+      first.setAuth(makeCachedAuth())
+      await first.flushed()
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+      await chmod(directory, 0o755)
+      first.setAuth(makeCachedAuth())
+      await first.flushed()
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+    },
+  )
 
   it('credential file is created with mode 0600 on its open descriptor', () => {
     const observed = observeCredentialWrite(storePath)
