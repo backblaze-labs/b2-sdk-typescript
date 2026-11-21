@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { AccountInfo } from '../auth/account-info.ts'
 import { InMemoryAccountInfo } from '../auth/in-memory.ts'
 import { B2Client } from '../client.ts'
 import { NetworkError } from '../errors/index.ts'
@@ -9,6 +10,7 @@ import { BufferSource } from '../streams/source.ts'
 import { deterministicBytes } from '../test-utils/index.ts'
 import { BucketType } from '../types/bucket.ts'
 import { bucketId, largeFileId } from '../types/ids.ts'
+import { cancelLargeFileBestEffort } from './cancel.ts'
 import { finishLargeFileWithAbortReconciliation } from './finish.ts'
 import { uploadLargeFile } from './large.ts'
 import { uploadPartWithFreshUrl } from './retry.ts'
@@ -156,6 +158,122 @@ describe('part upload URL pool cleanup', () => {
     await pending
     expect(info.checkoutPartUploadUrl(fileId)).toBeNull()
   })
+  it.each(['finish', 'cancel'] as const)(
+    'does not return an in-flight part URL after successful %s',
+    async (operation) => {
+      const info = new InMemoryAccountInfo()
+      const fileId = largeFileId('pending-file')
+      info.returnPartUploadUrl(fileId, {
+        uploadUrl: 'https://example.com/part',
+        authorizationToken: 'test',
+      })
+      let announceStart = () => {}
+      const started = new Promise<void>((resolve) => {
+        announceStart = resolve
+      })
+      let releaseUpload = () => {}
+      const release = new Promise<void>((resolve) => {
+        releaseUpload = resolve
+      })
+      const raw = {
+        async uploadPart() {
+          announceStart()
+          await release
+          return { contentSha1: 'sha1' }
+        },
+        async finishLargeFile() {
+          return { fileId }
+        },
+        async cancelLargeFile() {
+          return { fileId }
+        },
+      } as unknown as RawClient
+      const account = Object.assign(info, {
+        getApiUrl: () => 'https://example.com',
+        getAuthToken: () => 'test',
+      })
+      const pending = uploadPartWithFreshUrl(raw, account, fileId, {
+        fileName: 'test',
+        partNumber: 1,
+        data: new Uint8Array([1]),
+        contentLength: 1,
+        contentSha1: 'sha1',
+        retryResponseBodyFailures: false,
+        retryUploadConnectionFaults: true,
+      })
+      await started
+      if (operation === 'finish') {
+        await finishLargeFileWithAbortReconciliation(raw, account, {
+          fileId,
+          bucketId: bucketId('bucket'),
+          fileName: 'test',
+          partSha1s: [],
+        })
+      } else {
+        await cancelLargeFileBestEffort(raw, account, fileId)
+      }
+      releaseUpload()
+      await pending
+      expect(account.checkoutPartUploadUrl(fileId)).toBeNull()
+    },
+  )
+
+  it.each(['throwing', 'non-draining'] as const)(
+    'preserves successful finish with a %s custom store',
+    async (mode) => {
+      let calls = 0
+      const account = {
+        getApiUrl: () => 'https://example.com',
+        getAuthToken: () => 'test',
+        checkoutPartUploadUrl: () => {
+          calls++
+          if (mode === 'throwing') throw new Error('store unavailable')
+          return { uploadUrl: 'https://example.com/part', authorizationToken: 'test' }
+        },
+      } as unknown as AccountInfo
+      const result = { fileId: largeFileId('finished-file') }
+      const raw = { finishLargeFile: async () => result } as unknown as RawClient
+      await expect(
+        finishLargeFileWithAbortReconciliation(raw, account, {
+          fileId: result.fileId,
+          bucketId: bucketId('bucket'),
+          fileName: 'test',
+          partSha1s: [],
+        }),
+      ).resolves.toBe(result)
+      expect(calls).toBe(mode === 'throwing' ? 1 : 10_000)
+    },
+  )
+
+  it('clears pooled URLs when a caller cancels a large file through the bucket', async () => {
+    const sim = new B2Simulator()
+    const client = new B2Client({
+      applicationKeyId: 'test-key-id',
+      applicationKey: 'test-key',
+      transport: sim.transport(),
+    })
+    await client.authorize()
+    const bucket = await client.createBucket({
+      bucketName: 'pool-c13-public-cancel',
+      bucketType: BucketType.AllPrivate,
+    })
+    const started = await client.raw.startLargeFile(
+      client.accountInfo.getApiUrl(),
+      client.accountInfo.getAuthToken(),
+      {
+        bucketId: bucket.id,
+        fileName: 'test',
+        contentType: 'application/octet-stream',
+      },
+    )
+    client.accountInfo.returnPartUploadUrl(started.fileId, {
+      uploadUrl: 'https://example.com/part',
+      authorizationToken: 'test',
+    })
+    await bucket.cancelLargeFile(started.fileId)
+    expect(client.accountInfo.checkoutPartUploadUrl(started.fileId)).toBeNull()
+  })
+
   it('keeps part URLs when the finish outcome is ambiguous', async () => {
     const sim = new B2Simulator()
     const client = new B2Client({
