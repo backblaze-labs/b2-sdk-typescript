@@ -179,9 +179,14 @@ describe('sync findings', () => {
     },
   )
 
-  it.each(['older', 'newer'] as const)(
-    'orphan deletion preserves unfinished uploads %s than completed versions',
-    async (startOrder) => {
+  it.each([
+    { startOrder: 'older', customFolder: false },
+    { startOrder: 'newer', customFolder: false },
+    { startOrder: 'older', customFolder: true },
+    { startOrder: 'newer', customFolder: true },
+  ])(
+    'orphan deletion preserves unfinished uploads $startOrder than completed versions (custom folder: $customFolder)',
+    async ({ startOrder, customFolder }) => {
       const root = await mkdtemp(join(tmpdir(), 'b2sdk-c30-unfinished-'))
       try {
         const unfinished: StartLargeFileResponse[] = []
@@ -219,10 +224,35 @@ describe('sync findings', () => {
         const second = await bucket.upload({ fileName: 'dst/orphan.txt', source: bytes('second') })
         if (startOrder === 'newer') await startUpload('dst/orphan.txt')
         await startUpload('dst/pending-only.txt')
+        const dest = customFolder
+          ? {
+              type: 'b2' as const,
+              rawPrefix: 'dst/',
+              async *scan() {
+                const snapshot = await bucket.listFileVersions({ prefix: 'dst/' })
+                for (const fileName of ['dst/orphan.txt', 'dst/pending-only.txt']) {
+                  const versions = snapshot.files
+                    .filter((version) => version.fileName === fileName)
+                    .sort((a, b) => b.uploadTimestamp - a.uploadTimestamp)
+                  const selected = versions[0]
+                  if (!selected || selected.action === FileAction.Hide) {
+                    throw new Error('expected a completed or unfinished version in the fixture')
+                  }
+                  yield {
+                    relativePath: fileName.slice('dst/'.length),
+                    modTimeMillis: selected.uploadTimestamp,
+                    size: selected.contentLength,
+                    selectedVersion: selected,
+                    allVersions: versions,
+                  }
+                }
+              },
+            }
+          : new B2Folder(bucket, 'dst/')
 
         const config: SynchronizerUpConfig = {
           source: new LocalFolder(root),
-          dest: new B2Folder(bucket, 'dst/'),
+          dest,
           options: { compareMode: 'size', keepMode: 'delete' },
           bucket,
           prefix: 'dst/',

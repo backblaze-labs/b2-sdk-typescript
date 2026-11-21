@@ -2,7 +2,7 @@ import type { Bucket } from '../bucket.ts'
 import type { SseCDownloadKey } from '../raw/index.ts'
 import { type ContentSource, FileSource } from '../streams/source.ts'
 import type { EncryptionSetting } from '../types/encryption.ts'
-import { fileId as fileIdOf } from '../types/ids.ts'
+import { FileAction } from '../types/file.ts'
 import { DEFAULT_TRANSFER_CONCURRENCY } from '../util/defaults.ts'
 import { sanitizeErrorReason } from '../util/error-reason.ts'
 import type { SyncAction } from './actions/index.ts'
@@ -996,12 +996,14 @@ function createActionFactory(
       return new DeleteRemoteAction(
         path.relativePath,
         path.selectedVersion.fileId as string,
-        async (fileId, _fileName, signal) => {
+        async (_fileId, _fileName, signal) => {
           // Removing only the selected version exposes an older orphan version.
-          const versionIds = new Set([
-            fileIdOf(fileId),
-            ...path.allVersions.map((version) => version.fileId),
-          ])
+          // Custom scanners can include unfinished uploads; preserve those too.
+          const versionIds = new Set(
+            [path.selectedVersion, ...path.allVersions]
+              .filter((version) => version.action !== FileAction.Start)
+              .map((version) => version.fileId),
+          )
           for (const versionId of versionIds) {
             actionSignal(signal).throwIfAborted()
             await bucket.deleteFileVersion(b2FileName, versionId, {
