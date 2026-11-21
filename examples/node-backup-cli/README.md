@@ -61,3 +61,5 @@ npx tsx examples/node-backup-cli/backup.ts snapshot ./photos b2://my-bucket/phot
 ```
 
 The first run uploads everything. Subsequent runs only upload changed files. The `.b2-backup.json` manifest is written next to the source folder and uploaded to B2 as `<prefix>/.b2-backup.json` so a fresh machine can `restore` against the same prefix.
+
+The local manifest is associated with its bucket and prefix. When switching destinations, the CLI uses that destination's remote manifest if present, or starts a new backup. For copied or older remote manifests without a matching destination, it downloads and verifies the listed files before skipping them. Older local manifests without a destination are recovered from the remote manifest or treated as a new backup.
