@@ -158,7 +158,12 @@ function* actionsForDestOnly(
   }
 
   if (keepMode === 'keep-days') {
-    const ageMillis = nowMillis - dest.modTimeMillis
+    // B2 retention uses the version's age, independently of its source modification time.
+    const uploadedAt =
+      'selectedVersion' in dest
+        ? (dest as B2SyncPath).selectedVersion.uploadTimestamp
+        : dest.modTimeMillis
+    const ageMillis = nowMillis - uploadedAt
     const ageDays = ageMillis / (24 * 60 * 60 * 1000)
     if (ageDays < keepDays) {
       yield new SkipAction(

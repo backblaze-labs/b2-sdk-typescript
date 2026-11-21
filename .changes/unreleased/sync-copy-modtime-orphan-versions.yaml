@@ -1,0 +1,3 @@
+kind: Fixed
+body: "B2-to-B2 sync uses multipart copy above the 5 GB single-copy limit. Modtime sync preserves and compares source modification times instead of uploading unchanged local files again. Orphan deletion removes completed versions and hide markers in unlocked buckets while preserving unfinished uploads."
+time: 2026-11-20T00:00:00Z
