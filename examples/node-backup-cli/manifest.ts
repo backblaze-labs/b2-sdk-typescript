@@ -37,6 +37,12 @@ export interface Manifest {
   readonly version: 1
   /** Base64url-encoded PBKDF2 salt for this repository. */
   readonly salt: string
+  /** Destination associated with this manifest, if recorded by this CLI. */
+  readonly destination?: {
+    readonly apiUrl: string
+    readonly bucketId: string
+    readonly prefix: string
+  }
   /** When the manifest was last written. */
   readonly updatedAt: string
   /** All files in the backup, keyed by relative path. */

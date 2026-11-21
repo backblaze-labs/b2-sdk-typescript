@@ -14,12 +14,20 @@
  * appends one JSON line `{ "fileName": <decoded X-Bz-File-Name>, "status": <HTTP status> }`
  * to it. Credentials and upload tokens are never recorded.
  *
- * Requires `pnpm build` first (same prerequisite as `.github/workflows/examples.yml`).
+ * Uses built output by default; EXAMPLE_SIM_SOURCE=1 loads source through tsx.
  */
 import { appendFileSync } from 'node:fs'
-import { B2Client, BucketType } from '../../../dist/index.js'
-import { B2Simulator } from '../../../dist/simulator/index.js'
-import { BufferSource } from '../../../dist/streams/index.js'
+
+const fromSource = process.env.EXAMPLE_SIM_SOURCE === '1'
+const { B2Client, BucketType } = await import(
+  fromSource ? '../../../src/index.ts' : '../../../dist/index.js'
+)
+const { B2Simulator } = await import(
+  fromSource ? '../../../src/simulator/index.ts' : '../../../dist/simulator/index.js'
+)
+const { BufferSource } = await import(
+  fromSource ? '../../../src/streams/index.ts' : '../../../dist/streams/index.js'
+)
 
 const uploadTrace = process.env.EXAMPLE_SIM_UPLOAD_TRACE
 const seed = JSON.parse(process.env.EXAMPLE_SIM_SEED ?? '{}')
@@ -79,6 +87,18 @@ globalThis.fetch = async (input, init = {}) => {
   const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   // Compare the parsed origin exactly (not a string prefix) so only the pod host is remapped.
   const parsed = new URL(rawUrl)
+  if (
+    process.env.EXAMPLE_SIM_MANIFEST_FAILURE === '1' &&
+    parsed.pathname.endsWith('/.b2-backup.json')
+  ) {
+    return new Response(
+      JSON.stringify({ status: 403, code: 'access_denied', message: 'manifest access denied' }),
+      {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      },
+    )
+  }
   const url =
     parsed.origin === POD_ORIGIN ? SIM_UPLOAD_ORIGIN + parsed.pathname + parsed.search : rawUrl
   const response = await transport.send({

@@ -1,0 +1,3 @@
+kind: Fixed
+body: "The backup CLI example associates its local manifest with the destination, so snapshots to another bucket or prefix do not skip files based on a different backup."
+time: 2026-11-20T00:00:00Z

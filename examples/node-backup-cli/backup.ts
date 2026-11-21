@@ -15,6 +15,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { Bucket } from '@backblaze-labs/b2-sdk'
 import { B2Client } from '@backblaze-labs/b2-sdk'
+import { B2Error } from '@backblaze-labs/b2-sdk/errors'
 import { BufferSource } from '@backblaze-labs/b2-sdk/streams'
 import { smokeTransport } from '../_smoke/transport.ts'
 import { decryptFile, deriveKek, encryptFile, generateSalt, type WrappedKey } from './crypto.ts'
@@ -113,8 +114,9 @@ async function downloadRemoteManifest(bucket: Bucket, prefix: string): Promise<M
       offset += c.byteLength
     }
     return JSON.parse(new TextDecoder().decode(combined)) as Manifest
-  } catch {
-    return null
+  } catch (error) {
+    if (error instanceof B2Error && error.status === 404) return null
+    throw error
   }
 }
 
@@ -148,12 +150,23 @@ async function snapshot(localDir: string, uriString: string, options: CliOptions
     process.exit(1)
   }
 
-  // Use the local manifest if present; otherwise pull the remote one (lets a
-  // fresh machine resume against an existing prefix); otherwise start fresh.
-  let manifest =
-    (await readManifest(localDir)) ??
-    (await downloadRemoteManifest(bucket, prefix)) ??
-    newManifest(generateSalt())
+  const destination = { apiUrl: client.accountInfo.getApiUrl(), bucketId: bucket.id, prefix }
+  const sameDestination = (candidate: Manifest) =>
+    candidate.destination?.apiUrl === destination.apiUrl &&
+    candidate.destination.bucketId === destination.bucketId &&
+    candidate.destination.prefix === destination.prefix
+  const local = await readManifest(localDir)
+  // A local manifest is only evidence for the destination where it was written.
+  // Legacy manifests can still be recovered from their destination's remote copy.
+  const remote =
+    local && sameDestination(local) ? null : await downloadRemoteManifest(bucket, prefix)
+  const prior = local && sameDestination(local) ? local : remote
+  let manifest: Manifest = {
+    ...(prior && (prior.destination === undefined || sameDestination(prior))
+      ? prior
+      : newManifest(generateSalt())),
+    destination,
+  }
 
   const kek = await deriveKek(passphrase, manifestSalt(manifest))
 
