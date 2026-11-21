@@ -13,6 +13,7 @@ import type { RawClient } from '../raw/index.ts'
 import { EncryptionMode, type EncryptionSetting } from '../types/encryption.ts'
 import type { BucketId, LargeFileId } from '../types/ids.ts'
 import type { UploadPartResponse } from '../types/upload.ts'
+import { trackPartUpload } from './part-url-pool.ts'
 
 /** Event emitted before an upload is retried against a fresh upload URL. */
 export interface UploadRetryEvent {
@@ -205,6 +206,7 @@ export function uploadPartWithFreshUrl(
   fileId: LargeFileId,
   options: UploadPartWithFreshUrlOptions,
 ): Promise<UploadPartResponse> {
+  const tracked = trackPartUpload(accountInfo, fileId)
   return withFreshUploadUrlRetry({
     fileName: options.fileName,
     partNumber: options.partNumber,
@@ -215,7 +217,11 @@ export function uploadPartWithFreshUrl(
     retryUploadConnectionFaults: options.retryUploadConnectionFaults,
     checkout: () => accountInfo.checkoutPartUploadUrl(fileId),
     fetchFresh: () => fetchFreshPartUploadUrl(raw, accountInfo, fileId, options.signal),
-    returnEntry: (entry) => accountInfo.returnPartUploadUrl(fileId, entry),
+    returnEntry: (entry) => {
+      if (!options.signal?.aborted && !tracked.isFinalized()) {
+        accountInfo.returnPartUploadUrl(fileId, entry)
+      }
+    },
     evictEntry: (entry) => accountInfo.evictPartUploadUrl(fileId, entry),
     upload: (entry) => {
       const serverSideEncryption = uploadPartEncryption(options.serverSideEncryption)
@@ -235,7 +241,7 @@ export function uploadPartWithFreshUrl(
         },
       )
     },
-  })
+  }).finally(tracked.release)
 }
 
 /**

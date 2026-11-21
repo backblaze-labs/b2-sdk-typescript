@@ -54,6 +54,7 @@ import {
   rejectSmallResumeFileId,
   stripResumeOnlyOptions,
 } from './upload/options.ts'
+import { discardPartUploadUrls } from './upload/part-url-pool.ts'
 import { uploadSmallFile } from './upload/single.ts'
 import { DEFAULT_BULK_CONCURRENCY, DEFAULT_PAGE_SIZE } from './util/defaults.ts'
 import { type PaginatorOptions, paginateItems } from './util/paginator.ts'
@@ -912,11 +913,13 @@ export class Bucket {
    * @returns Metadata about the cancelled large file.
    */
   async cancelLargeFile(fileId: LargeFileId): Promise<CancelLargeFileResponse> {
-    return this.#client.raw.cancelLargeFile(
+    const result = await this.#client.raw.cancelLargeFile(
       this.#client.accountInfo.getApiUrl(),
       this.#client.accountInfo.getAuthToken(),
       { fileId },
     )
+    discardPartUploadUrls(this.#client.accountInfo, fileId)
+    return result
   }
 
   /**
