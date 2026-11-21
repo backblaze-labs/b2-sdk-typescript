@@ -39,6 +39,40 @@ async function makeStreamClient(minimumPartSize: number, intercept: Intercept = 
 const PART_LIMIT_MESSAGE = /10[,_ ]?000|too many parts|part.*limit/i
 
 describe('stream part limit', () => {
+  it.each([1, 2])(
+    'handles %i extra bytes with a buffered partial part near the limit',
+    async (extraBytes) => {
+      // Tiny simulator parts make the 10,000-part boundary inexpensive to exercise.
+      const { client, bucket, seen } = await makeStreamClient(2)
+      const payload = deterministicBytes(19_999)
+      const suffix = deterministicBytes(extraBytes)
+      const object = bucket.file(`c6-carry-${extraBytes}.bin`)
+      const { writable, done } = object.createWriteStream({ partSize: 2, concurrency: 4 })
+      const writer = writable.getWriter()
+      await writer.write(payload)
+      if (extraBytes === 1) {
+        await writer.write(suffix)
+        await writer.close()
+        await done
+        const stored = await readStream((await object.download()).body)
+        expect(stored).toEqual(new Uint8Array([...payload, ...suffix]))
+        expect(seen.filter((r) => r.url.includes('b2_upload_part'))).toHaveLength(10_000)
+      } else {
+        await expect(writer.write(suffix)).rejects.toThrow(PART_LIMIT_MESSAGE)
+        await expect(done).rejects.toThrow(PART_LIMIT_MESSAGE)
+        expect(seen.some((r) => r.url.includes('b2_cancel_large_file'))).toBe(true)
+        expect(seen.some((r) => r.url.includes('b2_finish_large_file'))).toBe(false)
+        const unfinished = await client.raw.listUnfinishedLargeFiles(
+          client.accountInfo.getApiUrl(),
+          client.accountInfo.getAuthToken(),
+          { bucketId: bucket.id },
+        )
+        expect(unfinished.files.some((f) => f.fileName === object.fileName)).toBe(false)
+      }
+    },
+    60_000,
+  )
+
   it('rejects a partial 10,001st part and cancels without waiting for close', async () => {
     const { client, bucket, seen } = await makeStreamClient(2)
     const { writable, done } = bucket.file('c6-partial.bin').createWriteStream({

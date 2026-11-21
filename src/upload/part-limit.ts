@@ -1,9 +1,13 @@
-/** Maximum number of parts accepted for a B2 large file. */
+/**
+ * Maximum number of parts accepted for a B2 large file.
+ * @see https://www.backblaze.com/docs/cloud-storage-create-large-files-with-the-native-api
+ */
 export const MAX_LARGE_FILE_PARTS = 10_000
 
 /**
  * Rejects a multipart transfer that would exceed the B2 part limit.
  * @param count - Number of parts required by the transfer.
+ *
  * @throws `RangeError` when the count exceeds the service limit.
  */
 export function assertPartLimit(count: number): void {
