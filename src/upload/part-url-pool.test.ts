@@ -17,6 +17,7 @@ import { uploadPartWithFreshUrl } from './retry.ts'
 
 describe('part upload URL pool cleanup', () => {
   it('part-upload URLs for a finished large file are not retained in the account pool', async () => {
+    // A reduced simulator part size exercises multipart upload with small fixtures.
     const sim = new B2Simulator({ minimumPartSize: 100_000 })
     // The pool is keyed by the large-file id issued by b2_start_large_file. The simulator
     // gives the finished file a different id, so read the key off the start request itself
@@ -63,6 +64,7 @@ describe('part upload URL pool cleanup', () => {
   it.each([true, false])(
     'handles part URLs after cancellation success=%s without clearing other files',
     async (cancelSucceeds) => {
+      // A reduced simulator part size exercises multipart upload with small fixtures.
       const sim = new B2Simulator({ minimumPartSize: 100_000 })
       const inner = sim.transport()
       let startedFileId: string | undefined
