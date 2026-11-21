@@ -8,6 +8,8 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../http/transport
 import { B2Simulator } from '../simulator/index.ts'
 import { BufferSource } from '../streams/source.ts'
 import { BucketType } from '../types/bucket.ts'
+import { FileAction } from '../types/file.ts'
+import type { StartLargeFileResponse } from '../types/upload.ts'
 import { B2Folder } from './scanners/b2.ts'
 import { LocalFolder } from './scanners/local.ts'
 import type {
@@ -170,6 +172,69 @@ describe('sync findings', () => {
         ).toHaveLength(0)
         expect(listing.files.map((file) => file.fileId)).toEqual(
           expect.arrayContaining([outside.fileId, kept.fileId]),
+        )
+      } finally {
+        await rm(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it.each(['older', 'newer'] as const)(
+    'orphan deletion preserves unfinished uploads %s than completed versions',
+    async (startOrder) => {
+      const root = await mkdtemp(join(tmpdir(), 'b2sdk-c30-unfinished-'))
+      try {
+        const unfinished: StartLargeFileResponse[] = []
+        const deletedIds: string[] = []
+        const { client, bucket } = await makeBucket('sync-c30-unfinished', (inner) => ({
+          async send(req) {
+            if (req.url.includes('b2_delete_file_version')) {
+              deletedIds.push((JSON.parse(req.body as string) as { fileId: string }).fileId)
+            }
+            const response = await inner.send(req)
+            if (!req.url.includes('b2_list_file_versions')) return response
+            // The simulator keeps unfinished uploads in a separate listing; model
+            // a file-version page that also includes B2's unfinished start rows.
+            const body = await response.json<{ files: unknown[] }>()
+            const listing = { ...body, files: [...body.files, ...unfinished] }
+            return {
+              ...response,
+              json: async <T>() => listing as T,
+              text: async () => JSON.stringify(listing),
+            }
+          },
+        }))
+        const startUpload = async (fileName: string) => {
+          const started = await client.raw.startLargeFile(
+            client.accountInfo.getApiUrl(),
+            client.accountInfo.getAuthToken(),
+            { bucketId: bucket.id, fileName, contentType: 'application/octet-stream' },
+          )
+          unfinished.push(started)
+          return started
+        }
+        if (startOrder === 'older') await startUpload('dst/orphan.txt')
+        const first = await bucket.upload({ fileName: 'dst/orphan.txt', source: bytes('first') })
+        const hidden = await bucket.hideFile('dst/orphan.txt')
+        const second = await bucket.upload({ fileName: 'dst/orphan.txt', source: bytes('second') })
+        if (startOrder === 'newer') await startUpload('dst/orphan.txt')
+        await startUpload('dst/pending-only.txt')
+
+        const config: SynchronizerUpConfig = {
+          source: new LocalFolder(root),
+          dest: new B2Folder(bucket, 'dst/'),
+          options: { compareMode: 'size', keepMode: 'delete' },
+          bucket,
+          prefix: 'dst/',
+        }
+        const events = await collect(config)
+        expect(deletedIds.sort()).toEqual([first.fileId, hidden.fileId, second.fileId].sort())
+        expect(events.filter((event) => event.type === 'error')).toEqual([])
+        const listing = await bucket.listFileVersions({ prefix: 'dst/' })
+        expect(listing.files.filter((version) => version.action !== FileAction.Start)).toEqual([])
+        const pending = await bucket.listUnfinishedLargeFiles({ namePrefix: 'dst/' })
+        expect(pending.files.map((file) => file.fileId).sort()).toEqual(
+          unfinished.map((file) => file.fileId).sort(),
         )
       } finally {
         await rm(root, { recursive: true, force: true })

@@ -136,6 +136,9 @@ export class B2Folder implements SyncFolder {
           )
         }
 
+        // Unfinished uploads are neither sync sources nor orphan-deletion candidates.
+        if (fv.action === FileAction.Start) continue
+
         // Real B2 honors the prefix in listFileVersions, but custom
         // transports and the simulator can over-return. Guard before
         // stripping the raw prefix so relativePath is never corrupted.
