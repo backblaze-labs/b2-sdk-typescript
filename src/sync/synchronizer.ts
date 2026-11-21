@@ -63,6 +63,7 @@ import type {
 const MAX_BUFFERED_SCAN_EVENTS = 100
 const MAX_AGGREGATE_FAILED_PATHS = 100
 const DEFAULT_DOWNLOAD_IDLE_TIMEOUT_MILLIS = 60_000
+const MAX_SINGLE_COPY_SIZE = 5_000_000_000
 
 interface ScanEventBuffer {
   readonly events: SyncEvent[]
@@ -894,6 +895,7 @@ function createActionFactory(
           await bucket.upload({
             fileName,
             source: fileSource,
+            lastModifiedMillis: source.modTimeMillis,
             ...(serverSideEncryption !== undefined ? { serverSideEncryption } : {}),
             signal: actionSignal(signal),
           })
@@ -995,9 +997,17 @@ function createActionFactory(
         path.relativePath,
         path.selectedVersion.fileId as string,
         async (fileId, _fileName, signal) => {
-          await bucket.deleteFileVersion(b2FileName, fileIdOf(fileId), {
-            signal: actionSignal(signal),
-          })
+          // Removing only the selected version exposes an older orphan version.
+          const versionIds = new Set([
+            fileIdOf(fileId),
+            ...path.allVersions.map((version) => version.fileId),
+          ])
+          for (const versionId of versionIds) {
+            actionSignal(signal).throwIfAborted()
+            await bucket.deleteFileVersion(b2FileName, versionId, {
+              signal: actionSignal(signal),
+            })
+          }
         },
       )
     },
@@ -1051,7 +1061,7 @@ function createActionFactory(
       const sourceServerSideEncryption = toSseCEncryptionSetting(
         config.options.encryptionProvider?.getSettingForDownload(source.selectedVersion),
       )
-      await bucket.copyFile({
+      const copyOptions = {
         sourceFileId: source.selectedVersion.fileId,
         fileName: targetPath,
         ...(destinationServerSideEncryption !== undefined
@@ -1059,7 +1069,12 @@ function createActionFactory(
           : {}),
         ...(sourceServerSideEncryption !== undefined ? { sourceServerSideEncryption } : {}),
         signal: actionSignal(signal),
-      })
+      }
+      if (source.selectedVersion.contentLength > MAX_SINGLE_COPY_SIZE) {
+        await bucket.copyLargeFile(copyOptions)
+      } else {
+        await bucket.copyFile(copyOptions)
+      }
     })
   }
 

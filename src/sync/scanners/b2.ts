@@ -223,9 +223,15 @@ export class B2Folder implements SyncFolder {
       // Reserved SDK temp names are a hard safety failure, not an ordinary filter.
       assertSyncPathAllowed(relativePath)
       const contentSha1 = selectB2ComparableSha1(selectedVersion)
+      const storedModTime = selectedVersion.fileInfo['src_last_modified_millis']
+      const sourceModTime =
+        storedModTime !== undefined && /^\d+$/.test(storedModTime) ? Number(storedModTime) : NaN
       yield {
         relativePath,
-        modTimeMillis: selectedVersion.uploadTimestamp,
+        modTimeMillis:
+          Number.isSafeInteger(sourceModTime) && sourceModTime >= 0
+            ? sourceModTime
+            : selectedVersion.uploadTimestamp,
         size: selectedVersion.contentLength,
         contentSha1,
         contentSha1State: syncSha1StateOf({ contentSha1 }),
