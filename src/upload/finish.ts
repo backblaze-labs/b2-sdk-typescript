@@ -1,5 +1,5 @@
 import type { AccountInfo } from '../auth/account-info.ts'
-import { FinishLargeFileResponseBodyError, NetworkError } from '../errors/index.ts'
+import { B2Error, FinishLargeFileResponseBodyError, NetworkError } from '../errors/index.ts'
 import type { RetryOptions } from '../http/retry.ts'
 import type { RawClient } from '../raw/index.ts'
 import type { FileVersion } from '../types/file.ts'
@@ -90,6 +90,7 @@ function finishLargeFileResponseBodyErrorWithContext(
 
 function isAmbiguousFinishDispatchFailure(err: unknown, signal: AbortSignal | undefined): boolean {
   if (err instanceof NetworkError) return true
+  if (err instanceof B2Error && err.status >= 500 && err.status < 600) return true
   if (isTimeoutError(err)) return true
   if (signal?.aborted !== true) return false
   if (signal.reason !== undefined && Object.is(err, signal.reason)) return true
