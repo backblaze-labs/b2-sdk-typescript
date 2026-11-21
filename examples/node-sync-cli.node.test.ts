@@ -2,10 +2,13 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const repoRoot = resolve(import.meta.dirname, '..')
-const preload = join(repoRoot, 'tests/known-defects/helpers/fetch-simulator-preload.mjs')
+const preload = pathToFileURL(
+  join(repoRoot, 'tests/known-defects/helpers/fetch-simulator-preload.mjs'),
+).href
 
 interface RunResult {
   readonly code: number | null
@@ -55,6 +58,10 @@ const exampleCredentials = {
 }
 
 describe('node-sync-cli', () => {
+  it('uses a file URL for the simulator preload', () => {
+    expect(new URL(preload).protocol).toBe('file:')
+  })
+
   it('exits zero when all sync actions succeed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'b2sdk-c31-success-'))
     try {
